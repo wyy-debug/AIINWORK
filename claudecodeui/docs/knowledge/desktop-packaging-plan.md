@@ -69,6 +69,15 @@ Suggested scripts:
 }
 ```
 
+Current Windows implementation:
+
+- Project-level `.npmrc` uses `registry.npmmirror.com`, Electron mirror, and electron-builder binary mirror.
+- `electron/main.mjs` starts the built Express backend as a child process, waits for `/health`, then opens a native `BrowserWindow`.
+- `build.extraMetadata.main` overrides the packaged Electron app entry to `electron/main.mjs`; the source package `main` remains `dist-server/server/index.js` for the npm/server runtime.
+- `scripts/package-electron-win.mjs` runs the web/server build, stages `electron-resources/runtime/node.exe`, stages the built `../claude-code/dist` backend, then invokes `electron-builder --win nsis --x64`.
+- `npm run package:electron-win` writes outputs under `../workspace/vendor/electron-dist`.
+- Windows signing and executable metadata editing are disabled for the first local package with `CSC_IDENTITY_AUTO_DISCOVERY=false` and `win.signAndEditExecutable=false`; this avoids the `winCodeSign` symbolic-link extraction failure on machines without symlink privileges.
+
 ## Native Dependency Strategy
 
 Prefer launching a packaged Node backend child process instead of importing backend code into Electron main. This avoids Electron ABI rebuild friction for `better-sqlite3` and `node-pty`.

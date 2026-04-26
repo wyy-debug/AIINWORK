@@ -31,6 +31,7 @@
     "client": "vite",
     "build": "npm run build:client && npm run build:server",
     "package:preview-win": "node scripts/package-preview-win.mjs",
+    "package:electron-win": "node scripts/package-electron-win.mjs",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
     "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",
@@ -134,6 +135,8 @@
     "auto-changelog": "^2.5.0",
     "autoprefixer": "^10.4.16",
     "concurrently": "^8.2.2",
+    "electron": "30.5.1",
+    "electron-builder": "24.13.3",
     "eslint": "^9.39.3",
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-boundaries": "^6.0.2",
@@ -160,5 +163,59 @@
   "lint-staged": {
     "src/**/*.{ts,tsx,js,jsx}": "eslint",
     "server/**/*.{js,ts}": "eslint"
+  },
+  "build": {
+    "appId": "com.aiinwork.mtlcode",
+    "productName": "MTL-Code",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "asar": false,
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "extraMetadata": {
+      "main": "electron/main.mjs"
+    },
+    "directories": {
+      "output": "../workspace/vendor/electron-dist"
+    },
+    "files": [
+      "electron/**",
+      "dist/**",
+      "dist-server/**",
+      "shared/**",
+      "package.json",
+      "node_modules/**",
+      "!node_modules/.cache/**",
+      "!node_modules/electron/dist/**",
+      "!node_modules/electron-builder/**"
+    ],
+    "extraResources": [
+      {
+        "from": "electron-resources/runtime",
+        "to": "runtime"
+      },
+      {
+        "from": "electron-resources/mtl-code",
+        "to": "mtl-code"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MTL-Code"
+    }
   }
 }

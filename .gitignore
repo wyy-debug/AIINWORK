@@ -108,5 +108,6 @@ workspace/**/*.tar.gz
 claude-code/docs/images/
 claude-code/src/utils/vendor/
 claudecodeui/.worktrees/
+claudecodeui/electron-resources/
 claudecodeui/tasks/
 claudecodeui/tasks.json
