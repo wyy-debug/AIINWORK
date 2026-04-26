@@ -1,0 +1,112 @@
+# MTLCode root gitignore
+# This root folder contains source repos plus local preview bundles.
+
+# Dependencies
+**/node_modules/
+**/.pnp/
+**/.pnp.*
+
+# Build outputs
+**/dist/
+**/dist-server/
+**/dist-ssr/
+**/build/
+**/out/
+**/.vite/
+**/.cache/
+**/.parcel-cache/
+**/.next/
+**/.nuxt/
+
+# Packaged preview/runtime bundles
+workspace/vendor/
+workspace/**/*.exe
+workspace/**/*.dll
+workspace/**/*.node
+workspace/**/*.asar
+workspace/**/*.zip
+workspace/**/*.7z
+workspace/**/*.tar
+workspace/**/*.tar.gz
+
+# Local runtime data and generated databases
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.db-journal
+**/*.sqlite-journal
+**/logs/
+**/*.log
+**/pids/
+**/*.pid
+**/*.pid.lock
+
+# Environment and secrets
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.sample
+**/credentials.json
+**/secrets.json
+**/secrets.local.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Local AI/agent runtime state
+**/.claude/
+**/.mtl-code/
+**/.cursor/
+**/.codex/
+**/.agents/
+**/.taskmaster/
+**/.gemini/
+**/.mcp.json
+
+# Test and coverage output
+**/coverage/
+**/.nyc_output/
+**/*.lcov
+**/test-results/
+**/playwright-report/
+**/blob-report/
+
+# Temporary files
+**/tmp/
+**/temp/
+**/.tmp/
+**/*.tmp
+**/*.bak
+**/*.swp
+**/*.swo
+**/*~
+
+# Editor/OS noise
+**/.DS_Store
+**/Thumbs.db
+**/ehthumbs.db
+**/.idea/
+**/.vscode/
+**/*.suo
+**/*.ntvs*
+**/*.njsproj
+**/*.sln
+
+# Reversible backups for nested repo metadata when converting to a monorepo
+**/.git-backup*/
+**/.git-subrepo-backup*/
+
+# Package artifacts
+**/*.tgz
+**/*.msi
+**/*.dmg
+**/*.pkg
+**/*.AppImage
+
+# Project-specific generated/vendor caches
+claude-code/docs/images/
+claude-code/src/utils/vendor/
+claudecodeui/.worktrees/
+claudecodeui/tasks/
+claudecodeui/tasks.json
