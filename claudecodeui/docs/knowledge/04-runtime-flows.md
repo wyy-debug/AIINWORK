@@ -1,0 +1,187 @@
+# K4 运行时流程
+
+## App 启动与 Project 同步
+
+```mermaid
+sequenceDiagram
+  participant Browser
+  participant App as React App
+  participant API as Express /api
+  participant WS as WebSocket /ws
+  participant Providers as Provider session folders
+
+  Browser->>App: load app
+  App->>API: auth status / user
+  App->>WS: connect with token
+  App->>API: GET /api/projects
+  API->>Providers: scan native project/session stores
+  Providers-->>API: projects and sessions
+  API-->>App: project list
+  API->>Providers: watch folders with chokidar
+  Providers-->>API: file changes
+  API-->>WS: projects_updated / loading_progress
+  WS-->>App: refresh sidebar/session metadata
+```
+
+关键文件：
+
+- `src/components/app/AppContent.tsx`
+- `src/hooks/useProjectsState.ts`
+- `src/contexts/WebSocketContext.tsx`
+- `server/index.js`
+- `server/projects.js`
+
+## 打开 Session
+
+1. 用户在 sidebar 选择 session。
+2. `useProjectsState` 保存 `selectedProject` 和 `selectedSession`，并跳转到 `/session/:sessionId`。
+3. `MainContent` 在 `chat` tab 渲染 `ChatInterface`。
+4. `useSessionStore` 从 `/api/sessions/:sessionId/messages` 拉取持久化消息。
+5. `server/routes/messages.js` 调用选中 Provider 的 session adapter。
+6. Provider 历史被转换为 `NormalizedMessage[]`。
+7. 前端合并 server messages 和 realtime messages 后渲染。
+
+关键不变量：server history 是稳定来源，realtime messages 是飞行中的覆盖层。
+
+## 发送 Agent 消息
+
+```mermaid
+sequenceDiagram
+  participant Chat as ChatInterface
+  participant WS as /ws
+  participant Server as server/index.js
+  participant Runtime as Provider runtime
+  participant Store as useSessionStore
+
+  Chat->>WS: provider command message
+  WS->>Server: claude-command / cursor-command / codex-command / gemini-command
+  Server->>Runtime: query or spawn provider
+  Runtime-->>Server: native SDK/CLI events
+  Server-->>WS: NormalizedMessage events
+  WS-->>Chat: latestMessage
+  Chat->>Store: append/update realtime messages
+  Store-->>Chat: merged render state
+```
+
+`server/index.js` 当前处理的 Provider command message type：
+
+- `claude-command`
+- `cursor-command`
+- `codex-command`
+- `gemini-command`
+- `abort-session`
+- `check-session-status`
+- `get-pending-permissions`
+- `get-active-sessions`
+- `claude-permission-response`
+
+New-session UI invariant:
+
+1. `useChatComposerState` creates a `new-session-*` display session before the backend has a real CLI session id.
+2. The temporary id is only for frontend rendering; provider command payloads must not pass it as `options.sessionId` or `resume`.
+3. `useChatRealtimeHandlers` routes early errors/stream events to the temporary id via `pendingViewSessionRef`.
+4. When `session_created` arrives, `useSessionStore.replaceSessionId()` moves buffered messages from the temporary id to the real session id.
+5. This keeps the first user message visible even when the backend is still starting or fails before emitting a native session id.
+
+## Tool Permission 流程
+
+1. Claude SDK 发出 permission request。
+2. 后端通过 `/ws` 发送 normalized permission event。
+3. Chat UI 渲染 permission request。
+4. 用户允许或拒绝。
+5. UI 携带 `requestId` 发送 `claude-permission-response`。
+6. `server/claude-sdk.js` 解析 pending approval，然后继续或阻止工具调用。
+
+除非产品明确要求“记住权限”，一次性 approval 不应被持久化。
+
+## Workspace 文件流程
+
+1. File tree 请求 `/api/projects/:projectName/files`。
+2. 读取/编辑使用 `/api/projects/:projectName/file` 或 `/files/content`。
+3. create/rename/delete/upload endpoint 会把目标路径校验在选中 project root 内。
+4. Code editor 更新打开文档，并通过 `src/utils/api.js` 保存。
+
+安全规则：所有文件操作都必须在读写前 resolve 并 validate path。
+
+## Git 流程
+
+1. `GitPanel` 调用 `/api/git/*` endpoints。
+2. `server/routes/git.js` 解析 project context 并执行 Git 命令。
+3. UI 渲染 status、diff、branch、commit history、remote state。
+4. commit 和 remote 操作返回结构化状态或错误给 panel。
+
+Git 改动影响 workspace，不影响 Provider 原生 session history。
+
+## Shell 流程
+
+1. Shell UI 打开 `/shell` WebSocket。
+2. UI 发送 `init`，包含 project path、session id、provider 和可选 initial command。
+3. 后端按 project/session/command 生成 key，创建或复用 PTY session。
+4. PTY output 流式返回给 xterm。
+5. login/auth command 会使用新 PTY session，不复用缓存 session。
+
+关键文件：
+
+- `src/components/shell`
+- `src/components/standalone-shell`
+- `server/index.js` 的 `handleShellConnection`
+
+## MCP 管理流程
+
+1. MCP UI 调用 `/api/providers/:provider/mcp/servers`。
+2. `provider.routes.ts` 解析 provider、scope、transport payload。
+3. `providerMcpService` 通过 registry 找到 Provider。
+4. Provider-specific MCP adapter 读写原生 Provider config。
+5. UI 按 scope 刷新 grouped server list。
+
+Global add 走 `/api/providers/mcp/servers/global`，对支持的 scope 应用到所有 Provider。
+
+## Plugin 流程
+
+1. `PluginsProvider` 加载 `/api/plugins`。
+2. Plugin route 读取 manifests 和 enabled state。
+3. 启用插件可能通过 `plugin-process-manager` 启动后端服务。
+4. Plugin tab 通过 `PluginTabContent` 渲染。
+5. Plugin WebSocket 可通过 `/plugin-ws/*` 代理。
+
+插件错误应该显示在插件设置中，不应拖垮核心 app shell。
+
+## MTLCode Anthropic-Compatible Model Config Flow
+
+1. User opens Settings > Agents; the only visible agent is `MTLCode`, while the internal provider key remains `claude`.
+2. The Model tab calls `GET /api/settings/mtl-code-model`.
+3. `server/routes/settings.js` reads `~/.mtl-code/settings.json`, with a legacy read-only fallback to `~/.claude/settings.json`.
+4. The UI saves changes with `PUT /api/settings/mtl-code-model`.
+5. The route writes `modelType: "anthropic"`, `model`, `env.ANTHROPIC_AUTH_TOKEN`, `env.ANTHROPIC_BASE_URL`, `env.ANTHROPIC_MODEL`, and Anthropic default model aliases.
+6. The route clears legacy `env.OPENAI_*` keys so new sessions cannot accidentally route through OpenAI Chat Completions.
+7. New MTL-Code backend sessions load those settings and use the Anthropic Messages API request format.
+8. Auth status reports `method: "anthropic_compatible"` when an Anthropic token is configured for a custom base URL.
+
+Invariant: visible naming is MTLCode, but backend/session compatibility still uses the `claude` provider key until the full provider ID migration is completed.
+
+New-chat invariant: `ProviderSelectionEmptyState.tsx` is not a provider/model picker. It shows one `MTL-Code / MTLCode` surface, and `useChatProviderState.ts` rewrites stale local storage values back to `selected-provider=claude` and `claude-model=mtlcode`.
+
+DeepSeek Anthropic adapter invariant:
+
+1. DeepSeek custom runtime config uses the Anthropic-compatible endpoint, typically `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
+2. `server/claude-sdk.js` merges `~/.mtl-code/settings.json.env` into the spawned MTL-Code child process so model/base URL/token/effort settings are active even when the UI server itself was started without those env vars.
+3. UI-spawned MTL-Code uses the `runtime.bareMode` setting from `/api/settings/mtl-code-model`; when enabled, `server/claude-sdk.js` adds `--bare` to avoid hooks, auto-memory, plugin sync, LSP startup, and CLAUDE.md auto-discovery unless context is explicitly provided.
+4. When the endpoint or model is DeepSeek, the spawn env supplies both `MTL_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EFFORT_LEVEL` with a default of `high`, plus `MTL_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` from the configured Haiku/small model.
+5. The MTL-Code backend treats DeepSeek as Anthropic-compatible but suppresses Anthropic `thinking.budget_tokens`; DeepSeek thinking strength is controlled through `output_config.effort`.
+6. A high `cache_read_input_tokens` number on a simple prompt is usually the coding-agent prompt/tool/project context being read from provider cache, not the literal user prompt size. `--bare` reduces avoidable auto-context, but agent tool schemas still cost context.
+
+Project session discovery invariant:
+
+1. Provider project folders live under `~/.mtl-code/projects/<encoded-project-name>` with `~/.claude/projects` as a legacy fallback.
+2. `findProjectDir()` must return the concrete encoded project directory, not the parent `projects` root.
+3. `getSessions()` reads JSONL files from that concrete directory and converts entries with `sessionId` into sidebar sessions.
+4. A project showing chat messages in the main panel but `0` sidebar sessions usually means discovery is pointed at the wrong folder level or the native JSONL parser no longer matches the persisted message shape.
+
+## TaskMaster / PRD 流程
+
+1. Task settings 决定 tasks tab 是否可见。
+2. `TaskMasterPanel` 绑定当前选中的 project。
+3. `server/routes/taskmaster.js` 处理 install/status/tasks/PRD/template 动作。
+4. PRD editor 管理 PRD 文档，并可触发 task generation。
+
+TaskMaster 必须保持可选；不可用或关闭时，主 tab 应回到 chat。
