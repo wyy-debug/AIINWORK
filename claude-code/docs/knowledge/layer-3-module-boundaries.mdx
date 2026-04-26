@@ -1,0 +1,54 @@
+---
+title: "L3 模块边界层"
+description: "按开发任务划分 MTL-Code 的模块边界，帮助快速定位改动范围和测试位置。"
+keywords: ["模块边界", "源码地图", "MTL-Code", "bounded context", "测试位置"]
+---
+
+## 边界原则
+
+1. 先按能力定位模块，再进入具体文件。
+2. 优先修改领域内已有入口，不跨层直接访问内部细节。
+3. 工具、Provider、MCP、UI、远程控制各自有独立测试区域，改动时补到最近的测试集合。
+4. 反编译代码里存在超长文件，改动要小而准，避免顺手格式化大文件。
+
+## 核心模块地图
+
+| 模块 | 主要职责 | 入口文件/目录 | 常见测试位置 |
+| --- | --- | --- | --- |
+| CLI 入口 | 快速路径、命令注册、主 action 分发 | `src/entrypoints/cli.tsx`、`src/main.tsx`、`src/commands/` | `src/commands/**/__tests__/`、`tests/integration/cli-arguments.test.ts` |
+| REPL/UI | 终端交互、输入框、消息渲染、权限提示 | `src/screens/REPL.tsx`、`src/components/`、`packages/@ant/ink/` | `src/components/**/__tests__/`、`src/__tests__/handlePromptSubmit.test.ts` |
+| 状态管理 | AppState、store、selector、session 全局状态 | `src/state/`、`src/bootstrap/state.ts` | `src/state/__tests__/` |
+| 对话编排 | 会话级编排、transcript、usage、文件历史 | `src/QueryEngine.ts`、`src/services/sessionTranscript/` | `src/__tests__/`、`tests/integration/message-pipeline.test.ts` |
+| 核心循环 | agentic loop、上下文预算、工具结果回灌 | `src/query.ts`、`src/query/`、`src/services/compact/` | `src/services/compact/__tests__/`、`tests/integration/message-pipeline.test.ts` |
+| API/Provider | 模型请求、流式响应、兼容 Provider | `src/services/api/`、`src/utils/model/`、`packages/@ant/model-provider/` | `src/services/api/**/__tests__/`、`packages/@ant/model-provider/src/**/__tests__/` |
+| 工具系统 | Tool 接口、工具池、内置工具实现 | `src/Tool.ts`、`src/tools.ts`、`packages/builtin-tools/src/tools/` | `src/__tests__/Tool.test.ts`、`src/__tests__/tools.test.ts`、`packages/builtin-tools/src/tools/**/__tests__/` |
+| 权限系统 | 工具权限、危险命令、模式切换 | `src/hooks/toolPermission/`、`src/utils/permissions/`、`src/components/permissions/` | `src/hooks/toolPermission/**/__tests__/`、`src/utils/permissions/__tests__/` |
+| MCP/插件/Skills | 外部工具协议、插件、技能发现与学习 | `src/services/mcp/`、`src/services/plugins/`、`src/skills/`、`src/services/skillLearning/` | `src/services/mcp/__tests__/`、`src/services/skillLearning/__tests__/` |
+| Bridge/ACP/远程 | 远程控制、ACP 桥接、Web/SSE/WS server | `src/bridge/`、`src/services/acp/`、`packages/acp-link/`、`packages/remote-control-server/` | `src/bridge/__tests__/`、`src/services/acp/__tests__/`、`packages/remote-control-server/src/__tests__/` |
+| 后台任务 | daemon、jobs、bg sessions、任务模板 | `src/daemon/`、`src/jobs/`、`src/cli/bg/`、`src/commands/daemon/`、`src/commands/job/` | 对应目录 `__tests__` |
+| 原生能力 | 截图、键鼠、音频、URL handler、图像处理 | `packages/*-napi/`、`packages/@ant/computer-use-*` | 对应 package 的 `src/__tests__/` |
+
+## 修改路径选择
+
+| 要做的事 | 推荐路径 |
+| --- | --- |
+| 新增斜杠命令 | 先看同类 `src/commands/<name>/`，再接入命令注册点 |
+| 新增内置工具 | 先定义工具实现于 `packages/builtin-tools/src/tools/<ToolName>/`，再检查 `src/tools.ts` 组装方式 |
+| 调整模型兼容 | 先定位 Provider 转换层，再看 `src/services/api/claude.ts` 请求组装 |
+| 改权限行为 | 先改规则解析或 handler，再改 UI 展示 |
+| 改 REPL 输入体验 | 先从 `src/screens/REPL.tsx` 找事件入口，再下钻到 `src/components/PromptInput/` |
+| 改远程控制 UI/server | 优先在 `packages/remote-control-server/` 内闭环，必要时再改 CLI bridge |
+
+## 不建议跨越的边界
+
+| 不建议做法 | 更稳的方式 |
+| --- | --- |
+| UI 组件直接拼 API 请求 | 通过 QueryEngine/query 链路传递 |
+| 工具实现直接读取 REPL 状态 | 用 ToolUseContext、权限上下文或显式参数 |
+| Provider 适配散落在业务调用点 | 收敛到 `src/services/api/` 或 `packages/@ant/model-provider/` |
+| 命令实现直接操作远程 server 内部状态 | 经 bridge/acp/server 已有服务接口 |
+| 在 `utils` 里堆新业务规则 | 放到具体领域目录，命名体现业务含义 |
+
+## L3 维护规则
+
+新增顶层能力、迁移 package、拆分/合并模块、改变测试归属时，更新本页。每一行都应能回答“我要改这里，先看哪里，测哪里”。

@@ -1,0 +1,84 @@
+---
+title: "L4 开发作业层"
+description: "MTL-Code 后续开发的执行手册：定位、实现、测试、文档和验收清单。"
+keywords: ["开发手册", "测试策略", "验收清单", "Bun", "TypeScript"]
+---
+
+## 作业流程
+
+1. 明确需求归属：先用 L3 找模块边界。
+2. 读最近上下文：同目录源码、同类测试、相关 docs/learn 页面。
+3. 选择最小改动点：优先延续已有接口、类型和目录风格。
+4. 写代码和测试：先跑最小相关测试，再扩大验证范围。
+5. 更新知识：如果改了链路、边界、流程或长期判断，同步更新 L2/L3/L4/L5。
+
+## 开发命令
+
+```bash
+bun install
+bun run dev
+bun run dev:inspect
+bun run build
+bun run build:vite
+bun run typecheck
+bun run lint
+bun test
+bun run test:all
+```
+
+常见局部测试：
+
+```bash
+bun test src/__tests__/tools.test.ts
+bun test src/services/mcp/__tests__/normalization.test.ts
+bun test packages/builtin-tools/src/tools/BashTool/__tests__/commandSemantics.test.ts
+bun test tests/integration/message-pipeline.test.ts
+```
+
+## 测试选择
+
+| 改动类型 | 最小测试 | 扩大验证 |
+| --- | --- | --- |
+| 纯文档 | JSON/frontmatter 检查，必要时 `bun run docs:dev` | 无 |
+| 工具实现 | 对应 tool 的 `__tests__` | `src/__tests__/tools.test.ts`、相关 integration |
+| 权限/危险命令 | `src/utils/permissions/__tests__/`、tool permission handler 测试 | 相关工具测试 |
+| Provider 转换 | Provider package 测试 | `src/services/api/**/__tests__/` |
+| 对话循环 | 最近的 `src/query` / compact / message pipeline 测试 | `bun run typecheck`、`bun test` |
+| CLI 命令 | 对应 `src/commands/**/__tests__/` | `tests/integration/cli-arguments.test.ts` |
+| 远程控制 | `src/bridge/__tests__/` 或 `packages/remote-control-server/src/__tests__/` | 相关 ACP/transport 测试 |
+
+## 实现约束
+
+| 约束 | 做法 |
+| --- | --- |
+| TypeScript 严格模式 | 完成代码改动后尽量跑 `bun run typecheck` |
+| Bun 优先 | 不引入 Node-only 运行假设，除非当前模块已有兼容路径 |
+| 反编译长文件 | 小范围补丁，不无关格式化 |
+| 工具能力 | 保持 Tool 接口链路：输入校验、权限判断、执行、结果 |
+| UI 交互 | 保持 React/Ink 现有组件风格和状态流 |
+| 命名 | 避免新增泛化 `utils`/`helpers`，使用领域名 |
+
+## 文档更新规则
+
+| 改了什么 | 更新哪里 |
+| --- | --- |
+| 新入口、新链路、新执行顺序 | `docs/knowledge/layer-2-runtime-flows.mdx` |
+| 新模块、新 package、新测试归属 | `docs/knowledge/layer-3-module-boundaries.mdx` |
+| 新命令、测试策略、验收流程 | `docs/knowledge/layer-4-development-playbook.mdx` |
+| 新长期决策、废弃路径、架构取舍 | `docs/knowledge/layer-5-decision-memory.mdx` |
+| 面向用户/读者的功能文档 | `docs/features/` 或对应主题目录 |
+| 源码学习过程笔记 | `learn/` |
+
+## Definition of Done
+
+一个开发任务默认达到以下状态才算收口：
+
+1. 改动范围和 L3 模块边界一致。
+2. 相关测试已运行，或明确记录未运行原因。
+3. 类型、lint、格式没有引入显而易见的问题。
+4. 用户可见行为、命令、文档入口同步更新。
+5. 有长期价值的判断已写入 L5。
+
+## L4 维护规则
+
+每当团队形成新的开发习惯、测试策略或验收标准，更新本页。这里不记录一次性任务进度，只沉淀可复用的作业方式。

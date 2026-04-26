@@ -1,0 +1,13 @@
+{
+  "name": "@mtl-code/mcp-chrome-bridge",
+  "version": "3.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "mtl-code-chrome-bridge": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ]
+}

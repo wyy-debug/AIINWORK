@@ -1,0 +1,71 @@
+---
+title: "L1 项目入口层"
+description: "MTL-Code 仓库的开发入口：项目事实、目录坐标、常用命令和已有知识源。"
+keywords: ["项目入口", "MTL-Code", "Bun", "monorepo", "开发入口"]
+---
+
+## 项目事实
+
+| 项目项 | 当前信息 |
+| --- | --- |
+| 包名 | `mtl-code` |
+| 运行时 | Bun，`package.json` 要求 `bun >= 1.2.0` |
+| 模块系统 | ESM，`package.json` 中 `"type": "module"` |
+| 主要语言 | TypeScript / TSX |
+| 工作区 | `packages/*`、`packages/@ant/*`、`packages/@anthropic-ai/*` |
+| CLI 产物 | `dist/cli-node.js`、`dist/cli-bun.js` |
+| 文档站 | Mintlify，配置在 `docs.json` |
+
+## 一眼看目录
+
+| 路径 | 用途 |
+| --- | --- |
+| `src/` | CLI 主体，包含入口、REPL、对话循环、服务、状态、命令等 |
+| `packages/` | workspace 包，包含内置工具、MCP client、远程控制服务、自定义 Ink、Provider 适配等 |
+| `docs/` | 面向文档站的体系化文档 |
+| `docs/knowledge/` | 面向后续开发的五层知识索引 |
+| `learn/` | 源码学习路线和阶段笔记 |
+| `teach-me/` | 主题化学习/教学笔记 |
+| `tests/` | 跨模块集成测试 |
+| `.github/workflows/` | CI、发布和贡献者更新流程 |
+
+## 第一批必读资料
+
+| 目标 | 入口 |
+| --- | --- |
+| 快速知道项目怎么协作 | `CLAUDE.md` / `AGENTS.md` |
+| 看项目功能介绍 | `README.md` / `README_EN.md` |
+| 看运行时五层架构 | `docs/introduction/architecture-overview.mdx` |
+| 按阶段学习源码 | `learn/LEARN.md` |
+| 看开发知识索引 | `docs/knowledge/index.mdx` |
+
+## 常用命令
+
+```bash
+bun install
+bun run dev
+bun run dev:inspect
+bun run build
+bun run build:vite
+bun test
+bun run typecheck
+bun run lint
+bun run test:all
+bun run docs:dev
+```
+
+## 新需求入口判断
+
+| 需求类型 | 先看 |
+| --- | --- |
+| CLI 参数、子命令、启动路径 | `src/entrypoints/cli.tsx`、`src/main.tsx`、`src/commands/` |
+| 交互式终端体验 | `src/screens/REPL.tsx`、`src/components/`、`src/state/` |
+| Agent 对话循环 | `src/QueryEngine.ts`、`src/query.ts` |
+| 模型请求、Provider、流式响应 | `src/services/api/claude.ts`、`src/utils/model/`、`packages/@ant/model-provider/` |
+| 内置工具 | `src/tools.ts`、`src/Tool.ts`、`packages/builtin-tools/src/tools/` |
+| MCP、Skills、插件 | `src/services/mcp/`、`src/skills/`、`src/services/plugins/` |
+| 远程控制、Bridge、ACP | `src/bridge/`、`src/services/acp/`、`packages/remote-control-server/`、`packages/acp-link/` |
+
+## L1 维护规则
+
+当 `package.json`、workspace 范围、顶层目录职责、常用命令发生变化时，优先更新本页。这里保持短、准、可跳转，不承载长篇源码分析。

@@ -1,0 +1,119 @@
+---
+title: "L2 运行链路层"
+description: "把 MTL-Code 的关键运行链路固定下来：启动、REPL、对话循环、工具调用、Provider、远程控制。"
+keywords: ["运行链路", "启动流程", "对话循环", "工具调用", "Provider"]
+---
+
+## 链路总览
+
+本层只回答一类问题：一次行为从哪里进入、经过哪些核心节点、在哪里产生副作用。细节实现仍以源码为准。
+
+| 链路 | 入口 | 核心节点 | 主要副作用 |
+| --- | --- | --- | --- |
+| CLI 启动 | `src/entrypoints/cli.tsx` | `src/main.tsx`、`src/replLauncher.tsx`、`src/screens/REPL.tsx` | 初始化配置、注册命令、渲染终端 UI |
+| 交互对话 | `src/screens/REPL.tsx` | `src/QueryEngine.ts`、`src/query.ts` | 消息追加、transcript、工具权限、token/cost 统计 |
+| 模型请求 | `src/query.ts` | `src/services/api/claude.ts`、`src/utils/model/providers.ts` | 流式事件、重试、降级、Provider 适配 |
+| 工具调用 | `src/tools.ts` | `src/Tool.ts`、`packages/builtin-tools/src/tools/` | 文件读写、shell 执行、MCP 调用、任务状态变化 |
+| 远程/Bridge | `src/bridge/` | `src/services/acp/`、`packages/acp-link/`、`packages/remote-control-server/` | WebSocket/SSE、权限回调、远程任务派发 |
+
+## CLI 启动链路
+
+```text
+package.json scripts.dev
+  -> src/entrypoints/cli.tsx
+  -> src/main.tsx
+  -> src/replLauncher.tsx
+  -> src/components/App.tsx
+  -> src/screens/REPL.tsx
+```
+
+关键判断：
+
+1. `src/entrypoints/cli.tsx` 负责快速路径和独立模式，例如版本、Chrome MCP、Computer Use MCP、daemon worker、remote-control。
+2. `src/main.tsx` 是重型 CLI 定义和分发中心，注册大量 Commander 子命令与主 action。
+3. `src/replLauncher.tsx` 把 `<App>` 和 `<REPL>` 组合起来渲染到终端。
+4. `src/screens/REPL.tsx` 接管用户输入、消息展示、权限提示和 query 触发。
+
+相关深读：`learn/phase-1-startup-flow.md`。
+
+## 对话循环链路
+
+```text
+REPL.onSubmit
+  -> handlePromptSubmit
+  -> QueryEngine / onQueryImpl
+  -> query()
+  -> queryLoop()
+  -> deps.callModel()
+  -> collect stream events
+  -> execute tools when needed
+  -> append tool results
+  -> continue or finish
+```
+
+关键判断：
+
+1. `src/QueryEngine.ts` 是 REPL 和底层 `query()` 之间的高层编排器，处理会话状态、持久化、成本和文件历史。
+2. `src/query.ts` 是核心 agentic loop，使用 `AsyncGenerator` 传递事件。
+3. 工具调用不是旁路能力，而是对话循环的一部分：模型返回 tool use，执行器拿到结果后再喂回 messages。
+4. 上下文压缩、tool result budget、错误恢复、模型降级都在这条链路附近发生。
+
+相关深读：`learn/phase-2-conversation-loop.md`、`docs/conversation/the-loop.mdx`。
+
+## 工具调用链路
+
+```text
+getTools(permissionContext)
+  -> getAllBaseTools()
+  -> filterToolsByDenyRules()
+  -> Tool.validateInput()
+  -> Tool.canUseTool()
+  -> Tool.checkPermissions()
+  -> Tool.call()
+  -> ToolResult
+```
+
+关键文件：
+
+| 文件 | 角色 |
+| --- | --- |
+| `src/tools.ts` | 工具池组装、preset、权限过滤入口 |
+| `src/Tool.ts` | Tool 类型、匹配、构建和结果类型 |
+| `packages/builtin-tools/src/tools/` | 内置工具实现 |
+| `src/hooks/toolPermission/` | 交互式权限处理 |
+| `src/utils/permissions/` | 权限规则解析与危险模式判断 |
+
+## Provider 请求链路
+
+```text
+queryLoop()
+  -> deps.callModel()
+  -> queryModelWithStreaming()
+  -> queryModel()
+  -> provider client / adapter
+  -> BetaRawMessageStreamEvent
+```
+
+主要入口：
+
+| 文件 | 角色 |
+| --- | --- |
+| `src/services/api/claude.ts` | Claude API 请求组装、流式事件处理、重试和降级 |
+| `src/utils/model/providers.ts` | Provider 选择 |
+| `packages/@ant/model-provider/` | OpenAI/Gemini/Grok 等兼容层转换 |
+| `src/services/providerUsage/` | Provider 使用统计 |
+
+## 远程控制链路
+
+远程控制相关能力分散在 CLI 侧、Bridge 侧、ACP 侧和独立 server 包中。
+
+| 能力 | 先看 |
+| --- | --- |
+| CLI bridge 模式 | `src/bridge/` |
+| ACP agent 协议桥接 | `src/services/acp/`、`packages/acp-link/` |
+| 自托管远程控制服务 | `packages/remote-control-server/` |
+| 文档入口 | `docs/features/remote-control-self-hosting.md`、`docs/features/bridge-mode.md`、`docs/features/acp-zed.md` |
+
+## L2 维护规则
+
+只要入口链路、核心循环、工具执行顺序、Provider 选择或远程通信协议发生变化，就更新本页。不要在本页写完整实现细节，保留源码路径和链路坐标即可。
