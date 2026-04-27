@@ -4,7 +4,6 @@ import type { TFunction } from 'i18next';
 
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
-import type { AgentConfig } from '../../../../types/agent';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { SessionWithProvider } from '../../types/types';
@@ -70,8 +69,6 @@ type SidebarContentProps = {
   onShowSettings: () => void;
   activeTab: AppTab;
   onShowAgents: () => void;
-  quickStartAgents: AgentConfig[];
-  onQuickStartAgent: (agentId: string) => void;
   projectListProps: SidebarProjectListProps;
   t: TFunction;
 };
@@ -105,8 +102,6 @@ export default function SidebarContent({
   onShowSettings,
   activeTab,
   onShowAgents,
-  quickStartAgents,
-  onQuickStartAgent,
   projectListProps,
   t,
 }: SidebarContentProps) {
@@ -147,8 +142,6 @@ export default function SidebarContent({
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
         onCollapseSidebar={onCollapseSidebar}
-        quickStartAgents={quickStartAgents}
-        onQuickStartAgent={onQuickStartAgent}
         t={t}
       />
 

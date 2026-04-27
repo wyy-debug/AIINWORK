@@ -1539,12 +1539,15 @@ function getConcreteCommandSessionId(data) {
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
     const concreteSessionId = getConcreteCommandSessionId(data);
-    const storedBinding = concreteSessionId ? sessionAgentBindingsDb.getBinding(concreteSessionId, provider) : null;
+    const allowSessionAgentBinding = data?.options?.allowSessionAgentBinding === true;
+    const storedBinding = allowSessionAgentBinding && concreteSessionId
+        ? sessionAgentBindingsDb.getBinding(concreteSessionId, provider)
+        : null;
     const optionConfiguration = Array.isArray(data?.options?.agentAppBindings)
         ? { appBindings: data.options.agentAppBindings }
         : null;
     const sessionConfiguration = optionConfiguration || storedBinding?.configuration || null;
-    const agentId = data?.options?.agentId || storedBinding?.agentId || '';
+    const agentId = data?.options?.agentId || (allowSessionAgentBinding ? storedBinding?.agentId : '') || '';
     if (!agentId) {
         return data;
     }
@@ -1557,7 +1560,7 @@ async function applyAgentRuntimeToChatCommand(data) {
         return data;
     }
 
-    if (concreteSessionId) {
+    if (allowSessionAgentBinding && concreteSessionId) {
         sessionAgentBindingsDb.setAgent(concreteSessionId, provider, runtime.agent.id, sessionConfiguration);
     }
 

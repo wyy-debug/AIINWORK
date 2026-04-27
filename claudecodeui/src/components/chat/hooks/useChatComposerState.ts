@@ -45,6 +45,7 @@ interface UseChatComposerStateArgs {
   agents?: AgentConfig[];
   selectedAgentId?: string;
   selectedAgentAppBindings?: AgentAppBinding[];
+  allowSessionAgentBinding?: boolean;
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -166,6 +167,7 @@ export function useChatComposerState({
   agents = [],
   selectedAgentId = '',
   selectedAgentAppBindings = [],
+  allowSessionAgentBinding = false,
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -680,6 +682,7 @@ export function useChatComposerState({
             model: cursorModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            allowSessionAgentBinding,
             skipPermissions: toolsSettings?.skipPermissions || false,
             sessionSummary,
             toolsSettings,
@@ -699,6 +702,7 @@ export function useChatComposerState({
             model: codexModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            allowSessionAgentBinding,
             sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
             clientMessageId,
@@ -717,6 +721,7 @@ export function useChatComposerState({
             model: geminiModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            allowSessionAgentBinding,
             sessionSummary,
             permissionMode,
             toolsSettings,
@@ -737,6 +742,7 @@ export function useChatComposerState({
             model: claudeModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            allowSessionAgentBinding,
             sessionSummary,
             images: uploadedImages,
             clientMessageId,
@@ -780,6 +786,7 @@ export function useChatComposerState({
       selectedProject,
       selectedAgentId,
       selectedAgentAppBindings,
+      allowSessionAgentBinding,
       sendMessage,
       setCanAbortSession,
       addMessage,

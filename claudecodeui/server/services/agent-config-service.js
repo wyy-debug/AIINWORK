@@ -28,6 +28,10 @@ const DEFAULT_AGENT_CHANNELS = [
 
 const nowIso = () => new Date().toISOString();
 
+function isImplementedAppBinding(app) {
+  return String(app || '').trim().startsWith('MCP: ');
+}
+
 const DEFAULT_AGENT_CONFIGS = [
   {
     id: 'task-manager',
@@ -45,12 +49,7 @@ const DEFAULT_AGENT_CONFIGS = [
     repository: 'seed/default/task-manager',
     systemPrompt:
       '你是任务管理 Agent。优先澄清目标、拆解步骤、维护上下文，并在工具可用时同步日历、项目追踪器和知识库。输出要清晰、可执行；外部应用未连接时先询问用户。',
-    appBindings: [
-      { slot: '日历', app: 'Google Calendar', status: 'optional' },
-      { slot: '聊天', app: 'Slack', status: 'optional' },
-      { slot: '知识库', app: 'Notion', status: 'optional' },
-      { slot: '项目追踪器', app: 'Linear MCP Server', status: 'optional' },
-    ],
+    appBindings: [],
     skills: ['需求拆解', '会议纪要', '风险提醒', '状态周报'],
     tools: ['Read', 'TodoRead', 'TodoWrite', 'Task'],
     guardrails: ['执行破坏性操作前必须确认', '跨项目写入前必须确认', '外部上传前清理密钥和隐私信息'],
@@ -76,11 +75,7 @@ const DEFAULT_AGENT_CONFIGS = [
     repository: 'seed/default/code-reviewer',
     systemPrompt:
       '你是代码审查 Agent。优先查找 bug、回归风险、安全问题和缺失测试。结论必须绑定文件和行号；如果没有发现问题，要明确说明剩余风险和未验证项。',
-    appBindings: [
-      { slot: '代码仓库', app: 'GitHub', status: 'optional' },
-      { slot: '聊天', app: 'Microsoft Teams', status: 'optional' },
-      { slot: '知识库', app: 'SharePoint', status: 'disabled' },
-    ],
+    appBindings: [],
     skills: ['安全审查', '测试建议', '变更摘要'],
     tools: ['Read', 'Grep', 'TodoRead'],
     guardrails: ['不回滚用户改动', '不暴露密钥', 'review 先列问题再总结'],
@@ -106,11 +101,7 @@ const DEFAULT_AGENT_CONFIGS = [
     repository: 'seed/default/product-planner',
     systemPrompt:
       '你是产品规划 Agent。将分散反馈整理成问题、用户价值、验收标准和分阶段实施计划。对不确定信息标记假设，不替用户承诺排期。',
-    appBindings: [
-      { slot: '反馈', app: '飞书多维表格', status: 'optional' },
-      { slot: '知识库', app: 'Notion', status: 'optional' },
-      { slot: '项目追踪器', app: 'Jira', status: 'optional' },
-    ],
+    appBindings: [],
     skills: ['PRD 生成', '优先级排序', '竞品分析'],
     tools: ['Read', 'TodoWrite'],
     guardrails: ['不替用户承诺排期', '不编造外部数据', '高不确定项标记假设'],
@@ -220,6 +211,7 @@ function normalizeAppBindings(value) {
       const slot = normalizeString(item.slot, '', 80);
       const app = normalizeString(item.app, '', 120);
       if (!slot || !app) return null;
+      if (!isImplementedAppBinding(app)) return null;
       const status = ['connected', 'optional', 'disabled'].includes(item.status)
         ? item.status
         : 'optional';

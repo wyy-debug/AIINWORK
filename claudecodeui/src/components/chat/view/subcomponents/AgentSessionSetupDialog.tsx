@@ -19,12 +19,6 @@ type SlotDraft = {
 };
 
 const COMMON_APPS_BY_SLOT: Array<{ match: RegExp; apps: string[] }> = [
-  { match: /日历|calendar/i, apps: ['Google Calendar', 'Outlook 日历', 'Microsoft Outlook Calendar'] },
-  { match: /聊天|chat/i, apps: ['Slack', 'Teams', 'Microsoft Teams'] },
-  { match: /邮件|email|mail/i, apps: ['Gmail', 'Outlook 电子邮件', 'Microsoft Outlook Email'] },
-  { match: /知识|文档|knowledge|drive|share/i, apps: ['Notion', 'SharePoint', 'Google 云端硬盘', 'Google Drive', 'Box', 'Dropbox'] },
-  { match: /项目|追踪|tracker|issue/i, apps: ['Linear MCP Server', 'Jira', 'Asana'] },
-  { match: /代码|仓库|repo|github/i, apps: ['GitHub'] },
   { match: /高级|工具|mcp|tool/i, apps: ['自定义 MCP'] },
 ];
 

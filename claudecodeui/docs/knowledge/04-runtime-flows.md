@@ -144,6 +144,12 @@ Agent Builder 的“浏览应用 > 自定义 MCP”复用同一套 Provider MCP 
 4. 保存成功后，Agent config 增加 `appBindings` 项，格式为 `MCP: <serverName>`，槽位为 `高级工具` 或 `高级工具 / <projectName>`。
 5. 当前绑定用于 Agent prompt 和配置可视化；实际 MCP 可用性来自 Provider 原生 MCP config，不是前端 mock。
 
+Implemented app catalog invariant:
+
+1. Agent Builder should only list app integrations that have a working runtime path.
+2. Current app catalog lists `自定义 MCP` only.
+3. Google, Slack, Notion, GitHub, Teams, SharePoint, Outlook, and demo apps stay hidden until their connector/runtime support is implemented.
+
 MCP closure updates:
 
 1. Agent Builder can inspect a configured MCP server with `GET /api/providers/:provider/mcp/servers/:name/inspect?scope=user|project&workspacePath=...`.
@@ -190,36 +196,39 @@ MCP closure updates:
 
 1. Agent runtime configs are persisted by `server/services/agent-config-service.js` in `~/.mtl-code-ui/agents/agents.json`.
 2. The main Agent config page is a template/config management surface, not a workspace-start screen. It loads and edits configs through authenticated `/api/agents` endpoints, including model, context window, prompt, skills, tools, app bindings, guardrails, and trigger keywords.
-3. Chat composer loads enabled agents and binds selection to a single conversation, not to the workspace. Persisted conversation bindings use authenticated backend APIs:
+3. Project chat never loads or displays Agent selection. It sends commands with `allowSessionAgentBinding: false`, so project sessions use the default MTL-Code runtime even if a stale binding row exists.
+4. Standalone conversation chat loads enabled agents and binds selection to a single conversation, not to the workspace. Persisted conversation bindings use authenticated backend APIs:
    - `GET /api/sessions/:sessionId/agent?provider=claude`
    - `PUT /api/sessions/:sessionId/agent`
    - `DELETE /api/sessions/:sessionId/agent?provider=claude`
-4. If the selected Agent declares application slots, the composer opens a setup dialog and requires slot-to-app selections before binding the Agent to the conversation.
-5. Per-conversation Agent slot selections are stored as `session_agent_bindings.config_json`. New installs create the column with the table; existing installs add it during DB migration.
-6. New conversations start with no Agent selected. A leading `@agent` mention can match `id`, `name`, or `shortName` and overrides the conversation Agent for that one message only.
-7. Frontend sends the resolved agent as `options.agentId` and resolved slot config as `options.agentAppBindings` in the existing WebSocket command payload. This keeps the provider command shape stable while making slots backend-visible.
-8. `server/index.js` resolves the agent at send time. If a concrete session ID is available and the frontend did not send `options.agentId`, the backend falls back to the persisted session binding. If fresh `options.agentAppBindings` are not sent, it falls back to the persisted `config_json`. Disabled, draft, or missing agents are ignored.
-9. `server/services/agent-config-service.js` applies session slot configuration before building the Agent prompt, so the prompt reflects the per-conversation app choices rather than only the reusable Agent template defaults.
-10. Agent knowledge sources are resolved through `server/services/agent-rag-service.js`. Indexed uploaded-file chunks are scored against the current user command and appended to the Agent prompt as RAG excerpts.
-11. For MTL-Code (`claude-command` compatibility path), the backend passes the agent profile through `--append-system-prompt`, preserving the default coding/safety prompt while adding the selected Agent role, skills, application bindings, RAG excerpts, memory metadata, and guardrails.
-12. Agent `modelConfig.contextWindowTokens` is forwarded as `options.contextWindowTokens`; `server/claude-sdk.js` writes it into `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW` for the spawned MTL-Code child. This is a real backend runtime override, not a GUI-only value.
-13. Agent `modelConfig.model` overrides the MTL-Code model only when it is not `inherit`. Non-MTL providers receive the Agent prompt in-band but do not inherit the MTL-Code model override.
-14. Agent MCP app bindings do not create a separate runtime transport. They reference MCP servers already persisted through Provider MCP config, so the spawned MTL-Code provider discovers them through its native config files.
+5. New standalone conversations show a yes/no choice for whether to use an Agent. Choosing no keeps the default MTL-Code conversation. Choosing yes asks for the Agent and, if needed, slot setup.
+6. If the selected Agent declares application slots, the composer opens a setup dialog and requires slot-to-app selections before binding the Agent to the conversation.
+7. Per-conversation Agent slot selections are stored as `session_agent_bindings.config_json`. New installs create the column with the table; existing installs add it during DB migration.
+8. A leading `@agent` mention can match `id`, `name`, or `shortName` and overrides the conversation Agent for that one message only.
+9. Frontend sends the resolved agent as `options.agentId`, resolved slot config as `options.agentAppBindings`, and the guard flag `options.allowSessionAgentBinding` in the existing WebSocket command payload. This keeps the provider command shape stable while making slots backend-visible.
+10. `server/index.js` resolves the agent at send time. If a concrete session ID is available and the frontend did not send `options.agentId`, the backend falls back to the persisted session binding only when `allowSessionAgentBinding === true`. If fresh `options.agentAppBindings` are not sent, it falls back to the persisted `config_json`. Disabled, draft, or missing agents are ignored.
+11. `server/services/agent-config-service.js` applies session slot configuration before building the Agent prompt, so the prompt reflects the per-conversation app choices rather than only the reusable Agent template defaults.
+12. Agent knowledge sources are resolved through `server/services/agent-rag-service.js`. Indexed uploaded-file chunks are scored against the current user command and appended to the Agent prompt as RAG excerpts.
+13. For MTL-Code (`claude-command` compatibility path), the backend passes the agent profile through `--append-system-prompt`, preserving the default coding/safety prompt while adding the selected Agent role, skills, application bindings, RAG excerpts, memory metadata, and guardrails.
+14. Agent `modelConfig.contextWindowTokens` is forwarded as `options.contextWindowTokens`; `server/claude-sdk.js` writes it into `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW` for the spawned MTL-Code child. This is a real backend runtime override, not a GUI-only value.
+15. Agent `modelConfig.model` overrides the MTL-Code model only when it is not `inherit`. Non-MTL providers receive the Agent prompt in-band but do not inherit the MTL-Code model override.
+16. Agent MCP app bindings do not create a separate runtime transport. They reference MCP servers already persisted through Provider MCP config, so the spawned MTL-Code provider discovers them through its native config files.
 
 Agent quick start:
 
-1. Sidebar conversation mode shows an Agent quick-start control beside the project/conversation switcher.
-2. Selecting an enabled Agent switches to standalone conversation mode, clears the selected project session, and opens a blank chat.
-3. If the Agent has required slots, the setup dialog opens before the Agent is considered active for the conversation.
-4. The empty conversation surface and composer show the selected Agent only after setup is complete.
-5. The first sent message includes `options.agentId` and `options.agentAppBindings`; after the real session ID is created, the existing session-agent binding flow persists both values for later reloads.
+1. Sidebar conversation mode uses the normal new-conversation button. There is no separate quick Agent selector in the sidebar.
+2. Creating a new standalone conversation clears the selected project session and opens a blank chat.
+3. The blank chat asks whether to use an Agent. If yes, the user selects the Agent and completes required slot setup before the Agent is considered active.
+4. The empty conversation surface shows the selected Agent only after setup is complete.
+5. The first sent Agent-backed message includes `options.agentId`, `options.agentAppBindings`, and `allowSessionAgentBinding: true`; after the real session ID is created, the session-agent binding flow persists both values for later reloads.
 
 Project/conversation separation:
 
 1. Project sessions and standalone conversations are independent sidebar modes.
 2. `useProjectsState` clears `selectedConversationSession` when project mode or a project session is selected.
 3. Switching to conversation mode clears `selectedSession` so project-backed sessions do not remain active behind the standalone conversation list.
-4. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
+4. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
+5. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
 
 Channel status:
 

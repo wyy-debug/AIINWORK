@@ -35,6 +35,7 @@ export default function AppContent() {
     isConversationSpace,
     quickStartAgentId,
     quickStartAgentRequestId,
+    newConversationRequestId,
     activeTab,
     sidebarOpen,
     isLoadingProjects,
@@ -192,6 +193,7 @@ export default function AppContent() {
           isConversationSpace={isConversationSpace}
           quickStartAgentId={quickStartAgentId}
           quickStartAgentRequestId={quickStartAgentRequestId}
+          newConversationRequestId={newConversationRequestId}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           ws={ws}

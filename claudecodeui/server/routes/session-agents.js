@@ -25,6 +25,10 @@ function normalizeString(value, fallback = '', maxLength = 160) {
   return (text || fallback).slice(0, maxLength);
 }
 
+function isImplementedAppBinding(app) {
+  return String(app || '').trim().startsWith('MCP: ');
+}
+
 function normalizeAppBindings(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -33,6 +37,7 @@ function normalizeAppBindings(value) {
       const slot = normalizeString(item.slot, '', 80);
       const app = normalizeString(item.app, '', 120);
       if (!slot || !app) return null;
+      if (!isImplementedAppBinding(app)) return null;
       const status = ['connected', 'optional', 'disabled'].includes(item.status)
         ? item.status
         : 'optional';

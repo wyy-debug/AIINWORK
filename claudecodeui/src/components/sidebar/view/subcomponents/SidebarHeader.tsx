@@ -1,10 +1,9 @@
-import { Bot, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button, Input } from '../../../../shared/view/ui';
 import { IS_PLATFORM } from '../../../../constants/config';
 import { cn } from '../../../../lib/utils';
-import type { AgentConfig } from '../../../../types/agent';
 
 type SearchMode = 'projects' | 'conversations';
 
@@ -21,51 +20,8 @@ type SidebarHeaderProps = {
   isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
-  quickStartAgents: AgentConfig[];
-  onQuickStartAgent: (agentId: string) => void;
   t: TFunction;
 };
-
-function AgentQuickStartControl({
-  agents,
-  onQuickStartAgent,
-}: {
-  agents: AgentConfig[];
-  onQuickStartAgent: (agentId: string) => void;
-}) {
-  const disabled = agents.length === 0;
-
-  return (
-    <label
-      className={cn(
-        'relative flex h-8 w-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-sm transition-colors hover:border-primary/40 hover:bg-muted/60 hover:text-foreground',
-        disabled && 'cursor-not-allowed opacity-45 hover:border-border/70 hover:bg-background hover:text-muted-foreground',
-      )}
-      title={disabled ? '暂无已启用 Agent' : '快速启动 Agent'}
-    >
-      <Bot className="h-4 w-4" />
-      <select
-        aria-label="快速启动 Agent"
-        value=""
-        disabled={disabled}
-        onChange={(event) => {
-          const agentId = event.target.value;
-          if (agentId) {
-            onQuickStartAgent(agentId);
-          }
-        }}
-        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-      >
-        <option value="">Agent</option>
-        {agents.map((agent) => (
-          <option key={agent.id} value={agent.id}>
-            {agent.shortName || agent.name}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
 
 export default function SidebarHeader({
   isPWA,
@@ -80,8 +36,6 @@ export default function SidebarHeader({
   isRefreshing,
   onCreateProject,
   onCollapseSidebar,
-  quickStartAgents,
-  onQuickStartAgent,
   t,
 }: SidebarHeaderProps) {
   const LogoBlock = () => (
@@ -184,9 +138,6 @@ export default function SidebarHeader({
                   {t('search.modeConversations')}
                 </button>
               </div>
-              {searchMode === 'conversations' && (
-                <AgentQuickStartControl agents={quickStartAgents} onQuickStartAgent={onQuickStartAgent} />
-              )}
             </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
@@ -281,9 +232,6 @@ export default function SidebarHeader({
                   {t('search.modeConversations')}
                 </button>
               </div>
-              {searchMode === 'conversations' && (
-                <AgentQuickStartControl agents={quickStartAgents} onQuickStartAgent={onQuickStartAgent} />
-              )}
             </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />

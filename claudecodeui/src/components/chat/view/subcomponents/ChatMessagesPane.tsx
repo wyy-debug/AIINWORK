@@ -4,6 +4,7 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { AgentConfig } from '../../../../types/agent';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 
 import MessageComponent from './MessageComponent';
@@ -52,7 +53,12 @@ interface ChatMessagesPaneProps {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
+  isConversationSpace?: boolean;
+  agents?: AgentConfig[];
   selectedAgentName?: string;
+  agentChoiceState?: 'pending' | 'default' | 'agent';
+  onUseDefaultAgent?: () => void;
+  onSelectConversationAgent?: (agentId: string) => void;
 }
 
 export default function ChatMessagesPane({
@@ -98,7 +104,12 @@ export default function ChatMessagesPane({
   showRawParameters,
   showThinking,
   selectedProject,
+  isConversationSpace,
+  agents,
   selectedAgentName,
+  agentChoiceState,
+  onUseDefaultAgent,
+  onSelectConversationAgent,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
@@ -162,7 +173,12 @@ export default function ChatMessagesPane({
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
           setInput={setInput}
+          isConversationSpace={isConversationSpace}
+          agents={agents}
           selectedAgentName={selectedAgentName}
+          agentChoiceState={agentChoiceState}
+          onUseDefaultAgent={onUseDefaultAgent}
+          onSelectConversationAgent={onSelectConversationAgent}
         />
       ) : (
         <>

@@ -37,6 +37,7 @@ function MainContent({
   isConversationSpace = false,
   quickStartAgentId,
   quickStartAgentRequestId,
+  newConversationRequestId,
   activeTab,
   setActiveTab,
   ws,
@@ -136,8 +137,10 @@ function MainContent({
                 key={`${isConversationSpace ? 'conversation' : 'project'}:${selectedProject.name}:${selectedSession?.id || 'new'}`}
                 selectedProject={selectedProject}
                 selectedSession={selectedSession}
+                isConversationSpace={isConversationSpace}
                 quickStartAgentId={quickStartAgentId}
                 quickStartAgentRequestId={quickStartAgentRequestId}
+                newConversationRequestId={newConversationRequestId}
                 ws={ws}
                 sendMessage={sendMessage}
                 latestMessage={latestMessage}

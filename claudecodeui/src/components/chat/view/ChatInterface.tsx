@@ -24,6 +24,8 @@ type PendingViewSession = {
   startedAt: number;
 };
 
+type ConversationAgentChoiceState = 'pending' | 'default' | 'agent';
+
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
@@ -48,8 +50,10 @@ function shouldConfigureAgent(agent: AgentConfig | null) {
 function ChatInterface({
   selectedProject,
   selectedSession,
+  isConversationSpace = false,
   quickStartAgentId,
   quickStartAgentRequestId,
+  newConversationRequestId,
   ws,
   sendMessage,
   latestMessage,
@@ -88,6 +92,9 @@ function ChatInterface({
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
+  const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
+    isConversationSpace ? 'pending' : 'default',
+  );
 
   const resetStreamingState = useCallback(() => {
     if (streamTimerRef.current) {
@@ -99,6 +106,15 @@ function ChatInterface({
   }, []);
 
   useEffect(() => {
+    if (!isConversationSpace) {
+      setAgents([]);
+      setPendingAgentSetup(null);
+      setSelectedAgentId('');
+      setSelectedAgentAppBindings([]);
+      setAgentChoiceState('default');
+      return undefined;
+    }
+
     let cancelled = false;
     const loadAgents = async () => {
       try {
@@ -122,7 +138,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isConversationSpace]);
 
   const enabledAgents = useMemo(
     () => agents.filter((agent) => agent.status === 'enabled'),
@@ -134,10 +150,19 @@ function ChatInterface({
   );
 
   const selectAgentForConversation = useCallback((agentId: string) => {
+    if (!isConversationSpace) {
+      setPendingAgentSetup(null);
+      setSelectedAgentId('');
+      setSelectedAgentAppBindings([]);
+      setAgentChoiceState('default');
+      return;
+    }
+
     if (!agentId) {
       setPendingAgentSetup(null);
       setSelectedAgentId('');
       setSelectedAgentAppBindings([]);
+      setAgentChoiceState('default');
       return;
     }
 
@@ -146,6 +171,7 @@ function ChatInterface({
       setPendingAgentSetup(null);
       setSelectedAgentId('');
       setSelectedAgentAppBindings([]);
+      setAgentChoiceState('pending');
       return;
     }
 
@@ -157,16 +183,28 @@ function ChatInterface({
     setPendingAgentSetup(null);
     setSelectedAgentId(agent.id);
     setSelectedAgentAppBindings([]);
-  }, [enabledAgents]);
+    setAgentChoiceState('agent');
+  }, [enabledAgents, isConversationSpace]);
+
+  const useDefaultConversationAgent = useCallback(() => {
+    setPendingAgentSetup(null);
+    setSelectedAgentId('');
+    setSelectedAgentAppBindings([]);
+    setAgentChoiceState('default');
+  }, []);
 
   const confirmAgentSetup = useCallback((agent: AgentConfig, appBindings: AgentAppBinding[]) => {
     const normalizedBindings = normalizeAgentAppBindings(appBindings);
     setPendingAgentSetup(null);
     setSelectedAgentId(agent.id);
     setSelectedAgentAppBindings(normalizedBindings);
+    setAgentChoiceState('agent');
   }, []);
 
   useEffect(() => {
+    if (!isConversationSpace) {
+      return;
+    }
     if (!quickStartAgentId || !quickStartAgentRequestId) {
       return;
     }
@@ -187,9 +225,10 @@ function ChatInterface({
       setPendingAgentSetup(null);
       setSelectedAgentId(agent.id);
       setSelectedAgentAppBindings([]);
+      setAgentChoiceState('agent');
     }
     lastQuickStartAgentRequestRef.current = quickStartAgentRequestId;
-  }, [enabledAgents, quickStartAgentId, quickStartAgentRequestId]);
+  }, [enabledAgents, isConversationSpace, quickStartAgentId, quickStartAgentRequestId]);
 
   const {
     provider,
@@ -266,6 +305,22 @@ function ChatInterface({
   );
 
   useEffect(() => {
+    if (!isConversationSpace) {
+      return;
+    }
+    if (!newConversationRequestId || selectedSession?.id || currentSessionId) {
+      return;
+    }
+    setPendingAgentSetup(null);
+    setSelectedAgentId('');
+    setSelectedAgentAppBindings([]);
+    setAgentChoiceState('pending');
+  }, [currentSessionId, isConversationSpace, newConversationRequestId, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!isConversationSpace) {
+      return;
+    }
     const bindingKey = activeConversationSessionId ? `${provider}:${activeConversationSessionId}` : '';
     const previousSessionId = previousCurrentSessionIdRef.current;
     previousCurrentSessionIdRef.current = currentSessionId;
@@ -285,9 +340,17 @@ function ChatInterface({
         agentBindingPersistKeyRef.current = '';
       });
     }
-  }, [activeConversationSessionId, currentSessionId, provider, selectedAgentAppBindings, selectedAgentId, selectedSession?.id]);
+  }, [activeConversationSessionId, currentSessionId, isConversationSpace, provider, selectedAgentAppBindings, selectedAgentId, selectedSession?.id]);
 
   useEffect(() => {
+    if (!isConversationSpace) {
+      setSelectedAgentId('');
+      setSelectedAgentAppBindings([]);
+      setPendingAgentSetup(null);
+      setAgentChoiceState('default');
+      return;
+    }
+
     if (!selectedSession?.id && !currentSessionId) {
       const hasQuickStartAgent = Boolean(
         quickStartAgentId
@@ -297,6 +360,9 @@ function ChatInterface({
       if (!hasQuickStartAgent) {
         setSelectedAgentId('');
         setSelectedAgentAppBindings([]);
+        if (agentChoiceState === 'agent') {
+          setAgentChoiceState('pending');
+        }
       }
       return;
     }
@@ -328,12 +394,14 @@ function ChatInterface({
         const nextAppBindings = normalizeAgentAppBindings(data?.configuration?.appBindings || data?.agent?.appBindings);
         setSelectedAgentId(nextAgentId);
         setSelectedAgentAppBindings(nextAppBindings);
+        setAgentChoiceState(nextAgentId ? 'agent' : 'default');
         agentBindingPersistKeyRef.current = `${bindingKey}:${nextAgentId}:${JSON.stringify({ appBindings: nextAppBindings })}`;
       } catch (error) {
         console.warn('Failed to load conversation Agent binding:', error);
         if (!cancelled && agentBindingLoadKeyRef.current === bindingKey) {
           setSelectedAgentId('');
           setSelectedAgentAppBindings([]);
+          setAgentChoiceState('default');
           agentBindingPersistKeyRef.current = `${bindingKey}:`;
         }
       }
@@ -343,7 +411,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, currentSessionId, provider, quickStartAgentId, quickStartAgentRequestId, selectedSession?.id]);
+  }, [activeConversationSessionId, agentChoiceState, currentSessionId, isConversationSpace, provider, quickStartAgentId, quickStartAgentRequestId, selectedSession?.id]);
 
   useEffect(() => {
     if (!selectedAgentId) {
@@ -352,10 +420,14 @@ function ChatInterface({
     if (!enabledAgents.some((agent) => agent.id === selectedAgentId)) {
       setSelectedAgentId('');
       setSelectedAgentAppBindings([]);
+      setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
     }
-  }, [enabledAgents, selectedAgentId]);
+  }, [enabledAgents, isConversationSpace, selectedAgentId]);
 
   useEffect(() => {
+    if (!isConversationSpace) {
+      return;
+    }
     if (!activeConversationSessionId) {
       return;
     }
@@ -375,7 +447,7 @@ function ChatInterface({
       console.warn('Failed to persist conversation Agent binding:', error);
       agentBindingPersistKeyRef.current = '';
     });
-  }, [activeConversationSessionId, provider, selectedAgentAppBindings, selectedAgentId]);
+  }, [activeConversationSessionId, isConversationSpace, provider, selectedAgentAppBindings, selectedAgentId]);
 
   const {
     input,
@@ -431,9 +503,10 @@ function ChatInterface({
     claudeModel,
     codexModel,
     geminiModel,
-    agents: enabledAgents,
-    selectedAgentId,
-    selectedAgentAppBindings,
+    agents: isConversationSpace ? enabledAgents : [],
+    selectedAgentId: isConversationSpace ? selectedAgentId : '',
+    selectedAgentAppBindings: isConversationSpace ? selectedAgentAppBindings : [],
+    allowSessionAgentBinding: isConversationSpace,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -596,7 +669,12 @@ function ChatInterface({
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           selectedProject={selectedProject}
-          selectedAgentName={selectedAgent?.shortName || selectedAgent?.name || ''}
+          isConversationSpace={isConversationSpace}
+          agents={isConversationSpace ? enabledAgents : []}
+          selectedAgentName={isConversationSpace ? selectedAgent?.shortName || selectedAgent?.name || '' : ''}
+          agentChoiceState={agentChoiceState}
+          onUseDefaultAgent={useDefaultConversationAgent}
+          onSelectConversationAgent={selectAgentForConversation}
         />
 
         <ChatComposer
@@ -607,8 +685,8 @@ function ChatInterface({
           isLoading={isLoading}
           onAbortSession={handleAbortSession}
           provider={provider}
-          agents={enabledAgents}
-          selectedAgentId={selectedAgentId}
+          agents={[]}
+          selectedAgentId={isConversationSpace ? selectedAgentId : ''}
           onSelectedAgentIdChange={selectAgentForConversation}
           permissionMode={permissionMode}
           onModeSwitch={cyclePermissionMode}

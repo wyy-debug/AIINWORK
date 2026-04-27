@@ -10,7 +10,9 @@ This note documents the current single-conversation Agent binding path. Agent co
 
 ## Current Behavior
 
-Enabled Agents are loaded into the chat composer. Selecting an Agent with application slots does not immediately bind it. The frontend opens a setup dialog and requires every slot to be mapped to an application before the Agent is enabled for that conversation.
+Enabled Agents are loaded only in standalone conversation space. Project sessions always use the default MTL-Code configuration and do not show Agent selection or Agent setup controls.
+
+For a new standalone conversation, the empty conversation screen asks whether this conversation should use an Agent. Choosing the default path keeps the session unbound. Choosing the Agent path lets the user select an enabled Agent. If that Agent has application slots, the frontend opens a setup dialog and requires every slot to be mapped to an application before the Agent is enabled for that conversation.
 
 The selected slot values are normalized as:
 
@@ -18,8 +20,8 @@ The selected slot values are normalized as:
 {
   "appBindings": [
     {
-      "slot": "calendar",
-      "app": "Google Calendar",
+      "slot": "高级工具",
+      "app": "MCP: project-tools",
       "status": "optional"
     }
   ]
@@ -48,13 +50,14 @@ When a message is submitted, the composer sends the resolved Agent in the existi
 
 - `options.agentId`
 - `options.agentAppBindings`
+- `options.allowSessionAgentBinding`
 
 `server/index.js` resolves the runtime Agent by combining:
 
 1. the explicit Agent ID in the command payload,
-2. the persisted session binding when the command has a concrete session ID,
+2. the persisted session binding when the command has a concrete session ID and `allowSessionAgentBinding === true`,
 3. the explicit slot configuration from `options.agentAppBindings`,
-4. the persisted `config_json` slot configuration when no fresh slot config is sent.
+4. the persisted `config_json` slot configuration when no fresh slot config is sent and session Agent binding is allowed.
 
 `server/services/agent-config-service.js` applies the session slot configuration to the Agent runtime profile before building the prompt. This makes slot selections backend-real: they are injected into the Agent prompt and are not only a GUI display value.
 
@@ -71,8 +74,10 @@ This prevents project chat history, conversation history, and Agent bindings fro
 
 ## Invariants
 
-- New conversations start without an Agent unless the user used quick start.
+- Project conversations must not automatically apply session Agent bindings.
+- New standalone conversations start without an Agent until the user chooses the Agent path in the new-conversation prompt.
 - A leading `@agent` mention still applies only to the current message.
 - Per-conversation slot setup never edits the reusable Agent template.
+- The Agent Builder app browser only shows implemented integrations. Currently that is `自定义 MCP`; placeholder third-party apps are not listed.
 - MCP app bindings still depend on Provider MCP configuration for actual tool availability.
 - Channel runtimes such as DingTalk are deferred; the current channel card is configuration context only.

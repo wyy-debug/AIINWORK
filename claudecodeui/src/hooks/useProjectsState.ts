@@ -169,8 +169,10 @@ export function useProjectsState({
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
   const [quickStartAgentId, setQuickStartAgentId] = useState('');
   const [quickStartAgentRequestId, setQuickStartAgentRequestId] = useState(0);
+  const [newConversationRequestId, setNewConversationRequestId] = useState(0);
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routeSessionModeSwitchRef = useRef(false);
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     try {
@@ -346,6 +348,10 @@ export function useProjectsState({
 
   useEffect(() => {
     if (!sessionId) {
+      routeSessionModeSwitchRef.current = false;
+      return;
+    }
+    if (routeSessionModeSwitchRef.current) {
       return;
     }
 
@@ -516,6 +522,7 @@ export function useProjectsState({
 
   const handleWorkspaceModeChange = useCallback(
     (mode: WorkspaceMode) => {
+      routeSessionModeSwitchRef.current = true;
       setWorkspaceMode(mode);
       if (mode === 'conversations') {
         setSelectedSession(null);
@@ -526,8 +533,9 @@ export function useProjectsState({
       } else {
         setSelectedConversationSession(null);
       }
+      navigate('/');
     },
-    [activeTab, fetchConversationProject],
+    [activeTab, fetchConversationProject, navigate],
   );
 
   const handleConversationSessionSelect = useCallback(
@@ -552,10 +560,13 @@ export function useProjectsState({
   );
 
   const handleNewConversation = useCallback(() => {
+    routeSessionModeSwitchRef.current = true;
     setWorkspaceMode('conversations');
     setSelectedSession(null);
     setSelectedConversationSession(null);
     setActiveTab('chat');
+    setQuickStartAgentId('');
+    setNewConversationRequestId((previous) => previous + 1);
     void fetchConversationProject();
     navigate('/');
 
@@ -570,6 +581,7 @@ export function useProjectsState({
         return;
       }
 
+      routeSessionModeSwitchRef.current = true;
       setWorkspaceMode('conversations');
       setSelectedSession(null);
       setSelectedConversationSession(null);
@@ -753,6 +765,7 @@ export function useProjectsState({
     isConversationSpace: workspaceMode === 'conversations',
     quickStartAgentId,
     quickStartAgentRequestId,
+    newConversationRequestId,
     activeTab,
     sidebarOpen,
     isLoadingProjects: isMainLoading,

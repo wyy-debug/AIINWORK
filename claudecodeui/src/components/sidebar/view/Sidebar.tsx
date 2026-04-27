@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
@@ -7,8 +7,6 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
-import { api } from '../../../utils/api';
-import type { AgentConfig } from '../../../types/agent';
 import type { Project, LLMProvider } from '../../../types/app';
 import type { MCPServerStatus, SessionWithProvider, SidebarProps } from '../types/types';
 
@@ -43,7 +41,6 @@ function Sidebar({
   onShowSettings,
   activeTab,
   onShowAgents,
-  onQuickStartAgent,
   showSettings,
   settingsInitialTab,
   onCloseSettings,
@@ -59,8 +56,6 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
-  const [agents, setAgents] = useState<AgentConfig[]>([]);
-
   const {
     isSidebarCollapsed,
     expandedProjects,
@@ -146,38 +141,6 @@ function Sidebar({
   };
 
   const conversationSessions = getConversationSessions(conversationProject);
-  const quickStartAgents = useMemo(
-    () => agents.filter((agent) => agent.status === 'enabled'),
-    [agents],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadAgents = async () => {
-      try {
-        const response = await api.agents(false);
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data?.error || 'Failed to load agents');
-        }
-        if (!cancelled) {
-          setAgents(Array.isArray(data?.agents) ? data.agents : []);
-        }
-      } catch (error) {
-        console.warn('Failed to load sidebar agents:', error);
-        if (!cancelled) {
-          setAgents([]);
-        }
-      }
-    };
-
-    void loadAgents();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab]);
-
   useEffect(() => {
     if (typeof document === 'undefined') {
       return;
@@ -341,8 +304,6 @@ function Sidebar({
             onShowSettings={onShowSettings}
             activeTab={activeTab}
             onShowAgents={onShowAgents}
-            quickStartAgents={quickStartAgents}
-            onQuickStartAgent={onQuickStartAgent}
             projectListProps={projectListProps}
             t={t}
           />
