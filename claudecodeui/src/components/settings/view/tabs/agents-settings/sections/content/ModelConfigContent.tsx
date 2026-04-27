@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bot, KeyRound, Rocket, Save, Server } from 'lucide-react';
+import { Bot, Gauge, KeyRound, Rocket, Save, Server } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../../../../../shared/view/ui';
@@ -18,9 +18,12 @@ type MtlCodeModelConfig = {
   anthropic: AnthropicModelConfig;
   runtime: {
     bareMode: boolean;
+    contextWindowTokens: number;
   };
   configPath?: string;
 };
+
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 
 const createEmptyConfig = (): MtlCodeModelConfig => ({
   provider: 'anthropic',
@@ -32,12 +35,14 @@ const createEmptyConfig = (): MtlCodeModelConfig => ({
   },
   runtime: {
     bareMode: true,
+    contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
   },
 });
 
 const toConfig = (value: unknown): MtlCodeModelConfig => {
   const data = value as Partial<MtlCodeModelConfig> | undefined;
   const fallback = createEmptyConfig();
+  const contextWindowTokens = data?.runtime?.contextWindowTokens;
 
   return {
     provider: 'anthropic',
@@ -50,6 +55,12 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
     },
     runtime: {
       bareMode: data?.runtime?.bareMode !== false,
+      contextWindowTokens:
+        typeof contextWindowTokens === 'number' &&
+        Number.isFinite(contextWindowTokens) &&
+        contextWindowTokens > 0
+          ? contextWindowTokens
+          : fallback.runtime.contextWindowTokens,
     },
   };
 };
@@ -108,12 +119,27 @@ export default function ModelConfigContent() {
     setStatus(null);
   };
 
-  const updateRuntime = (bareMode: boolean) => {
+  const updateBareMode = (bareMode: boolean) => {
     setConfig((current) => ({
       ...current,
       runtime: {
         ...current.runtime,
         bareMode,
+      },
+    }));
+    setStatus(null);
+  };
+
+  const updateContextWindowTokens = (value: string) => {
+    const contextWindowTokens = Number.parseInt(value, 10);
+    setConfig((current) => ({
+      ...current,
+      runtime: {
+        ...current.runtime,
+        contextWindowTokens:
+          Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
+            ? contextWindowTokens
+            : DEFAULT_CONTEXT_WINDOW_TOKENS,
       },
     }));
     setStatus(null);
@@ -208,6 +234,26 @@ export default function ModelConfigContent() {
       </div>
 
       <div className="rounded-lg border border-border bg-card/50 p-4">
+        <label className="space-y-2">
+          <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Gauge className="h-4 w-4" />
+            {t('mtlCodeModel.contextWindowTokens', {
+              defaultValue: 'Context window tokens',
+            })}
+          </span>
+          <Input
+            type="number"
+            min={1}
+            step={1000}
+            value={config.runtime.contextWindowTokens}
+            onChange={(event) => updateContextWindowTokens(event.target.value)}
+            placeholder="200000"
+            disabled={isLoading || isSaving}
+          />
+        </label>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card/50 p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex gap-3">
             <Rocket className="mt-0.5 h-4 w-4 text-primary" />
@@ -224,7 +270,7 @@ export default function ModelConfigContent() {
           </div>
           <SettingsToggle
             checked={config.runtime.bareMode}
-            onChange={updateRuntime}
+            onChange={updateBareMode}
             ariaLabel={t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
             disabled={isLoading || isSaving}
           />

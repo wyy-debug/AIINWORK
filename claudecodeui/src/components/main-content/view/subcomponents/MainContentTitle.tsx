@@ -7,6 +7,7 @@ type MainContentTitleProps = {
   activeTab: AppTab;
   selectedProject: Project;
   selectedSession: ProjectSession | null;
+  isConversationSpace?: boolean;
   shouldShowTasksTab: boolean;
 };
 
@@ -38,6 +39,7 @@ export default function MainContentTitle({
   activeTab,
   selectedProject,
   selectedSession,
+  isConversationSpace = false,
   shouldShowTasksTab,
 }: MainContentTitleProps) {
   const { t } = useTranslation();
@@ -64,12 +66,16 @@ export default function MainContentTitle({
             <h2 className="scrollbar-hide overflow-x-auto whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
               {getSessionTitle(selectedSession)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="truncate text-[11px] leading-tight text-muted-foreground">
+              {isConversationSpace ? '独立对话' : selectedProject.displayName}
+            </div>
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">
             <h2 className="text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
-            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="truncate text-xs leading-tight text-muted-foreground">
+              {isConversationSpace ? '独立对话' : selectedProject.displayName}
+            </div>
           </div>
         ) : (
           <div className="min-w-0">

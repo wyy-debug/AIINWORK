@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
+
 import type { AppTab, Project, ProjectSession } from '../../../types/app';
 
 export type SessionLifecycleHandler = (sessionId?: string | null) => void;
@@ -33,8 +34,13 @@ export type PrdFile = {
 };
 
 export type MainContentProps = {
+  projects: Project[];
   selectedProject: Project | null;
+  projectSelectedProject?: Project | null;
   selectedSession: ProjectSession | null;
+  isConversationSpace?: boolean;
+  quickStartAgentId?: string;
+  quickStartAgentRequestId?: number;
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   ws: WebSocket | null;
@@ -60,6 +66,7 @@ export type MainContentHeaderProps = {
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   selectedProject: Project;
   selectedSession: ProjectSession | null;
+  isConversationSpace?: boolean;
   shouldShowTasksTab: boolean;
   isMobile: boolean;
   onMenuClick: () => void;

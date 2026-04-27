@@ -28,7 +28,18 @@ import { spawn } from 'child_process';
 import pty from 'node-pty';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, deleteProject, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
+import {
+    getProjects,
+    getSessions,
+    getStandaloneConversationProject,
+    getStandaloneConversationProjectName,
+    renameProject,
+    deleteSession,
+    deleteProject,
+    extractProjectDirectory,
+    clearProjectDirectoryCache,
+    searchConversations,
+} from './projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
@@ -42,19 +53,23 @@ import mcpUtilsRoutes from './routes/mcp-utils.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
+import agentsRoutes from './routes/agents.js';
 import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
 import userRoutes from './routes/user.js';
 import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
+import agentRepositoryRoutes from './routes/agent-repository.js';
+import sessionAgentRoutes from './routes/session-agents.js';
 import messagesRoutes from './routes/messages.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
+import { resolveAgentRuntime } from './services/agent-config-service.js';
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 const MTL_CODE_DEFAULT_CLI = 'mtl-code';
@@ -346,7 +361,14 @@ app.use('/api/gemini', authenticateToken, geminiRoutes);
 // Plugins API Routes (protected)
 app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
+// Agent template and skill repository routes (protected)
+app.use('/api/agent-repository', authenticateToken, agentRepositoryRoutes);
+
+// Agent profile configuration routes (protected)
+app.use('/api/agents', authenticateToken, agentsRoutes);
+
 // Unified session messages route (protected)
+app.use('/api/sessions', authenticateToken, sessionAgentRoutes);
 app.use('/api/sessions', authenticateToken, messagesRoutes);
 
 // Unified provider MCP routes (protected)
@@ -472,6 +494,48 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
     }
 });
 
+app.get('/api/conversations', authenticateToken, async (req, res) => {
+    try {
+        const { limit = 50, offset = 0 } = req.query;
+        const project = await getStandaloneConversationProject(parseInt(limit), parseInt(offset));
+        res.json({ project });
+    } catch (error) {
+        console.error('Error loading standalone conversations:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/conversations/sessions', authenticateToken, async (req, res) => {
+    try {
+        const { limit = 50, offset = 0 } = req.query;
+        const project = await getStandaloneConversationProject(parseInt(limit), parseInt(offset));
+        res.json({
+            sessions: project.sessions,
+            cursorSessions: project.cursorSessions,
+            codexSessions: project.codexSessions,
+            geminiSessions: project.geminiSessions,
+            hasMore: project.sessionMeta?.hasMore === true,
+            total: project.sessionMeta?.total || 0,
+            project,
+        });
+    } catch (error) {
+        console.error('Error loading standalone conversation sessions:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/conversations/sessions/:sessionId', authenticateToken, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        await deleteSession(getStandaloneConversationProjectName(), sessionId);
+        sessionNamesDb.deleteName(sessionId, 'claude');
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[API] Error deleting standalone conversation ${req.params.sessionId}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Rename project endpoint
 app.put('/api/projects/:projectName/rename', authenticateToken, async (req, res) => {
     try {
@@ -568,7 +632,7 @@ app.get('/api/search/conversations', authenticateToken, async (req, res) => {
             } else {
                 res.write(`event: progress\ndata: ${JSON.stringify({ totalMatches, scannedProjects, totalProjects })}\n\n`);
             }
-        }, abortController.signal);
+        }, abortController.signal, { standaloneOnly: true });
         if (!closed) {
             res.write(`event: done\ndata: {}\n\n`);
         }
@@ -595,6 +659,33 @@ const expandWorkspacePath = (inputPath) => {
     return inputPath;
 };
 
+const WINDOWS_DRIVES_PATH = '__WINDOWS_DRIVES__';
+
+const listWindowsDriveRoots = async () => {
+    if (process.platform !== 'win32') {
+        return [];
+    }
+
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const driveResults = await Promise.all(
+        letters.map(async (letter) => {
+            const drivePath = `${letter}:\\`;
+            try {
+                await fsPromises.access(drivePath);
+                return {
+                    path: drivePath,
+                    name: `${letter}:`,
+                    type: 'directory'
+                };
+            } catch (error) {
+                return null;
+            }
+        })
+    );
+
+    return driveResults.filter(Boolean);
+};
+
 // Browse filesystem endpoint for project suggestions - uses existing getFileTree
 app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
     try {
@@ -602,6 +693,14 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
 
         console.log('[API] Browse filesystem request for path:', dirPath);
         console.log('[API] WORKSPACES_ROOT is:', WORKSPACES_ROOT);
+        if (dirPath === WINDOWS_DRIVES_PATH) {
+            return res.json({
+                path: WINDOWS_DRIVES_PATH,
+                displayPath: 'This PC',
+                suggestions: await listWindowsDriveRoots()
+            });
+        }
+
         // Default to home directory if no path provided
         const defaultRoot = WORKSPACES_ROOT;
         let targetPath = dirPath ? expandWorkspacePath(dirPath) : defaultRoot;
@@ -609,7 +708,7 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
         // Resolve and normalize the path
         targetPath = path.resolve(targetPath);
 
-        // Security check - ensure path is within allowed workspace root
+        // Security check - block obvious system-critical workspace locations
         const validation = await validateWorkspacePath(targetPath);
         if (!validation.valid) {
             return res.status(403).json({ error: validation.error });
@@ -1422,6 +1521,74 @@ class WebSocketWriter {
     }
 }
 
+function getProviderFromCommandType(type) {
+    if (type === 'cursor-command') return 'cursor';
+    if (type === 'codex-command') return 'codex';
+    if (type === 'gemini-command') return 'gemini';
+    return 'claude';
+}
+
+function getConcreteCommandSessionId(data) {
+    const sessionId = data?.options?.sessionId || data?.sessionId || null;
+    if (!sessionId || String(sessionId).startsWith('new-session-')) {
+        return null;
+    }
+    return String(sessionId);
+}
+
+async function applyAgentRuntimeToChatCommand(data) {
+    const provider = getProviderFromCommandType(data?.type);
+    const concreteSessionId = getConcreteCommandSessionId(data);
+    const storedBinding = concreteSessionId ? sessionAgentBindingsDb.getBinding(concreteSessionId, provider) : null;
+    const optionConfiguration = Array.isArray(data?.options?.agentAppBindings)
+        ? { appBindings: data.options.agentAppBindings }
+        : null;
+    const sessionConfiguration = optionConfiguration || storedBinding?.configuration || null;
+    const agentId = data?.options?.agentId || storedBinding?.agentId || '';
+    if (!agentId) {
+        return data;
+    }
+
+    const runtime = await resolveAgentRuntime(agentId, {
+        query: typeof data.command === 'string' ? data.command : '',
+        sessionConfiguration,
+    });
+    if (!runtime) {
+        return data;
+    }
+
+    if (concreteSessionId) {
+        sessionAgentBindingsDb.setAgent(concreteSessionId, provider, runtime.agent.id, sessionConfiguration);
+    }
+
+    const options = {
+        ...(data.options || {}),
+        agentId: runtime.agent.id,
+        agentRuntime: {
+            id: runtime.agent.id,
+            name: runtime.agent.name,
+            version: runtime.agent.version,
+        },
+        contextWindowTokens: runtime.contextWindowTokens,
+    };
+
+    if (data.type === 'claude-command' && runtime.model) {
+        options.model = runtime.model;
+    }
+
+    if (data.type === 'claude-command') {
+        options.appendSystemPrompt = runtime.appendSystemPrompt;
+        return { ...data, options };
+    }
+
+    const command = typeof data.command === 'string' ? data.command : '';
+    return {
+        ...data,
+        command: [runtime.appendSystemPrompt, '', 'User task:', command].join('\n'),
+        options,
+    };
+}
+
 // Handle chat WebSocket connections
 function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
@@ -1437,30 +1604,34 @@ function handleChatConnection(ws, request) {
             const data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
+                const commandData = await applyAgentRuntimeToChatCommand(data);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
 
                 // Use Claude Agents SDK
-                await queryClaudeSDK(data.command, data.options, writer);
+                await queryClaudeSDK(commandData.command, commandData.options, writer);
             } else if (data.type === 'cursor-command') {
+                const commandData = await applyAgentRuntimeToChatCommand(data);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await spawnCursor(data.command, data.options, writer);
+                await spawnCursor(commandData.command, commandData.options, writer);
             } else if (data.type === 'codex-command') {
+                const commandData = await applyAgentRuntimeToChatCommand(data);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await queryCodex(data.command, data.options, writer);
+                await queryCodex(commandData.command, commandData.options, writer);
             } else if (data.type === 'gemini-command') {
+                const commandData = await applyAgentRuntimeToChatCommand(data);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await spawnGemini(data.command, data.options, writer);
+                await spawnGemini(commandData.command, commandData.options, writer);
             } else if (data.type === 'cursor-resume') {
                 // Backward compatibility: treat as cursor-command with resume and no prompt
                 console.log('[DEBUG] Cursor resume session (compat):', data.sessionId);
@@ -2156,7 +2327,7 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
         const lines = fileContent.trim().split('\n');
 
         const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW, 10);
-        const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160000;
+        const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 200000;
         let inputTokens = 0;
         let cacheCreationTokens = 0;
         let cacheReadTokens = 0;

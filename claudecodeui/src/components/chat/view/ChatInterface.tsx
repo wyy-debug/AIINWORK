@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
@@ -6,6 +6,8 @@ import PermissionContext from '../../../contexts/PermissionContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
 import type { ChatInterfaceProps, Provider  } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
+import type { AgentAppBinding, AgentConfig } from '../../../types/agent';
+import { api } from '../../../utils/api';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
@@ -14,6 +16,7 @@ import { useSessionStore } from '../../../stores/useSessionStore';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
+import AgentSessionSetupDialog from './subcomponents/AgentSessionSetupDialog';
 
 
 type PendingViewSession = {
@@ -21,9 +24,32 @@ type PendingViewSession = {
   startedAt: number;
 };
 
+const isTemporarySessionId = (sessionId: string | null | undefined) =>
+  Boolean(sessionId && sessionId.startsWith('new-session-'));
+
+function normalizeAgentAppBindings(value: unknown): AgentAppBinding[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((binding) => {
+      const item = binding && typeof binding === 'object' ? binding as Partial<AgentAppBinding> : {};
+      const slot = typeof item.slot === 'string' ? item.slot.trim() : '';
+      const app = typeof item.app === 'string' ? item.app.trim() : '';
+      if (!slot || !app) return null;
+      const status = item.status === 'connected' || item.status === 'disabled' ? item.status : 'optional';
+      return { slot, app, status };
+    })
+    .filter((binding): binding is AgentAppBinding => Boolean(binding));
+}
+
+function shouldConfigureAgent(agent: AgentConfig | null) {
+  return Boolean(agent && agent.appBindings.length > 0);
+}
+
 function ChatInterface({
   selectedProject,
   selectedSession,
+  quickStartAgentId,
+  quickStartAgentRequestId,
   ws,
   sendMessage,
   latestMessage,
@@ -53,6 +79,15 @@ function ChatInterface({
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamRef = useRef('');
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
+  const previousCurrentSessionIdRef = useRef<string | null>(null);
+  const agentBindingLoadKeyRef = useRef('');
+  const agentBindingPersistKeyRef = useRef('');
+  const skipNextAgentBindingLoadKeyRef = useRef('');
+  const lastQuickStartAgentRequestRef = useRef(0);
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
+  const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
 
   const resetStreamingState = useCallback(() => {
     if (streamTimerRef.current) {
@@ -62,6 +97,99 @@ function ChatInterface({
     streamBufferRef.current = '';
     accumulatedStreamRef.current = '';
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAgents = async () => {
+      try {
+        const response = await api.agents(false);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load agents');
+        }
+        if (!cancelled) {
+          setAgents(Array.isArray(data?.agents) ? data.agents : []);
+        }
+      } catch (error) {
+        console.warn('Failed to load chat agents:', error);
+        if (!cancelled) {
+          setAgents([]);
+        }
+      }
+    };
+
+    void loadAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const enabledAgents = useMemo(
+    () => agents.filter((agent) => agent.status === 'enabled'),
+    [agents],
+  );
+  const selectedAgent = useMemo(
+    () => enabledAgents.find((agent) => agent.id === selectedAgentId) || null,
+    [enabledAgents, selectedAgentId],
+  );
+
+  const selectAgentForConversation = useCallback((agentId: string) => {
+    if (!agentId) {
+      setPendingAgentSetup(null);
+      setSelectedAgentId('');
+      setSelectedAgentAppBindings([]);
+      return;
+    }
+
+    const agent = enabledAgents.find((entry) => entry.id === agentId) || null;
+    if (!agent) {
+      setPendingAgentSetup(null);
+      setSelectedAgentId('');
+      setSelectedAgentAppBindings([]);
+      return;
+    }
+
+    if (shouldConfigureAgent(agent)) {
+      setPendingAgentSetup(agent);
+      return;
+    }
+
+    setPendingAgentSetup(null);
+    setSelectedAgentId(agent.id);
+    setSelectedAgentAppBindings([]);
+  }, [enabledAgents]);
+
+  const confirmAgentSetup = useCallback((agent: AgentConfig, appBindings: AgentAppBinding[]) => {
+    const normalizedBindings = normalizeAgentAppBindings(appBindings);
+    setPendingAgentSetup(null);
+    setSelectedAgentId(agent.id);
+    setSelectedAgentAppBindings(normalizedBindings);
+  }, []);
+
+  useEffect(() => {
+    if (!quickStartAgentId || !quickStartAgentRequestId) {
+      return;
+    }
+    if (lastQuickStartAgentRequestRef.current === quickStartAgentRequestId) {
+      return;
+    }
+    if (!enabledAgents.some((agent) => agent.id === quickStartAgentId)) {
+      return;
+    }
+
+    const agent = enabledAgents.find((entry) => entry.id === quickStartAgentId) || null;
+    if (!agent) {
+      return;
+    }
+    if (shouldConfigureAgent(agent)) {
+      setPendingAgentSetup(agent);
+    } else {
+      setPendingAgentSetup(null);
+      setSelectedAgentId(agent.id);
+      setSelectedAgentAppBindings([]);
+    }
+    lastQuickStartAgentRequestRef.current = quickStartAgentRequestId;
+  }, [enabledAgents, quickStartAgentId, quickStartAgentRequestId]);
 
   const {
     provider,
@@ -129,6 +257,126 @@ function ChatInterface({
     sessionStore,
   });
 
+  const activeConversationSessionId = useMemo(
+    () => {
+      const sessionId = selectedSession?.id || currentSessionId;
+      return sessionId && !isTemporarySessionId(sessionId) ? sessionId : null;
+    },
+    [currentSessionId, selectedSession?.id],
+  );
+
+  useEffect(() => {
+    const bindingKey = activeConversationSessionId ? `${provider}:${activeConversationSessionId}` : '';
+    const previousSessionId = previousCurrentSessionIdRef.current;
+    previousCurrentSessionIdRef.current = currentSessionId;
+
+    if (
+      isTemporarySessionId(previousSessionId)
+      && activeConversationSessionId
+      && !selectedSession?.id
+      && selectedAgentId
+    ) {
+      skipNextAgentBindingLoadKeyRef.current = bindingKey;
+      agentBindingPersistKeyRef.current = `${bindingKey}:${selectedAgentId}:${JSON.stringify({ appBindings: selectedAgentAppBindings })}`;
+      void api.updateSessionAgent(activeConversationSessionId, selectedAgentId, provider, {
+        appBindings: selectedAgentAppBindings,
+      }).catch((error) => {
+        console.warn('Failed to persist new conversation Agent binding:', error);
+        agentBindingPersistKeyRef.current = '';
+      });
+    }
+  }, [activeConversationSessionId, currentSessionId, provider, selectedAgentAppBindings, selectedAgentId, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!selectedSession?.id && !currentSessionId) {
+      const hasQuickStartAgent = Boolean(
+        quickStartAgentId
+        && quickStartAgentRequestId
+        && lastQuickStartAgentRequestRef.current === quickStartAgentRequestId,
+      );
+      if (!hasQuickStartAgent) {
+        setSelectedAgentId('');
+        setSelectedAgentAppBindings([]);
+      }
+      return;
+    }
+
+    if (!activeConversationSessionId) {
+      return;
+    }
+
+    const bindingKey = `${provider}:${activeConversationSessionId}`;
+    if (skipNextAgentBindingLoadKeyRef.current === bindingKey) {
+      skipNextAgentBindingLoadKeyRef.current = '';
+      return;
+    }
+
+    let cancelled = false;
+    agentBindingLoadKeyRef.current = bindingKey;
+
+    const loadSessionAgent = async () => {
+      try {
+        const response = await api.sessionAgent(activeConversationSessionId, provider);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load conversation Agent binding');
+        }
+        if (cancelled || agentBindingLoadKeyRef.current !== bindingKey) {
+          return;
+        }
+        const nextAgentId = typeof data?.agentId === 'string' ? data.agentId : '';
+        const nextAppBindings = normalizeAgentAppBindings(data?.configuration?.appBindings || data?.agent?.appBindings);
+        setSelectedAgentId(nextAgentId);
+        setSelectedAgentAppBindings(nextAppBindings);
+        agentBindingPersistKeyRef.current = `${bindingKey}:${nextAgentId}:${JSON.stringify({ appBindings: nextAppBindings })}`;
+      } catch (error) {
+        console.warn('Failed to load conversation Agent binding:', error);
+        if (!cancelled && agentBindingLoadKeyRef.current === bindingKey) {
+          setSelectedAgentId('');
+          setSelectedAgentAppBindings([]);
+          agentBindingPersistKeyRef.current = `${bindingKey}:`;
+        }
+      }
+    };
+
+    void loadSessionAgent();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversationSessionId, currentSessionId, provider, quickStartAgentId, quickStartAgentRequestId, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!selectedAgentId) {
+      return;
+    }
+    if (!enabledAgents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId('');
+      setSelectedAgentAppBindings([]);
+    }
+  }, [enabledAgents, selectedAgentId]);
+
+  useEffect(() => {
+    if (!activeConversationSessionId) {
+      return;
+    }
+
+    const configuration = { appBindings: selectedAgentAppBindings };
+    const bindingKey = `${provider}:${activeConversationSessionId}:${selectedAgentId}:${JSON.stringify(configuration)}`;
+    if (agentBindingPersistKeyRef.current === bindingKey) {
+      return;
+    }
+    agentBindingPersistKeyRef.current = bindingKey;
+
+    const persistSessionAgent = selectedAgentId
+      ? api.updateSessionAgent(activeConversationSessionId, selectedAgentId, provider, configuration)
+      : api.clearSessionAgent(activeConversationSessionId, provider);
+
+    void persistSessionAgent.catch((error) => {
+      console.warn('Failed to persist conversation Agent binding:', error);
+      agentBindingPersistKeyRef.current = '';
+    });
+  }, [activeConversationSessionId, provider, selectedAgentAppBindings, selectedAgentId]);
+
   const {
     input,
     setInput,
@@ -171,7 +419,6 @@ function ChatInterface({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
-    isInputFocused,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -184,6 +431,9 @@ function ChatInterface({
     claudeModel,
     codexModel,
     geminiModel,
+    agents: enabledAgents,
+    selectedAgentId,
+    selectedAgentAppBindings,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -346,6 +596,7 @@ function ChatInterface({
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           selectedProject={selectedProject}
+          selectedAgentName={selectedAgent?.shortName || selectedAgent?.name || ''}
         />
 
         <ChatComposer
@@ -356,6 +607,9 @@ function ChatInterface({
           isLoading={isLoading}
           onAbortSession={handleAbortSession}
           provider={provider}
+          agents={enabledAgents}
+          selectedAgentId={selectedAgentId}
+          onSelectedAgentIdChange={selectAgentForConversation}
           permissionMode={permissionMode}
           onModeSwitch={cyclePermissionMode}
           thinkingMode={thinkingMode}
@@ -416,6 +670,16 @@ function ChatInterface({
           sendByCtrlEnter={sendByCtrlEnter}
         />
       </div>
+
+      {pendingAgentSetup && (
+        <AgentSessionSetupDialog
+          agent={pendingAgentSetup}
+          initialBindings={selectedAgentId === pendingAgentSetup.id ? selectedAgentAppBindings : pendingAgentSetup.appBindings}
+          isLoading={isLoading}
+          onCancel={() => setPendingAgentSetup(null)}
+          onConfirm={(bindings) => confirmAgentSetup(pendingAgentSetup, bindings)}
+        />
+      )}
 
       <QuickSettingsPanel />
     </PermissionContext.Provider>

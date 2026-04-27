@@ -77,6 +77,7 @@ Current Windows implementation:
 - `scripts/package-electron-win.mjs` runs the web/server build, stages `electron-resources/runtime/node.exe`, stages the built `../claude-code/dist` backend, then invokes `electron-builder --win nsis --x64`.
 - `npm run package:electron-win` writes outputs under `../workspace/vendor/electron-dist`.
 - Windows signing and executable metadata editing are disabled for the first local package with `CSC_IDENTITY_AUTO_DISCOVERY=false` and `win.signAndEditExecutable=false`; this avoids the `winCodeSign` symbolic-link extraction failure on machines without symlink privileges.
+- On Windows with Node 24, `spawnSync('npm.cmd', ...)` can fail with `EINVAL`. `scripts/package-electron-win.mjs` wraps `.cmd` commands with `cmd.exe /d /s /c` so `npm run build` and `npx electron-builder` work inside the packaging script.
 
 ## Native Dependency Strategy
 

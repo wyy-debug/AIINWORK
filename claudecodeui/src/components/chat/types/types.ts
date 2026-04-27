@@ -94,6 +94,8 @@ export interface Question {
 export interface ChatInterfaceProps {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
+  quickStartAgentId?: string;
+  quickStartAgentRequestId?: number;
   ws: WebSocket | null;
   sendMessage: (message: unknown) => void;
   latestMessage: any;

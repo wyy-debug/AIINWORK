@@ -1,6 +1,6 @@
 # MTL-Code UI Five-Layer Knowledge Architecture
 
-Updated: 2026-04-26
+Updated: 2026-04-27
 
 This directory is the development entry point for `claudecodeui`, now branded as MTL-Code UI. Use it to answer five practical questions before changing code: what domain concept is involved, which system boundary owns it, which module should change, which runtime flow is affected, and how to verify the result.
 
@@ -16,9 +16,15 @@ This directory is the development entry point for `claudecodeui`, now branded as
 
 ## Current Notes
 
+- [2026-04-27-agent-rag-foundation.md](2026-04-27-agent-rag-foundation.md): Agent Builder knowledge upload, local indexing, and lightweight retrieval injection into Agent runtime prompts.
+- [2026-04-27-session-agent-slots.md](2026-04-27-session-agent-slots.md): per-conversation Agent selection, required slot setup, backend persistence, and project/conversation state separation.
+- [2026-04-27-agent-skill-repository.md](2026-04-27-agent-skill-repository.md): remote catalog support for agent prompt templates and Skills, including upload, install, and likes.
+- [2026-04-27-agent-skill-hub-extraction.md](2026-04-27-agent-skill-hub-extraction.md): extraction of the embedded remote repository server into the standalone Agent/Skill Hub project.
+- [2026-04-27-remote-agent-repository-server.md](2026-04-27-remote-agent-repository-server.md): standalone Hub API for shared submissions, review/publish, global likes, and public catalog hosting.
+- [2026-04-27-unrestricted-workspace-paths.md](2026-04-27-unrestricted-workspace-paths.md): project creation can use normal folders outside the home directory, with system-critical paths still blocked.
 - [2026-04-26-local-first-frontend.md](2026-04-26-local-first-frontend.md): frontend auth/Git removal for first-use simplicity.
 - [2026-04-26-mtl-code-backend-integration.md](2026-04-26-mtl-code-backend-integration.md): MTL-Code backend executable, config paths, and provider compatibility.
-- [2026-04-26-mtlcode-agent-openai-model-config.md](2026-04-26-mtlcode-agent-openai-model-config.md): Agent settings simplification, MTLCode-only model surface, and Anthropic-compatible backend config.
+- [2026-04-26-mtlcode-agent-openai-model-config.md](2026-04-26-mtlcode-agent-openai-model-config.md): Agent settings simplification, MTLCode-only model surface, Anthropic-compatible backend config, and context-window propagation.
 - [desktop-packaging-plan.md](desktop-packaging-plan.md): plan for bundling frontend and backend into a desktop installer.
 
 ## How To Use

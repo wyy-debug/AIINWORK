@@ -3,6 +3,7 @@ import { McpServers } from '../../../../../mcp';
 
 import ModelConfigContent from './content/ModelConfigContent';
 import PermissionsContent from './content/PermissionsContent';
+import RepositoryContent from './content/RepositoryContent';
 
 export default function AgentCategoryContentSection({
   selectedAgent,
@@ -70,6 +71,10 @@ export default function AgentCategoryContentSection({
           selectedProvider={selectedAgent}
           currentProjects={projects}
         />
+      )}
+
+      {selectedCategory === 'repository' && selectedAgent === 'claude' && (
+        <RepositoryContent projects={projects} />
       )}
     </div>
   );

@@ -1,13 +1,17 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { api } from '../../../utils/api';
+import type { AgentConfig } from '../../../types/agent';
 import type { Project, LLMProvider } from '../../../types/app';
-import type { MCPServerStatus, SidebarProps } from '../types/types';
+import type { MCPServerStatus, SessionWithProvider, SidebarProps } from '../types/types';
+
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
@@ -22,15 +26,24 @@ function Sidebar({
   projects,
   selectedProject,
   selectedSession,
+  workspaceMode,
+  conversationProject,
+  selectedConversationSession,
   onProjectSelect,
   onSessionSelect,
   onNewSession,
+  onWorkspaceModeChange,
+  onConversationSessionSelect,
+  onNewConversation,
   onSessionDelete,
   onProjectDelete,
   isLoading,
   loadingProgress,
   onRefresh,
   onShowSettings,
+  activeTab,
+  onShowAgents,
+  onQuickStartAgent,
   showSettings,
   settingsInitialTab,
   onCloseSettings,
@@ -46,6 +59,7 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
 
   const {
     isSidebarCollapsed,
@@ -101,6 +115,7 @@ function Sidebar({
     projects,
     selectedProject,
     selectedSession,
+    workspaceMode,
     isLoading,
     isMobile,
     t,
@@ -113,6 +128,55 @@ function Sidebar({
     setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
     sidebarVisible,
   });
+
+  const getConversationSessions = (project: Project | null): SessionWithProvider[] => {
+    if (!project) {
+      return [];
+    }
+    return [
+      ...(project.sessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'claude') as LLMProvider })),
+      ...(project.codexSessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'codex') as LLMProvider })),
+      ...(project.cursorSessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'cursor') as LLMProvider })),
+      ...(project.geminiSessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'gemini') as LLMProvider })),
+    ].sort((left, right) => {
+      const leftTime = new Date(left.lastActivity || left.updated_at || left.created_at || 0).getTime();
+      const rightTime = new Date(right.lastActivity || right.updated_at || right.created_at || 0).getTime();
+      return rightTime - leftTime;
+    });
+  };
+
+  const conversationSessions = getConversationSessions(conversationProject);
+  const quickStartAgents = useMemo(
+    () => agents.filter((agent) => agent.status === 'enabled'),
+    [agents],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAgents = async () => {
+      try {
+        const response = await api.agents(false);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load agents');
+        }
+        if (!cancelled) {
+          setAgents(Array.isArray(data?.agents) ? data.agents : []);
+        }
+      } catch (error) {
+        console.warn('Failed to load sidebar agents:', error);
+        if (!cancelled) {
+          setAgents([]);
+        }
+      }
+    };
+
+    void loadAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -212,6 +276,8 @@ function Sidebar({
         <SidebarCollapsed
           onExpand={handleExpandSidebar}
           onShowSettings={onShowSettings}
+          activeTab={activeTab}
+          onShowAgents={onShowAgents}
           updateAvailable={updateAvailable}
           onShowVersionModal={() => setShowVersionModal(true)}
           t={t}
@@ -222,21 +288,25 @@ function Sidebar({
             isPWA={isPWA}
             isMobile={isMobile}
             isLoading={isLoading}
-            projects={projects}
             searchFilter={searchFilter}
             onSearchFilterChange={setSearchFilter}
             onClearSearchFilter={() => setSearchFilter('')}
             searchMode={searchMode}
             onSearchModeChange={(mode: 'projects' | 'conversations') => {
               setSearchMode(mode);
+              setSearchFilter('');
+              onWorkspaceModeChange(mode);
               if (mode === 'projects') clearConversationResults();
             }}
+            conversationProject={conversationProject}
+            conversationSessions={conversationSessions}
+            selectedConversationSession={selectedConversationSession}
+            onConversationSessionSelect={onConversationSessionSelect}
             conversationResults={conversationResults}
             isSearching={isSearching}
             searchProgress={searchProgress}
             onConversationResultClick={(projectName: string, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => {
               const resolvedProvider = (provider || 'claude') as LLMProvider;
-              const project = projects.find(p => p.name === projectName);
               const searchTarget = { __searchTargetTimestamp: messageTimestamp || null, __searchTargetSnippet: messageSnippet || null };
               const sessionObj = {
                 id: sessionId,
@@ -244,24 +314,24 @@ function Sidebar({
                 __projectName: projectName,
                 ...searchTarget,
               };
-              if (project) {
-                handleProjectSelect(project);
-                const sessions = getProjectSessions(project);
-                const existing = sessions.find(s => s.id === sessionId);
-                if (existing) {
-                  handleSessionClick({ ...existing, ...searchTarget }, projectName);
-                } else {
-                  handleSessionClick(sessionObj, projectName);
-                }
+              const existing = conversationSessions.find(session => session.id === sessionId);
+              if (existing) {
+                onConversationSessionSelect({ ...existing, ...searchTarget });
               } else {
-                handleSessionClick(sessionObj, projectName);
+                onConversationSessionSelect(sessionObj);
               }
             }}
             onRefresh={() => {
               void refreshProjects();
             }}
             isRefreshing={isRefreshing}
-            onCreateProject={() => setShowNewProject(true)}
+            onCreateProject={() => {
+              if (searchMode === 'conversations') {
+                onNewConversation();
+                return;
+              }
+              setShowNewProject(true);
+            }}
             onCollapseSidebar={handleCollapseSidebar}
             updateAvailable={updateAvailable}
             releaseInfo={releaseInfo}
@@ -269,6 +339,10 @@ function Sidebar({
             currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
+            activeTab={activeTab}
+            onShowAgents={onShowAgents}
+            quickStartAgents={quickStartAgents}
+            onQuickStartAgent={onQuickStartAgent}
             projectListProps={projectListProps}
             t={t}
           />

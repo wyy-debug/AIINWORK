@@ -32,12 +32,20 @@ Backend:
   - `env.ANTHROPIC_DEFAULT_HAIKU_MODEL`
   - `env.ANTHROPIC_DEFAULT_SONNET_MODEL`
   - `env.ANTHROPIC_DEFAULT_OPUS_MODEL`
+  - `env.MTL_CODE_MAX_CONTEXT_TOKENS`
+  - `env.CONTEXT_WINDOW`
   - clears legacy `env.OPENAI_*` runtime keys so chat cannot accidentally route through OpenAI Chat Completions.
 
 MTL-Code backend:
 
 - The CLI already supports `modelType: "anthropic"` and the `ANTHROPIC_*` environment keys through its settings/env pipeline.
 - New sessions spawned by the UI backend pick up the saved settings when the MTL-Code process starts.
+- The default MTL-Code context window is 200,000 tokens. DeepSeek does not receive a provider-specific context-window default; users can explicitly set `1000000` when using a 1M-token DeepSeek endpoint.
+- The Agent settings UI context-window input must be saved through `/api/settings/mtl-code-model`; a GUI-only value is not enough.
+- `server/routes/settings.js` persists the value to `MTL_CODE_MAX_CONTEXT_TOKENS` for the MTL-Code backend and to `CONTEXT_WINDOW` for UI token-budget compatibility.
+- `server/claude-sdk.js` merges saved `settings.env` into the spawned MTL-Code child process and mirrors `MTL_CODE_MAX_CONTEXT_TOKENS` to `CONTEXT_WINDOW`.
+- `../claude-code/src/utils/context.ts` honors `MTL_CODE_MAX_CONTEXT_TOKENS` for local context decisions such as auto-compact, not only for Ant-internal users.
+- Token-budget UI should prefer `modelUsage[model].contextWindow` from the MTL-Code result event when available.
 - `src/services/api/client.ts` in the MTL-Code backend explicitly passes `ANTHROPIC_BASE_URL` to the Anthropic SDK client, so configured gateways use the Anthropic Messages API request format.
 - Chat execution must call the paired MTL-Code runtime directly, not the Anthropic Agent SDK.
 - `server/claude-sdk.js` keeps its historical export name for compatibility, but launches MTL-Code with `--print --input-format stream-json --output-format stream-json --verbose`.

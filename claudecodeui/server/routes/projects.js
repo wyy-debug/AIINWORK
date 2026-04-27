@@ -12,7 +12,8 @@ function sanitizeGitError(message, token) {
   return message.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '***');
 }
 
-// Configure allowed workspace root (defaults to user's home directory)
+// Default starting point for workspace browsing. Validation allows workspaces
+// outside this path while still blocking obvious system-critical directories.
 export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
 
 // System-critical paths that should never be used as workspace directories
@@ -43,6 +44,38 @@ export const FORBIDDEN_PATHS = [
   'C:\\$Recycle.Bin'
 ];
 
+function isPathAtOrInside(parentPath, candidatePath) {
+  const normalizedParent = path.normalize(parentPath);
+  const normalizedCandidate = path.normalize(candidatePath);
+  const comparisonParent = process.platform === 'win32'
+    ? normalizedParent.toLowerCase()
+    : normalizedParent;
+  const comparisonCandidate = process.platform === 'win32'
+    ? normalizedCandidate.toLowerCase()
+    : normalizedCandidate;
+
+  return comparisonCandidate === comparisonParent ||
+    comparisonCandidate.startsWith(comparisonParent + path.sep);
+}
+
+function getForbiddenWorkspacePath(candidatePath) {
+  const normalizedPath = path.normalize(candidatePath);
+
+  if (normalizedPath === '/') {
+    return '/';
+  }
+
+  return FORBIDDEN_PATHS.find((forbiddenPath) => {
+    if (forbiddenPath === '/var' &&
+        (normalizedPath.startsWith('/var/tmp') ||
+         normalizedPath.startsWith('/var/folders'))) {
+      return false;
+    }
+
+    return isPathAtOrInside(forbiddenPath, normalizedPath);
+  });
+}
+
 /**
  * Validates that a path is safe for workspace operations
  * @param {string} requestedPath - The path to validate
@@ -54,31 +87,14 @@ export async function validateWorkspacePath(requestedPath) {
     let absolutePath = path.resolve(requestedPath);
 
     // Check if path is a forbidden system directory
-    const normalizedPath = path.normalize(absolutePath);
-    if (FORBIDDEN_PATHS.includes(normalizedPath) || normalizedPath === '/') {
+    const forbiddenPath = getForbiddenWorkspacePath(absolutePath);
+    if (forbiddenPath) {
       return {
         valid: false,
-        error: 'Cannot use system-critical directories as workspace locations'
+        error: forbiddenPath === '/'
+          ? 'Cannot use system root as a workspace location'
+          : `Cannot create workspace in system directory: ${forbiddenPath}`
       };
-    }
-
-    // Additional check for paths starting with forbidden directories
-    for (const forbidden of FORBIDDEN_PATHS) {
-      if (normalizedPath === forbidden ||
-          normalizedPath.startsWith(forbidden + path.sep)) {
-        // Exception: /var/tmp and similar user-accessible paths might be allowed
-        // but /var itself and most /var subdirectories should be blocked
-        if (forbidden === '/var' &&
-            (normalizedPath.startsWith('/var/tmp') ||
-             normalizedPath.startsWith('/var/folders'))) {
-          continue; // Allow these specific cases
-        }
-
-        return {
-          valid: false,
-          error: `Cannot create workspace in system directory: ${forbidden}`
-        };
-      }
     }
 
     // Try to resolve the real path (following symlinks)
@@ -98,8 +114,7 @@ export async function validateWorkspacePath(requestedPath) {
           realPath = path.join(parentRealPath, path.basename(absolutePath));
         } catch (parentError) {
           if (parentError.code === 'ENOENT') {
-            // Parent doesn't exist either - use the absolute path as-is
-            // We'll validate it's within allowed root
+            // Parent doesn't exist either - use the absolute path as-is.
             realPath = absolutePath;
           } else {
             throw parentError;
@@ -110,15 +125,13 @@ export async function validateWorkspacePath(requestedPath) {
       }
     }
 
-    // Resolve the workspace root to its real path
-    const resolvedWorkspaceRoot = await fs.realpath(WORKSPACES_ROOT);
-
-    // Ensure the resolved path is contained within the allowed workspace root
-    if (!realPath.startsWith(resolvedWorkspaceRoot + path.sep) &&
-        realPath !== resolvedWorkspaceRoot) {
+    const forbiddenRealPath = getForbiddenWorkspacePath(realPath);
+    if (forbiddenRealPath) {
       return {
         valid: false,
-        error: `Workspace path must be within the allowed workspace root: ${WORKSPACES_ROOT}`
+        error: forbiddenRealPath === '/'
+          ? 'Cannot use system root as a workspace location'
+          : `Cannot create workspace in system directory: ${forbiddenRealPath}`
       };
     }
 
@@ -128,16 +141,16 @@ export async function validateWorkspacePath(requestedPath) {
       const stats = await fs.lstat(absolutePath);
 
       if (stats.isSymbolicLink()) {
-        // Verify symlink target is also within allowed root
+        // Verify symlink target is not a forbidden system location
         const linkTarget = await fs.readlink(absolutePath);
         const resolvedTarget = path.resolve(path.dirname(absolutePath), linkTarget);
         const realTarget = await fs.realpath(resolvedTarget);
+        const forbiddenTarget = getForbiddenWorkspacePath(realTarget);
 
-        if (!realTarget.startsWith(resolvedWorkspaceRoot + path.sep) &&
-            realTarget !== resolvedWorkspaceRoot) {
+        if (forbiddenTarget) {
           return {
             valid: false,
-            error: 'Symlink target is outside the allowed workspace root'
+            error: `Symlink target points to a system directory: ${forbiddenTarget}`
           };
         }
       }

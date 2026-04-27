@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Eye, EyeOff, FolderOpen, FolderPlus, Loader2, Plus, X } from 'lucide-react';
 import { Button, Input } from '../../../shared/view/ui';
 import { browseFilesystemFolders, createFolderInFilesystem } from '../data/workspaceApi';
-import { getParentPath, joinFolderPath } from '../utils/pathUtils';
+import { getParentPath, joinFolderPath, WINDOWS_DRIVES_PATH } from '../utils/pathUtils';
 import type { FolderSuggestion } from '../types';
 
 type FolderBrowserModalProps = {
@@ -19,6 +19,7 @@ export default function FolderBrowserModal({
   onFolderSelected,
 }: FolderBrowserModalProps) {
   const [currentPath, setCurrentPath] = useState('~');
+  const [displayPath, setDisplayPath] = useState('~');
   const [folders, setFolders] = useState<FolderSuggestion[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
   const [showHiddenFolders, setShowHiddenFolders] = useState(false);
@@ -34,6 +35,7 @@ export default function FolderBrowserModal({
     try {
       const result = await browseFilesystemFolders(pathToLoad);
       setCurrentPath(result.path);
+      setDisplayPath(result.displayPath || result.path);
       setFolders(result.suggestions);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load folders');
@@ -71,7 +73,7 @@ export default function FolderBrowserModal({
   };
 
   const handleCreateFolder = useCallback(async () => {
-    if (!newFolderName.trim()) {
+    if (!newFolderName.trim() || currentPath === WINDOWS_DRIVES_PATH) {
       return;
     }
 
@@ -91,6 +93,7 @@ export default function FolderBrowserModal({
   }, [currentPath, loadFolders, newFolderName]);
 
   const parentPath = getParentPath(currentPath);
+  const isVirtualLocation = currentPath === WINDOWS_DRIVES_PATH;
 
   if (!isOpen) {
     return null;
@@ -121,9 +124,12 @@ export default function FolderBrowserModal({
             </button>
             <button
               onClick={() => setShowNewFolderInput((previous) => !previous)}
+              disabled={isVirtualLocation}
               className={`rounded-md p-2 transition-colors ${
                 showNewFolderInput
                   ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                  : isVirtualLocation
+                    ? 'cursor-not-allowed text-gray-300 dark:text-gray-600'
                   : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300'
               }`}
               title="Create new folder"
@@ -230,7 +236,7 @@ export default function FolderBrowserModal({
           <div className="flex items-center gap-2 bg-gray-50 px-4 py-3 dark:bg-gray-900/50">
             <span className="text-sm text-gray-600 dark:text-gray-400">Path:</span>
             <code className="flex-1 truncate font-mono text-sm text-gray-900 dark:text-white">
-              {currentPath}
+              {displayPath}
             </code>
           </div>
           <div className="flex items-center justify-end gap-2 p-4">
@@ -240,6 +246,7 @@ export default function FolderBrowserModal({
             <Button
               variant="outline"
               onClick={() => onFolderSelected(currentPath, autoAdvanceOnSelect)}
+              disabled={isVirtualLocation}
             >
               Use this folder
             </Button>

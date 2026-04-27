@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import { useWebSocket } from '../../contexts/WebSocketContext';
@@ -27,8 +28,13 @@ export default function AppContent() {
   } = useSessionProtection();
 
   const {
+    projects,
     selectedProject,
+    projectSelectedProject,
     selectedSession,
+    isConversationSpace,
+    quickStartAgentId,
+    quickStartAgentRequestId,
     activeTab,
     sidebarOpen,
     isLoadingProjects,
@@ -179,8 +185,13 @@ export default function AppContent() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <MainContent
+          projects={projects}
           selectedProject={selectedProject}
+          projectSelectedProject={projectSelectedProject}
           selectedSession={selectedSession}
+          isConversationSpace={isConversationSpace}
+          quickStartAgentId={quickStartAgentId}
+          quickStartAgentRequestId={quickStartAgentRequestId}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           ws={ws}

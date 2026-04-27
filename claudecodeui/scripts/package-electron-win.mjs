@@ -37,7 +37,10 @@ const assertInsideWorkspace = (target) => {
 const commandName = (command) => process.platform === 'win32' ? `${command}.cmd` : command;
 
 const run = (command, args, options = {}) => {
-  const result = spawnSync(command, args, {
+  const needsWindowsCommandShell = process.platform === 'win32' && command.endsWith('.cmd');
+  const executable = needsWindowsCommandShell ? process.env.ComSpec || 'cmd.exe' : command;
+  const commandArgs = needsWindowsCommandShell ? ['/d', '/s', '/c', command, ...args] : args;
+  const result = spawnSync(executable, commandArgs, {
     cwd: appRoot,
     stdio: 'inherit',
     windowsHide: true,

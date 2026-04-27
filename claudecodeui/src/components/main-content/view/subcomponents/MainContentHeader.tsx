@@ -9,6 +9,7 @@ export default function MainContentHeader({
   setActiveTab,
   selectedProject,
   selectedSession,
+  isConversationSpace = false,
   shouldShowTasksTab,
   isMobile,
   onMenuClick,
@@ -42,6 +43,7 @@ export default function MainContentHeader({
             activeTab={activeTab}
             selectedProject={selectedProject}
             selectedSession={selectedSession}
+            isConversationSpace={isConversationSpace}
             shouldShowTasksTab={shouldShowTasksTab}
           />
         </div>
@@ -55,11 +57,13 @@ export default function MainContentHeader({
             onScroll={updateScrollState}
             className="scrollbar-hide overflow-x-auto"
           >
-            <MainContentTabSwitcher
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              shouldShowTasksTab={shouldShowTasksTab}
-            />
+            {!isConversationSpace && (
+              <MainContentTabSwitcher
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                shouldShowTasksTab={shouldShowTasksTab}
+              />
+            )}
           </div>
           {canScrollRight && (
             <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-background to-transparent" />

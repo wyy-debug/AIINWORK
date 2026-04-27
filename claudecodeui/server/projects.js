@@ -286,6 +286,29 @@ function getProjectsDir(homeDir) {
   return path.join(homeDir, 'projects');
 }
 
+function encodeProviderProjectName(projectPath) {
+  return path.resolve(projectPath).replace(/[^a-zA-Z0-9-]/g, '-');
+}
+
+function getStandaloneConversationPath() {
+  return path.join(getMtlCodeHomeDir(), 'standalone-conversations');
+}
+
+function getStandaloneConversationProjectName() {
+  return encodeProviderProjectName(getStandaloneConversationPath());
+}
+
+function isStandaloneConversationProjectName(projectName) {
+  return projectName === getStandaloneConversationProjectName();
+}
+
+async function ensureStandaloneConversationDirectory() {
+  const conversationPath = getStandaloneConversationPath();
+  await fs.mkdir(conversationPath, { recursive: true, mode: 0o700 });
+  await fs.mkdir(path.join(getMtlCodeHomeDir(), 'projects'), { recursive: true, mode: 0o700 });
+  return conversationPath;
+}
+
 async function findProjectDir(projectName, preferredHomeDir = null) {
   const homeDirs = preferredHomeDir
     ? uniquePaths([preferredHomeDir, ...getProviderHomeDirs()])
@@ -531,14 +554,19 @@ async function getProjects(progressCallback = null) {
 
   try {
     // First, get existing MTL-Code projects from the file system, with legacy Claude dirs included.
-    directories = await listProviderProjectDirs();
+    directories = (await listProviderProjectDirs())
+      .filter(entry => !isStandaloneConversationProjectName(entry.name));
 
     // Build set of existing project names for later
     directories.forEach(e => existingProjects.add(e.name));
 
     // Count manual projects not already in directories
     const manualProjectsCount = Object.entries(config)
-      .filter(([name, cfg]) => cfg.manuallyAdded && !existingProjects.has(name))
+      .filter(([name, cfg]) => (
+        cfg.manuallyAdded
+        && !existingProjects.has(name)
+        && !isStandaloneConversationProjectName(name)
+      ))
       .length;
 
     totalProjects = directories.length + manualProjectsCount;
@@ -653,13 +681,17 @@ async function getProjects(progressCallback = null) {
     console.error('Error reading projects directories:', error);
     // Calculate total for manual projects only (no directories exist)
     totalProjects = Object.entries(config)
-      .filter(([name, cfg]) => cfg.manuallyAdded)
+      .filter(([name, cfg]) => cfg.manuallyAdded && !isStandaloneConversationProjectName(name))
       .length;
   }
 
   // Add manually configured projects that don't exist as folders yet
   for (const [projectName, projectConfig] of Object.entries(config)) {
-    if (!existingProjects.has(projectName) && projectConfig.manuallyAdded) {
+    if (
+      !existingProjects.has(projectName)
+      && projectConfig.manuallyAdded
+      && !isStandaloneConversationProjectName(projectName)
+    ) {
       processedProjects++;
 
       // Emit progress for manual projects
@@ -770,6 +802,57 @@ async function getProjects(progressCallback = null) {
   }
 
   return projects;
+}
+
+async function getStandaloneConversationProject(limit = 50, offset = 0) {
+  const conversationPath = await ensureStandaloneConversationDirectory();
+  const projectName = getStandaloneConversationProjectName();
+  const sessionResult = await getSessions(projectName, limit, offset, getMtlCodeHomeDir());
+  const project = {
+    name: projectName,
+    path: conversationPath,
+    displayName: '对话',
+    fullPath: conversationPath,
+    isStandaloneConversation: true,
+    sessions: sessionResult.sessions || [],
+    cursorSessions: [],
+    codexSessions: [],
+    geminiSessions: [],
+    sessionMeta: {
+      hasMore: sessionResult.hasMore,
+      total: sessionResult.total,
+      offset: sessionResult.offset,
+      limit: sessionResult.limit,
+    },
+  };
+
+  applyCustomSessionNames(project.sessions, 'claude');
+
+  try {
+    project.cursorSessions = await getCursorSessions(conversationPath);
+  } catch {
+    project.cursorSessions = [];
+  }
+  applyCustomSessionNames(project.cursorSessions, 'cursor');
+
+  try {
+    project.codexSessions = await getCodexSessions(conversationPath);
+  } catch {
+    project.codexSessions = [];
+  }
+  applyCustomSessionNames(project.codexSessions, 'codex');
+
+  try {
+    const uiSessions = sessionManager.getProjectSessions(conversationPath) || [];
+    const cliSessions = await getGeminiCliSessions(conversationPath);
+    const uiIds = new Set(uiSessions.map(session => session.id));
+    project.geminiSessions = [...uiSessions, ...cliSessions.filter(session => !uiIds.has(session.id))];
+  } catch {
+    project.geminiSessions = [];
+  }
+  applyCustomSessionNames(project.geminiSessions, 'gemini');
+
+  return project;
 }
 
 async function getSessions(projectName, limit = 5, offset = 0, preferredHomeDir = null) {
@@ -1993,7 +2076,7 @@ async function deleteCodexSession(sessionId) {
   }
 }
 
-async function searchConversations(query, limit = 50, onProjectResult = null, signal = null) {
+async function searchConversations(query, limit = 50, onProjectResult = null, signal = null, options = {}) {
   const safeQuery = typeof query === 'string' ? query.trim() : '';
   const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
   const config = await loadProjectConfig();
@@ -2079,7 +2162,12 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
   };
 
   try {
-    const projectDirs = await listProviderProjectDirs();
+    if (options.standaloneOnly) {
+      await ensureStandaloneConversationDirectory();
+    }
+    const projectDirs = options.standaloneOnly
+      ? [{ name: getStandaloneConversationProjectName(), sourceHomeDir: getMtlCodeHomeDir() }]
+      : (await listProviderProjectDirs()).filter(entry => !isStandaloneConversationProjectName(entry.name));
     let scannedProjects = 0;
     const totalProjects = projectDirs.length;
 
@@ -2662,6 +2750,9 @@ async function getGeminiCliSessionMessages(sessionId) {
 export {
   getProjects,
   getSessions,
+  getStandaloneConversationProject,
+  getStandaloneConversationProjectName,
+  getStandaloneConversationPath,
   getSessionMessages,
   parseJsonlSessions,
   renameProject,

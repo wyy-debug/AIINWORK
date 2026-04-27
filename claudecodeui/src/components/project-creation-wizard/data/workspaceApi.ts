@@ -23,6 +23,7 @@ export const browseFilesystemFolders = async (pathToBrowse: string) => {
 
   return {
     path: data.path || pathToBrowse,
+    displayPath: data.displayPath,
     suggestions: (data.suggestions || []) as FolderSuggestion[],
   };
 };

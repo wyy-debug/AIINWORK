@@ -131,7 +131,7 @@ function showStatus() {
     console.log(`       SERVER_PORT: ${c.bright(process.env.SERVER_PORT || process.env.PORT || '3001')} ${c.dim(process.env.SERVER_PORT || process.env.PORT ? '' : '(default)')}`);
     console.log(`       DATABASE_PATH: ${c.dim(process.env.DATABASE_PATH || '(using default location)')}`);
     console.log(`       MTL_CODE_CLI_PATH: ${c.dim(resolveMtlCodeCliPath())}`);
-    console.log(`       CONTEXT_WINDOW: ${c.dim(process.env.CONTEXT_WINDOW || '160000 (default)')}`);
+    console.log(`       CONTEXT_WINDOW: ${c.dim(process.env.CONTEXT_WINDOW || '200000 (default)')}`);
 
     // MTL-Code projects folders
     console.log(`\n${c.info('[INFO]')} MTL-Code Projects Folders:`);
@@ -194,7 +194,7 @@ Environment Variables:
   DATABASE_PATH       Set custom database location
   MTL_CODE_CLI_PATH   Set custom MTL-Code CLI path
   CLAUDE_CLI_PATH     Legacy fallback for custom MTL-Code CLI path
-  CONTEXT_WINDOW      Set context window size (default: 160000)
+  CONTEXT_WINDOW      Set context window size (default: 200000)
 
 Documentation:
   ${packageJson.homepage || 'https://github.com/mtl-code/mtl-code-ui'}

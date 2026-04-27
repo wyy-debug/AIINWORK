@@ -3,7 +3,7 @@ import { cn } from '../../../../../../lib/utils';
 import type { AgentCategory } from '../../../../types/types';
 import type { AgentCategoryTabsSectionProps } from '../types';
 
-const AGENT_CATEGORIES: AgentCategory[] = ['model', 'permissions', 'mcp'];
+const AGENT_CATEGORIES: AgentCategory[] = ['model', 'permissions', 'mcp', 'repository'];
 
 export default function AgentCategoryTabsSection({
   selectedCategory,
@@ -30,6 +30,7 @@ export default function AgentCategoryTabsSection({
             {category === 'model' && t('tabs.model', { defaultValue: 'Model' })}
             {category === 'permissions' && t('tabs.permissions')}
             {category === 'mcp' && t('tabs.mcpServers')}
+            {category === 'repository' && t('tabs.repository', { defaultValue: 'Repository' })}
           </button>
         ))}
       </div>

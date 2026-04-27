@@ -354,6 +354,10 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     args.push('--disallowedTools', ...settings.disallowedTools);
   }
 
+  if (options.appendSystemPrompt && typeof options.appendSystemPrompt === 'string') {
+    args.push('--append-system-prompt', options.appendSystemPrompt);
+  }
+
   // Let MTL-Code resolve the concrete runtime model from ~/.mtl-code/settings.json
   // and OPENAI_* env vars unless the UI sends an explicit non-sentinel model.
   if (options.model && options.model !== MTL_CODE_MODEL.value) {
@@ -390,13 +394,27 @@ function isDeepSeekAnthropicRuntime(env) {
   return baseUrl.includes('api.deepseek.com') || model.includes('deepseek');
 }
 
-async function buildMtlCodeSpawnEnv() {
+function resolveConfiguredContextWindow(env, overrideTokens = null) {
+  const parsedOverride = parseInt(String(overrideTokens || ''), 10);
+  if (Number.isFinite(parsedOverride) && parsedOverride > 0) {
+    return String(parsedOverride);
+  }
+  const parsed = parseInt(env.MTL_CODE_MAX_CONTEXT_TOKENS || env.CONTEXT_WINDOW || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : null;
+}
+
+async function buildMtlCodeSpawnEnv(options = {}) {
   const settingsEnv = await readMtlCodeSettingsEnv();
   const spawnEnv = {
     ...process.env,
     ...settingsEnv,
     MTLCODE: '1'
   };
+  const configuredContextWindow = resolveConfiguredContextWindow(spawnEnv, options.contextWindowTokens);
+  if (configuredContextWindow) {
+    spawnEnv.MTL_CODE_MAX_CONTEXT_TOKENS = configuredContextWindow;
+    spawnEnv.CONTEXT_WINDOW = configuredContextWindow;
+  }
 
   if (isDeepSeekAnthropicRuntime(spawnEnv)) {
     const configuredModel = spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || '';
@@ -503,9 +521,10 @@ function extractTokenBudget(resultMessage) {
   // Total used = input + output + cache tokens
   const totalUsed = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
 
-  // Use configured context window budget from environment (default 160000)
-  // This is the user's budget limit, not the model's context window
-  const contextWindow = parseInt(process.env.CONTEXT_WINDOW) || 160000;
+  // Prefer the backend-reported model window; fall back to the UI env budget.
+  const contextWindow = parseInt(modelData.contextWindow, 10)
+    || parseInt(process.env.CONTEXT_WINDOW, 10)
+    || 200000;
 
   // Token calc logged via token-budget WS event
 
@@ -653,11 +672,15 @@ function waitForMtlCodeSpawn(child) {
   });
 }
 
-function createMtlCodeUserMessage(content) {
+function createMtlCodeUserMessage(content, clientMessageId = null) {
+  const requestId = typeof clientMessageId === 'string' && clientMessageId.trim()
+    ? clientMessageId.trim()
+    : createRequestId();
+
   return {
     type: 'user',
     content,
-    uuid: createRequestId(),
+    uuid: requestId,
     session_id: '',
     message: {
       role: 'user',
@@ -873,7 +896,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     const launches = resolveMtlCodeLaunches();
     const cwd = resolveWorkingDirectory(options.cwd || options.projectPath);
-    const childEnv = await buildMtlCodeSpawnEnv();
+    const childEnv = await buildMtlCodeSpawnEnv(options);
     const cliArgs = buildMtlCodeArgs(options, childEnv);
     let lastSpawnError = null;
 
@@ -944,7 +967,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     });
 
     if (finalCommand && finalCommand.trim()) {
-      writeMtlCodeJson(child, createMtlCodeUserMessage(finalCommand));
+      writeMtlCodeJson(child, createMtlCodeUserMessage(finalCommand, options.clientMessageId));
     } else {
       closeMtlCodeInput(child);
     }

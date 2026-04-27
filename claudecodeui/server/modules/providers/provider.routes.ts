@@ -1,3 +1,6 @@
+import { access } from 'node:fs/promises';
+import path from 'node:path';
+
 import express, { type Request, type Response } from 'express';
 
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
@@ -143,6 +146,144 @@ const parseProvider = (value: unknown): LLMProvider => {
   });
 };
 
+const findExecutable = async (command: string): Promise<string | null> => {
+  const normalized = command.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const hasPathSegment = normalized.includes('/') || normalized.includes('\\') || path.isAbsolute(normalized);
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
+        .split(';')
+        .map((extension) => extension.trim())
+        .filter(Boolean)
+    : [''];
+  const commandExtension = path.extname(normalized);
+  const candidates = hasPathSegment
+    ? [normalized, ...(process.platform === 'win32' && !commandExtension ? extensions.map((extension) => `${normalized}${extension}`) : [])]
+    : String(process.env.PATH || '')
+        .split(path.delimiter)
+        .filter(Boolean)
+        .flatMap((dir) => {
+          if (process.platform !== 'win32' || commandExtension) {
+            return [path.join(dir, normalized)];
+          }
+          return extensions.map((extension) => path.join(dir, `${normalized}${extension}`));
+        });
+
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // keep checking PATH candidates
+    }
+  }
+
+  return null;
+};
+
+const inspectProviderMcpServer = async (
+  provider: LLMProvider,
+  name: string,
+  scope: McpScope | undefined,
+  workspacePath: string | undefined,
+) => {
+  const requestedScope = scope || 'user';
+  const servers = await providerMcpService.listProviderMcpServersForScope(provider, requestedScope, { workspacePath });
+  const server = servers.find((candidate) => candidate.name === name);
+  if (!server) {
+    throw new AppError('MCP server not found.', {
+      code: 'MCP_SERVER_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+
+  const checks: Array<{ id: string; status: 'pass' | 'warn' | 'fail'; message: string; detail?: string }> = [];
+  checks.push({
+    id: 'definition',
+    status: 'pass',
+    message: 'MCP server definition was found in provider config.',
+    detail: `${server.scope}:${server.transport}`,
+  });
+
+  if (server.transport === 'stdio') {
+    const executable = await findExecutable(server.command || '');
+    if (executable) {
+      checks.push({
+        id: 'command',
+        status: 'pass',
+        message: 'Startup command is available on this machine.',
+        detail: executable,
+      });
+    } else {
+      checks.push({
+        id: 'command',
+        status: 'fail',
+        message: 'Startup command was not found on PATH or as an absolute file.',
+        detail: server.command || '',
+      });
+    }
+  } else if (server.url) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const headers: Record<string, string> = { ...(server.headers || {}) };
+      if (server.transport === 'sse' && !Object.keys(headers).some((key) => key.toLowerCase() === 'accept')) {
+        headers.Accept = 'text/event-stream';
+      }
+      const response = await fetch(server.url, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+      });
+      const status = response.status >= 500 ? 'fail' : response.status >= 400 ? 'warn' : 'pass';
+      checks.push({
+        id: 'endpoint',
+        status,
+        message: response.ok
+          ? 'Remote MCP endpoint responded.'
+          : `Remote MCP endpoint responded with HTTP ${response.status}.`,
+        detail: server.url,
+      });
+    } catch (error) {
+      checks.push({
+        id: 'endpoint',
+        status: 'fail',
+        message: error instanceof Error && error.name === 'AbortError'
+          ? 'Remote MCP endpoint timed out.'
+          : 'Remote MCP endpoint could not be reached.',
+        detail: server.url,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  } else {
+    checks.push({
+      id: 'endpoint',
+      status: 'fail',
+      message: 'Remote MCP server is missing a URL.',
+    });
+  }
+
+  checks.push({
+    id: 'tools',
+    status: 'warn',
+    message: 'Tool listing is owned by the provider runtime and will be available after the session starts.',
+  });
+
+  const failed = checks.some((check) => check.status === 'fail');
+  const warned = checks.some((check) => check.status === 'warn');
+  return {
+    provider,
+    server,
+    status: failed ? 'error' : warned ? 'warning' : 'ok',
+    checkedAt: new Date().toISOString(),
+    checks,
+  };
+};
+
 router.get(
   '/:provider/auth/status',
   asyncHandler(async (req: Request, res: Response) => {
@@ -177,6 +318,18 @@ router.post(
     const payload = parseMcpUpsertPayload(req.body);
     const server = await providerMcpService.upsertProviderMcpServer(provider, payload);
     res.status(201).json(createApiSuccessResponse({ server }));
+  }),
+);
+
+router.get(
+  '/:provider/mcp/servers/:name/inspect',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    const scope = parseMcpScope(req.query.scope);
+    const workspacePath = readOptionalQueryString(req.query.workspacePath);
+    const name = readPathParam(req.params.name, 'name');
+    const inspection = await inspectProviderMcpServer(provider, name, scope, workspacePath);
+    res.json(createApiSuccessResponse(inspection));
   }),
 );
 

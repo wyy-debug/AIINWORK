@@ -10,6 +10,7 @@ export type FolderSuggestion = {
 
 export type BrowseFilesystemResponse = {
   path?: string;
+  displayPath?: string;
   suggestions?: FolderSuggestion[];
   error?: string;
 };

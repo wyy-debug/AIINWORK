@@ -1,5 +1,7 @@
 import React, { useEffect } from 'react';
+
 import ChatInterface from '../../chat/view/ChatInterface';
+import AgentConfigDashboard from '../../agents/view/AgentConfigDashboard';
 import FileTree from '../../file-tree/view/FileTree';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
 import PluginTabContent from '../../plugins/view/PluginTabContent';
@@ -11,6 +13,7 @@ import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
 import { TaskMasterPanel } from '../../task-master';
+
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
@@ -27,8 +30,13 @@ type TasksSettingsContextValue = {
 };
 
 function MainContent({
+  projects,
   selectedProject,
+  projectSelectedProject,
   selectedSession,
+  isConversationSpace = false,
+  quickStartAgentId,
+  quickStartAgentRequestId,
   activeTab,
   setActiveTab,
   ws,
@@ -54,7 +62,7 @@ function MainContent({
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
-  const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
+  const shouldShowTasksTab = Boolean(!isConversationSpace && tasksEnabled && isTaskMasterInstalled);
 
   const {
     editingFile,
@@ -75,16 +83,27 @@ function MainContent({
     const selectedProjectName = selectedProject?.name;
     const currentProjectName = currentProject?.name;
 
-    if (selectedProject && selectedProjectName !== currentProjectName) {
+    if (!isConversationSpace && selectedProject && selectedProjectName !== currentProjectName) {
       setCurrentProject?.(selectedProject);
     }
-  }, [selectedProject, currentProject?.name, setCurrentProject]);
+  }, [isConversationSpace, selectedProject, currentProject?.name, setCurrentProject]);
 
   useEffect(() => {
     if (!shouldShowTasksTab && activeTab === 'tasks') {
       setActiveTab('chat');
     }
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
+
+  if (activeTab === 'agents') {
+    return (
+      <AgentConfigDashboard
+        isMobile={isMobile}
+        onMenuClick={onMenuClick}
+        projects={projects}
+        selectedProject={projectSelectedProject || selectedProject}
+      />
+    );
+  }
 
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
@@ -94,13 +113,16 @@ function MainContent({
     return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
+  const visibleActiveTab = isConversationSpace ? 'chat' : activeTab;
+
   return (
     <div className="flex h-full flex-col">
       <MainContentHeader
-        activeTab={activeTab}
+        activeTab={visibleActiveTab}
         setActiveTab={setActiveTab}
         selectedProject={selectedProject}
         selectedSession={selectedSession}
+        isConversationSpace={isConversationSpace}
         shouldShowTasksTab={shouldShowTasksTab}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
@@ -108,11 +130,14 @@ function MainContent({
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
-          <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
+          <div className={`h-full ${visibleActiveTab === 'chat' ? 'block' : 'hidden'}`}>
             <ErrorBoundary showDetails>
               <ChatInterface
+                key={`${isConversationSpace ? 'conversation' : 'project'}:${selectedProject.name}:${selectedSession?.id || 'new'}`}
                 selectedProject={selectedProject}
                 selectedSession={selectedSession}
+                quickStartAgentId={quickStartAgentId}
+                quickStartAgentRequestId={quickStartAgentRequestId}
                 ws={ws}
                 sendMessage={sendMessage}
                 latestMessage={latestMessage}
@@ -137,13 +162,13 @@ function MainContent({
             </ErrorBoundary>
           </div>
 
-          {activeTab === 'files' && (
+          {visibleActiveTab === 'files' && (
             <div className="h-full overflow-hidden">
               <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
             </div>
           )}
 
-          {activeTab === 'shell' && (
+          {visibleActiveTab === 'shell' && (
             <div className="h-full w-full overflow-hidden">
               <StandaloneShell
                 project={selectedProject}
@@ -154,14 +179,14 @@ function MainContent({
             </div>
           )}
 
-          {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
+          {shouldShowTasksTab && <TaskMasterPanel isVisible={visibleActiveTab === 'tasks'} />}
 
-          <div className={`h-full overflow-hidden ${activeTab === 'preview' ? 'block' : 'hidden'}`} />
+          <div className={`h-full overflow-hidden ${visibleActiveTab === 'preview' ? 'block' : 'hidden'}`} />
 
-          {activeTab.startsWith('plugin:') && (
+          {visibleActiveTab.startsWith('plugin:') && (
             <div className="h-full overflow-hidden">
               <PluginTabContent
-                pluginName={activeTab.replace('plugin:', '')}
+                pluginName={visibleActiveTab.replace('plugin:', '')}
                 selectedProject={selectedProject}
                 selectedSession={selectedSession}
               />
@@ -180,7 +205,7 @@ function MainContent({
           onCloseEditor={handleCloseEditor}
           onToggleEditorExpand={handleToggleEditorExpand}
           projectPath={selectedProject.path}
-          fillSpace={activeTab === 'files'}
+          fillSpace={visibleActiveTab === 'files'}
         />
       </div>
     </div>

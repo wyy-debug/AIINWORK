@@ -42,7 +42,10 @@ function chatMessageToNormalized(
   sessionId: string,
   provider: LLMProvider,
 ): NormalizedMessage | null {
-  const id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const providedId = typeof msg.id === 'string' && msg.id.trim()
+    ? msg.id.trim()
+    : null;
+  const id = providedId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const ts = msg.timestamp instanceof Date
     ? msg.timestamp.toISOString()
     : typeof msg.timestamp === 'number'
@@ -185,7 +188,7 @@ export function useChatSessionState({
 
   const addMessage = useCallback((msg: ChatMessage) => {
     if (!activeSessionId) {
-      // No session yet â€?show as pending until the backend creates one
+      // No session yet - show as pending until the backend creates one
       setPendingUserMessage(msg);
       return;
     }
@@ -306,7 +309,7 @@ export function useChatSessionState({
     if (!searchScrollActiveRef.current) setTimeout(() => scrollToBottom(), 200);
   }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
 
-  // Main session loading effect â€?store-based
+  // Main session loading effect - store-based
   useEffect(() => {
     if (!selectedSession || !selectedProject) {
       resetStreamingState();
@@ -371,7 +374,7 @@ export function useChatSessionState({
 
     lastLoadedSessionKeyRef.current = sessionKey;
 
-    // Fetch from server â†?store updates â†?chatMessages re-derives automatically
+    // Fetch from server -> store updates -> chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);
     sessionStore.fetchFromServer(selectedSession.id, {
       provider: (selectedSession.__provider || provider) as LLMProvider,

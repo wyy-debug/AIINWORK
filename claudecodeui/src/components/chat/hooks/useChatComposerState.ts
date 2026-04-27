@@ -20,6 +20,7 @@ import type {
   PermissionMode,
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { AgentAppBinding, AgentConfig } from '../../../types/agent';
 import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
@@ -41,6 +42,9 @@ interface UseChatComposerStateArgs {
   claudeModel: string;
   codexModel: string;
   geminiModel: string;
+  agents?: AgentConfig[];
+  selectedAgentId?: string;
+  selectedAgentAppBindings?: AgentAppBinding[];
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -84,6 +88,9 @@ const createFakeSubmitEvent = () => {
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
+const createClientUserMessageId = () =>
+  `client_user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
 const getNotificationSessionSummary = (
   selectedSession: ProjectSession | null,
   fallbackInput: string,
@@ -102,6 +109,48 @@ const getNotificationSessionSummary = (
   return normalizedFallback.length > 80 ? `${normalizedFallback.slice(0, 77)}...` : normalizedFallback;
 };
 
+const normalizeAgentToken = (value: string) => value.trim().toLowerCase();
+
+const resolveAgentInvocation = (
+  rawInput: string,
+  agents: AgentConfig[] = [],
+  selectedAgentId = '',
+) => {
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId && agent.status === 'enabled') || null;
+  const trimmedStart = rawInput.trimStart();
+  const mentionMatch = trimmedStart.match(/^@([^\s]+)\s*/);
+
+  if (!mentionMatch) {
+    return {
+      agent: selectedAgent,
+      content: rawInput,
+    };
+  }
+
+  const token = normalizeAgentToken(mentionMatch[1]);
+  const mentionedAgent = agents.find((agent) => {
+    if (agent.status !== 'enabled') {
+      return false;
+    }
+    return normalizeAgentToken(agent.id) === token
+      || normalizeAgentToken(agent.name) === token
+      || normalizeAgentToken(agent.shortName) === token;
+  }) || null;
+
+  if (!mentionedAgent) {
+    return {
+      agent: selectedAgent,
+      content: rawInput,
+    };
+  }
+
+  const content = trimmedStart.slice(mentionMatch[0].length);
+  return {
+    agent: mentionedAgent,
+    content: content.trim() ? content : rawInput,
+  };
+};
+
 export function useChatComposerState({
   selectedProject,
   selectedSession,
@@ -114,6 +163,9 @@ export function useChatComposerState({
   claudeModel,
   codexModel,
   geminiModel,
+  agents = [],
+  selectedAgentId = '',
+  selectedAgentAppBindings = [],
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -149,6 +201,7 @@ export function useChatComposerState({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
+  const submitLockRef = useRef(false);
   const handleSubmitRef = useRef<
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
@@ -491,10 +544,22 @@ export function useChatComposerState({
         }
       }
 
-      let messageContent = currentInput;
+      if (submitLockRef.current) {
+        return;
+      }
+      submitLockRef.current = true;
+
+      const agentInvocation = resolveAgentInvocation(currentInput, agents, selectedAgentId);
+      const activeAgent = agentInvocation.agent;
+      const activeAgentAppBindings = activeAgent
+        ? activeAgent.id === selectedAgentId && selectedAgentAppBindings.length > 0
+          ? selectedAgentAppBindings
+          : activeAgent.appBindings
+        : [];
+      let messageContent = agentInvocation.content;
       const selectedThinkingMode = thinkingModes.find((mode: { id: string; prefix?: string }) => mode.id === thinkingMode);
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
-        messageContent = `${selectedThinkingMode.prefix}: ${currentInput}`;
+        messageContent = `${selectedThinkingMode.prefix}: ${messageContent}`;
       }
 
       let uploadedImages: unknown[] = [];
@@ -525,6 +590,7 @@ export function useChatComposerState({
             content: `Failed to upload images: ${message}`,
             timestamp: new Date(),
           });
+          submitLockRef.current = false;
           return;
         }
       }
@@ -535,12 +601,16 @@ export function useChatComposerState({
       const backendSessionId =
         effectiveSessionId && !isTemporarySessionId(effectiveSessionId) ? effectiveSessionId : null;
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
+      const clientMessageId = createClientUserMessageId();
 
       const userMessage: ChatMessage = {
+        id: clientMessageId,
         type: 'user',
         content: currentInput,
         images: uploadedImages as any,
         timestamp: new Date(),
+        agentId: activeAgent?.id,
+        agentName: activeAgent?.name,
       };
 
       addMessage(userMessage);
@@ -608,9 +678,12 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: cursorModel,
+            agentId: activeAgent?.id,
+            agentAppBindings: activeAgentAppBindings,
             skipPermissions: toolsSettings?.skipPermissions || false,
             sessionSummary,
             toolsSettings,
+            clientMessageId,
           },
         });
       } else if (provider === 'codex') {
@@ -624,8 +697,11 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: codexModel,
+            agentId: activeAgent?.id,
+            agentAppBindings: activeAgentAppBindings,
             sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
+            clientMessageId,
           },
         });
       } else if (provider === 'gemini') {
@@ -639,9 +715,12 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: geminiModel,
+            agentId: activeAgent?.id,
+            agentAppBindings: activeAgentAppBindings,
             sessionSummary,
             permissionMode,
             toolsSettings,
+            clientMessageId,
           },
         });
       } else {
@@ -656,8 +735,11 @@ export function useChatComposerState({
             toolsSettings,
             permissionMode,
             model: claudeModel,
+            agentId: activeAgent?.id,
+            agentAppBindings: activeAgentAppBindings,
             sessionSummary,
             images: uploadedImages,
+            clientMessageId,
           },
         });
       }
@@ -678,6 +760,7 @@ export function useChatComposerState({
       safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
     },
     [
+      agents,
       selectedSession,
       attachedImages,
       claudeModel,
@@ -695,6 +778,8 @@ export function useChatComposerState({
       resetCommandMenuState,
       scrollToBottom,
       selectedProject,
+      selectedAgentId,
+      selectedAgentAppBindings,
       sendMessage,
       setCanAbortSession,
       addMessage,
@@ -710,6 +795,12 @@ export function useChatComposerState({
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      submitLockRef.current = false;
+    }
+  }, [isLoading]);
 
   useEffect(() => {
     inputValueRef.current = input;

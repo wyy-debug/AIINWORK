@@ -1,4 +1,5 @@
 const WINDOWS_DRIVE_PATTERN = /^[A-Za-z]:\\?$/;
+export const WINDOWS_DRIVES_PATH = '__WINDOWS_DRIVES__';
 
 export const getSuggestionRootPath = (inputPath: string): string => {
   const trimmedPath = inputPath.trim();
@@ -12,8 +13,12 @@ export const getSuggestionRootPath = (inputPath: string): string => {
 
 // Handles root edge cases for Unix-like and Windows paths.
 export const getParentPath = (currentPath: string): string | null => {
-  if (currentPath === '~' || currentPath === '/' || WINDOWS_DRIVE_PATTERN.test(currentPath)) {
+  if (currentPath === '~' || currentPath === '/' || currentPath === WINDOWS_DRIVES_PATH) {
     return null;
+  }
+
+  if (WINDOWS_DRIVE_PATTERN.test(currentPath)) {
+    return WINDOWS_DRIVES_PATH;
   }
 
   const lastSeparatorIndex = Math.max(currentPath.lastIndexOf('/'), currentPath.lastIndexOf('\\'));

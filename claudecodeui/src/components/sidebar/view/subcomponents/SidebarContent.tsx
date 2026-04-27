@@ -1,10 +1,16 @@
-import { type ReactNode } from 'react';
-import { Folder, MessageSquare, Search } from 'lucide-react';
+import { type ReactNode, useMemo } from 'react';
+import { MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { ScrollArea } from '../../../../shared/view/ui';
-import type { Project } from '../../../../types/app';
+import type { AppTab, Project, ProjectSession } from '../../../../types/app';
+import type { AgentConfig } from '../../../../types/agent';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
+import type { SessionWithProvider } from '../../types/types';
+import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import { createSessionViewModel, getSessionDate } from '../../utils/utils';
+
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
@@ -39,12 +45,15 @@ type SidebarContentProps = {
   isPWA: boolean;
   isMobile: boolean;
   isLoading: boolean;
-  projects: Project[];
   searchFilter: string;
   onSearchFilterChange: (value: string) => void;
   onClearSearchFilter: () => void;
   searchMode: SearchMode;
   onSearchModeChange: (mode: SearchMode) => void;
+  conversationProject: Project | null;
+  conversationSessions: SessionWithProvider[];
+  selectedConversationSession: ProjectSession | null;
+  onConversationSessionSelect: (session: ProjectSession) => void;
   conversationResults: ConversationSearchResults | null;
   isSearching: boolean;
   searchProgress: SearchProgress | null;
@@ -59,6 +68,10 @@ type SidebarContentProps = {
   currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
+  activeTab: AppTab;
+  onShowAgents: () => void;
+  quickStartAgents: AgentConfig[];
+  onQuickStartAgent: (agentId: string) => void;
   projectListProps: SidebarProjectListProps;
   t: TFunction;
 };
@@ -67,12 +80,15 @@ export default function SidebarContent({
   isPWA,
   isMobile,
   isLoading,
-  projects,
   searchFilter,
   onSearchFilterChange,
   onClearSearchFilter,
   searchMode,
   onSearchModeChange,
+  conversationProject,
+  conversationSessions,
+  selectedConversationSession,
+  onConversationSessionSelect,
   conversationResults,
   isSearching,
   searchProgress,
@@ -87,11 +103,31 @@ export default function SidebarContent({
   currentVersion,
   onShowVersionModal,
   onShowSettings,
+  activeTab,
+  onShowAgents,
+  quickStartAgents,
+  onQuickStartAgent,
   projectListProps,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
+  const conversationItems = useMemo(() => {
+    const normalizedQuery = searchFilter.trim().toLowerCase();
+    return conversationSessions
+      .map((session) => ({
+        session,
+        sessionView: createSessionViewModel(session, projectListProps.currentTime, t),
+      }))
+      .filter((item) => {
+        if (!normalizedQuery || normalizedQuery.length >= 2) {
+          return true;
+        }
+        const sessionText = `${item.sessionView.sessionName} ${item.session.id}`.toLowerCase();
+        return sessionText.includes(normalizedQuery);
+      })
+      .sort((left, right) => getSessionDate(right.session).getTime() - getSessionDate(left.session).getTime());
+  }, [conversationSessions, projectListProps.currentTime, searchFilter, t]);
 
   return (
     <div
@@ -102,7 +138,6 @@ export default function SidebarContent({
         isPWA={isPWA}
         isMobile={isMobile}
         isLoading={isLoading}
-        projectsCount={projects.length}
         searchFilter={searchFilter}
         onSearchFilterChange={onSearchFilterChange}
         onClearSearchFilter={onClearSearchFilter}
@@ -112,12 +147,15 @@ export default function SidebarContent({
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
         onCollapseSidebar={onCollapseSidebar}
+        quickStartAgents={quickStartAgents}
+        onQuickStartAgent={onQuickStartAgent}
         t={t}
       />
 
       <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
-        {showConversationSearch ? (
-          isSearching && !hasPartialResults ? (
+        {searchMode === 'conversations' ? (
+          showConversationSearch ? (
+            isSearching && !hasPartialResults ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
@@ -129,7 +167,7 @@ export default function SidebarContent({
                 </p>
               )}
             </div>
-          ) : !isSearching && conversationResults && conversationResults.results.length === 0 ? (
+            ) : !isSearching && conversationResults && conversationResults.results.length === 0 ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
                 <Search className="h-6 w-6 text-muted-foreground" />
@@ -137,7 +175,7 @@ export default function SidebarContent({
               <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">{t('search.noResults')}</h3>
               <p className="text-sm text-muted-foreground">{t('search.tryDifferentQuery')}</p>
             </div>
-          ) : hasPartialResults ? (
+            ) : hasPartialResults ? (
             <div className="space-y-3 px-2">
               <div className="flex items-center justify-between px-1">
                 <p className="text-xs text-muted-foreground">
@@ -162,12 +200,6 @@ export default function SidebarContent({
               )}
               {conversationResults.results.map((projectResult) => (
                 <div key={projectResult.projectName} className="space-y-1">
-                  <div className="flex items-center gap-1.5 px-1 py-1">
-                    <Folder className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                    <span className="truncate text-xs font-medium text-foreground">
-                      {projectResult.projectDisplayName}
-                    </span>
-                  </div>
                   {projectResult.sessions.map((session) => (
                     <button
                       key={`${projectResult.projectName}-${session.sessionId}`}
@@ -208,8 +240,45 @@ export default function SidebarContent({
                   ))}
                 </div>
               ))}
+              </div>
+            ) : null
+          ) : conversationItems.length === 0 ? (
+            <div className="px-4 py-12 text-center md:py-8">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
+                <MessageSquare className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">暂无独立对话</h3>
+              <p className="text-sm text-muted-foreground">新建对话后会显示在这里</p>
             </div>
-          ) : null
+          ) : (
+            <div className="space-y-1 px-2">
+              {conversationItems.map(({ session, sessionView }) => (
+                <button
+                  key={`${conversationProject?.name || 'conversation'}-${session.__provider}-${session.id}`}
+                  type="button"
+                  className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent/55 ${
+                    selectedConversationSession?.id === session.id ? 'bg-accent/65' : ''
+                  }`}
+                  onClick={() => onConversationSessionSelect(session)}
+                >
+                  <div className="flex items-start gap-2">
+                    <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span className="truncate">独立对话</span>
+                        {sessionView.messageCount > 0 && (
+                          <span className="ml-auto shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px]">
+                            {sessionView.messageCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )
         ) : (
           <SidebarProjectList {...projectListProps} />
         )}
@@ -222,6 +291,8 @@ export default function SidebarContent({
         currentVersion={currentVersion}
         onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
+        activeTab={activeTab}
+        onShowAgents={onShowAgents}
         t={t}
       />
     </div>

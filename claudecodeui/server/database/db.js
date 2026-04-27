@@ -1,8 +1,11 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
+import Database from 'better-sqlite3';
+
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
+
 import {
   APP_CONFIG_TABLE_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SQL,
@@ -10,6 +13,8 @@ import {
   PUSH_SUBSCRIPTIONS_TABLE_SQL,
   SESSION_NAMES_TABLE_SQL,
   SESSION_NAMES_LOOKUP_INDEX_SQL,
+  SESSION_AGENT_BINDINGS_TABLE_SQL,
+  SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 
@@ -111,6 +116,14 @@ const runMigrations = () => {
     db.exec(APP_CONFIG_TABLE_SQL);
     db.exec(SESSION_NAMES_TABLE_SQL);
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
+    db.exec(SESSION_AGENT_BINDINGS_TABLE_SQL);
+    const sessionAgentBindingColumns = db.prepare("PRAGMA table_info(session_agent_bindings)").all();
+    const sessionAgentBindingColumnNames = sessionAgentBindingColumns.map(col => col.name);
+    if (!sessionAgentBindingColumnNames.includes('config_json')) {
+      console.log('Running migration: Adding config_json column to session_agent_bindings');
+      db.exec('ALTER TABLE session_agent_bindings ADD COLUMN config_json TEXT');
+    }
+    db.exec(SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -517,6 +530,57 @@ const sessionNamesDb = {
   },
 };
 
+const sessionAgentBindingsDb = {
+  setAgent: (sessionId, provider, agentId, configuration = null) => {
+    const configJson = configuration && typeof configuration === 'object'
+      ? JSON.stringify(configuration)
+      : null;
+    db.prepare(`
+      INSERT INTO session_agent_bindings (session_id, provider, agent_id, config_json)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(session_id, provider)
+      DO UPDATE SET agent_id = excluded.agent_id, config_json = excluded.config_json, updated_at = CURRENT_TIMESTAMP
+    `).run(sessionId, provider, agentId, configJson);
+  },
+
+  getBinding: (sessionId, provider) => {
+    const row = db.prepare(
+      'SELECT agent_id, config_json FROM session_agent_bindings WHERE session_id = ? AND provider = ?'
+    ).get(sessionId, provider);
+    if (!row?.agent_id) {
+      return null;
+    }
+    let configuration = null;
+    if (row.config_json) {
+      try {
+        configuration = JSON.parse(row.config_json);
+      } catch {
+        configuration = null;
+      }
+    }
+    return {
+      agentId: row.agent_id,
+      configuration,
+    };
+  },
+
+  getAgentId: (sessionId, provider) => {
+    return sessionAgentBindingsDb.getBinding(sessionId, provider)?.agentId || null;
+  },
+
+  deleteAgent: (sessionId, provider) => {
+    return db.prepare(
+      'DELETE FROM session_agent_bindings WHERE session_id = ? AND provider = ?'
+    ).run(sessionId, provider).changes > 0;
+  },
+
+  deleteAgentFromAllSessions: (agentId) => {
+    return db.prepare(
+      'DELETE FROM session_agent_bindings WHERE agent_id = ?'
+    ).run(agentId).changes;
+  },
+};
+
 // Apply custom session names from the database (overrides CLI-generated summaries)
 function applyCustomSessionNames(sessions, provider) {
   if (!sessions?.length) return;
@@ -587,6 +651,7 @@ export {
   notificationPreferencesDb,
   pushSubscriptionsDb,
   sessionNamesDb,
+  sessionAgentBindingsDb,
   applyCustomSessionNames,
   appConfigDb,
   githubTokensDb // Backward compatibility

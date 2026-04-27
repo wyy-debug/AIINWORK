@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent/Skill Hub</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">MTL-Code compatible repository</p>
+          <h1>Agent/Skill Hub</h1>
+        </div>
+        <button id="refreshButton" class="button secondary" type="button">Refresh</button>
+      </header>
+
+      <section id="message" class="message hidden"></section>
+
+      <section class="panel">
+        <div class="panelHeader">
+          <div>
+            <h2>Hub Status</h2>
+            <p>Use the catalog URL in MTL-Code UI: Settings > Agents > Repository.</p>
+          </div>
+          <label class="tokenBox">
+            Admin token
+            <input id="adminToken" type="password" placeholder="Optional for localhost" />
+          </label>
+        </div>
+        <div id="statusGrid" class="statusGrid"></div>
+      </section>
+
+      <section class="grid">
+        <form id="publishForm" class="panel formPanel">
+          <div class="panelHeader">
+            <div>
+              <h2>Publish Item</h2>
+              <p>Directly publish an Agent template or Skill to the public catalog.</p>
+            </div>
+          </div>
+          <div class="formGrid">
+            <label>
+              Kind
+              <select name="kind">
+                <option value="agent-template">Agent template</option>
+                <option value="skill">Skill</option>
+              </select>
+            </label>
+            <label>
+              Name
+              <input name="name" placeholder="task-manager" required />
+            </label>
+            <label>
+              Title
+              <input name="title" placeholder="Task Manager" required />
+            </label>
+            <label>
+              Author
+              <input name="author" placeholder="Team" />
+            </label>
+            <label class="span2">
+              Description
+              <input name="description" placeholder="Short catalog summary" />
+            </label>
+            <label>
+              Tags
+              <input name="tags" placeholder="planning, team, review" />
+            </label>
+            <label>
+              Supported apps
+              <input name="supportedApps" placeholder="Notion, Slack, GitHub" />
+            </label>
+            <label class="span2">
+              Capabilities
+              <input name="capabilities" placeholder="Summarize tasks, Draft updates" />
+            </label>
+            <label class="span2">
+              Content
+              <textarea name="content" rows="12" placeholder="Paste Agent prompt or SKILL.md content" required></textarea>
+            </label>
+            <label class="checkbox">
+              <input name="overwrite" type="checkbox" />
+              Overwrite existing item
+            </label>
+          </div>
+          <button class="button primary" type="submit">Publish</button>
+        </form>
+
+        <section class="panel">
+          <div class="panelHeader">
+            <div>
+              <h2>Pending Submissions</h2>
+              <p>Review public submissions before publishing.</p>
+            </div>
+          </div>
+          <div id="submissionsList" class="list"></div>
+        </section>
+      </section>
+
+      <section class="panel">
+        <div class="panelHeader">
+          <div>
+            <h2>Published Items</h2>
+            <p>Items shown here are visible from the public catalog.</p>
+          </div>
+        </div>
+        <div id="itemsList" class="list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

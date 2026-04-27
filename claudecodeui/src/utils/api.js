@@ -75,6 +75,85 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(workspaceData),
     }),
+  agents: (includePaused = true) =>
+    apiFetch(`/api/agents?includePaused=${includePaused ? 'true' : 'false'}`),
+  conversations: (limit = 50, offset = 0) =>
+    apiFetch(`/api/conversations?limit=${limit}&offset=${offset}`),
+  conversationSessions: (limit = 50, offset = 0) =>
+    apiFetch(`/api/conversations/sessions?limit=${limit}&offset=${offset}`),
+  deleteConversationSession: (sessionId) =>
+    apiFetch(`/api/conversations/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    }),
+  createAgent: (agentData) =>
+    apiFetch('/api/agents', {
+      method: 'POST',
+      body: JSON.stringify(agentData),
+    }),
+  updateAgent: (agentId, agentData) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(agentData),
+    }),
+  deleteAgent: (agentId) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+      method: 'DELETE',
+    }),
+  uploadAgentKnowledge: (agentId, formData) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge/upload`, {
+      method: 'POST',
+      body: formData,
+      headers: {},
+    }),
+  agentKnowledge: (agentId) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge`),
+  deleteAgentKnowledgeSource: (agentId, sourceId) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(sourceId)}`, {
+      method: 'DELETE',
+    }),
+  reindexAgentKnowledgeSource: (agentId, sourceId) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(sourceId)}/reindex`, {
+      method: 'POST',
+    }),
+  sessionAgent: (sessionId, provider = 'claude') =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/agent?provider=${encodeURIComponent(provider)}`),
+  /**
+   * @param {string} sessionId
+   * @param {string} agentId
+   * @param {string} [provider]
+   * @param {unknown} [configuration]
+   */
+  updateSessionAgent: (sessionId, agentId, provider = 'claude', configuration = null) =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/agent`, {
+      method: 'PUT',
+      body: JSON.stringify({ agentId, provider, configuration }),
+    }),
+  clearSessionAgent: (sessionId, provider = 'claude') =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/agent?provider=${encodeURIComponent(provider)}`, {
+      method: 'DELETE',
+    }),
+  mcpServers: (provider = 'claude', scope = 'user', workspacePath = '') => {
+    const params = new URLSearchParams({ scope });
+    if (workspacePath) params.set('workspacePath', workspacePath);
+    return apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers?${params.toString()}`);
+  },
+  upsertMcpServer: (provider = 'claude', payload) =>
+    apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  inspectMcpServer: (provider = 'claude', serverName, scope = 'user', workspacePath = '') => {
+    const params = new URLSearchParams({ scope });
+    if (workspacePath) params.set('workspacePath', workspacePath);
+    return apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers/${encodeURIComponent(serverName)}/inspect?${params.toString()}`);
+  },
+  deleteMcpServer: (provider = 'claude', serverName, scope = 'user', workspacePath = '') => {
+    const params = new URLSearchParams({ scope });
+    if (workspacePath) params.set('workspacePath', workspacePath);
+    return apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers/${encodeURIComponent(serverName)}?${params.toString()}`, {
+      method: 'DELETE',
+    });
+  },
   readFile: (projectName, filePath) =>
     apiFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectName, filePath) =>

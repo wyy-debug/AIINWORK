@@ -1,8 +1,10 @@
-import { Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Bot, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { Button, Input } from '../../../../shared/view/ui';
 import { IS_PLATFORM } from '../../../../constants/config';
 import { cn } from '../../../../lib/utils';
+import type { AgentConfig } from '../../../../types/agent';
 
 type SearchMode = 'projects' | 'conversations';
 
@@ -10,7 +12,6 @@ type SidebarHeaderProps = {
   isPWA: boolean;
   isMobile: boolean;
   isLoading: boolean;
-  projectsCount: number;
   searchFilter: string;
   onSearchFilterChange: (value: string) => void;
   onClearSearchFilter: () => void;
@@ -20,14 +21,56 @@ type SidebarHeaderProps = {
   isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
+  quickStartAgents: AgentConfig[];
+  onQuickStartAgent: (agentId: string) => void;
   t: TFunction;
 };
+
+function AgentQuickStartControl({
+  agents,
+  onQuickStartAgent,
+}: {
+  agents: AgentConfig[];
+  onQuickStartAgent: (agentId: string) => void;
+}) {
+  const disabled = agents.length === 0;
+
+  return (
+    <label
+      className={cn(
+        'relative flex h-8 w-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-sm transition-colors hover:border-primary/40 hover:bg-muted/60 hover:text-foreground',
+        disabled && 'cursor-not-allowed opacity-45 hover:border-border/70 hover:bg-background hover:text-muted-foreground',
+      )}
+      title={disabled ? '暂无已启用 Agent' : '快速启动 Agent'}
+    >
+      <Bot className="h-4 w-4" />
+      <select
+        aria-label="快速启动 Agent"
+        value=""
+        disabled={disabled}
+        onChange={(event) => {
+          const agentId = event.target.value;
+          if (agentId) {
+            onQuickStartAgent(agentId);
+          }
+        }}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      >
+        <option value="">Agent</option>
+        {agents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.shortName || agent.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 export default function SidebarHeader({
   isPWA,
   isMobile,
   isLoading,
-  projectsCount,
   searchFilter,
   onSearchFilterChange,
   onClearSearchFilter,
@@ -37,6 +80,8 @@ export default function SidebarHeader({
   isRefreshing,
   onCreateProject,
   onCollapseSidebar,
+  quickStartAgents,
+  onQuickStartAgent,
   t,
 }: SidebarHeaderProps) {
   const LogoBlock = () => (
@@ -90,7 +135,7 @@ export default function SidebarHeader({
               size="sm"
               className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
               onClick={onCreateProject}
-              title={t('tooltips.createProject')}
+              title={searchMode === 'conversations' ? '新建对话' : t('tooltips.createProject')}
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -107,36 +152,41 @@ export default function SidebarHeader({
         </div>
 
         {/* Search bar */}
-        {projectsCount > 0 && !isLoading && (
+        {!isLoading && (
           <div className="mt-2.5 space-y-2">
             {/* Search mode toggle */}
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
+            <div className="flex items-center gap-1.5">
+              <div className="flex min-w-0 flex-1 rounded-lg bg-muted/50 p-0.5">
+                <button
+                  onClick={() => onSearchModeChange('projects')}
+                  aria-pressed={searchMode === 'projects'}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                    searchMode === 'projects'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Folder className="h-3 w-3" />
+                  {t('search.modeProjects')}
+                </button>
+                <button
+                  onClick={() => onSearchModeChange('conversations')}
+                  aria-pressed={searchMode === 'conversations'}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                    searchMode === 'conversations'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <MessageSquare className="h-3 w-3" />
+                  {t('search.modeConversations')}
+                </button>
+              </div>
+              {searchMode === 'conversations' && (
+                <AgentQuickStartControl agents={quickStartAgents} onQuickStartAgent={onQuickStartAgent} />
+              )}
             </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
@@ -194,41 +244,46 @@ export default function SidebarHeader({
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground transition-all active:scale-95"
               onClick={onCreateProject}
             >
-              <FolderPlus className="h-4 w-4" />
+              {searchMode === 'conversations' ? <MessageSquare className="h-4 w-4" /> : <FolderPlus className="h-4 w-4" />}
             </button>
           </div>
         </div>
 
         {/* Mobile search */}
-        {projectsCount > 0 && !isLoading && (
+        {!isLoading && (
           <div className="mt-2.5 space-y-2">
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
-              <button
-                onClick={() => onSearchModeChange('projects')}
-                aria-pressed={searchMode === 'projects'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
-                  searchMode === 'projects'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
-              </button>
-              <button
-                onClick={() => onSearchModeChange('conversations')}
-                aria-pressed={searchMode === 'conversations'}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
-              </button>
+            <div className="flex items-center gap-1.5">
+              <div className="flex min-w-0 flex-1 rounded-lg bg-muted/50 p-0.5">
+                <button
+                  onClick={() => onSearchModeChange('projects')}
+                  aria-pressed={searchMode === 'projects'}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                    searchMode === 'projects'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Folder className="h-3 w-3" />
+                  {t('search.modeProjects')}
+                </button>
+                <button
+                  onClick={() => onSearchModeChange('conversations')}
+                  aria-pressed={searchMode === 'conversations'}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                    searchMode === 'conversations'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <MessageSquare className="h-3 w-3" />
+                  {t('search.modeConversations')}
+                </button>
+              </div>
+              {searchMode === 'conversations' && (
+                <AgentQuickStartControl agents={quickStartAgents} onQuickStartAgent={onQuickStartAgent} />
+              )}
             </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />

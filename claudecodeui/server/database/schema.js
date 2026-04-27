@@ -40,6 +40,19 @@ export const SESSION_NAMES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_names
 
 export const SESSION_NAMES_LOOKUP_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_names_lookup ON session_names(session_id, provider);`;
 
+export const SESSION_AGENT_BINDINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_agent_bindings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  agent_id TEXT NOT NULL,
+  config_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id, provider)
+);`;
+
+export const SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_agent_bindings_lookup ON session_agent_bindings(session_id, provider);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -97,6 +110,10 @@ ${PUSH_SUBSCRIPTIONS_TABLE_SQL}
 ${SESSION_NAMES_TABLE_SQL}
 
 ${SESSION_NAMES_LOOKUP_INDEX_SQL}
+
+${SESSION_AGENT_BINDINGS_TABLE_SQL}
+
+${SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

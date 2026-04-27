@@ -22,11 +22,14 @@ const ANTHROPIC_ENV_KEYS = {
 };
 const MTL_CODE_ENV_KEYS = {
   uiBareMode: 'MTL_CODE_UI_BARE',
+  maxContextTokens: 'MTL_CODE_MAX_CONTEXT_TOKENS',
+  uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
   subagentModel: 'MTL_CODE_SUBAGENT_MODEL',
   legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
 };
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const OPENAI_ENV_KEYS = {
   apiKey: 'OPENAI_API_KEY',
   baseUrl: 'OPENAI_BASE_URL',
@@ -69,6 +72,11 @@ const readMtlCodeSettings = async () => {
 
 const readStringEnv = (env, key) => readOptionalString(env?.[key]) || '';
 
+const readPositiveIntegerEnv = (env, key) => {
+  const value = Number.parseInt(readStringEnv(env, key), 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+};
+
 const readBooleanEnvDefaultTrue = (env, key) => {
   const value = readStringEnv(env, key).toLowerCase();
   return value !== '0' && value !== 'false' && value !== 'off';
@@ -93,6 +101,9 @@ const toMtlCodeModelConfig = (settings, filePath) => {
   const apiKeyConfigured = preferLegacyOpenAI
     ? legacyOpenAIApiKeyConfigured || anthropicApiKeyConfigured
     : anthropicApiKeyConfigured || legacyOpenAIApiKeyConfigured;
+  const contextWindowTokens = readPositiveIntegerEnv(env, MTL_CODE_ENV_KEYS.maxContextTokens)
+    || readPositiveIntegerEnv(env, MTL_CODE_ENV_KEYS.uiContextWindow)
+    || DEFAULT_CONTEXT_WINDOW_TOKENS;
 
   return {
     provider: 'anthropic',
@@ -105,6 +116,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
     },
     runtime: {
       bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.uiBareMode),
+      contextWindowTokens,
     },
   };
 };
@@ -129,6 +141,8 @@ const normalizeModelConfigInput = (body) => {
   const anthropic = readObjectRecord(payload.anthropic)
     ?? readObjectRecord(payload.openai)
     ?? {};
+  const runtime = readObjectRecord(payload.runtime) ?? {};
+  const contextWindowTokens = Number.parseInt(String(runtime.contextWindowTokens ?? ''), 10);
 
   return {
     provider: 'anthropic',
@@ -138,7 +152,10 @@ const normalizeModelConfigInput = (body) => {
       model: toStringEnv(anthropic.model),
     },
     runtime: {
-      bareMode: readObjectRecord(payload.runtime)?.bareMode !== false,
+      bareMode: runtime.bareMode !== false,
+      contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
+        ? contextWindowTokens
+        : undefined,
     },
   };
 };
@@ -471,6 +488,9 @@ router.put('/mtl-code-model', async (req, res) => {
     setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultSonnetModel, input.anthropic.model);
     setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultOpusModel, input.anthropic.model);
     env[MTL_CODE_ENV_KEYS.uiBareMode] = input.runtime.bareMode ? '1' : '0';
+    const contextWindowTokens = input.runtime.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS;
+    env[MTL_CODE_ENV_KEYS.maxContextTokens] = String(contextWindowTokens);
+    env[MTL_CODE_ENV_KEYS.uiContextWindow] = String(contextWindowTokens);
     if (isDeepSeekAnthropicRuntime(input.anthropic.baseUrl, input.anthropic.model)) {
       applyDeepSeekAnthropicDefaults(env, input.anthropic.model);
     }

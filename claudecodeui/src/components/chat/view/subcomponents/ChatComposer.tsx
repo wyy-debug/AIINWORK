@@ -11,8 +11,9 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
+import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon, BotIcon } from 'lucide-react';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
+import type { AgentConfig } from '../../../../types/agent';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
@@ -56,6 +57,9 @@ interface ChatComposerProps {
   isLoading: boolean;
   onAbortSession: () => void;
   provider: Provider | string;
+  agents: AgentConfig[];
+  selectedAgentId: string;
+  onSelectedAgentIdChange: (agentId: string) => void;
   permissionMode: PermissionMode | string;
   onModeSwitch: () => void;
   thinkingMode: string;
@@ -111,6 +115,9 @@ export default function ChatComposer({
   isLoading,
   onAbortSession,
   provider,
+  agents,
+  selectedAgentId,
+  onSelectedAgentIdChange,
   permissionMode,
   onModeSwitch,
   thinkingMode,
@@ -317,6 +324,28 @@ export default function ChatComposer({
               <ImageIcon />
             </PromptInputButton>
 
+            {agents.length > 0 && (
+              <label
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-border/60 bg-muted/35 px-2 text-xs text-muted-foreground transition-colors hover:bg-muted/60"
+                title="选择当前对话使用的 Agent，也可以在输入框开头使用 @Agent 只作用于当前消息"
+              >
+                <BotIcon className="h-3.5 w-3.5 shrink-0" />
+                <select
+                  value={selectedAgentId}
+                  onChange={(event) => onSelectedAgentIdChange(event.target.value)}
+                  disabled={isLoading}
+                  className="max-w-[132px] bg-transparent text-xs font-medium text-foreground outline-none"
+                >
+                  <option value="">本对话默认</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.shortName || agent.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             <button
               type="button"
               onClick={onModeSwitch}
@@ -356,7 +385,7 @@ export default function ChatComposer({
               <ThinkingModeSelector selectedMode={thinkingMode} onModeChange={setThinkingMode} onClose={() => {}} className="" />
             )}
 
-            <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />
+            <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 200000} />
 
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}

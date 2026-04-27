@@ -10,6 +10,7 @@ import type {
   ProjectSortOrder,
   SessionDeleteConfirmation,
   SessionWithProvider,
+  WorkspaceMode,
 } from '../types/types';
 import {
   filterProjects,
@@ -62,6 +63,7 @@ type UseSidebarControllerArgs = {
   projects: Project[];
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
+  workspaceMode: WorkspaceMode;
   isLoading: boolean;
   isMobile: boolean;
   t: TFunction;
@@ -79,6 +81,7 @@ export function useSidebarController({
   projects,
   selectedProject,
   selectedSession,
+  workspaceMode,
   isLoading,
   isMobile,
   t,
@@ -110,7 +113,7 @@ export function useSidebarController({
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
   const [starredProjects, setStarredProjects] = useState<Set<string>>(() => loadStarredProjects());
-  const [searchMode, setSearchMode] = useState<'projects' | 'conversations'>('projects');
+  const [searchMode, setSearchMode] = useState<WorkspaceMode>(workspaceMode);
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
@@ -119,6 +122,10 @@ export function useSidebarController({
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const isSidebarCollapsed = !isMobile && !sidebarVisible;
+
+  useEffect(() => {
+    setSearchMode(workspaceMode);
+  }, [workspaceMode]);
 
   useEffect(() => {
     const timer = setInterval(() => {
