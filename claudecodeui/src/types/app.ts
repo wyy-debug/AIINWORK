@@ -30,6 +30,29 @@ export interface ProjectTaskmasterInfo {
   [key: string]: unknown;
 }
 
+export interface WorktreeDispatchMeta {
+  id: string;
+  projectName?: string;
+  sessionId?: string | null;
+  provider?: LLMProvider;
+  parentProjectName: string;
+  parentProjectPath: string;
+  worktreePath: string;
+  baseRef: string;
+  baseCommit: string;
+  mode: 'managed' | 'permanent';
+  status: 'created' | 'running' | 'done' | 'failed' | 'archived';
+  agentId?: string;
+  skills?: string[];
+  appBindings?: Array<{ slot: string; app: string; status: string }>;
+  taskPrompt?: string;
+  displayName?: string;
+  branchName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
 export interface Project {
   name: string;
   displayName: string;
@@ -41,6 +64,7 @@ export interface Project {
   geminiSessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  worktree?: WorktreeDispatchMeta;
   [key: string]: unknown;
 }
 

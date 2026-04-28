@@ -1,3 +1,4 @@
+import type { AgentAppBinding } from '../../../types/agent';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 
 export type Provider = LLMProvider;
@@ -79,6 +80,34 @@ export interface PendingPermissionRequest {
   receivedAt?: Date;
 }
 
+export interface AgentRuntimePermissionSnapshot {
+  permissionMode: string;
+  skipPermissions: boolean;
+  allowedTools: string[];
+  disallowedTools: string[];
+  bypassPermissions: boolean;
+}
+
+export interface AgentRuntimeDiagnostics {
+  type?: 'agent' | 'skills' | string;
+  provider?: string;
+  allowSessionAgentBinding?: boolean;
+  agentId?: string;
+  agentName?: string;
+  appBindings?: AgentAppBinding[];
+  mcpBindings?: AgentAppBinding[];
+  sessionSkills?: string[];
+  effectiveSkills?: string[];
+  appendSystemPromptLength?: number;
+  model?: string;
+  contextWindowTokens?: number | null;
+  projectPath?: string;
+  sessionId?: string | null;
+  permissions?: AgentRuntimePermissionSnapshot;
+  receivedAt?: string;
+  [key: string]: unknown;
+}
+
 export interface QuestionOption {
   label: string;
   description?: string;
@@ -98,6 +127,7 @@ export interface ChatInterfaceProps {
   quickStartAgentId?: string;
   quickStartAgentRequestId?: number;
   newConversationRequestId?: number;
+  newProjectSessionRequestId?: number;
   ws: WebSocket | null;
   sendMessage: (message: unknown) => void;
   latestMessage: any;

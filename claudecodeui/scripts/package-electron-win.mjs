@@ -138,6 +138,7 @@ const stageElectronResources = async () => {
 
 const main = async () => {
   ensureMtlCodeBackendBuilt();
+  run(commandName('npm'), ['run', 'icons:app']);
   run(commandName('npm'), ['run', 'build']);
   await stageElectronResources();
   await emptyDir(electronDistDir);

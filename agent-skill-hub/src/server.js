@@ -20,10 +20,13 @@ const CONTENT_ROOT = path.join(DATA_ROOT, 'content');
 const PUBLISHED_DIR = path.join(CONTENT_ROOT, 'published');
 const SUBMISSIONS_DIR = path.join(CONTENT_ROOT, 'submissions');
 const MAX_CONTENT_BYTES = Number(process.env.HUB_MAX_CONTENT_BYTES || 2 * 1024 * 1024);
+const MAX_PACKAGE_FILES = Number(process.env.HUB_MAX_PACKAGE_FILES || 200);
+const MAX_PACKAGE_BYTES = Number(process.env.HUB_MAX_PACKAGE_BYTES || 20 * 1024 * 1024);
+const BODY_LIMIT_MB = Math.ceil((Math.max(MAX_CONTENT_BYTES, MAX_PACKAGE_BYTES) + 1024 * 1024) / 1024 / 1024);
 
 app.set('trust proxy', true);
-app.use(express.json({ limit: `${Math.ceil(MAX_CONTENT_BYTES / 1024 / 1024) + 1}mb` }));
-app.use(express.urlencoded({ extended: false, limit: `${Math.ceil(MAX_CONTENT_BYTES / 1024 / 1024) + 1}mb` }));
+app.use(express.json({ limit: `${BODY_LIMIT_MB}mb` }));
+app.use(express.urlencoded({ extended: false, limit: `${BODY_LIMIT_MB}mb` }));
 
 function nowIso() {
   return new Date().toISOString();
@@ -274,6 +277,60 @@ function prepareContent(kind, payload) {
   return { name, formatted };
 }
 
+function safeRelativePath(input) {
+  const value = String(input || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const normalized = path.posix.normalize(value);
+  if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized.includes('/../') || path.isAbsolute(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizePackageFiles(value, { requireSkillMd = false } = {}) {
+  if (!Array.isArray(value) || value.length === 0) {
+    if (requireSkillMd) throw new Error('skill package must include SKILL.md');
+    return [];
+  }
+  if (value.length > MAX_PACKAGE_FILES) {
+    throw new Error(`skill package can include at most ${MAX_PACKAGE_FILES} files`);
+  }
+
+  const files = [];
+  const seen = new Set();
+  let totalBytes = 0;
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const relativePath = safeRelativePath(entry.path || entry.name);
+    if (!relativePath || relativePath.endsWith('/')) {
+      throw new Error('skill package contains an invalid file path');
+    }
+    const key = relativePath.toLowerCase();
+    if (seen.has(key)) {
+      throw new Error(`skill package contains duplicate file path: ${relativePath}`);
+    }
+    seen.add(key);
+
+    const encoding = entry.encoding === 'base64' ? 'base64' : 'utf8';
+    if (typeof entry.content !== 'string') {
+      throw new Error(`skill package file ${relativePath} is missing content`);
+    }
+    const buffer = Buffer.from(entry.content, encoding);
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_PACKAGE_BYTES) {
+      throw new Error(`skill package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
+    }
+    files.push({ path: relativePath, buffer, size: buffer.length });
+  }
+
+  if (files.length === 0) {
+    throw new Error('skill package must include at least one file');
+  }
+  if (requireSkillMd && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
+    throw new Error('skill package must include SKILL.md at the package root');
+  }
+  return files;
+}
+
 function safeContentPath(contentPath) {
   const normalized = path.normalize(String(contentPath || ''));
   if (!normalized || normalized.startsWith('..') || path.isAbsolute(normalized)) {
@@ -295,10 +352,24 @@ function getSubmissionContentPath(submissionId) {
   return path.join('submissions', `${submissionId}.md`);
 }
 
+function getPublishedPackageRoot(itemId) {
+  return path.join('published', itemId);
+}
+
+function getSubmissionPackageRoot(submissionId) {
+  return path.join('submissions', submissionId);
+}
+
 async function readStoredContent(contentPath) {
   const resolved = safeContentPath(contentPath);
   if (!resolved) throw new Error('Invalid content path');
   return await fsp.readFile(resolved, 'utf8');
+}
+
+async function readStoredBuffer(contentPath) {
+  const resolved = safeContentPath(contentPath);
+  if (!resolved) throw new Error('Invalid content path');
+  return await fsp.readFile(resolved);
 }
 
 async function writeStoredContent(contentPath, content) {
@@ -308,10 +379,56 @@ async function writeStoredContent(contentPath, content) {
   await fsp.writeFile(resolved, content, { mode: 0o600 });
 }
 
+async function writeStoredBuffer(contentPath, buffer) {
+  const resolved = safeContentPath(contentPath);
+  if (!resolved) throw new Error('Invalid content path');
+  await ensureDir(path.dirname(resolved));
+  await fsp.writeFile(resolved, buffer, { mode: 0o600 });
+}
+
+async function writeStoredPackage(rootPath, files) {
+  const root = safeContentPath(rootPath);
+  if (!root) throw new Error('Invalid package path');
+  await fsp.rm(root, { recursive: true, force: true });
+  const packageFiles = [];
+  for (const file of files) {
+    const relativePath = safeRelativePath(file.path);
+    if (!relativePath) throw new Error('Invalid package file path');
+    const contentPath = path.join(rootPath, ...relativePath.split('/'));
+    await writeStoredBuffer(contentPath, file.buffer);
+    packageFiles.push({
+      path: relativePath,
+      contentPath,
+      size: file.size,
+    });
+  }
+  return packageFiles;
+}
+
+async function readStoredPackageFiles(packageFiles) {
+  if (!Array.isArray(packageFiles) || packageFiles.length === 0) return [];
+  const files = [];
+  let totalBytes = 0;
+  for (const file of packageFiles) {
+    const relativePath = safeRelativePath(file.path);
+    if (!relativePath || !file.contentPath) throw new Error('Invalid package file path');
+    const buffer = await readStoredBuffer(file.contentPath);
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_PACKAGE_BYTES) {
+      throw new Error(`skill package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
+    }
+    files.push({ path: relativePath, buffer, size: buffer.length });
+  }
+  if (files.length > 0 && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
+    throw new Error('skill package must include SKILL.md at the package root');
+  }
+  return files;
+}
+
 async function removeStoredContent(contentPath) {
   const resolved = safeContentPath(contentPath);
   if (resolved) {
-    await fsp.rm(resolved, { force: true });
+    await fsp.rm(resolved, { force: true, recursive: true });
   }
 }
 
@@ -348,7 +465,28 @@ function currentLikes(store, itemId) {
   return Math.max(0, Number(store.likes?.[itemId]?.count || 0));
 }
 
+function encodePackagePath(relativePath) {
+  return String(relativePath || '')
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+}
+
 function toCatalogItem(store, item) {
+  const packageFiles = Array.isArray(item.packageFiles)
+    ? item.packageFiles
+      .map((file) => {
+        const relativePath = safeRelativePath(file.path);
+        if (!relativePath) return null;
+        return {
+          path: relativePath,
+          size: Number(file.size || 0),
+          contentUrl: `./content/${encodeURIComponent(item.id)}/${encodePackagePath(relativePath)}`,
+        };
+      })
+      .filter(Boolean)
+    : [];
+
   return {
     id: item.name,
     kind: item.kind,
@@ -366,7 +504,10 @@ function toCatalogItem(store, item) {
     downloads: Number(item.downloads || 0),
     createdAt: item.createdAt || null,
     updatedAt: item.updatedAt || null,
-    contentUrl: `./content/${encodeURIComponent(item.id)}.md`,
+    contentUrl: packageFiles.length > 0
+      ? `./content/${encodeURIComponent(item.id)}/SKILL.md`
+      : `./content/${encodeURIComponent(item.id)}.md`,
+    ...(packageFiles.length > 0 ? { packageFiles } : {}),
     likeUrl: `./items/${encodeURIComponent(item.id)}/like`,
   };
 }
@@ -425,6 +566,22 @@ function getLanAccessUrls() {
     .map((entry) => `http://${entry.address}:${PORT}`);
 }
 
+function contentTypeForPath(filePath) {
+  const extension = path.extname(String(filePath || '')).toLowerCase();
+  if (extension === '.md' || extension === '.markdown') return 'text/markdown; charset=utf-8';
+  if (extension === '.txt' || extension === '.log') return 'text/plain; charset=utf-8';
+  if (extension === '.json') return 'application/json; charset=utf-8';
+  if (['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'].includes(extension)) return 'text/javascript; charset=utf-8';
+  if (extension === '.css') return 'text/css; charset=utf-8';
+  if (extension === '.html' || extension === '.htm') return 'text/html; charset=utf-8';
+  if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.gif') return 'image/gif';
+  if (extension === '.pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
 function requestToken(req) {
   const authHeader = String(req.headers.authorization || '');
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -468,10 +625,31 @@ async function createSubmission(payload, req) {
   const kind = normalizeKind(payload.kind);
   if (!kind) throw new Error('kind must be "agent-template" or "skill"');
 
-  const { name, formatted } = prepareContent(kind, payload);
+  let name;
+  let formatted = null;
+  let packageFiles = [];
+  if (kind === 'skill' && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
+    name = sanitizeSlug(payload.name || payload.title);
+    if (!validateSlug(name)) {
+      throw new Error('name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
+    }
+    packageFiles = normalizePackageFiles(payload.packageFiles, { requireSkillMd: true });
+  } else {
+    const prepared = prepareContent(kind, payload);
+    name = prepared.name;
+    formatted = prepared.formatted;
+  }
+
   const submissionId = createSubmissionId(kind, name);
-  const contentPath = getSubmissionContentPath(submissionId);
-  await writeStoredContent(contentPath, formatted);
+  let contentPath = getSubmissionContentPath(submissionId);
+  let storedPackageFiles = [];
+  if (packageFiles.length > 0) {
+    const packageRoot = getSubmissionPackageRoot(submissionId);
+    storedPackageFiles = await writeStoredPackage(packageRoot, packageFiles);
+    contentPath = path.join(packageRoot, 'SKILL.md');
+  } else {
+    await writeStoredContent(contentPath, formatted);
+  }
 
   return {
     id: submissionId,
@@ -487,6 +665,7 @@ async function createSubmission(payload, req) {
     capabilities: safeStringArray(payload.capabilities || payload.features),
     status: 'pending',
     contentPath,
+    ...(storedPackageFiles.length > 0 ? { packageFiles: storedPackageFiles } : {}),
     submittedAt: nowIso(),
     submitterIpHash: crypto.createHash('sha256').update(String(req.ip || '')).digest('hex'),
   };
@@ -508,11 +687,24 @@ async function publishSubmission(store, submission, payload = {}) {
     }
   }
 
-  const content = typeof payload.content === 'string' && payload.content.trim()
-    ? prepareContent(kind, { ...submission, ...payload, name }).formatted
-    : await readStoredContent(submission.contentPath);
-  const publishedContentPath = getPublishedContentPath(itemId);
-  await writeStoredContent(publishedContentPath, content);
+  let publishedContentPath = getPublishedContentPath(itemId);
+  let publishedPackageFiles = [];
+  if (kind === 'skill' && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
+    const files = normalizePackageFiles(payload.packageFiles, { requireSkillMd: true });
+    const packageRoot = getPublishedPackageRoot(itemId);
+    publishedPackageFiles = await writeStoredPackage(packageRoot, files);
+    publishedContentPath = path.join(packageRoot, 'SKILL.md');
+  } else if (kind === 'skill' && Array.isArray(submission.packageFiles) && submission.packageFiles.length > 0 && !(typeof payload.content === 'string' && payload.content.trim())) {
+    const files = await readStoredPackageFiles(submission.packageFiles);
+    const packageRoot = getPublishedPackageRoot(itemId);
+    publishedPackageFiles = await writeStoredPackage(packageRoot, files);
+    publishedContentPath = path.join(packageRoot, 'SKILL.md');
+  } else {
+    const content = typeof payload.content === 'string' && payload.content.trim()
+      ? prepareContent(kind, { ...submission, ...payload, name }).formatted
+      : await readStoredContent(submission.contentPath);
+    await writeStoredContent(publishedContentPath, content);
+  }
 
   const previous = existingIndex >= 0 ? store.items[existingIndex] : null;
   const item = {
@@ -530,6 +722,7 @@ async function publishSubmission(store, submission, payload = {}) {
     version: String(payload.version || previous?.version || '1.0.0').trim(),
     status: 'published',
     contentPath: publishedContentPath,
+    ...(publishedPackageFiles.length > 0 ? { packageFiles: publishedPackageFiles } : {}),
     downloads: Number(previous?.downloads || 0),
     createdAt: previous?.createdAt || nowIso(),
     updatedAt: nowIso(),
@@ -553,15 +746,36 @@ async function publishDirect(store, payload) {
   const kind = normalizeKind(payload.kind);
   if (!kind) throw new Error('kind must be "agent-template" or "skill"');
 
-  const { name, formatted } = prepareContent(kind, payload);
+  let name;
+  let formatted = null;
+  let packageFiles = [];
+  if (kind === 'skill' && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
+    name = sanitizeSlug(payload.name || payload.title);
+    if (!validateSlug(name)) {
+      throw new Error('name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
+    }
+    packageFiles = normalizePackageFiles(payload.packageFiles, { requireSkillMd: true });
+  } else {
+    const prepared = prepareContent(kind, payload);
+    name = prepared.name;
+    formatted = prepared.formatted;
+  }
+
   const itemId = publicItemId(kind, name);
   const existingIndex = store.items.findIndex((item) => item.id === itemId);
   if (existingIndex >= 0 && !payload.overwrite) {
     throw new Error(`${publicKindLabel(kind)} "${name}" already exists`);
   }
 
-  const contentPath = getPublishedContentPath(itemId);
-  await writeStoredContent(contentPath, formatted);
+  let contentPath = getPublishedContentPath(itemId);
+  let storedPackageFiles = [];
+  if (packageFiles.length > 0) {
+    const packageRoot = getPublishedPackageRoot(itemId);
+    storedPackageFiles = await writeStoredPackage(packageRoot, packageFiles);
+    contentPath = path.join(packageRoot, 'SKILL.md');
+  } else {
+    await writeStoredContent(contentPath, formatted);
+  }
 
   const previous = existingIndex >= 0 ? store.items[existingIndex] : null;
   const item = {
@@ -579,6 +793,7 @@ async function publishDirect(store, payload) {
     version: String(payload.version || previous?.version || '1.0.0').trim(),
     status: 'published',
     contentPath,
+    ...(storedPackageFiles.length > 0 ? { packageFiles: storedPackageFiles } : {}),
     downloads: Number(previous?.downloads || 0),
     createdAt: previous?.createdAt || nowIso(),
     updatedAt: nowIso(),
@@ -611,6 +826,33 @@ publicRouter.get('/catalog.json', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to read repository catalog', details: error.message });
+  }
+});
+
+publicRouter.get('/content/:itemId/*', async (req, res) => {
+  try {
+    const itemId = String(req.params.itemId || '');
+    const relativePath = safeRelativePath(req.params[0]);
+    if (!relativePath) return res.status(400).json({ error: 'Invalid package file path' });
+
+    const store = await readStore();
+    const item = store.items.find((candidate) => candidate.id === itemId && candidate.status === 'published');
+    if (!item || !Array.isArray(item.packageFiles)) return res.status(404).json({ error: 'Repository item not found' });
+
+    const packageFile = item.packageFiles.find((file) => String(file.path || '').toLowerCase() === relativePath.toLowerCase());
+    if (!packageFile) return res.status(404).json({ error: 'Package file not found' });
+
+    const content = await readStoredBuffer(packageFile.contentPath);
+    if (relativePath.toLowerCase() === 'skill.md') {
+      item.downloads = Number(item.downloads || 0) + 1;
+      await writeStore(store);
+    }
+
+    res.setHeader('Content-Type', contentTypeForPath(relativePath));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(content);
+  } catch (error) {
+    return res.status(404).json({ error: 'Repository package file not found', details: error.message });
   }
 });
 
@@ -852,7 +1094,9 @@ adminRouter.delete('/items/:itemId', async (req, res) => {
     if (index < 0) return res.status(404).json({ error: 'Repository item not found' });
 
     const [removed] = store.items.splice(index, 1);
-    await removeStoredContent(removed.contentPath);
+    await removeStoredContent(Array.isArray(removed.packageFiles) && removed.packageFiles.length > 0
+      ? path.dirname(removed.contentPath)
+      : removed.contentPath);
     delete store.likes[removed.id];
     await writeStore(store);
     return res.json({ success: true, item: removed });

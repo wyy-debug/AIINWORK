@@ -42,6 +42,7 @@ export type MainContentProps = {
   quickStartAgentId?: string;
   quickStartAgentRequestId?: number;
   newConversationRequestId?: number;
+  newProjectSessionRequestId?: number;
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   ws: WebSocket | null;

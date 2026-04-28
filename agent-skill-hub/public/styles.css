@@ -158,6 +158,12 @@ textarea {
   resize: vertical;
 }
 
+small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .formGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

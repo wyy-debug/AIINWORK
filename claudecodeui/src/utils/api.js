@@ -66,6 +66,29 @@ export const api = {
       method: 'DELETE',
     });
   },
+  createProjectWorktree: (projectName, payload = {}) =>
+    apiFetch(`/api/projects/${encodeURIComponent(projectName)}/worktrees`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  projectWorktrees: (projectName) =>
+    apiFetch(`/api/projects/${encodeURIComponent(projectName)}/worktrees`),
+  worktree: (worktreeId) =>
+    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}`),
+  updateWorktreeSession: (worktreeId, sessionId, provider = 'claude') =>
+    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/session`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, provider }),
+    }),
+  createWorktreeBranch: (worktreeId, branchName) =>
+    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/create-branch`, {
+      method: 'POST',
+      body: JSON.stringify({ branchName }),
+    }),
+  deleteWorktree: (worktreeId, force = false) =>
+    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}${force ? '?force=true' : ''}`, {
+      method: 'DELETE',
+    }),
   searchConversationsUrl: (query, limit = 50) => {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return `/api/search/conversations?${params.toString()}`;
@@ -77,6 +100,12 @@ export const api = {
     }),
   agents: (includePaused = true) =>
     apiFetch(`/api/agents?includePaused=${includePaused ? 'true' : 'false'}`),
+  installedAgentSkills: (workspacePath = '') => {
+    const params = new URLSearchParams();
+    if (workspacePath) params.set('workspacePath', workspacePath);
+    const query = params.toString();
+    return apiFetch(`/api/agents/skills/installed${query ? `?${query}` : ''}`);
+  },
   conversations: (limit = 50, offset = 0) =>
     apiFetch(`/api/conversations?limit=${limit}&offset=${offset}`),
   conversationSessions: (limit = 50, offset = 0) =>

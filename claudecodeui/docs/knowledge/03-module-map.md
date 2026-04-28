@@ -30,6 +30,7 @@
 | Plugins | `src/contexts/PluginsContext.tsx`，`src/components/plugins` | 插件列表、install/update/toggle、插件 tab 内容。 |
 | Task planning | `src/components/task-master`，`src/components/prd-editor`，`src/contexts/TaskMasterContext.ts` | TaskMaster panel、PRD 编辑、任务生成。 |
 | Project creation | `src/components/project-creation-wizard` | workspace 创建、GitHub token、clone/create 流程。 |
+| Worktree dispatch | `src/components/sidebar/view/subcomponents/WorktreeDispatchModal.tsx`，`src/components/main-content/view/subcomponents/WorktreeProjectBadge.tsx` | Git worktree 派发入口、Agent/Skill 预绑定、worktree 项目头部状态和分支/删除操作。 |
 | Shared UI | `src/shared/view/ui` | 可复用 UI primitives。 |
 | API/types | `src/utils/api.js`，`src/types/app.ts` | HTTP wrapper 和前端 app contracts。 |
 
@@ -48,6 +49,7 @@
 | Gemini runtime | `server/gemini-cli.js`，`server/modules/providers/list/gemini`，`server/routes/gemini.js` | Gemini CLI/session deletion/MCP/auth adapters。 |
 | Projects/session discovery | `server/projects.js`，`server/index.js` 中的 project endpoints | 聚合 projects、sessions、search、names、path extraction。 |
 | Workspace creation | `server/routes/projects.js` | workspace 校验、GitHub clone/create 流程。 |
+| Worktree dispatch | `server/routes/worktrees.js`，`server/database/db.js` | managed detached worktree 创建、元数据、session 关联、分支创建和 dirty 删除检查。 |
 | Git | `server/routes/git.js` | status、diff、commit、branch、remote 操作。 |
 | Commands | `server/routes/commands.js` | command listing/execution 支持。 |
 | Settings | `server/routes/settings.js`，`server/routes/user.js` | API keys、credentials、notifications、server env、user Git config、onboarding。 |

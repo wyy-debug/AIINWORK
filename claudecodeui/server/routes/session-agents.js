@@ -47,10 +47,26 @@ function normalizeAppBindings(value) {
     .slice(0, 30);
 }
 
+function normalizeSkillNames(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map((skill) => normalizeString(skill, '', 120))
+    .filter(Boolean)
+    .filter((skill) => {
+      const key = skill.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 30);
+}
+
 function normalizeSessionAgentConfiguration(value) {
   const source = value && typeof value === 'object' ? value : {};
   return {
     appBindings: normalizeAppBindings(source.appBindings),
+    skills: normalizeSkillNames(source.skills),
   };
 }
 
@@ -84,9 +100,18 @@ router.put('/:sessionId/agent', async (req, res) => {
     const provider = normalizeProvider(req.body?.provider || req.query.provider);
     const agentId = String(req.body?.agentId || '').trim();
 
+    const configuration = normalizeSessionAgentConfiguration(req.body?.configuration || {
+      appBindings: req.body?.appBindings,
+      skills: req.body?.skills,
+    });
+
     if (!agentId) {
-      sessionAgentBindingsDb.deleteAgent(sessionId, provider);
-      return res.json({ success: true, sessionId, provider, agentId: '', agent: null });
+      if (configuration.appBindings.length === 0 && configuration.skills.length === 0) {
+        sessionAgentBindingsDb.deleteAgent(sessionId, provider);
+        return res.json({ success: true, sessionId, provider, agentId: '', agent: null, configuration: null });
+      }
+      sessionAgentBindingsDb.setAgent(sessionId, provider, '', configuration);
+      return res.json({ success: true, sessionId, provider, agentId: '', agent: null, configuration });
     }
 
     const agent = await getAgentConfig(agentId);
@@ -94,9 +119,6 @@ router.put('/:sessionId/agent', async (req, res) => {
       return res.status(400).json({ error: 'Agent must exist and be enabled before it can be bound to a conversation' });
     }
 
-    const configuration = normalizeSessionAgentConfiguration(req.body?.configuration || {
-      appBindings: req.body?.appBindings,
-    });
     sessionAgentBindingsDb.setAgent(sessionId, provider, agent.id, configuration);
     res.json({ success: true, sessionId, provider, agentId: agent.id, agent, configuration });
   } catch (error) {

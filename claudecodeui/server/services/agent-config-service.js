@@ -3,6 +3,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 
 import { buildAgentKnowledgePrompt } from './agent-rag-service.js';
+import { listInstalledSkills } from './agent-skill-service.js';
 
 const UI_DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
 const AGENTS_DIR = process.env.MTL_CODE_AGENTS_CONFIG_DIR || path.join(UI_DATA_DIR, 'agents');
@@ -463,8 +464,9 @@ export async function buildAgentSystemPrompt(agent, options = {}) {
     agent.systemPrompt,
   ];
 
-  if (agent.skills.length > 0) {
-    lines.push('', 'Preferred skills:', ...agent.skills.map((skill) => `- ${skill}`));
+  const skillsPrompt = await buildSkillReferencePrompt(agent.skills, options);
+  if (skillsPrompt) {
+    lines.push('', skillsPrompt);
   }
 
   if (agent.appBindings.length > 0) {
@@ -511,14 +513,47 @@ export async function buildAgentSystemPrompt(agent, options = {}) {
   return lines.filter((line) => line !== undefined && line !== null).join('\n');
 }
 
+export async function buildSkillReferencePrompt(skillNames = [], options = {}) {
+  const normalizedSkillNames = normalizeStringArray(skillNames, 60, 120);
+  if (normalizedSkillNames.length === 0) {
+    return '';
+  }
+
+  let installedSkills = [];
+  try {
+    const registry = await listInstalledSkills({ workspacePath: options.workspacePath || '' });
+    installedSkills = Array.isArray(registry.skills) ? registry.skills : [];
+  } catch {
+    installedSkills = [];
+  }
+
+  const lines = [
+    'Preferred skills for this conversation:',
+    ...normalizedSkillNames.map((skillName) => {
+      const installed = installedSkills.find((skill) => (
+        skill.name.toLowerCase() === String(skillName).toLowerCase()
+        || skill.title.toLowerCase() === String(skillName).toLowerCase()
+      ));
+      return installed
+        ? `- ${skillName} (installed, ${installed.provider}/${installed.scope}, ${installed.skillPath})`
+        : `- ${skillName} (not installed; do not rely on this Skill until the user installs it)`;
+    }),
+    'When a preferred Skill is installed, read and follow its SKILL.md instructions before applying that specialized workflow. These Skills narrow the workflow for this conversation and do not grant extra permissions by themselves.',
+  ];
+
+  return lines.join('\n');
+}
+
 function applyRuntimeAgentConfiguration(agent, configuration = {}) {
   const appBindings = normalizeAppBindings(configuration?.appBindings);
-  if (appBindings.length === 0) {
+  const skills = normalizeStringArray(configuration?.skills, 60, 120);
+  if (appBindings.length === 0 && skills.length === 0) {
     return agent;
   }
   return {
     ...agent,
-    appBindings,
+    appBindings: appBindings.length > 0 ? appBindings : agent.appBindings,
+    skills: skills.length > 0 ? Array.from(new Set([...agent.skills, ...skills])) : agent.skills,
   };
 }
 

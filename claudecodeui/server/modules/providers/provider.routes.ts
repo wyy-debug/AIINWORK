@@ -270,7 +270,8 @@ const inspectProviderMcpServer = async (
   checks.push({
     id: 'tools',
     status: 'warn',
-    message: 'Tool listing is owned by the provider runtime and will be available after the session starts.',
+    message: 'Configuration is bound. Tool listing is discovered by the MTL-Code provider runtime after a session starts.',
+    detail: 'v1 does not expose a separate MCP tool-list API.',
   });
 
   const failed = checks.some((check) => check.status === 'fail');

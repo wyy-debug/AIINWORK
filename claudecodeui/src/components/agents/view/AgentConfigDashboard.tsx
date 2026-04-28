@@ -69,11 +69,22 @@ type CatalogApp = {
   icon: LucideIcon;
 };
 
-type SkillTemplate = {
+type InstalledSkill = {
   id: string;
   name: string;
+  title: string;
   description: string;
-  source: 'local' | 'remote' | 'generated';
+  version?: string;
+  tags?: string[];
+  scope: 'user' | 'project';
+  provider: 'mtl-code' | 'claude' | 'codex' | string;
+  source: string;
+  path: string;
+  skillPath: string;
+  callable: boolean;
+  fileCount: number;
+  folders: string[];
+  updatedAt?: string;
 };
 
 type AgentMcpServer = {
@@ -139,26 +150,21 @@ function isImplementedAppBinding(app: string) {
   return app.trim().startsWith('MCP: ');
 }
 
-const SKILL_TEMPLATES: SkillTemplate[] = [
-  {
-    id: 'example-skill',
-    name: 'example-skill',
-    description: '示例技能，用于展示 Skill 仓库的安装和绑定流程。',
-    source: 'remote',
-  },
-  {
-    id: 'skill-creator',
-    name: 'skill-creator',
-    description: '根据描述生成 SKILL.md 草稿，适合快速创建可复用能力。',
-    source: 'local',
-  },
-  {
-    id: 'meeting-brief',
-    name: 'meeting-brief',
-    description: '把会议记录整理成结论、待办和风险。',
-    source: 'remote',
-  },
-];
+function formatSkillProvider(skill?: InstalledSkill | null) {
+  if (!skill) return '未安装';
+  if (skill.scope === 'project') return `项目 ${skill.provider}`;
+  if (skill.provider === 'mtl-code') return 'MTL-Code';
+  if (skill.provider === 'codex') return 'Codex';
+  if (skill.provider === 'claude') return 'Claude';
+  return skill.provider;
+}
+
+function findInstalledSkill(skills: InstalledSkill[], skillName: string) {
+  const normalized = skillName.trim().toLowerCase();
+  return skills.find((skill) => (
+    skill.name.toLowerCase() === normalized || skill.title.toLowerCase() === normalized
+  )) || null;
+}
 
 const createDefaultChannels = (): AgentChannel[] => [
   {
@@ -321,14 +327,16 @@ function BuilderDialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="grid h-[min(78vh,560px)] w-full max-w-[720px] overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:grid-cols-[260px_minmax(0,1fr)]"
+        onWheel={(event) => event.stopPropagation()}
+        onTouchMove={(event) => event.stopPropagation()}
+        className="relative grid h-[min(86vh,680px)] max-h-[calc(100vh-2rem)] min-h-0 w-full max-w-[720px] touch-auto grid-rows-[minmax(0,1fr)] overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:grid-cols-[260px_minmax(0,1fr)]"
       >
         {children}
         <button
           type="button"
           aria-label="关闭"
           onClick={onClose}
-          className="absolute right-[calc(50%-350px)] top-[calc(50%-270px)] hidden h-8 w-8 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted md:flex"
+          className="absolute right-4 top-4 hidden h-8 w-8 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted md:flex"
         >
           <X className="h-5 w-5" />
         </button>
@@ -662,7 +670,7 @@ function AppCatalogModal({
 
   return (
     <BuilderDialog title="浏览应用" onClose={onClose}>
-      <aside className="min-h-0 border-r border-border bg-muted/30 p-2">
+      <aside className="flex min-h-0 flex-col overflow-hidden border-r border-border bg-muted/30 p-2">
         <SidebarSearch value={query} onChange={setQuery} placeholder="搜索应用" />
         <div className="mt-2 h-[calc(100%-48px)] overflow-y-auto pr-1">
           {filteredApps.map((app) => {
@@ -822,6 +830,9 @@ function AppCatalogModal({
                               ))}
                             </div>
                           )}
+                          <div className="mt-2 rounded-md border border-border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                            检测只验证 MCP Server 配置、启动命令或 URL 连通性。工具列表会在会话启动后由 MTL-Code 原生 runtime 发现；如果这里没有工具列表，不代表未绑定。
+                          </div>
                         </div>
                       );
                     })}
@@ -980,24 +991,40 @@ function AppCatalogModal({
 
 function SkillsModal({
   agent,
+  installedSkills,
+  isLoadingSkills,
+  onRefreshSkills,
   onClose,
   onAddSkill,
 }: {
   agent: AgentConfig;
+  installedSkills: InstalledSkill[];
+  isLoadingSkills: boolean;
+  onRefreshSkills: () => void;
   onClose: () => void;
   onAddSkill: (skillName: string) => void;
 }) {
   const [query, setQuery] = useState('');
-  const [selectedSkillId, setSelectedSkillId] = useState('create');
+  const [selectedSkillId, setSelectedSkillId] = useState('');
   const [skillPrompt, setSkillPrompt] = useState('');
   const filteredSkills = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return SKILL_TEMPLATES;
-    return SKILL_TEMPLATES.filter((skill) => (
-      `${skill.name} ${skill.description}`.toLowerCase().includes(normalizedQuery)
+    if (!normalizedQuery) return installedSkills;
+    return installedSkills.filter((skill) => (
+      `${skill.name} ${skill.title} ${skill.description} ${skill.source} ${skill.provider}`.toLowerCase().includes(normalizedQuery)
     ));
-  }, [query]);
-  const selectedSkill = SKILL_TEMPLATES.find((skill) => skill.id === selectedSkillId);
+  }, [installedSkills, query]);
+  const selectedSkill = filteredSkills.find((skill) => skill.id === selectedSkillId) || filteredSkills[0] || null;
+
+  useEffect(() => {
+    if (filteredSkills.length === 0) {
+      setSelectedSkillId('');
+      return;
+    }
+    if (!selectedSkillId || !filteredSkills.some((skill) => skill.id === selectedSkillId)) {
+      setSelectedSkillId(filteredSkills[0].id);
+    }
+  }, [filteredSkills, selectedSkillId]);
 
   const handleGenerateSkill = () => {
     const text = skillPrompt.trim();
@@ -1014,9 +1041,16 @@ function SkillsModal({
 
   return (
     <BuilderDialog title="添加技能" onClose={onClose}>
-      <aside className="min-h-0 border-r border-border bg-muted/30 p-2">
+      <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-border bg-muted/30 p-2">
         <SidebarSearch value={query} onChange={setQuery} placeholder="搜索技能" />
-        <div className="mt-2 space-y-1">
+        <div className="mt-2 flex items-center justify-between px-3 text-xs text-muted-foreground">
+          <span>{isLoadingSkills ? '扫描 Skill...' : `${installedSkills.length} 个已安装 Skill`}</span>
+          <button type="button" onClick={onRefreshSkills} className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-background hover:text-foreground">
+            <RefreshCw className={cn('h-3 w-3', isLoadingSkills && 'animate-spin')} />
+            刷新
+          </button>
+        </div>
+        <div className="hidden">
           <button
             type="button"
             onClick={() => setSelectedSkillId('create')}
@@ -1042,7 +1076,7 @@ function SkillsModal({
         </div>
 
         <div className="mt-5 px-3 text-xs font-medium text-muted-foreground">热门技能</div>
-        <div className="mt-2 space-y-1">
+        <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pb-2 pr-1">
           {filteredSkills.map((skill) => (
             <button
               key={skill.id}
@@ -1054,13 +1088,21 @@ function SkillsModal({
               )}
             >
               <Box className="h-4 w-4 shrink-0 text-primary" />
-              <span className="truncate">{skill.name}</span>
+              <span className="min-w-0 flex-1 truncate">{skill.name}</span>
+              <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+                可调用
+              </span>
             </button>
           ))}
+          {filteredSkills.length === 0 && (
+            <div className="rounded-lg border border-dashed border-border bg-background/70 px-3 py-4 text-xs leading-5 text-muted-foreground">
+              未发现已安装 Skill。请先从 Repository 安装，或放到 ~/.mtl-code/skills、~/.codex/skills。
+            </div>
+          )}
         </div>
       </aside>
 
-      <main className="relative flex min-h-0 flex-col p-7">
+      <main className="relative flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain p-7">
         <button
           type="button"
           aria-label="关闭"
@@ -1124,11 +1166,19 @@ function SkillsModal({
             <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-background text-primary">
               <Box className="h-8 w-8" />
             </div>
-            <h2 className="mt-8 text-2xl font-semibold text-foreground">{selectedSkill.name}</h2>
-            <div className="mt-2 text-sm text-muted-foreground">
-              {selectedSkill.source === 'local' ? '本地技能' : '远端仓库'}
+            <h2 className="mt-8 text-2xl font-semibold text-foreground">{selectedSkill.title || selectedSkill.name}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span>{formatSkillProvider(selectedSkill)}</span>
+              <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">已可调用</span>
+              {selectedSkill.fileCount > 0 && <span>{selectedSkill.fileCount} files</span>}
             </div>
             <p className="mt-5 max-w-[360px] text-sm leading-7 text-muted-foreground">{selectedSkill.description}</p>
+            <div className="mt-4 space-y-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <div className="break-all">SKILL.md: {selectedSkill.skillPath}</div>
+              {selectedSkill.folders.length > 0 && (
+                <div>包含目录: {selectedSkill.folders.join(', ')}</div>
+              )}
+            </div>
             <div className="mt-auto">
               <Button
                 type="button"
@@ -1226,6 +1276,8 @@ export default function AgentConfigDashboard({
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [draftAgent, setDraftAgent] = useState<AgentConfig | null>(null);
   const [settingsConfig, setSettingsConfig] = useState<MtlCodeSettingsConfig | null>(null);
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
+  const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingAgentId, setSavingAgentId] = useState<string | null>(null);
@@ -1235,6 +1287,8 @@ export default function AgentConfigDashboard({
   const [isUploadingKnowledge, setIsUploadingKnowledge] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedWorkspacePath = selectedProject?.fullPath || selectedProject?.path || '';
 
   const settingsModelConfig = useMemo(() => ({
     provider: 'mtl-code',
@@ -1289,10 +1343,31 @@ export default function AgentConfigDashboard({
     }
   }, []);
 
+  const loadInstalledSkills = useCallback(async () => {
+    setIsLoadingSkills(true);
+    try {
+      const response = await api.installedAgentSkills(selectedWorkspacePath);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to load installed skills');
+      }
+      setInstalledSkills(Array.isArray(data?.skills) ? data.skills : []);
+    } catch (skillError) {
+      console.warn('Failed to load installed Agent skills:', skillError);
+      setInstalledSkills([]);
+    } finally {
+      setIsLoadingSkills(false);
+    }
+  }, [selectedWorkspacePath]);
+
   useEffect(() => {
     void loadAgents();
     void loadSettingsConfig();
   }, [loadAgents, loadSettingsConfig]);
+
+  useEffect(() => {
+    void loadInstalledSkills();
+  }, [loadInstalledSkills]);
 
   useEffect(() => {
     setAgents((previous) => previous.map((agent) => applySettingsModelConfig(agent)));
@@ -1971,16 +2046,26 @@ export default function AgentConfigDashboard({
                     <div>
                       <div className="mb-2 text-xs font-medium text-muted-foreground">技能</div>
                       <div className="flex flex-wrap gap-2">
-                        {draftAgent.skills.map((skill) => (
-                          <button
-                            key={skill}
-                            type="button"
-                            onClick={() => removeSkill(skill)}
-                            className="rounded-full border border-border bg-muted/30 px-3 py-1 text-xs text-foreground hover:bg-muted"
-                          >
-                            {skill}
-                          </button>
-                        ))}
+                        {draftAgent.skills.map((skill) => {
+                          const installedSkill = findInstalledSkill(installedSkills, skill);
+                          return (
+                            <button
+                              key={skill}
+                              type="button"
+                              onClick={() => removeSkill(skill)}
+                              className={cn(
+                                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs hover:bg-muted',
+                                installedSkill
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                                  : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+                              )}
+                              title={installedSkill ? `${formatSkillProvider(installedSkill)} 已可调用` : '本机未发现这个 Skill'}
+                            >
+                              {skill}
+                              <span className="text-[10px] opacity-80">{installedSkill ? '已可调用' : '未安装'}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -2105,6 +2190,9 @@ export default function AgentConfigDashboard({
       {activeModal === 'skills' && draftAgent && (
         <SkillsModal
           agent={draftAgent}
+          installedSkills={installedSkills}
+          isLoadingSkills={isLoadingSkills}
+          onRefreshSkills={() => void loadInstalledSkills()}
           onClose={() => setActiveModal(null)}
           onAddSkill={addSkill}
         />

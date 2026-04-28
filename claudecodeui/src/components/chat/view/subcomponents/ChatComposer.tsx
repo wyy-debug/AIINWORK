@@ -1,25 +1,32 @@
-import { useTranslation } from 'react-i18next';
-import type {
-  ChangeEvent,
-  ClipboardEvent,
-  Dispatch,
-  FormEvent,
-  KeyboardEvent,
-  MouseEvent,
-  ReactNode,
-  RefObject,
-  SetStateAction,
-  TouchEvent,
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+  type TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon, BotIcon } from 'lucide-react';
-import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
-import type { AgentConfig } from '../../../../types/agent';
-import CommandMenu from './CommandMenu';
-import ClaudeStatus from './ClaudeStatus';
-import ImageAttachment from './ImageAttachment';
-import PermissionRequestsBanner from './PermissionRequestsBanner';
-import ThinkingModeSelector from './ThinkingModeSelector';
-import TokenUsagePie from './TokenUsagePie';
+import {
+  ImageIcon,
+  MessageSquareIcon,
+  XIcon,
+  ArrowDownIcon,
+  BotIcon,
+  SparklesIcon,
+  WrenchIcon,
+  BracesIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  SearchIcon,
+} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
 import {
   PromptInput,
   PromptInputHeader,
@@ -30,6 +37,16 @@ import {
   PromptInputButton,
   PromptInputSubmit,
 } from '../../../../shared/view/ui';
+import { cn } from '../../../../lib/utils';
+import type { AgentAppBinding, AgentConfig, InstalledSkill } from '../../../../types/agent';
+import type { AgentRuntimeDiagnostics, PendingPermissionRequest, Provider } from '../../types/types';
+
+import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
+import CommandMenu from './CommandMenu';
+import ClaudeStatus from './ClaudeStatus';
+import ImageAttachment from './ImageAttachment';
+import PermissionRequestsBanner from './PermissionRequestsBanner';
+import TokenUsagePie from './TokenUsagePie';
 
 interface MentionableFile {
   name: string;
@@ -59,11 +76,14 @@ interface ChatComposerProps {
   provider: Provider | string;
   agents: AgentConfig[];
   selectedAgentId: string;
+  selectedAgentAppBindings: AgentAppBinding[];
   onSelectedAgentIdChange: (agentId: string) => void;
-  permissionMode: PermissionMode | string;
-  onModeSwitch: () => void;
-  thinkingMode: string;
-  setThinkingMode: Dispatch<SetStateAction<string>>;
+  installedSkills: InstalledSkill[];
+  selectedSkillNames: string[];
+  onToggleSkillName: (skillName: string) => void;
+  onClearSkillNames: () => void;
+  showRuntimeDiagnostics: boolean;
+  agentRuntimeDiagnostics: AgentRuntimeDiagnostics | null;
   tokenBudget: { used?: number; total?: number } | null;
   slashCommandsCount: number;
   onToggleCommandMenu: () => void;
@@ -117,11 +137,14 @@ export default function ChatComposer({
   provider,
   agents,
   selectedAgentId,
+  selectedAgentAppBindings,
   onSelectedAgentIdChange,
-  permissionMode,
-  onModeSwitch,
-  thinkingMode,
-  setThinkingMode,
+  installedSkills,
+  selectedSkillNames,
+  onToggleSkillName,
+  onClearSkillNames,
+  showRuntimeDiagnostics,
+  agentRuntimeDiagnostics,
   tokenBudget,
   slashCommandsCount,
   onToggleCommandMenu,
@@ -165,6 +188,12 @@ export default function ChatComposer({
   sendByCtrlEnter,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isSkillMenuOpen, setIsSkillMenuOpen] = useState(false);
+  const [skillSearch, setSkillSearch] = useState('');
+  const [skillMenuPosition, setSkillMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
+  const skillMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
   const textareaRect = textareaRef.current?.getBoundingClientRect();
   const commandMenuPosition = {
     top: textareaRect ? Math.max(16, textareaRect.top - 316) : 0,
@@ -179,6 +208,92 @@ export default function ChatComposer({
 
   // Hide the thinking/status bar while any permission request is pending
   const hasPendingPermissions = pendingPermissionRequests.length > 0;
+  const selectedSkillKeys = useMemo(
+    () => new Set(selectedSkillNames.map((name) => name.toLowerCase())),
+    [selectedSkillNames],
+  );
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null;
+  const selectedMcpBindings = selectedAgentAppBindings.filter((binding) => binding.app.trim().startsWith('MCP: '));
+  const filteredInstalledSkills = useMemo(() => {
+    const normalizedQuery = skillSearch.trim().toLowerCase();
+    const matches = normalizedQuery
+      ? installedSkills.filter((skill) => (
+        `${skill.name} ${skill.title} ${skill.description || ''} ${skill.provider} ${skill.scope}`
+          .toLowerCase()
+          .includes(normalizedQuery)
+      ))
+      : installedSkills;
+
+    return [...matches].sort((left, right) => {
+      const leftLabel = left.title || left.name;
+      const rightLabel = right.title || right.name;
+      const leftSelected = selectedSkillKeys.has(left.name.toLowerCase()) || selectedSkillKeys.has(leftLabel.toLowerCase());
+      const rightSelected = selectedSkillKeys.has(right.name.toLowerCase()) || selectedSkillKeys.has(rightLabel.toLowerCase());
+
+      if (leftSelected !== rightSelected) return leftSelected ? -1 : 1;
+      return leftLabel.localeCompare(rightLabel);
+    });
+  }, [installedSkills, selectedSkillKeys, skillSearch]);
+  const selectedSkillSummaries = selectedSkillNames.map((skillName) => {
+    const normalized = skillName.toLowerCase();
+    const installedSkill = installedSkills.find((skill) => (
+      skill.name.toLowerCase() === normalized || skill.title.toLowerCase() === normalized
+    ));
+    return {
+      name: skillName,
+      label: installedSkill?.title || installedSkill?.name || skillName,
+      callable: Boolean(installedSkill?.callable),
+      source: installedSkill ? `${installedSkill.provider}/${installedSkill.scope}` : 'missing',
+    };
+  });
+  const hasRuntimeBindings = Boolean(selectedAgent || selectedMcpBindings.length > 0 || selectedSkillSummaries.length > 0);
+
+  useEffect(() => {
+    if (!isSkillMenuOpen) return undefined;
+
+    const updatePosition = () => {
+      const buttonRect = skillMenuButtonRef.current?.getBoundingClientRect();
+      if (!buttonRect) return;
+
+      const menuWidth = Math.min(380, window.innerWidth - 16);
+      const left = Math.min(
+        Math.max(8, buttonRect.left),
+        Math.max(8, window.innerWidth - menuWidth - 8),
+      );
+
+      setSkillMenuPosition({
+        left,
+        bottom: window.innerHeight - buttonRect.top + 8,
+      });
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (skillMenuRef.current?.contains(target) || skillMenuButtonRef.current?.contains(target)) {
+        return;
+      }
+      setIsSkillMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsSkillMenuOpen(false);
+      }
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSkillMenuOpen]);
 
   return (
     <div className="flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
@@ -202,6 +317,50 @@ export default function ChatComposer({
       )}
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-4xl">
+        {hasRuntimeBindings && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card/80 px-3 py-2 text-xs shadow-sm">
+            {selectedAgent && (
+              <span
+                className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-2.5 font-medium text-primary"
+                title={`Agent 已绑定到当前对话：${selectedAgent.name}`}
+              >
+                <BotIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Agent：{selectedAgent.shortName || selectedAgent.name}</span>
+                <span className="shrink-0 text-[10px] opacity-75">已绑定</span>
+              </span>
+            )}
+            {selectedMcpBindings.map((binding) => (
+              <span
+                key={`${binding.slot}:${binding.app}`}
+                className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 font-medium text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300"
+                title={`${binding.slot} 已绑定 ${binding.app}。运行时由 MTL-Code 原生 MCP 配置发现工具。`}
+              >
+                <WrenchIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{binding.app}</span>
+                <span className="shrink-0 text-[10px] opacity-75">MCP</span>
+              </span>
+            ))}
+            {selectedSkillSummaries.map((skill) => (
+              <button
+                key={skill.name}
+                type="button"
+                onClick={() => onToggleSkillName(skill.name)}
+                disabled={isLoading}
+                className={`inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-full border px-2.5 font-medium transition-colors disabled:opacity-60 ${
+                  skill.callable
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                    : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'
+                }`}
+                title={skill.callable ? `${skill.label} 已可调用：${skill.source}` : `${skill.label} 未在本机 Skill 注册表中找到`}
+              >
+                <SparklesIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{skill.label}</span>
+                <span className="shrink-0 text-[10px] opacity-75">{skill.callable ? '已可调用' : '不可用'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {isUserScrolledUp && hasMessages && (
           <div className="absolute -top-10 left-0 right-0 z-10 flex justify-center">
             <button
@@ -250,6 +409,115 @@ export default function ChatComposer({
           isOpen={isCommandMenuOpen}
           frequentCommands={frequentCommands}
         />
+
+        {showRuntimeDiagnostics && isDiagnosticsOpen && (
+          <div className="absolute bottom-full left-0 right-0 z-50 mb-3">
+            <AgentRuntimeDiagnosticsPanel
+              diagnostics={agentRuntimeDiagnostics}
+              onClose={() => setIsDiagnosticsOpen(false)}
+            />
+          </div>
+        )}
+
+        {isSkillMenuOpen && (
+          <div
+            ref={skillMenuRef}
+            className="fixed z-[90] flex max-h-[420px] w-[min(380px,calc(100vw-16px))] flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xl ring-1 ring-black/5 backdrop-blur-md"
+            style={{
+              left: skillMenuPosition?.left ?? 8,
+              bottom: skillMenuPosition?.bottom ?? 80,
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-border/50 px-3 py-2.5">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <SparklesIcon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-foreground">添加 Skill</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {selectedSkillNames.length > 0 ? `${selectedSkillNames.length} 个已绑定` : `${installedSkills.length} 个可选`}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSkillMenuOpen(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="关闭 Skill 菜单"
+              >
+                <XIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="border-b border-border/50 p-2">
+              <div className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
+                <SearchIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <input
+                  value={skillSearch}
+                  onChange={(event) => setSkillSearch(event.target.value)}
+                  className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+                  placeholder="搜索 Skill"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="max-h-[292px] overflow-y-auto p-1.5" role="listbox" aria-label="可用 Skill">
+              {filteredInstalledSkills.length === 0 && (
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">没有匹配的 Skill</div>
+              )}
+              {filteredInstalledSkills.map((skill) => {
+                const label = skill.title || skill.name;
+                const selected = selectedSkillKeys.has(skill.name.toLowerCase()) || selectedSkillKeys.has(label.toLowerCase());
+                const statusLabel = selected ? '已绑定' : (skill.callable ? '已可调用' : '不可用');
+
+                return (
+                  <button
+                    key={`${skill.provider}:${skill.scope}:${skill.name}`}
+                    type="button"
+                    onClick={() => onToggleSkillName(skill.name)}
+                    className={cn(
+                      'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                      selected ? 'bg-primary/8 text-primary' : 'text-foreground hover:bg-muted/70',
+                    )}
+                    role="option"
+                    aria-selected={selected}
+                  >
+                    <span
+                      className={cn(
+                        'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border',
+                        selected
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-background text-muted-foreground',
+                      )}
+                    >
+                      {selected ? <CheckIcon className="h-3.5 w-3.5" /> : <SparklesIcon className="h-3.5 w-3.5" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{label}</span>
+                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                        {skill.provider} / {skill.scope}
+                      </span>
+                    </span>
+                    <span
+                      className={cn(
+                        'mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                        selected
+                          ? 'border-primary/25 bg-primary/10 text-primary'
+                          : skill.callable
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                            : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+                      )}
+                    >
+                      {statusLabel}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
@@ -346,46 +614,73 @@ export default function ChatComposer({
               </label>
             )}
 
-            <button
-              type="button"
-              onClick={onModeSwitch}
-              className={`rounded-lg border p-2 text-xs font-medium transition-all duration-200 sm:px-2.5 sm:py-1 ${
-                permissionMode === 'default'
-                  ? 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted'
-                  : permissionMode === 'acceptEdits'
-                    ? 'border-green-300/60 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-600/40 dark:bg-green-900/15 dark:text-green-300 dark:hover:bg-green-900/25'
-                    : permissionMode === 'bypassPermissions'
-                      ? 'border-orange-300/60 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-600/40 dark:bg-orange-900/15 dark:text-orange-300 dark:hover:bg-orange-900/25'
-                      : 'border-primary/20 bg-primary/5 text-primary hover:bg-primary/10'
-              }`}
-              title={t('input.clickToChangeMode')}
-            >
-              <div className="flex items-center gap-1.5">
-                <div
-                  className={`h-2.5 w-2.5 rounded-full sm:h-1.5 sm:w-1.5 ${
-                    permissionMode === 'default'
-                      ? 'bg-muted-foreground'
-                      : permissionMode === 'acceptEdits'
-                        ? 'bg-green-500'
-                        : permissionMode === 'bypassPermissions'
-                          ? 'bg-orange-500'
-                          : 'bg-primary'
-                  }`}
-                />
-                <span className="hidden whitespace-nowrap sm:inline">
-                  {permissionMode === 'default' && t('codex.modes.default')}
-                  {permissionMode === 'acceptEdits' && t('codex.modes.acceptEdits')}
-                  {permissionMode === 'bypassPermissions' && t('codex.modes.bypassPermissions')}
-                  {permissionMode === 'plan' && t('codex.modes.plan')}
+            {installedSkills.length > 0 && (
+              <button
+                ref={skillMenuButtonRef}
+                type="button"
+                onClick={() => {
+                  setIsSkillMenuOpen((previous) => !previous);
+                  setSkillSearch('');
+                }}
+                disabled={isLoading}
+                aria-haspopup="listbox"
+                aria-expanded={isSkillMenuOpen}
+                className={cn(
+                  'flex h-9 min-w-[132px] items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                  selectedSkillNames.length > 0
+                    ? 'border-primary/25 bg-primary/8 text-primary hover:bg-primary/12'
+                    : 'border-border/60 bg-muted/35 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                )}
+                title="为当前对话添加 Skill"
+              >
+                <SparklesIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="max-w-[116px] truncate font-medium">
+                  {selectedSkillNames.length > 0 ? `${selectedSkillNames.length} Skills` : '添加 Skill'}
                 </span>
-              </div>
-            </button>
+                <ChevronDownIcon className={cn('h-3.5 w-3.5 shrink-0 transition-transform', isSkillMenuOpen && 'rotate-180')} />
+              </button>
+            )}
 
-            {provider === 'claude' && (
-              <ThinkingModeSelector selectedMode={thinkingMode} onModeChange={setThinkingMode} onClose={() => {}} className="" />
+            {selectedSkillNames.length > 0 && (
+              <div className="hidden max-w-[260px] items-center gap-1 overflow-hidden sm:flex">
+                {selectedSkillNames.slice(0, 2).map((skillName) => (
+                  <button
+                    key={skillName}
+                    type="button"
+                    onClick={() => onToggleSkillName(skillName)}
+                    disabled={isLoading}
+                    className="inline-flex h-7 max-w-[118px] items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-60"
+                    title={`移除 ${skillName}`}
+                  >
+                    <span className="truncate">{skillName}</span>
+                    <XIcon className="h-3 w-3 shrink-0" />
+                  </button>
+                ))}
+                {selectedSkillNames.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={onClearSkillNames}
+                    disabled={isLoading}
+                    className="h-7 rounded-full border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                    title="清空当前对话 Skill"
+                  >
+                    +{selectedSkillNames.length - 2}
+                  </button>
+                )}
+              </div>
             )}
 
             <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 200000} />
+
+            {showRuntimeDiagnostics && (
+              <PromptInputButton
+                tooltip={{ content: agentRuntimeDiagnostics ? '查看 Agent 运行诊断' : '暂无 Agent 运行诊断' }}
+                onClick={() => setIsDiagnosticsOpen((previous) => !previous)}
+                className={agentRuntimeDiagnostics ? 'text-primary' : ''}
+              >
+                <BracesIcon />
+              </PromptInputButton>
+            )}
 
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
@@ -406,7 +701,7 @@ export default function ChatComposer({
               <PromptInputButton
                 tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
                 onClick={onClearInput}
-                className="hidden sm:No-flex"
+                className="hidden sm:flex"
               >
                 <XIcon />
               </PromptInputButton>

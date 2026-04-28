@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, InputHTMLAttributes } from 'react';
 import {
   BookOpen,
   Bot,
@@ -76,6 +76,24 @@ type RepositoryItem = {
   updatedAt?: string | null;
 };
 
+type InstalledSkill = {
+  name: string;
+  title?: string;
+  scope: 'user' | 'project';
+  provider: string;
+  workspacePath?: string;
+  path: string;
+  skillPath: string;
+  updatedAt?: string;
+};
+
+type UploadPackageFile = {
+  path: string;
+  content: string;
+  encoding: 'utf8' | 'base64';
+  size: number;
+};
+
 type CatalogResponse = {
   repositories: RepositorySource[];
   items: RepositoryItem[];
@@ -93,6 +111,7 @@ type UploadForm = {
   supportedApps: string;
   capabilities: string;
   content: string;
+  packageFiles: UploadPackageFile[];
   overwrite: boolean;
 };
 
@@ -107,8 +126,14 @@ const EMPTY_UPLOAD_FORM: UploadForm = {
   supportedApps: '',
   capabilities: '',
   content: '',
+  packageFiles: [],
   overwrite: false,
 };
+
+const directoryInputProps = {
+  webkitdirectory: '',
+  directory: '',
+} as InputHTMLAttributes<HTMLInputElement> & { webkitdirectory: string; directory: string };
 
 const DEFAULT_SLOT_LABELS = [
   { id: 'calendar', label: 'Calendar' },
@@ -132,6 +157,57 @@ function parseAppOptions(value: string): AppOption[] {
   }));
 }
 
+function getFileRelativePath(file: File) {
+  const withRelativePath = file as File & { webkitRelativePath?: string };
+  return (withRelativePath.webkitRelativePath || file.name).replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function stripCommonRoot(paths: string[]) {
+  const firstSegments = paths
+    .map((filePath) => filePath.split('/').filter(Boolean)[0])
+    .filter(Boolean);
+  if (firstSegments.length === 0 || !firstSegments.every((segment) => segment === firstSegments[0])) {
+    return { rootName: '', paths };
+  }
+  const rootName = firstSegments[0];
+  return {
+    rootName,
+    paths: paths.map((filePath) => filePath.split('/').slice(1).join('/')).filter(Boolean),
+  };
+}
+
+function isTextPackageFile(file: File, relativePath: string) {
+  if (file.type.startsWith('text/')) return true;
+  return /\.(md|markdown|txt|json|jsonc|ya?ml|toml|ini|cfg|conf|js|jsx|ts|tsx|mjs|cjs|py|ps1|psm1|sh|bash|zsh|fish|bat|cmd|css|html?|xml|csv|svg|rs|go|java|cs|c|cpp|h|hpp|sql)$/i.test(relativePath);
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function readPackageFile(file: File, relativePath: string): Promise<UploadPackageFile> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isTextPackageFile(file, relativePath)) {
+    return {
+      path: relativePath,
+      content: new TextDecoder('utf-8').decode(bytes),
+      encoding: 'utf8',
+      size: file.size,
+    };
+  }
+  return {
+    path: relativePath,
+    content: bytesToBase64(bytes),
+    encoding: 'base64',
+    size: file.size,
+  };
+}
+
 async function readError(response: Response, fallback: string) {
   try {
     const data = await response.json();
@@ -153,6 +229,25 @@ function kindAccent(kind: RepositoryKind) {
 
 function templateKey(item: RepositoryItem) {
   return `${item.repoId}:${item.id}`;
+}
+
+function normalizeInstallName(value: string) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^skill-/, '')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeLocalPath(value: string) {
+  return String(value || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function itemNameCandidates(item: RepositoryItem) {
+  return new Set([item.name, item.title, item.id]
+    .map(normalizeInstallName)
+    .filter(Boolean));
 }
 
 function formatAppLabel(app: AppOption | string) {
@@ -200,11 +295,14 @@ function getTemplateSlots(item: RepositoryItem): AppSlot[] {
 type ItemCardProps = {
   item: RepositoryItem;
   busy: boolean;
+  installed: boolean;
   onLike: (item: RepositoryItem) => void;
   onInstall: (item: RepositoryItem) => void;
+  onUpdate: (item: RepositoryItem) => void;
+  onUninstall: (item: RepositoryItem) => void;
 };
 
-function ItemCard({ item, busy, onLike, onInstall }: ItemCardProps) {
+function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninstall }: ItemCardProps) {
   return (
     <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex items-start justify-between gap-3">
@@ -214,6 +312,11 @@ function ItemCard({ item, busy, onLike, onInstall }: ItemCardProps) {
               {kindLabel(item.kind)}
             </span>
             <h4 className="truncate text-sm font-semibold text-foreground">{item.title}</h4>
+            {installed && (
+              <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+                已安装
+              </span>
+            )}
             <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {item.repoName}
             </span>
@@ -250,7 +353,7 @@ function ItemCard({ item, busy, onLike, onInstall }: ItemCardProps) {
           )}
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-1">
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1">
           <button
             type="button"
             onClick={() => onLike(item)}
@@ -266,15 +369,38 @@ function ItemCard({ item, busy, onLike, onInstall }: ItemCardProps) {
             <Heart className={cn('h-3.5 w-3.5', item.liked && 'fill-current')} />
             <span>{item.likes}</span>
           </button>
-          <button
-            type="button"
-            onClick={() => onInstall(item)}
-            disabled={busy}
-            className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-            Pull
-          </button>
+          {installed ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onUpdate(item)}
+                disabled={busy}
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                更新
+              </button>
+              <button
+                type="button"
+                onClick={() => onUninstall(item)}
+                disabled={busy}
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-red-200 px-2.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-60 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/30"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                卸载
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onInstall(item)}
+              disabled={busy}
+              className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              Pull
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -504,6 +630,7 @@ type RepositoryContentProps = {
 export default function RepositoryContent({ projects }: RepositoryContentProps) {
   const [repositories, setRepositories] = useState<RepositorySource[]>([]);
   const [items, setItems] = useState<RepositoryItem[]>([]);
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
   const [errors, setErrors] = useState<CatalogResponse['errors']>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -520,6 +647,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string | null>(null);
   const [setupItem, setSetupItem] = useState<RepositoryItem | null>(null);
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
+  const selectedProjectPath = installScope === 'project' ? projectPath : '';
 
   const loadCatalog = useCallback(async () => {
     setLoading(true);
@@ -543,6 +671,23 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   useEffect(() => {
     void loadCatalog();
   }, [loadCatalog]);
+
+  const loadInstalledSkills = useCallback(async () => {
+    try {
+      const response = await api.installedAgentSkills(selectedProjectPath);
+      if (!response.ok) {
+        throw new Error(await readError(response, 'Failed to load installed skills'));
+      }
+      const data = await response.json();
+      setInstalledSkills(Array.isArray(data.skills) ? data.skills : []);
+    } catch {
+      setInstalledSkills([]);
+    }
+  }, [selectedProjectPath]);
+
+  useEffect(() => {
+    void loadInstalledSkills();
+  }, [loadInstalledSkills]);
 
   useEffect(() => {
     if (installScope === 'project' && !projectPath && projects[0]) {
@@ -578,6 +723,28 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     () => filteredItems.filter((item) => item.kind === 'skill'),
     [filteredItems],
   );
+
+  const installedSkillNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const skill of installedSkills) {
+      const isSelectedTarget = installScope === 'project'
+        ? skill.scope === 'project'
+          && skill.provider === 'claude'
+          && normalizeLocalPath(skill.workspacePath || '') === normalizeLocalPath(projectPath)
+        : skill.scope === 'user' && skill.provider === 'mtl-code';
+      if (isSelectedTarget) {
+        names.add(normalizeInstallName(skill.name));
+        if (skill.title) names.add(normalizeInstallName(skill.title));
+      }
+    }
+    return names;
+  }, [installScope, installedSkills, projectPath]);
+
+  const isSkillInstalled = useCallback((item: RepositoryItem) => {
+    if (item.kind !== 'skill') return false;
+    const candidates = itemNameCandidates(item);
+    return Array.from(candidates).some((name) => installedSkillNames.has(name));
+  }, [installedSkillNames]);
 
   useEffect(() => {
     if (agentTemplates.length === 0) {
@@ -691,8 +858,13 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     }
   };
 
-  const installItem = async (item: RepositoryItem, configuration?: { appBindings?: Record<string, string> }) => {
-    const key = `install:${item.repoId}:${item.id}`;
+  const installItem = async (
+    item: RepositoryItem,
+    configuration?: { appBindings?: Record<string, string> },
+    options?: { overwrite?: boolean; action?: 'install' | 'update' },
+  ) => {
+    const action = options?.action || 'install';
+    const key = `${action}:${item.repoId}:${item.id}`;
     setBusyKey(key);
     setActionError(null);
     setMessage(null);
@@ -704,7 +876,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           itemId: item.id,
           target: installScope,
           projectPath: installScope === 'project' ? projectPath : undefined,
-          overwrite: overwriteInstall,
+          overwrite: options?.overwrite ?? overwriteInstall,
           configuration,
         }),
       });
@@ -712,14 +884,43 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         throw new Error(await readError(response, 'Failed to install item'));
       }
       const data = await response.json();
-      setMessage(`${kindLabel(item.kind)} installed to ${data.installPath}`);
+      setMessage(`${kindLabel(item.kind)} ${action === 'update' ? 'updated' : 'installed'} to ${data.installPath}`);
       setSetupItem(null);
       setSetupValues({});
       await loadCatalog();
+      await loadInstalledSkills();
       return data;
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to install item');
       return null;
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const uninstallItem = async (item: RepositoryItem) => {
+    const key = `uninstall:${item.repoId}:${item.id}`;
+    setBusyKey(key);
+    setActionError(null);
+    setMessage(null);
+    try {
+      const response = await apiFetch('/api/agent-repository/install', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          repoId: item.repoId,
+          itemId: item.id,
+          target: installScope,
+          projectPath: installScope === 'project' ? projectPath : undefined,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response, 'Failed to uninstall item'));
+      }
+      const data = await response.json();
+      setMessage(`${kindLabel(item.kind)} uninstalled from ${data.installPath}`);
+      await loadInstalledSkills();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to uninstall item');
     } finally {
       setBusyKey(null);
     }
@@ -787,6 +988,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         method: 'POST',
         body: JSON.stringify({
           ...uploadForm,
+          packageFiles: uploadForm.kind === 'skill' ? uploadForm.packageFiles : [],
           tags: parseTags(uploadForm.tags),
           supportedApps: parseAppOptions(uploadForm.supportedApps),
           capabilities: parseTags(uploadForm.capabilities),
@@ -815,9 +1017,50 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       name: prev.name || name,
       title: prev.title || name,
       content: text,
+      packageFiles: [],
     }));
     event.target.value = '';
   };
+
+  const readSkillPackageFolder = async (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    if (selectedFiles.length === 0) return;
+    setActionError(null);
+    try {
+      const rawPaths = selectedFiles.map(getFileRelativePath);
+      const { rootName, paths } = stripCommonRoot(rawPaths);
+      const pathPairs = selectedFiles
+        .flatMap((file, index) => {
+          const relativePath = paths[index] || rawPaths[index];
+          return relativePath && !relativePath.endsWith('/') ? [{ file, relativePath }] : [];
+        });
+      if (!pathPairs.some((entry) => entry.relativePath.toLowerCase() === 'skill.md')) {
+        throw new Error('Skill package must include SKILL.md at the selected folder root');
+      }
+
+      const packageFiles = await Promise.all(
+        pathPairs.map((entry) => readPackageFile(entry.file, entry.relativePath)),
+      );
+      const skillFile = packageFiles.find((file) => file.path.toLowerCase() === 'skill.md');
+      const skillContent = skillFile?.encoding === 'utf8' ? skillFile.content : '';
+      const fallbackName = rootName || uploadForm.name || 'skill-package';
+      setUploadForm((prev) => ({
+        ...prev,
+        kind: 'skill',
+        name: prev.name || fallbackName,
+        title: prev.title || fallbackName,
+        content: skillContent || prev.content,
+        packageFiles,
+      }));
+      setMessage(`Loaded Skill package with ${packageFiles.length} file(s).`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to load Skill package');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const uploadHasContent = Boolean(uploadForm.content.trim() || (uploadForm.kind === 'skill' && uploadForm.packageFiles.length > 0));
 
   return (
     <div className="space-y-4">
@@ -918,11 +1161,8 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <h3 className="text-sm font-semibold text-foreground">Agent/Skill Hub</h3>
             <p className="mt-1 text-sm text-muted-foreground">
               The shared remote repository server now runs as a standalone Agent/Skill Hub.
-              Start that service separately, then add its catalog URL below.
+              Start that service separately, then add its catalog URL below. No remote Hub is configured by default.
             </p>
-            <div className="mt-2 rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
-              http://localhost:4877/agent-repository/catalog.json
-            </div>
           </div>
         </div>
       </section>
@@ -934,7 +1174,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <input
               value={newRepoUrl}
               onChange={(event) => setNewRepoUrl(event.target.value)}
-              placeholder="http://localhost:4877/agent-repository/catalog.json"
+              placeholder="Enter catalog URL"
               className="mt-1 h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
           </div>
@@ -1047,14 +1287,21 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                     <h3 className="text-sm font-semibold text-foreground">Skills</h3>
                   )}
                   {skillItems.map((item) => {
-                    const busy = busyKey === `like:${item.repoId}:${item.id}` || busyKey === `install:${item.repoId}:${item.id}`;
+                    const installed = isSkillInstalled(item);
+                    const busy = busyKey === `like:${item.repoId}:${item.id}`
+                      || busyKey === `install:${item.repoId}:${item.id}`
+                      || busyKey === `update:${item.repoId}:${item.id}`
+                      || busyKey === `uninstall:${item.repoId}:${item.id}`;
                     return (
                       <ItemCard
                         key={`${item.repoId}:${item.id}`}
                         item={item}
                         busy={busy}
+                        installed={installed}
                         onLike={(nextItem) => void likeItem(nextItem)}
                         onInstall={(nextItem) => void installItem(nextItem)}
+                        onUpdate={(nextItem) => void installItem(nextItem, undefined, { overwrite: true, action: 'update' })}
+                        onUninstall={(nextItem) => void uninstallItem(nextItem)}
                       />
                     );
                   })}
@@ -1080,7 +1327,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               <button
                 key={kind}
                 type="button"
-                onClick={() => setUploadForm((prev) => ({ ...prev, kind }))}
+                onClick={() => setUploadForm((prev) => ({ ...prev, kind, packageFiles: kind === 'skill' ? prev.packageFiles : [] }))}
                 className={cn(
                   'px-3 text-sm transition-colors',
                   uploadForm.kind === kind ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground',
@@ -1150,10 +1397,28 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               Load markdown file
               <input type="file" accept=".md,.txt,text/markdown,text/plain" onChange={(event) => void readUploadFile(event)} className="sr-only" />
             </label>
+            {uploadForm.kind === 'skill' && (
+              <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded border border-border text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                <Upload className="h-4 w-4" />
+                Load Skill folder
+                <input
+                  type="file"
+                  multiple
+                  {...directoryInputProps}
+                  onChange={(event) => void readSkillPackageFolder(event)}
+                  className="sr-only"
+                />
+              </label>
+            )}
+            {uploadForm.kind === 'skill' && uploadForm.packageFiles.length > 0 && (
+              <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+                Skill package selected: {uploadForm.packageFiles.length} file(s). The full folder will be installed with SKILL.md.
+              </div>
+            )}
             <textarea
               value={uploadForm.content}
-              onChange={(event) => setUploadForm((prev) => ({ ...prev, content: event.target.value }))}
-              placeholder={uploadForm.kind === 'skill' ? 'Paste SKILL.md content or skill instructions' : 'Paste the agent system prompt'}
+              onChange={(event) => setUploadForm((prev) => ({ ...prev, content: event.target.value, packageFiles: [] }))}
+              placeholder={uploadForm.kind === 'skill' ? 'Paste SKILL.md content, or load a full Skill folder' : 'Paste the agent system prompt'}
               rows={10}
               className="min-h-[220px] resize-y rounded border border-border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
             />
@@ -1169,7 +1434,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <button
               type="button"
               onClick={() => void uploadItem()}
-              disabled={!uploadForm.name.trim() || !uploadForm.content.trim() || busyKey === 'upload'}
+              disabled={!uploadForm.name.trim() || !uploadHasContent || busyKey === 'upload'}
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {busyKey === 'upload' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}

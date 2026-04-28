@@ -172,13 +172,16 @@ MCP closure updates:
 
 1. Settings > Agents > Repository loads `GET /api/agent-repository/catalog`.
 2. `server/routes/agent-repository.js` merges the local writable repository with enabled external HTTP(S) catalogs.
-3. Upload writes agent templates or `SKILL.md` content into `~/.mtl-code-ui/agent-repository/local` and updates the local `catalog.json`.
-4. Install pulls item content and writes agent templates to `~/.mtl-code/agents/<name>.md` or project `.claude/agents/<name>.md`; skills go to `~/.mtl-code/skills/<name>/SKILL.md` or project `.claude/skills/<name>/SKILL.md`.
+3. Upload writes agent templates, `SKILL.md` content, or complete Skill package folders into `~/.mtl-code-ui/agent-repository/local` and updates the local `catalog.json`.
+4. Install pulls item content and writes agent templates to `~/.mtl-code/agents/<name>.md` or project `.claude/agents/<name>.md`; skills go to `~/.mtl-code/skills/<name>/` or project `.claude/skills/<name>/`, preserving package files when the catalog provides `packageFiles`.
 5. Likes are stored in the local repository catalog for local items. Remote items can provide `likeUrl`; otherwise the UI backend stores a local like overlay.
 6. Agent templates can include `supportedApps`, `appSlots`, and `capabilities`; the Repository UI renders these as a template gallery and setup dialog before installing.
 7. Setup selections are sent as `configuration.appBindings`; the backend appends them to the installed Agent markdown as prompt-visible application context.
 8. Installing an Agent template through the guided setup also creates or updates a runtime Agent config through `POST /api/agents`, using the installed markdown as the Agent system prompt.
-9. Skills still install as Skill files only. They are not auto-bound to an Agent until the user selects or references them in Agent configuration.
+9. Skills install as single files or full package directories. They are not auto-bound to an Agent until the user selects or references them in Agent configuration.
+10. Agent Builder loads real installed Skills through `GET /api/agents/skills/installed`, scanning user and project skill roots for `SKILL.md`.
+11. Skill discovery roots include `~/.mtl-code/skills`, `~/.claude/skills`, `~/.codex/skills`, and matching project-local `.mtl-code/.claude/.codex/skills` folders when a workspace path is available.
+12. Bound Agent skills are marked as callable only when the Skill registry can find a matching installed package. Missing skills remain visible but show as not installed.
 
 ## Remote Agent Repository Server Flow
 
@@ -209,10 +212,11 @@ MCP closure updates:
 10. `server/index.js` resolves the agent at send time. If a concrete session ID is available and the frontend did not send `options.agentId`, the backend falls back to the persisted session binding only when `allowSessionAgentBinding === true`. If fresh `options.agentAppBindings` are not sent, it falls back to the persisted `config_json`. Disabled, draft, or missing agents are ignored.
 11. `server/services/agent-config-service.js` applies session slot configuration before building the Agent prompt, so the prompt reflects the per-conversation app choices rather than only the reusable Agent template defaults.
 12. Agent knowledge sources are resolved through `server/services/agent-rag-service.js`. Indexed uploaded-file chunks are scored against the current user command and appended to the Agent prompt as RAG excerpts.
-13. For MTL-Code (`claude-command` compatibility path), the backend passes the agent profile through `--append-system-prompt`, preserving the default coding/safety prompt while adding the selected Agent role, skills, application bindings, RAG excerpts, memory metadata, and guardrails.
-14. Agent `modelConfig.contextWindowTokens` is forwarded as `options.contextWindowTokens`; `server/claude-sdk.js` writes it into `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW` for the spawned MTL-Code child. This is a real backend runtime override, not a GUI-only value.
-15. Agent `modelConfig.model` overrides the MTL-Code model only when it is not `inherit`. Non-MTL providers receive the Agent prompt in-band but do not inherit the MTL-Code model override.
-16. Agent MCP app bindings do not create a separate runtime transport. They reference MCP servers already persisted through Provider MCP config, so the spawned MTL-Code provider discovers them through its native config files.
+13. Agent skills are resolved through `server/services/agent-skill-service.js` at runtime. Installed skills include provider/scope/path details in the Agent prompt; missing skills are explicitly marked as unavailable.
+14. For MTL-Code (`claude-command` compatibility path), the backend passes the agent profile through `--append-system-prompt`, preserving the default coding/safety prompt while adding the selected Agent role, skills, application bindings, RAG excerpts, memory metadata, and guardrails.
+15. Agent `modelConfig.contextWindowTokens` is forwarded as `options.contextWindowTokens`; `server/claude-sdk.js` writes it into `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW` for the spawned MTL-Code child. This is a real backend runtime override, not a GUI-only value.
+16. Agent `modelConfig.model` overrides the MTL-Code model only when it is not `inherit`. Non-MTL providers receive the Agent prompt in-band but do not inherit the MTL-Code model override.
+17. Agent MCP app bindings do not create a separate runtime transport. They reference MCP servers already persisted through Provider MCP config, so the spawned MTL-Code provider discovers them through its native config files.
 
 Agent quick start:
 
@@ -226,9 +230,20 @@ Project/conversation separation:
 
 1. Project sessions and standalone conversations are independent sidebar modes.
 2. `useProjectsState` clears `selectedConversationSession` when project mode or a project session is selected.
-3. Switching to conversation mode clears `selectedSession` so project-backed sessions do not remain active behind the standalone conversation list.
-4. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
-5. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
+
+2026-04-28 implementation note:
+
+1. Project chat uses the default MTL-Code runtime path. It does not load Agent lists or render Agent selectors in the composer. It can still show installed Skills; when a project session selects Skills, the UI persists an empty-Agent session binding with `configuration.skills` so later messages in that same session keep the Skill context.
+2. Standalone conversation chat owns Agent and Skill binding. It loads enabled Agents, installed Skills, persisted session binding, and sends `allowSessionAgentBinding: true`.
+3. Agent setup dialogs resolve MCP slots from real provider MCP configuration by reading user-scoped MCP servers and, when a workspace path is available, project-scoped MCP servers.
+4. Placeholder app values such as `Custom MCP` or `自定义 MCP` are not valid final slot selections. A user must choose a concrete `MCP: <serverName>` entry before enabling the Agent for the conversation.
+5. The composer shows a runtime binding strip for standalone conversations. It lists the active Agent, selected `MCP: <serverName>` bindings, and selected Skills with callable/missing status.
+6. The composer shows selected Skills in project sessions too, but never exposes an Agent selector there.
+7. The backend emits `agent_runtime_debug` status events and console logs whenever an Agent or session Skill prompt is applied. The payload includes Agent identity, app/MCP bindings, session/effective Skills, prompt length, model, context window, project path, session id, and the permission snapshot.
+8. The chat UI intentionally keeps `agent_runtime_debug` out of the message list and visible run status. It is exposed only through the composer diagnostics panel.
+9. Switching to conversation mode clears `selectedSession` so project-backed sessions do not remain active behind the standalone conversation list.
+10. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
+11. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
 
 Channel status:
 
@@ -239,9 +254,10 @@ Agent management APIs:
 
 1. `GET /api/agents?includePaused=true|false` lists Agent configs.
 2. `GET /api/agents/:agentId` reads one Agent config.
-3. `POST /api/agents` creates or upserts an Agent.
-4. `PUT /api/agents/:agentId` and `PATCH /api/agents/:agentId` update an Agent.
-5. `DELETE /api/agents/:agentId` deletes the Agent, removes its uploaded knowledge directory, and clears session bindings for that Agent.
+3. `GET /api/agents/skills/installed?workspacePath=...` lists installed Skill packages and their callable status.
+4. `POST /api/agents` creates or upserts an Agent.
+5. `PUT /api/agents/:agentId` and `PATCH /api/agents/:agentId` update an Agent.
+6. `DELETE /api/agents/:agentId` deletes the Agent, removes its uploaded knowledge directory, and clears session bindings for that Agent.
 
 ## MTLCode Anthropic-Compatible Model Config Flow
 

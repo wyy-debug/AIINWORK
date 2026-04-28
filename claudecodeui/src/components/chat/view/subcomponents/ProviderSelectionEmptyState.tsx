@@ -47,7 +47,6 @@ export default function ProviderSelectionEmptyState({
   isTaskMasterInstalled,
   onShowAllTasks,
   setInput,
-  isConversationSpace,
   agents = [],
   selectedAgentName,
   agentChoiceState = "default",
@@ -73,16 +72,16 @@ export default function ProviderSelectionEmptyState({
   });
 
   useEffect(() => {
-    if (!isConversationSpace || agentChoiceState !== "pending") {
+    if (agentChoiceState !== "pending") {
       return;
     }
     if (!draftAgentId && enabledAgents.length > 0) {
       setDraftAgentId(enabledAgents[0].id);
     }
-  }, [agentChoiceState, draftAgentId, enabledAgents, isConversationSpace]);
+  }, [agentChoiceState, draftAgentId, enabledAgents]);
 
   const showAgentChoice =
-    isConversationSpace && agentChoiceState === "pending" && !selectedAgentName;
+    agentChoiceState === "pending" && !selectedAgentName && enabledAgents.length > 0;
 
   if (!selectedSession && !currentSessionId) {
     return (

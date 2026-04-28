@@ -38,6 +38,7 @@ function MainContent({
   quickStartAgentId,
   quickStartAgentRequestId,
   newConversationRequestId,
+  newProjectSessionRequestId,
   activeTab,
   setActiveTab,
   ws,
@@ -141,6 +142,7 @@ function MainContent({
                 quickStartAgentId={quickStartAgentId}
                 quickStartAgentRequestId={quickStartAgentRequestId}
                 newConversationRequestId={newConversationRequestId}
+                newProjectSessionRequestId={newProjectSessionRequestId}
                 ws={ws}
                 sendMessage={sendMessage}
                 latestMessage={latestMessage}

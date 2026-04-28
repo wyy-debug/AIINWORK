@@ -15,6 +15,8 @@ const LOCAL_CATALOG_PATH = path.join(LOCAL_REPOSITORY_DIR, 'catalog.json');
 const SOURCES_PATH = path.join(REPOSITORY_ROOT, 'sources.json');
 const LIKES_PATH = path.join(REPOSITORY_ROOT, 'likes.json');
 const MAX_REMOTE_TEXT_BYTES = 2 * 1024 * 1024;
+const MAX_PACKAGE_FILES = 200;
+const MAX_PACKAGE_BYTES = 20 * 1024 * 1024;
 
 const DEFAULT_SOURCE = {
   id: LOCAL_REPOSITORY_ID,
@@ -236,6 +238,58 @@ function safeRelativePath(input) {
   return normalized;
 }
 
+function normalizePackageFiles(value, { requireSkillMd = false } = {}) {
+  if (!Array.isArray(value) || value.length === 0) {
+    if (requireSkillMd) throw new Error('skill package must include SKILL.md');
+    return [];
+  }
+  if (value.length > MAX_PACKAGE_FILES) {
+    throw new Error(`skill package can include at most ${MAX_PACKAGE_FILES} files`);
+  }
+
+  const files = [];
+  const seen = new Set();
+  let totalBytes = 0;
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const relativePath = safeRelativePath(entry.path || entry.name);
+    if (!relativePath || relativePath.endsWith('/')) {
+      throw new Error('skill package contains an invalid file path');
+    }
+    const key = relativePath.toLowerCase();
+    if (seen.has(key)) {
+      throw new Error(`skill package contains duplicate file path: ${relativePath}`);
+    }
+    seen.add(key);
+
+    const encoding = entry.encoding === 'base64' ? 'base64' : 'utf8';
+    if (typeof entry.content !== 'string') {
+      throw new Error(`skill package file ${relativePath} is missing content`);
+    }
+    const buffer = Buffer.from(entry.content, encoding);
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_PACKAGE_BYTES) {
+      throw new Error(`skill package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
+    }
+
+    files.push({
+      path: relativePath,
+      buffer,
+      size: buffer.length,
+    });
+  }
+
+  if (files.length === 0) {
+    throw new Error('skill package must include at least one file');
+  }
+  if (requireSkillMd && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
+    throw new Error('skill package must include SKILL.md at the package root');
+  }
+
+  return files;
+}
+
 function resolveLocalContentPath(contentPath) {
   const safePath = safeRelativePath(contentPath);
   if (!safePath) return null;
@@ -315,6 +369,46 @@ function resolveRemoteUrl(baseUrl, candidate) {
   }
 }
 
+function normalizeCatalogPackageFiles(rawItem, source) {
+  const rawFiles = Array.isArray(rawItem.packageFiles)
+    ? rawItem.packageFiles
+    : Array.isArray(rawItem.files)
+      ? rawItem.files
+      : [];
+  return rawFiles
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const relativePath = safeRelativePath(entry.path || entry.name);
+      if (!relativePath) return null;
+
+      const contentPath = entry.contentPath || entry.path || null;
+      let contentUrl = entry.contentUrl || entry.url || null;
+      if (source.type === 'local') {
+        const localPath = contentPath ? safeRelativePath(contentPath) : null;
+        if (!localPath) return null;
+        contentUrl = `/api/agent-repository/local/content?path=${encodeURIComponent(localPath)}`;
+        return {
+          path: relativePath,
+          size: Number(entry.size || 0),
+          contentPath: localPath,
+          contentUrl,
+        };
+      }
+
+      if (source.url && contentUrl) {
+        contentUrl = resolveRemoteUrl(source.url, contentUrl);
+      }
+      if (!contentUrl) return null;
+      return {
+        path: relativePath,
+        size: Number(entry.size || 0),
+        contentUrl,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_PACKAGE_FILES);
+}
+
 function likeKey(repoId, itemId) {
   return `${repoId}:${itemId}`;
 }
@@ -342,6 +436,7 @@ function normalizeCatalogItem(rawItem, source, catalog, likesState) {
   const likeUrl = rawItem.likeUrl && source.url
     ? resolveRemoteUrl(source.url, rawItem.likeUrl)
     : rawItem.likeUrl || null;
+  const packageFiles = kind === 'skill' ? normalizeCatalogPackageFiles(rawItem, source) : [];
 
   return {
     id,
@@ -366,6 +461,7 @@ function normalizeCatalogItem(rawItem, source, catalog, likesState) {
     repoWritable: Boolean(source.writable),
     contentUrl,
     contentPath: source.type === 'local' ? contentPath : null,
+    packageFiles,
     inlineContent: typeof rawItem.content === 'string' ? rawItem.content : null,
     likeUrl,
     sourceUrl: source.url || null,
@@ -389,6 +485,29 @@ async function fetchText(url, label = 'remote resource') {
       throw new Error(`${label} is too large`);
     }
     return text;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchBinary(url, label = 'remote file') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`${label} returned HTTP ${response.status}`);
+    }
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength > MAX_PACKAGE_BYTES) {
+      throw new Error(`${label} is too large`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length > MAX_PACKAGE_BYTES) {
+      throw new Error(`${label} is too large`);
+    }
+    return buffer;
   } finally {
     clearTimeout(timer);
   }
@@ -490,6 +609,45 @@ async function readItemContent(item) {
   throw new Error('Item does not provide content');
 }
 
+async function readItemPackageFiles(item) {
+  if (item.kind !== 'skill' || !Array.isArray(item.packageFiles) || item.packageFiles.length === 0) {
+    return [];
+  }
+
+  const files = [];
+  let totalBytes = 0;
+  for (const packageFile of item.packageFiles) {
+    const relativePath = safeRelativePath(packageFile.path);
+    if (!relativePath) {
+      throw new Error('Skill package contains an invalid file path');
+    }
+
+    let buffer;
+    if (item.repoId === LOCAL_REPOSITORY_ID) {
+      const resolved = resolveLocalContentPath(packageFile.contentPath);
+      if (!resolved) {
+        throw new Error(`Invalid local package file path: ${relativePath}`);
+      }
+      buffer = await fsp.readFile(resolved);
+    } else if (packageFile.contentUrl) {
+      buffer = await fetchBinary(packageFile.contentUrl, `Skill file ${relativePath}`);
+    } else {
+      throw new Error(`Skill package file ${relativePath} does not provide content`);
+    }
+
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_PACKAGE_BYTES) {
+      throw new Error(`skill package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
+    }
+    files.push({ path: relativePath, buffer, size: buffer.length });
+  }
+
+  if (!files.some((file) => file.path.toLowerCase() === 'skill.md')) {
+    throw new Error('skill package must include SKILL.md at the package root');
+  }
+  return files;
+}
+
 function normalizeAppBindings(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const bindings = {};
@@ -554,7 +712,58 @@ async function writeInstallFile(filePath, content, overwrite) {
   await fsp.writeFile(filePath, content, { flag, mode: 0o600 });
 }
 
-async function upsertLocalItem({ kind, name, title, description, author, tags, content, overwrite, icon, supportedApps, appSlots, capabilities }) {
+function assertInstallPathSafe(targetPath, target = 'user', projectPath = '') {
+  const resolved = path.resolve(targetPath);
+  const base = target === 'project'
+    ? path.resolve(projectPath, '.claude')
+    : path.resolve(getMtlCodeConfigDir());
+  if (resolved === base || resolved.startsWith(base + path.sep)) {
+    return resolved;
+  }
+  throw new Error('Install target is outside the allowed install directory');
+}
+
+async function writeInstallPackage(targetDir, files, overwrite, { target = 'user', projectPath = '' } = {}) {
+  const root = path.resolve(targetDir);
+  assertInstallPathSafe(root, target, projectPath);
+  if (overwrite) {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+  await ensureDir(root);
+
+  if (!overwrite) {
+    for (const file of files) {
+      const relativePath = safeRelativePath(file.path);
+      if (!relativePath) throw new Error('Invalid package file path');
+      const targetPath = path.resolve(root, ...relativePath.split('/'));
+      if (targetPath !== root && !targetPath.startsWith(root + path.sep)) {
+        throw new Error('Invalid package file path');
+      }
+      if (fs.existsSync(targetPath)) {
+        const error = new Error(`Install target already exists: ${relativePath}`);
+        error.code = 'EEXIST';
+        throw error;
+      }
+    }
+  }
+
+  for (const file of files) {
+    const relativePath = safeRelativePath(file.path);
+    const targetPath = path.resolve(root, ...relativePath.split('/'));
+    await ensureDir(path.dirname(targetPath));
+    await fsp.writeFile(targetPath, file.buffer, { mode: 0o600 });
+  }
+}
+
+async function removeInstallTarget(kind, name, target, projectPath) {
+  const installPath = resolveInstallTarget(kind, name, target, projectPath);
+  const targetPath = kind === 'skill' ? path.dirname(installPath) : installPath;
+  const resolvedTarget = assertInstallPathSafe(targetPath, target, projectPath);
+  await fsp.rm(resolvedTarget, { recursive: kind === 'skill', force: true });
+  return resolvedTarget;
+}
+
+async function upsertLocalItem({ kind, name, title, description, author, tags, content, packageFiles, overwrite, icon, supportedApps, appSlots, capabilities }) {
   const id = sanitizeSlug(name || title);
   if (!validateSlug(id)) {
     throw new Error('Name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
@@ -570,16 +779,45 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
   const contentPath = kind === 'skill'
     ? `skills/${id}/SKILL.md`
     : `agents/${id}/${id}.md`;
-  const finalContent = kind === 'skill'
-    ? formatSkillMarkdown({ name: id, title, description, content })
-    : formatAgentTemplateMarkdown({ name: id, description, prompt: content });
+  const normalizedPackageFiles = kind === 'skill'
+    ? normalizePackageFiles(packageFiles, { requireSkillMd: Array.isArray(packageFiles) && packageFiles.length > 0 })
+    : [];
 
   const resolved = resolveLocalContentPath(contentPath);
   if (!resolved) {
     throw new Error('Invalid repository content path');
   }
-  await ensureDir(path.dirname(resolved));
-  await fsp.writeFile(resolved, finalContent, { mode: 0o600 });
+
+  let catalogPackageFiles = [];
+  if (kind === 'skill' && normalizedPackageFiles.length > 0) {
+    const packageRootPath = `skills/${id}`;
+    const packageRoot = resolveLocalContentPath(packageRootPath);
+    if (!packageRoot) throw new Error('Invalid repository package path');
+    if (existingIndex >= 0 && overwrite) {
+      await fsp.rm(packageRoot, { recursive: true, force: true });
+    }
+    for (const file of normalizedPackageFiles) {
+      const fileContentPath = `${packageRootPath}/${file.path}`;
+      const filePath = resolveLocalContentPath(fileContentPath);
+      if (!filePath) throw new Error('Invalid repository package file path');
+      await ensureDir(path.dirname(filePath));
+      await fsp.writeFile(filePath, file.buffer, { mode: 0o600 });
+      catalogPackageFiles.push({
+        path: file.path,
+        contentPath: fileContentPath,
+        size: file.size,
+      });
+    }
+  } else {
+    if (!content || typeof content !== 'string') {
+      throw new Error('content is required');
+    }
+    const finalContent = kind === 'skill'
+      ? formatSkillMarkdown({ name: id, title, description, content })
+      : formatAgentTemplateMarkdown({ name: id, description, prompt: content });
+    await ensureDir(path.dirname(resolved));
+    await fsp.writeFile(resolved, finalContent, { mode: 0o600 });
+  }
 
   const item = {
     id,
@@ -597,6 +835,7 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
     likes: existingIndex >= 0 ? Number(catalog.items[existingIndex].likes || 0) : 0,
     downloads: existingIndex >= 0 ? Number(catalog.items[existingIndex].downloads || 0) : 0,
     contentPath,
+    ...(catalogPackageFiles.length > 0 ? { packageFiles: catalogPackageFiles } : {}),
     createdAt,
     updatedAt: nowIso(),
   };
@@ -770,13 +1009,14 @@ router.post('/upload', async (req, res) => {
       author,
       tags,
       content,
+      packageFiles,
       overwrite = false,
       icon,
       supportedApps,
       appSlots,
       capabilities,
     } = req.body || {};
-    if (!content || typeof content !== 'string') {
+    if ((!content || typeof content !== 'string') && (!Array.isArray(packageFiles) || packageFiles.length === 0)) {
       return res.status(400).json({ error: 'content is required' });
     }
     const item = await upsertLocalItem({
@@ -787,6 +1027,7 @@ router.post('/upload', async (req, res) => {
       author,
       tags,
       content,
+      packageFiles,
       overwrite: Boolean(overwrite),
       icon,
       supportedApps,
@@ -862,12 +1103,23 @@ router.post('/install', async (req, res) => {
     if (!item) {
       return res.status(404).json({ error: 'Repository item not found' });
     }
-    const rawContent = await readItemContent(item);
-    const content = item.kind === 'agent-template'
-      ? applyAgentConfiguration(rawContent, configuration)
-      : rawContent;
     const installPath = resolveInstallTarget(item.kind, item.name || item.id, target, projectPath);
-    await writeInstallFile(installPath, content, Boolean(overwrite));
+    let responseContent;
+    let responseInstallPath = installPath;
+
+    if (item.kind === 'skill' && Array.isArray(item.packageFiles) && item.packageFiles.length > 0) {
+      const packageFiles = await readItemPackageFiles(item);
+      const installDir = path.dirname(installPath);
+      await writeInstallPackage(installDir, packageFiles, Boolean(overwrite), { target, projectPath });
+      responseInstallPath = installDir;
+    } else {
+      const rawContent = await readItemContent(item);
+      const content = item.kind === 'agent-template'
+        ? applyAgentConfiguration(rawContent, configuration)
+        : rawContent;
+      await writeInstallFile(installPath, content, Boolean(overwrite));
+      responseContent = item.kind === 'agent-template' ? content : undefined;
+    }
 
     if (item.repoId === LOCAL_REPOSITORY_ID) {
       const catalog = await readLocalCatalog();
@@ -884,13 +1136,41 @@ router.post('/install', async (req, res) => {
     res.json({
       success: true,
       item,
-      installPath,
+      installPath: responseInstallPath,
       target,
-      content: item.kind === 'agent-template' ? content : undefined,
+      content: responseContent,
     });
   } catch (error) {
     const status = error?.code === 'EEXIST' ? 409 : 400;
     res.status(status).json({ error: 'Failed to install repository item', details: error.message });
+  }
+});
+
+router.delete('/install', async (req, res) => {
+  try {
+    const { repoId, itemId, target = 'user', projectPath } = req.body || {};
+    if (!repoId || !itemId) {
+      return res.status(400).json({ error: 'repoId and itemId are required' });
+    }
+    const item = await findPublicItem(String(repoId), String(itemId));
+    if (!item) {
+      return res.status(404).json({ error: 'Repository item not found' });
+    }
+
+    const installPath = await removeInstallTarget(
+      item.kind,
+      item.name || item.id,
+      target,
+      projectPath,
+    );
+    res.json({
+      success: true,
+      item,
+      installPath,
+      target,
+    });
+  } catch (error) {
+    res.status(400).json({ error: 'Failed to uninstall repository item', details: error.message });
   }
 });
 

@@ -11,6 +11,7 @@ import {
   patchAgentConfig,
   upsertAgentConfig,
 } from '../services/agent-config-service.js';
+import { listInstalledSkills } from '../services/agent-skill-service.js';
 import {
   deleteAgentKnowledge,
   deleteAgentKnowledgeSource,
@@ -31,6 +32,18 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error listing agents:', error);
     res.status(500).json({ error: 'Failed to list agents' });
+  }
+});
+
+router.get('/skills/installed', async (req, res) => {
+  try {
+    const result = await listInstalledSkills({
+      workspacePath: typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '',
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Error listing installed skills:', error);
+    res.status(500).json({ error: error.message || 'Failed to list installed skills' });
   }
 });
 

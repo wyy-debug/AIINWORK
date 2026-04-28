@@ -53,6 +53,32 @@ export const SESSION_AGENT_BINDINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sess
 
 export const SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_agent_bindings_lookup ON session_agent_bindings(session_id, provider);`;
 
+export const WORKTREE_DISPATCHES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS worktree_dispatches (
+  id TEXT PRIMARY KEY,
+  project_name TEXT,
+  session_id TEXT,
+  provider TEXT DEFAULT 'claude',
+  parent_project_name TEXT NOT NULL,
+  parent_project_path TEXT NOT NULL,
+  worktree_path TEXT NOT NULL UNIQUE,
+  base_ref TEXT NOT NULL,
+  base_commit TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'managed',
+  status TEXT NOT NULL DEFAULT 'created',
+  agent_id TEXT,
+  skills_json TEXT,
+  app_bindings_json TEXT,
+  task_prompt TEXT,
+  display_name TEXT,
+  branch_name TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const WORKTREE_DISPATCHES_PARENT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_worktree_dispatches_parent ON worktree_dispatches(parent_project_name, status);`;
+export const WORKTREE_DISPATCHES_PATH_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_worktree_dispatches_path ON worktree_dispatches(worktree_path);`;
+export const WORKTREE_DISPATCHES_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_worktree_dispatches_session ON worktree_dispatches(session_id, provider);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -114,6 +140,14 @@ ${SESSION_NAMES_LOOKUP_INDEX_SQL}
 ${SESSION_AGENT_BINDINGS_TABLE_SQL}
 
 ${SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL}
+
+${WORKTREE_DISPATCHES_TABLE_SQL}
+
+${WORKTREE_DISPATCHES_PARENT_INDEX_SQL}
+
+${WORKTREE_DISPATCHES_PATH_INDEX_SQL}
+
+${WORKTREE_DISPATCHES_SESSION_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

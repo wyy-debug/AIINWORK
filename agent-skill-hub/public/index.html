@@ -78,7 +78,12 @@
             </label>
             <label class="span2">
               Content
-              <textarea name="content" rows="12" placeholder="Paste Agent prompt or SKILL.md content" required></textarea>
+              <textarea name="content" rows="12" placeholder="Paste Agent prompt or SKILL.md content"></textarea>
+            </label>
+            <label id="skillPackageLabel" class="span2">
+              Skill package folder
+              <input id="skillPackageInput" type="file" multiple webkitdirectory directory />
+              <small id="skillPackageSummary">Optional for Skill: select a folder that contains SKILL.md.</small>
             </label>
             <label class="checkbox">
               <input name="overwrite" type="checkbox" />

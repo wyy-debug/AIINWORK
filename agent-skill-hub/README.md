@@ -40,7 +40,32 @@ $env:HUB_ADMIN_TOKEN="change-me"
 .\dist\agent-skill-hub.exe
 ```
 
-The Hub listens on `0.0.0.0` by default, so machines on the LAN can reach it if Windows Firewall allows the port.
+The Hub listens on `0.0.0.0` by default, so machines on the LAN can reach it if Windows Firewall allows the port. Example LAN startup:
+
+```powershell
+$env:PORT="4877"
+$env:HOST="0.0.0.0"
+$env:HUB_DATA_DIR="D:\mtl-agent-skill-hub-data"
+$env:HUB_ADMIN_TOKEN="change-me"
+.\dist\agent-skill-hub.exe
+```
+
+Example Windows Firewall rule:
+
+```powershell
+New-NetFirewallRule -DisplayName "Agent Skill Hub 4877" -Direction Inbound -Protocol TCP -LocalPort 4877 -Action Allow
+```
+
+Catalog URL examples:
+
+- Local machine: `http://localhost:4877/agent-repository/catalog.json`
+- LAN client: `http://<server-ip>:4877/agent-repository/catalog.json`
+
+Admin requests outside localhost require `HUB_ADMIN_TOKEN`:
+
+```powershell
+Invoke-RestMethod http://localhost:4877/api/admin/status -Headers @{ Authorization = "Bearer change-me" }
+```
 
 ## Environment
 
@@ -55,6 +80,8 @@ The Hub listens on `0.0.0.0` by default, so machines on the LAN can reach it if 
 | `HUB_SUBMIT_TOKEN` | empty | Optional token for public submissions. |
 | `HUB_PUBLIC_BASE_PATH` | `/agent-repository` | Public catalog base path. |
 | `HUB_ADMIN_BASE_PATH` | `/api/admin` | Admin API base path. |
+| `HUB_MAX_PACKAGE_FILES` | `200` | Maximum files in one Skill package. |
+| `HUB_MAX_PACKAGE_BYTES` | `20971520` | Maximum aggregate Skill package bytes. |
 
 If `HUB_ADMIN_TOKEN` is not configured, admin APIs are only allowed from loopback requests. Configure it before exposing the Hub on a network.
 
@@ -62,6 +89,7 @@ If `HUB_ADMIN_TOKEN` is not configured, admin APIs are only allowed from loopbac
 
 - `GET /agent-repository/catalog.json`
 - `GET /agent-repository/content/:itemId.md`
+- `GET /agent-repository/content/:itemId/:packageFile`
 - `POST /agent-repository/items/:itemId/like`
 - `POST /agent-repository/submit`
 
@@ -80,6 +108,22 @@ Submission body:
   "content": "You are a task management agent..."
 }
 ```
+
+Skill packages can be submitted or published with `packageFiles` instead of a single markdown body:
+
+```json
+{
+  "kind": "skill",
+  "name": "unity-memory-profiler-code-analysis",
+  "title": "Unity Memory Profiler Code Analysis",
+  "packageFiles": [
+    { "path": "SKILL.md", "encoding": "utf8", "content": "---\nname: unity-memory-profiler-code-analysis\n---\n..." },
+    { "path": "scripts/analyze.js", "encoding": "utf8", "content": "export function analyze() {}\n" }
+  ]
+}
+```
+
+The admin UI can also select a Skill folder. The folder must contain `SKILL.md` at its root; subfolders such as `agents/`, `references/`, and `scripts/` are preserved in the public catalog.
 
 ## Admin API
 

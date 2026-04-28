@@ -37,6 +37,56 @@ const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
+function normalizeToolSettings(settings = {}) {
+  return {
+    allowedTools: Array.isArray(settings.allowedTools)
+      ? settings.allowedTools.filter(entry => typeof entry === 'string' && entry.trim())
+      : [],
+    disallowedTools: Array.isArray(settings.disallowedTools)
+      ? settings.disallowedTools.filter(entry => typeof entry === 'string' && entry.trim())
+      : [],
+    skipPermissions: Boolean(settings.skipPermissions)
+  };
+}
+
+function shouldBypassToolPermissions(options = {}, settings = normalizeToolSettings()) {
+  if (options.permissionMode === 'plan') {
+    return false;
+  }
+
+  return Boolean(
+    settings.skipPermissions
+    || options.skipPermissions
+    || options.permissionMode === 'bypassPermissions'
+  );
+}
+
+function resolveConfiguredToolDecision(toolName, input, options = {}, settings = normalizeToolSettings()) {
+  if (TOOLS_REQUIRING_INTERACTION.has(toolName)) {
+    return null;
+  }
+
+  if (shouldBypassToolPermissions(options, settings)) {
+    return { allow: true, updatedInput: input };
+  }
+
+  const isDisallowed = settings.disallowedTools.some(entry =>
+    matchesToolPermission(entry, toolName, input)
+  );
+  if (isDisallowed) {
+    return { allow: false, message: 'Tool disallowed by settings' };
+  }
+
+  const isAllowed = settings.allowedTools.some(entry =>
+    matchesToolPermission(entry, toolName, input)
+  );
+  if (isAllowed) {
+    return { allow: true, updatedInput: input };
+  }
+
+  return null;
+}
+
 function resolveBunExecutable() {
   if (process.env.BUN_EXE && existsSync(process.env.BUN_EXE)) {
     return process.env.BUN_EXE;
@@ -302,11 +352,7 @@ function shouldUseBareMode(env = process.env) {
 
 function buildMtlCodeArgs(options = {}, env = process.env) {
   const { sessionId, toolsSettings, permissionMode } = options;
-  const settings = toolsSettings || {
-    allowedTools: [],
-    disallowedTools: [],
-    skipPermissions: false
-  };
+  const settings = normalizeToolSettings(toolsSettings);
 
   const args = [
     '--print',
@@ -328,13 +374,14 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     args.push('--resume', sessionId);
   }
 
-  const effectivePermissionMode = settings.skipPermissions && permissionMode !== 'plan'
+  const bypassToolPermissions = shouldBypassToolPermissions(options, settings);
+  const effectivePermissionMode = bypassToolPermissions
     ? 'bypassPermissions'
     : permissionMode;
   if (effectivePermissionMode && effectivePermissionMode !== 'default') {
     args.push('--permission-mode', effectivePermissionMode);
   }
-  if (settings.skipPermissions && permissionMode !== 'plan') {
+  if ((settings.skipPermissions || options.skipPermissions) && permissionMode !== 'plan') {
     args.push('--dangerously-skip-permissions');
   }
 
@@ -747,6 +794,7 @@ function buildUnsupportedControlResponse(controlRequest, message) {
 
 async function queryMtlCodeDirect(command, options = {}, ws) {
   const { sessionId, sessionSummary } = options;
+  const runtimeToolSettings = normalizeToolSettings(options.toolsSettings);
   let capturedSessionId = sessionId;
   let sessionCreatedSent = false;
   let tempImagePaths = [];
@@ -815,6 +863,12 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const input = request.input || {};
     const sid = capturedSessionId || sessionId || null;
     const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
+    const configuredDecision = resolveConfiguredToolDecision(toolName, input, options, runtimeToolSettings);
+
+    if (configuredDecision) {
+      writeMtlCodeJson(child, buildPermissionControlResponse(message, configuredDecision));
+      return;
+    }
 
     ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: sid, provider: 'claude' }));
     emitNotification(createNotificationEvent({
@@ -841,6 +895,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: sid, provider: 'claude' }));
       }
     });
+
+    if (decision?.allow && typeof decision.rememberEntry === 'string' && decision.rememberEntry.trim()) {
+      if (!runtimeToolSettings.allowedTools.includes(decision.rememberEntry)) {
+        runtimeToolSettings.allowedTools.push(decision.rememberEntry);
+      }
+      runtimeToolSettings.disallowedTools = runtimeToolSettings.disallowedTools.filter(entry => entry !== decision.rememberEntry);
+    }
 
     writeMtlCodeJson(child, buildPermissionControlResponse(
       message,

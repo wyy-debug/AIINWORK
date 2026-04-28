@@ -45,6 +45,7 @@ interface UseChatComposerStateArgs {
   agents?: AgentConfig[];
   selectedAgentId?: string;
   selectedAgentAppBindings?: AgentAppBinding[];
+  selectedSkillNames?: string[];
   allowSessionAgentBinding?: boolean;
   isLoading: boolean;
   canAbortSession: boolean;
@@ -167,6 +168,7 @@ export function useChatComposerState({
   agents = [],
   selectedAgentId = '',
   selectedAgentAppBindings = [],
+  selectedSkillNames = [],
   allowSessionAgentBinding = false,
   isLoading,
   canAbortSession,
@@ -558,6 +560,10 @@ export function useChatComposerState({
           ? selectedAgentAppBindings
           : activeAgent.appBindings
         : [];
+      const activeSkillNames = selectedSkillNames
+        .map((skill) => skill.trim())
+        .filter(Boolean)
+        .slice(0, 60);
       let messageContent = agentInvocation.content;
       const selectedThinkingMode = thinkingModes.find((mode: { id: string; prefix?: string }) => mode.id === thinkingMode);
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
@@ -682,6 +688,7 @@ export function useChatComposerState({
             model: cursorModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             skipPermissions: toolsSettings?.skipPermissions || false,
             sessionSummary,
@@ -702,6 +709,7 @@ export function useChatComposerState({
             model: codexModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
@@ -721,6 +729,7 @@ export function useChatComposerState({
             model: geminiModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
             permissionMode,
@@ -742,6 +751,7 @@ export function useChatComposerState({
             model: claudeModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
             images: uploadedImages,
@@ -786,6 +796,7 @@ export function useChatComposerState({
       selectedProject,
       selectedAgentId,
       selectedAgentAppBindings,
+      selectedSkillNames,
       allowSessionAgentBinding,
       sendMessage,
       setCanAbortSession,

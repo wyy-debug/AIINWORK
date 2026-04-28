@@ -1,8 +1,11 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
+
 import type { MainContentHeaderProps } from '../../types/types';
+
 import MobileMenuButton from './MobileMenuButton';
 import MainContentTabSwitcher from './MainContentTabSwitcher';
 import MainContentTitle from './MainContentTitle';
+import WorktreeProjectBadge from './WorktreeProjectBadge';
 
 export default function MainContentHeader({
   activeTab,
@@ -39,13 +42,18 @@ export default function MainContentHeader({
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {isMobile && <MobileMenuButton onMenuClick={onMenuClick} />}
-          <MainContentTitle
-            activeTab={activeTab}
-            selectedProject={selectedProject}
-            selectedSession={selectedSession}
-            isConversationSpace={isConversationSpace}
-            shouldShowTasksTab={shouldShowTasksTab}
-          />
+          <div className="min-w-0 flex-1">
+            <MainContentTitle
+              activeTab={activeTab}
+              selectedProject={selectedProject}
+              selectedSession={selectedSession}
+              isConversationSpace={isConversationSpace}
+              shouldShowTasksTab={shouldShowTasksTab}
+            />
+            {!isConversationSpace && selectedProject.worktree && (
+              <WorktreeProjectBadge project={selectedProject} />
+            )}
+          </div>
         </div>
 
         <div className="relative min-w-0 flex-shrink overflow-hidden sm:flex-shrink-0">

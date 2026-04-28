@@ -65,7 +65,7 @@ import crypto from 'crypto';
 import Database from 'better-sqlite3';
 import os from 'os';
 import sessionManager from './sessionManager.js';
-import { applyCustomSessionNames } from './database/db.js';
+import { applyCustomSessionNames, worktreeDispatchesDb } from './database/db.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -337,6 +337,23 @@ async function findProjectDir(projectName, preferredHomeDir = null) {
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
   projectDirectoryCache.clear();
+}
+
+function attachWorktreeMetadata(project, actualProjectDir) {
+  if (!project || !actualProjectDir) {
+    return project;
+  }
+
+  try {
+    const worktree = worktreeDispatchesDb.getByWorktreePath(path.resolve(actualProjectDir));
+    if (worktree) {
+      project.worktree = worktree;
+    }
+  } catch (error) {
+    console.warn(`[Worktree] Failed to attach metadata for ${actualProjectDir}:`, error.message);
+  }
+
+  return project;
 }
 
 // Load project configuration file
@@ -675,6 +692,7 @@ async function getProjects(progressCallback = null) {
         };
       }
 
+      attachWorktreeMetadata(project, actualProjectDir);
       projects.push(project);
     }
   } catch (error) {
@@ -788,6 +806,7 @@ async function getProjects(progressCallback = null) {
         };
       }
 
+      attachWorktreeMetadata(project, actualProjectDir);
       projects.push(project);
     }
   }

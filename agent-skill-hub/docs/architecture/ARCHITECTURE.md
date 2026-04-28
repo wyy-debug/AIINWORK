@@ -19,8 +19,8 @@ flowchart LR
 
 ## Containers
 
-- `src/server.js`: Express app, public repository API, admin API, markdown content storage.
-- `public/`: static admin UI for status, direct publish, submission review, and deletion.
+- `src/server.js`: Express app, public repository API, admin API, markdown content storage, and package-style Skill file storage.
+- `public/`: static admin UI for status, direct publish, Skill package folder upload, submission review, and deletion.
 - `store.json`: catalog metadata, submission metadata, like counters.
 - `content/published`: published Agent template and Skill markdown.
 - `content/submissions`: pending submission markdown.
@@ -32,6 +32,7 @@ Public repository API:
 
 - `GET /agent-repository/catalog.json`
 - `GET /agent-repository/content/:itemId.md`
+- `GET /agent-repository/content/:itemId/:packageFile`
 - `POST /agent-repository/items/:itemId/like`
 - `POST /agent-repository/submit`
 
@@ -54,6 +55,8 @@ Compatibility alias:
 ## Data Ownership
 
 The Hub owns shared repository data. MTL-Code UI owns local installation, local Agent runtime config, and local Skill files. A client should not mutate Hub storage directly; it should submit content or use authenticated admin APIs.
+
+Published Skill packages are represented in catalog items with `packageFiles`, where each entry has a package-relative `path` and a public `contentUrl`. `SKILL.md` remains the compatibility `contentUrl`, while clients that understand packages fetch every listed file and install the full directory.
 
 ## Risks
 

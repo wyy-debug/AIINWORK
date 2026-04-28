@@ -2,6 +2,7 @@ const state = {
   status: null,
   submissions: [],
   items: [],
+  skillPackageFiles: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -12,6 +13,9 @@ const els = {
   refreshButton: $('#refreshButton'),
   statusGrid: $('#statusGrid'),
   publishForm: $('#publishForm'),
+  skillPackageLabel: $('#skillPackageLabel'),
+  skillPackageInput: $('#skillPackageInput'),
+  skillPackageSummary: $('#skillPackageSummary'),
   submissionsList: $('#submissionsList'),
   itemsList: $('#itemsList'),
 };
@@ -70,6 +74,100 @@ function parseList(value) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function getFileRelativePath(file) {
+  return String(file.webkitRelativePath || file.name || '').replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function stripCommonRoot(paths) {
+  const firstSegments = paths.map((filePath) => filePath.split('/').filter(Boolean)[0]).filter(Boolean);
+  if (firstSegments.length === 0 || !firstSegments.every((segment) => segment === firstSegments[0])) {
+    return { rootName: '', paths };
+  }
+  const rootName = firstSegments[0];
+  return {
+    rootName,
+    paths: paths.map((filePath) => filePath.split('/').slice(1).join('/')).filter(Boolean),
+  };
+}
+
+function isTextPackageFile(file, relativePath) {
+  if (String(file.type || '').startsWith('text/')) return true;
+  return /\.(md|markdown|txt|json|jsonc|ya?ml|toml|ini|cfg|conf|js|jsx|ts|tsx|mjs|cjs|py|ps1|psm1|sh|bash|zsh|fish|bat|cmd|css|html?|xml|csv|svg|rs|go|java|cs|c|cpp|h|hpp|sql)$/i.test(relativePath);
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function readPackageFile(file, relativePath) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isTextPackageFile(file, relativePath)) {
+    return {
+      path: relativePath,
+      content: new TextDecoder('utf-8').decode(bytes),
+      encoding: 'utf8',
+      size: file.size,
+    };
+  }
+  return {
+    path: relativePath,
+    content: bytesToBase64(bytes),
+    encoding: 'base64',
+    size: file.size,
+  };
+}
+
+function resetSkillPackage() {
+  state.skillPackageFiles = [];
+  if (els.skillPackageInput) els.skillPackageInput.value = '';
+  if (els.skillPackageSummary) {
+    els.skillPackageSummary.textContent = 'Optional for Skill: select a folder that contains SKILL.md.';
+  }
+}
+
+function updateSkillPackageVisibility() {
+  const isSkill = els.publishForm.elements.kind.value === 'skill';
+  els.skillPackageLabel.hidden = !isSkill;
+  if (!isSkill) {
+    resetSkillPackage();
+  }
+}
+
+async function readSkillPackage(event) {
+  const selectedFiles = Array.from(event.target.files || []);
+  if (selectedFiles.length === 0) return;
+  const rawPaths = selectedFiles.map(getFileRelativePath);
+  const { rootName, paths } = stripCommonRoot(rawPaths);
+  const pathPairs = selectedFiles.flatMap((file, index) => {
+    const relativePath = paths[index] || rawPaths[index];
+    return relativePath && !relativePath.endsWith('/') ? [{ file, relativePath }] : [];
+  });
+  if (!pathPairs.some((entry) => entry.relativePath.toLowerCase() === 'skill.md')) {
+    resetSkillPackage();
+    throw new Error('Skill package must include SKILL.md at the selected folder root');
+  }
+
+  state.skillPackageFiles = await Promise.all(pathPairs.map((entry) => readPackageFile(entry.file, entry.relativePath)));
+  const skillFile = state.skillPackageFiles.find((file) => file.path.toLowerCase() === 'skill.md');
+  const contentField = els.publishForm.elements.content;
+  if (skillFile?.encoding === 'utf8' && !contentField.value.trim()) {
+    contentField.value = skillFile.content;
+  }
+  if (rootName && !els.publishForm.elements.name.value.trim()) {
+    els.publishForm.elements.name.value = rootName;
+  }
+  if (rootName && !els.publishForm.elements.title.value.trim()) {
+    els.publishForm.elements.title.value = rootName;
+  }
+  els.publishForm.elements.kind.value = 'skill';
+  els.skillPackageSummary.textContent = `Selected Skill package: ${state.skillPackageFiles.length} file(s).`;
 }
 
 function renderStatus() {
@@ -173,12 +271,19 @@ async function publishForm(event) {
   payload.supportedApps = parseList(payload.supportedApps);
   payload.capabilities = parseList(payload.capabilities);
   payload.overwrite = form.get('overwrite') === 'on';
+  if (payload.kind === 'skill' && state.skillPackageFiles.length > 0) {
+    payload.packageFiles = state.skillPackageFiles;
+  }
+  if (!String(payload.content || '').trim() && !payload.packageFiles) {
+    throw new Error('Content is required unless a Skill package folder is selected.');
+  }
 
   await api('/api/admin/items', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
   els.publishForm.reset();
+  resetSkillPackage();
   showMessage('Published item.');
   await loadHub();
 }
@@ -219,6 +324,16 @@ els.refreshButton.addEventListener('click', () => {
 els.publishForm.addEventListener('submit', (event) => {
   publishForm(event).catch((error) => showMessage(error.message, 'error'));
 });
+
+els.skillPackageInput.addEventListener('change', (event) => {
+  readSkillPackage(event).catch((error) => showMessage(error.message, 'error'));
+});
+
+els.publishForm.elements.kind.addEventListener('change', () => {
+  updateSkillPackageVisibility();
+});
+
+updateSkillPackageVisibility();
 
 document.addEventListener('click', (event) => {
   handleListClick(event).catch((error) => showMessage(error.message, 'error'));

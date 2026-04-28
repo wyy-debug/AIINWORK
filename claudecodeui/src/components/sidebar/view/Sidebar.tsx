@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
@@ -14,6 +14,7 @@ import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
+import WorktreeDispatchModal from './subcomponents/WorktreeDispatchModal';
 
 type TaskMasterSidebarContext = {
   setCurrentProject: (project: Project) => void;
@@ -56,6 +57,7 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+  const [worktreeDispatchProject, setWorktreeDispatchProject] = useState<Project | null>(null);
   const {
     isSidebarCollapsed,
     expandedProjects,
@@ -159,6 +161,16 @@ function Sidebar({
     window.location.reload();
   };
 
+  const handleWorktreeCreated = (createdProject: Project, shouldCreateSession: boolean) => {
+    setWorktreeDispatchProject(null);
+    void Promise.resolve(onRefresh()).finally(() => {
+      onProjectSelect(createdProject);
+      if (shouldCreateSession) {
+        onNewSession(createdProject);
+      }
+    });
+  };
+
   const projectListProps: SidebarProjectListProps = {
     projects,
     filteredProjects,
@@ -189,6 +201,7 @@ function Sidebar({
       void saveProjectName(projectName);
     },
     onDeleteProject: requestProjectDelete,
+    onDispatchWorktree: setWorktreeDispatchProject,
     onSessionSelect: handleSessionClick,
     onDeleteSession: showDeleteSessionConfirmation,
     onLoadMoreSessions: (project) => {
@@ -310,6 +323,13 @@ function Sidebar({
         </>
       )}
 
+      {worktreeDispatchProject && (
+        <WorktreeDispatchModal
+          project={worktreeDispatchProject}
+          onClose={() => setWorktreeDispatchProject(null)}
+          onCreated={handleWorktreeCreated}
+        />
+      )}
     </>
   );
 }

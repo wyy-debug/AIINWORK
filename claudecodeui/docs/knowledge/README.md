@@ -21,6 +21,7 @@ This directory is the development entry point for `claudecodeui`, now branded as
 - [2026-04-27-agent-skill-repository.md](2026-04-27-agent-skill-repository.md): remote catalog support for agent prompt templates and Skills, including upload, install, and likes.
 - [2026-04-27-agent-skill-hub-extraction.md](2026-04-27-agent-skill-hub-extraction.md): extraction of the embedded remote repository server into the standalone Agent/Skill Hub project.
 - [2026-04-27-remote-agent-repository-server.md](2026-04-27-remote-agent-repository-server.md): standalone Hub API for shared submissions, review/publish, global likes, and public catalog hosting.
+- [2026-04-28-worktree-dispatch.md](2026-04-28-worktree-dispatch.md): Codex-style managed detached worktree dispatch, session linkage, and delete/branch behavior.
 - [2026-04-27-unrestricted-workspace-paths.md](2026-04-27-unrestricted-workspace-paths.md): project creation can use normal folders outside the home directory, with system-critical paths still blocked.
 - [2026-04-26-local-first-frontend.md](2026-04-26-local-first-frontend.md): frontend auth/Git removal for first-use simplicity.
 - [2026-04-26-mtl-code-backend-integration.md](2026-04-26-mtl-code-backend-integration.md): MTL-Code backend executable, config paths, and provider compatibility.

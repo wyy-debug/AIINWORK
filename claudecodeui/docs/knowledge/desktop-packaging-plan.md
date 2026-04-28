@@ -78,6 +78,7 @@ Current Windows implementation:
 - `npm run package:electron-win` writes outputs under `../workspace/vendor/electron-dist`.
 - Windows signing and executable metadata editing are disabled for the first local package with `CSC_IDENTITY_AUTO_DISCOVERY=false` and `win.signAndEditExecutable=false`; this avoids the `winCodeSign` symbolic-link extraction failure on machines without symlink privileges.
 - On Windows with Node 24, `spawnSync('npm.cmd', ...)` can fail with `EINVAL`. `scripts/package-electron-win.mjs` wraps `.cmd` commands with `cmd.exe /d /s /c` so `npm run build` and `npx electron-builder` work inside the packaging script.
+- Application-level icons are generated from `public/icons/argus-icon.svg` by `npm run icons:app`. The generated `public/icon.ico` is used by `build.win.icon`, NSIS installer icons, desktop shortcuts, and the taskbar/startup shell. PWA/favicon/logo PNGs are generated from the same source.
 
 ## Native Dependency Strategy
 

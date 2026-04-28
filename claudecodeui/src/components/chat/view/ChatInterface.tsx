@@ -4,9 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import PermissionContext from '../../../contexts/PermissionContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
-import type { ChatInterfaceProps, Provider  } from '../types/types';
+import type { AgentRuntimeDiagnostics, ChatInterfaceProps, Provider  } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
-import type { AgentAppBinding, AgentConfig } from '../../../types/agent';
+import type { AgentAppBinding, AgentConfig, InstalledSkill } from '../../../types/agent';
 import { api } from '../../../utils/api';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
@@ -43,6 +43,21 @@ function normalizeAgentAppBindings(value: unknown): AgentAppBinding[] {
     .filter((binding): binding is AgentAppBinding => Boolean(binding));
 }
 
+function normalizeSkillNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value
+    .map((skill) => (typeof skill === 'string' ? skill.trim() : ''))
+    .filter(Boolean)
+    .filter((skill) => {
+      const key = skill.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 60);
+}
+
 function shouldConfigureAgent(agent: AgentConfig | null) {
   return Boolean(agent && agent.appBindings.length > 0);
 }
@@ -54,6 +69,7 @@ function ChatInterface({
   quickStartAgentId,
   quickStartAgentRequestId,
   newConversationRequestId,
+  newProjectSessionRequestId,
   ws,
   sendMessage,
   latestMessage,
@@ -86,14 +102,25 @@ function ChatInterface({
   const previousCurrentSessionIdRef = useRef<string | null>(null);
   const agentBindingLoadKeyRef = useRef('');
   const agentBindingPersistKeyRef = useRef('');
+  const agentBindingHydratedKeyRef = useRef('');
   const skipNextAgentBindingLoadKeyRef = useRef('');
+  const worktreeDefaultsKeyRef = useRef('');
+  const worktreeSessionPersistKeyRef = useRef('');
+  const worktreePromptPrefillKeyRef = useRef('');
+  const projectSkillBindingLoadKeyRef = useRef('');
+  const projectSkillBindingPersistKeyRef = useRef('');
+  const projectSkillBindingHydratedKeyRef = useRef('');
   const lastQuickStartAgentRequestRef = useRef(0);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
+  const [selectedSessionSkillNames, setSelectedSessionSkillNames] = useState<string[]>([]);
+  const [selectedProjectSkillNames, setSelectedProjectSkillNames] = useState<string[]>([]);
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
+  const [agentRuntimeDiagnostics, setAgentRuntimeDiagnostics] = useState<AgentRuntimeDiagnostics | null>(null);
   const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
-    isConversationSpace ? 'pending' : 'default',
+    selectedSession ? 'default' : 'pending',
   );
 
   const resetStreamingState = useCallback(() => {
@@ -105,8 +132,45 @@ function ChatInterface({
     accumulatedStreamRef.current = '';
   }, []);
 
+  const workspacePath = selectedProject?.fullPath || selectedProject?.path || '';
+  const worktreeMeta = selectedProject?.worktree || null;
+  const isWorktreeProject = Boolean(!isConversationSpace && worktreeMeta?.id);
+  const agentBindingEnabled = isConversationSpace || isWorktreeProject;
+  const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
+
   useEffect(() => {
-    if (!isConversationSpace) {
+    if (!selectedProject) {
+      setInstalledSkills([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadInstalledSkills = async () => {
+      try {
+        const response = await api.installedAgentSkills(workspacePath);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load installed skills');
+        }
+        if (!cancelled) {
+          setInstalledSkills(Array.isArray(data?.skills) ? data.skills : []);
+        }
+      } catch (error) {
+        console.warn('Failed to load installed skills:', error);
+        if (!cancelled) {
+          setInstalledSkills([]);
+        }
+      }
+    };
+
+    void loadInstalledSkills();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProject, workspacePath]);
+
+  useEffect(() => {
+    if (!agentBindingEnabled || !selectedProject) {
       setAgents([]);
       setPendingAgentSetup(null);
       setSelectedAgentId('');
@@ -138,7 +202,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [isConversationSpace]);
+  }, [agentBindingEnabled, selectedProject]);
 
   const enabledAgents = useMemo(
     () => agents.filter((agent) => agent.status === 'enabled'),
@@ -150,14 +214,6 @@ function ChatInterface({
   );
 
   const selectAgentForConversation = useCallback((agentId: string) => {
-    if (!isConversationSpace) {
-      setPendingAgentSetup(null);
-      setSelectedAgentId('');
-      setSelectedAgentAppBindings([]);
-      setAgentChoiceState('default');
-      return;
-    }
-
     if (!agentId) {
       setPendingAgentSetup(null);
       setSelectedAgentId('');
@@ -184,7 +240,7 @@ function ChatInterface({
     setSelectedAgentId(agent.id);
     setSelectedAgentAppBindings([]);
     setAgentChoiceState('agent');
-  }, [enabledAgents, isConversationSpace]);
+  }, [enabledAgents]);
 
   const useDefaultConversationAgent = useCallback(() => {
     setPendingAgentSetup(null);
@@ -305,22 +361,86 @@ function ChatInterface({
   );
 
   useEffect(() => {
-    if (!isConversationSpace) {
+    const requestId = isConversationSpace ? newConversationRequestId : newProjectSessionRequestId;
+    if (!requestId || selectedSession?.id || currentSessionId) {
       return;
     }
-    if (!newConversationRequestId || selectedSession?.id || currentSessionId) {
+    if (isWorktreeProject) {
+      const nextAgentId = typeof worktreeMeta?.agentId === 'string' ? worktreeMeta.agentId : '';
+      const nextAppBindings = normalizeAgentAppBindings(worktreeMeta?.appBindings);
+      const nextSkills = normalizeSkillNames(worktreeMeta?.skills);
+      setPendingAgentSetup(null);
+      setSelectedAgentId(nextAgentId);
+      setSelectedAgentAppBindings(nextAppBindings);
+      setSelectedSessionSkillNames(nextSkills);
+      setSelectedProjectSkillNames([]);
+      setAgentChoiceState(nextAgentId ? 'agent' : 'default');
+      setAgentRuntimeDiagnostics(null);
       return;
     }
     setPendingAgentSetup(null);
     setSelectedAgentId('');
     setSelectedAgentAppBindings([]);
-    setAgentChoiceState('pending');
-  }, [currentSessionId, isConversationSpace, newConversationRequestId, selectedSession?.id]);
+    setSelectedSessionSkillNames([]);
+    setSelectedProjectSkillNames([]);
+    setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
+    setAgentRuntimeDiagnostics(null);
+  }, [
+    currentSessionId,
+    isConversationSpace,
+    isWorktreeProject,
+    newConversationRequestId,
+    newProjectSessionRequestId,
+    selectedSession?.id,
+    worktreeMeta?.agentId,
+    worktreeMeta?.appBindings,
+    worktreeMeta?.skills,
+  ]);
 
   useEffect(() => {
-    if (!isConversationSpace) {
+    if (agentBindingEnabled) {
       return;
     }
+    setSelectedProjectSkillNames([]);
+  }, [agentBindingEnabled, selectedProject?.name, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!isWorktreeProject || selectedSession?.id || currentSessionId || !worktreeMeta?.id) {
+      return;
+    }
+    const nextAgentId = typeof worktreeMeta.agentId === 'string' ? worktreeMeta.agentId : '';
+    const nextAppBindings = normalizeAgentAppBindings(worktreeMeta.appBindings);
+    const nextSkills = normalizeSkillNames(worktreeMeta.skills);
+    const defaultsKey = `${worktreeMeta.id}:${nextAgentId}:${JSON.stringify({ nextAppBindings, nextSkills })}`;
+    if (worktreeDefaultsKeyRef.current === defaultsKey) {
+      return;
+    }
+    worktreeDefaultsKeyRef.current = defaultsKey;
+    setPendingAgentSetup(null);
+    setSelectedAgentId(nextAgentId);
+    setSelectedAgentAppBindings(nextAppBindings);
+    setSelectedSessionSkillNames(nextSkills);
+    setSelectedProjectSkillNames([]);
+    setAgentChoiceState(nextAgentId ? 'agent' : 'default');
+  }, [
+    currentSessionId,
+    isWorktreeProject,
+    selectedSession?.id,
+    worktreeMeta?.agentId,
+    worktreeMeta?.appBindings,
+    worktreeMeta?.id,
+    worktreeMeta?.skills,
+  ]);
+
+  useEffect(() => {
+    setAgentRuntimeDiagnostics(null);
+  }, [isConversationSpace, selectedProject?.name, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!agentBindingEnabled) {
+      return;
+    }
+
     const bindingKey = activeConversationSessionId ? `${provider}:${activeConversationSessionId}` : '';
     const previousSessionId = previousCurrentSessionIdRef.current;
     previousCurrentSessionIdRef.current = currentSessionId;
@@ -329,39 +449,45 @@ function ChatInterface({
       isTemporarySessionId(previousSessionId)
       && activeConversationSessionId
       && !selectedSession?.id
-      && selectedAgentId
+      && (selectedAgentId || selectedSessionSkillNames.length > 0)
     ) {
       skipNextAgentBindingLoadKeyRef.current = bindingKey;
-      agentBindingPersistKeyRef.current = `${bindingKey}:${selectedAgentId}:${JSON.stringify({ appBindings: selectedAgentAppBindings })}`;
+      agentBindingHydratedKeyRef.current = bindingKey;
+      agentBindingPersistKeyRef.current = `${bindingKey}:${selectedAgentId}:${JSON.stringify({ appBindings: selectedAgentAppBindings, skills: selectedSessionSkillNames })}`;
       void api.updateSessionAgent(activeConversationSessionId, selectedAgentId, provider, {
         appBindings: selectedAgentAppBindings,
+        skills: selectedSessionSkillNames,
       }).catch((error) => {
         console.warn('Failed to persist new conversation Agent binding:', error);
         agentBindingPersistKeyRef.current = '';
       });
     }
-  }, [activeConversationSessionId, currentSessionId, isConversationSpace, provider, selectedAgentAppBindings, selectedAgentId, selectedSession?.id]);
+  }, [activeConversationSessionId, agentBindingEnabled, currentSessionId, provider, selectedAgentAppBindings, selectedAgentId, selectedSession?.id, selectedSessionSkillNames]);
 
   useEffect(() => {
-    if (!isConversationSpace) {
+    if (!agentBindingEnabled) {
+      setPendingAgentSetup(null);
       setSelectedAgentId('');
       setSelectedAgentAppBindings([]);
-      setPendingAgentSetup(null);
       setAgentChoiceState('default');
       return;
     }
 
     if (!selectedSession?.id && !currentSessionId) {
+      if (isWorktreeProject) {
+        return;
+      }
       const hasQuickStartAgent = Boolean(
         quickStartAgentId
         && quickStartAgentRequestId
         && lastQuickStartAgentRequestRef.current === quickStartAgentRequestId,
       );
-      if (!hasQuickStartAgent) {
+      if (!hasQuickStartAgent && !selectedAgentId && selectedSessionSkillNames.length === 0) {
         setSelectedAgentId('');
         setSelectedAgentAppBindings([]);
+        setSelectedSessionSkillNames([]);
         if (agentChoiceState === 'agent') {
-          setAgentChoiceState('pending');
+          setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
         }
       }
       return;
@@ -392,16 +518,21 @@ function ChatInterface({
         }
         const nextAgentId = typeof data?.agentId === 'string' ? data.agentId : '';
         const nextAppBindings = normalizeAgentAppBindings(data?.configuration?.appBindings || data?.agent?.appBindings);
+        const nextSkills = normalizeSkillNames(data?.configuration?.skills);
         setSelectedAgentId(nextAgentId);
         setSelectedAgentAppBindings(nextAppBindings);
+        setSelectedSessionSkillNames(nextSkills);
         setAgentChoiceState(nextAgentId ? 'agent' : 'default');
-        agentBindingPersistKeyRef.current = `${bindingKey}:${nextAgentId}:${JSON.stringify({ appBindings: nextAppBindings })}`;
+        agentBindingHydratedKeyRef.current = bindingKey;
+        agentBindingPersistKeyRef.current = `${bindingKey}:${nextAgentId}:${JSON.stringify({ appBindings: nextAppBindings, skills: nextSkills })}`;
       } catch (error) {
         console.warn('Failed to load conversation Agent binding:', error);
         if (!cancelled && agentBindingLoadKeyRef.current === bindingKey) {
           setSelectedAgentId('');
           setSelectedAgentAppBindings([]);
+          setSelectedSessionSkillNames([]);
           setAgentChoiceState('default');
+          agentBindingHydratedKeyRef.current = bindingKey;
           agentBindingPersistKeyRef.current = `${bindingKey}:`;
         }
       }
@@ -411,10 +542,13 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, agentChoiceState, currentSessionId, isConversationSpace, provider, quickStartAgentId, quickStartAgentRequestId, selectedSession?.id]);
+  }, [activeConversationSessionId, agentBindingEnabled, agentChoiceState, currentSessionId, isConversationSpace, isWorktreeProject, provider, quickStartAgentId, quickStartAgentRequestId, selectedAgentId, selectedSession?.id, selectedSessionSkillNames.length]);
 
   useEffect(() => {
     if (!selectedAgentId) {
+      return;
+    }
+    if (agentBindingEnabled && agents.length === 0) {
       return;
     }
     if (!enabledAgents.some((agent) => agent.id === selectedAgentId)) {
@@ -422,24 +556,28 @@ function ChatInterface({
       setSelectedAgentAppBindings([]);
       setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
     }
-  }, [enabledAgents, isConversationSpace, selectedAgentId]);
+  }, [agentBindingEnabled, agents.length, enabledAgents, isConversationSpace, selectedAgentId]);
 
   useEffect(() => {
-    if (!isConversationSpace) {
+    if (!agentBindingEnabled) {
       return;
     }
     if (!activeConversationSessionId) {
       return;
     }
 
-    const configuration = { appBindings: selectedAgentAppBindings };
+    const configuration = { appBindings: selectedAgentAppBindings, skills: selectedSessionSkillNames };
     const bindingKey = `${provider}:${activeConversationSessionId}:${selectedAgentId}:${JSON.stringify(configuration)}`;
     if (agentBindingPersistKeyRef.current === bindingKey) {
       return;
     }
+    const hydratedKey = `${provider}:${activeConversationSessionId}`;
+    if (!selectedAgentId && selectedSessionSkillNames.length === 0 && agentBindingHydratedKeyRef.current !== hydratedKey) {
+      return;
+    }
     agentBindingPersistKeyRef.current = bindingKey;
 
-    const persistSessionAgent = selectedAgentId
+    const persistSessionAgent = selectedAgentId || selectedSessionSkillNames.length > 0
       ? api.updateSessionAgent(activeConversationSessionId, selectedAgentId, provider, configuration)
       : api.clearSessionAgent(activeConversationSessionId, provider);
 
@@ -447,7 +585,94 @@ function ChatInterface({
       console.warn('Failed to persist conversation Agent binding:', error);
       agentBindingPersistKeyRef.current = '';
     });
-  }, [activeConversationSessionId, isConversationSpace, provider, selectedAgentAppBindings, selectedAgentId]);
+  }, [activeConversationSessionId, agentBindingEnabled, provider, selectedAgentAppBindings, selectedAgentId, selectedSessionSkillNames]);
+
+  const toggleSessionSkill = useCallback((skillName: string) => {
+    const normalized = skillName.trim();
+    if (!normalized) return;
+    const updateSkills = (previous: string[]) => {
+      const exists = previous.some((name) => name.toLowerCase() === normalized.toLowerCase());
+      return exists
+        ? previous.filter((name) => name.toLowerCase() !== normalized.toLowerCase())
+        : [...previous, normalized].slice(0, 60);
+    };
+    if (agentBindingEnabled) {
+      setSelectedSessionSkillNames(updateSkills);
+    } else {
+      setSelectedProjectSkillNames(updateSkills);
+    }
+  }, [agentBindingEnabled]);
+
+  const activeSkillNames = agentBindingEnabled ? selectedSessionSkillNames : selectedProjectSkillNames;
+
+  useEffect(() => {
+    if (!projectSkillBindingEnabled || !activeConversationSessionId) {
+      return undefined;
+    }
+
+    const bindingKey = `${provider}:${activeConversationSessionId}:project-skills`;
+    let cancelled = false;
+    projectSkillBindingLoadKeyRef.current = bindingKey;
+
+    const loadProjectSkillBinding = async () => {
+      try {
+        const response = await api.sessionAgent(activeConversationSessionId, provider);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load project Skill binding');
+        }
+        if (cancelled || projectSkillBindingLoadKeyRef.current !== bindingKey) {
+          return;
+        }
+
+        const nextSkills = normalizeSkillNames(data?.configuration?.skills);
+        setSelectedProjectSkillNames(nextSkills);
+        projectSkillBindingHydratedKeyRef.current = bindingKey;
+        projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify(nextSkills)}`;
+      } catch (error) {
+        console.warn('Failed to load project Skill binding:', error);
+        if (!cancelled && projectSkillBindingLoadKeyRef.current === bindingKey) {
+          setSelectedProjectSkillNames([]);
+          projectSkillBindingHydratedKeyRef.current = bindingKey;
+          projectSkillBindingPersistKeyRef.current = `${bindingKey}:[]`;
+        }
+      }
+    };
+
+    void loadProjectSkillBinding();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversationSessionId, projectSkillBindingEnabled, provider]);
+
+  useEffect(() => {
+    if (!projectSkillBindingEnabled || !activeConversationSessionId) {
+      return;
+    }
+
+    const hydratedKey = `${provider}:${activeConversationSessionId}:project-skills`;
+    if (selectedProjectSkillNames.length === 0 && projectSkillBindingHydratedKeyRef.current !== hydratedKey) {
+      return;
+    }
+
+    const persistKey = `${hydratedKey}:${JSON.stringify(selectedProjectSkillNames)}`;
+    if (projectSkillBindingPersistKeyRef.current === persistKey) {
+      return;
+    }
+    projectSkillBindingPersistKeyRef.current = persistKey;
+
+    const persistProjectSkills = selectedProjectSkillNames.length > 0
+      ? api.updateSessionAgent(activeConversationSessionId, '', provider, {
+        appBindings: [],
+        skills: selectedProjectSkillNames,
+      })
+      : api.clearSessionAgent(activeConversationSessionId, provider);
+
+    void persistProjectSkills.catch((error) => {
+      console.warn('Failed to persist project Skill binding:', error);
+      projectSkillBindingPersistKeyRef.current = '';
+    });
+  }, [activeConversationSessionId, projectSkillBindingEnabled, provider, selectedProjectSkillNames]);
 
   const {
     input,
@@ -455,8 +680,6 @@ function ChatInterface({
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,
-    thinkingMode,
-    setThinkingMode,
     slashCommandsCount,
     filteredCommands,
     frequentCommands,
@@ -503,10 +726,11 @@ function ChatInterface({
     claudeModel,
     codexModel,
     geminiModel,
-    agents: isConversationSpace ? enabledAgents : [],
-    selectedAgentId: isConversationSpace ? selectedAgentId : '',
-    selectedAgentAppBindings: isConversationSpace ? selectedAgentAppBindings : [],
-    allowSessionAgentBinding: isConversationSpace,
+    agents: agentBindingEnabled ? enabledAgents : [],
+    selectedAgentId: agentBindingEnabled ? selectedAgentId : '',
+    selectedAgentAppBindings: agentBindingEnabled ? selectedAgentAppBindings : [],
+    selectedSkillNames: activeSkillNames,
+    allowSessionAgentBinding: agentBindingEnabled || activeSkillNames.length > 0,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -528,6 +752,37 @@ function ChatInterface({
     setIsUserScrolledUp,
     setPendingPermissionRequests,
   });
+
+  useEffect(() => {
+    if (!isWorktreeProject || !worktreeMeta?.id || !activeConversationSessionId) {
+      return;
+    }
+    const bindingKey = `${worktreeMeta.id}:${provider}:${activeConversationSessionId}`;
+    if (worktreeSessionPersistKeyRef.current === bindingKey) {
+      return;
+    }
+    worktreeSessionPersistKeyRef.current = bindingKey;
+    void api.updateWorktreeSession(worktreeMeta.id, activeConversationSessionId, provider).catch((error) => {
+      console.warn('Failed to persist worktree session link:', error);
+      worktreeSessionPersistKeyRef.current = '';
+    });
+  }, [activeConversationSessionId, isWorktreeProject, provider, worktreeMeta?.id]);
+
+  useEffect(() => {
+    if (!isWorktreeProject || selectedSession?.id || currentSessionId || !worktreeMeta?.id) {
+      return;
+    }
+    const prompt = typeof worktreeMeta.taskPrompt === 'string' ? worktreeMeta.taskPrompt.trim() : '';
+    if (!prompt || input.trim()) {
+      return;
+    }
+    const promptKey = `${worktreeMeta.id}:${prompt}`;
+    if (worktreePromptPrefillKeyRef.current === promptKey) {
+      return;
+    }
+    worktreePromptPrefillKeyRef.current = promptKey;
+    setInput(prompt);
+  }, [currentSessionId, input, isWorktreeProject, selectedSession?.id, setInput, worktreeMeta?.id, worktreeMeta?.taskPrompt]);
 
   // On WebSocket reconnect, re-fetch the current session's messages from the server
   // so missed streaming events are shown. Also reset isLoading.
@@ -554,6 +809,7 @@ function ChatInterface({
     setCanAbortSession,
     setClaudeStatus,
     setTokenBudget,
+    setAgentRuntimeDiagnostics,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamBufferRef,
@@ -670,8 +926,8 @@ function ChatInterface({
           showThinking={showThinking}
           selectedProject={selectedProject}
           isConversationSpace={isConversationSpace}
-          agents={isConversationSpace ? enabledAgents : []}
-          selectedAgentName={isConversationSpace ? selectedAgent?.shortName || selectedAgent?.name || '' : ''}
+          agents={agentBindingEnabled ? enabledAgents : []}
+          selectedAgentName={agentBindingEnabled ? selectedAgent?.shortName || selectedAgent?.name || '' : ''}
           agentChoiceState={agentChoiceState}
           onUseDefaultAgent={useDefaultConversationAgent}
           onSelectConversationAgent={selectAgentForConversation}
@@ -685,13 +941,22 @@ function ChatInterface({
           isLoading={isLoading}
           onAbortSession={handleAbortSession}
           provider={provider}
-          agents={[]}
-          selectedAgentId={isConversationSpace ? selectedAgentId : ''}
+          agents={agentBindingEnabled ? enabledAgents : []}
+          selectedAgentId={agentBindingEnabled ? selectedAgentId : ''}
+          selectedAgentAppBindings={agentBindingEnabled ? selectedAgentAppBindings : []}
           onSelectedAgentIdChange={selectAgentForConversation}
-          permissionMode={permissionMode}
-          onModeSwitch={cyclePermissionMode}
-          thinkingMode={thinkingMode}
-          setThinkingMode={setThinkingMode}
+          installedSkills={installedSkills}
+          selectedSkillNames={activeSkillNames}
+          onToggleSkillName={toggleSessionSkill}
+          onClearSkillNames={() => {
+            if (agentBindingEnabled) {
+              setSelectedSessionSkillNames([]);
+            } else {
+              setSelectedProjectSkillNames([]);
+            }
+          }}
+          showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0}
+          agentRuntimeDiagnostics={agentRuntimeDiagnostics}
           tokenBudget={tokenBudget}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
@@ -749,10 +1014,11 @@ function ChatInterface({
         />
       </div>
 
-      {pendingAgentSetup && (
+      {agentBindingEnabled && pendingAgentSetup && (
         <AgentSessionSetupDialog
           agent={pendingAgentSetup}
           initialBindings={selectedAgentId === pendingAgentSetup.id ? selectedAgentAppBindings : pendingAgentSetup.appBindings}
+          workspacePath={workspacePath}
           isLoading={isLoading}
           onCancel={() => setPendingAgentSetup(null)}
           onConfirm={(bindings) => confirmAgentSetup(pendingAgentSetup, bindings)}

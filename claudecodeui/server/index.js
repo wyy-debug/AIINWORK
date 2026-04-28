@@ -62,6 +62,7 @@ import pluginsRoutes from './routes/plugins.js';
 import agentRepositoryRoutes from './routes/agent-repository.js';
 import sessionAgentRoutes from './routes/session-agents.js';
 import messagesRoutes from './routes/messages.js';
+import worktreeRoutes from './routes/worktrees.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
@@ -69,7 +70,7 @@ import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
-import { resolveAgentRuntime } from './services/agent-config-service.js';
+import { buildSkillReferencePrompt, resolveAgentRuntime } from './services/agent-config-service.js';
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 const MTL_CODE_DEFAULT_CLI = 'mtl-code';
@@ -370,6 +371,9 @@ app.use('/api/agents', authenticateToken, agentsRoutes);
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, sessionAgentRoutes);
 app.use('/api/sessions', authenticateToken, messagesRoutes);
+
+// Managed Git worktree dispatch routes (protected)
+app.use('/api', authenticateToken, worktreeRoutes);
 
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
@@ -1536,6 +1540,70 @@ function getConcreteCommandSessionId(data) {
     return String(sessionId);
 }
 
+function normalizeRuntimeToolSettings(settings = {}) {
+    const source = settings && typeof settings === 'object' ? settings : {};
+    return {
+        allowedTools: Array.isArray(source.allowedTools)
+            ? source.allowedTools.filter((entry) => typeof entry === 'string' && entry.trim())
+            : [],
+        disallowedTools: Array.isArray(source.disallowedTools)
+            ? source.disallowedTools.filter((entry) => typeof entry === 'string' && entry.trim())
+            : [],
+        skipPermissions: Boolean(source.skipPermissions),
+    };
+}
+
+function createRuntimePermissionSnapshot(data) {
+    const options = data?.options && typeof data.options === 'object' ? data.options : {};
+    const toolsSettings = normalizeRuntimeToolSettings(options.toolsSettings);
+    const permissionMode = typeof options.permissionMode === 'string' && options.permissionMode.trim()
+        ? options.permissionMode.trim()
+        : 'default';
+    const skipPermissions = Boolean(toolsSettings.skipPermissions || options.skipPermissions);
+    const bypassPermissions = permissionMode !== 'plan' && Boolean(
+        skipPermissions || permissionMode === 'bypassPermissions'
+    );
+
+    return {
+        permissionMode,
+        skipPermissions,
+        allowedTools: toolsSettings.allowedTools,
+        disallowedTools: toolsSettings.disallowedTools,
+        bypassPermissions,
+    };
+}
+
+function createRuntimeDiagnosticsPayload(data) {
+    const diagnostics = data?.options?.runtimeDiagnostics;
+    if (!diagnostics || typeof diagnostics !== 'object') {
+        return null;
+    }
+
+    return {
+        ...diagnostics,
+        provider: getProviderFromCommandType(data?.type),
+        sessionId: data?.options?.sessionId || data?.sessionId || null,
+        projectPath: data?.options?.projectPath || data?.options?.cwd || '',
+        permissions: createRuntimePermissionSnapshot(data),
+    };
+}
+
+function emitRuntimeDiagnostics(writer, data) {
+    const payload = createRuntimeDiagnosticsPayload(data);
+    if (!payload) {
+        return;
+    }
+
+    console.log('[Agent Runtime]', JSON.stringify(payload));
+    writer.send(createNormalizedMessage({
+        kind: 'status',
+        text: 'agent_runtime_debug',
+        provider: payload.provider || 'claude',
+        sessionId: payload.sessionId || null,
+        agentRuntime: payload,
+    }));
+}
+
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
     const concreteSessionId = getConcreteCommandSessionId(data);
@@ -1543,18 +1611,72 @@ async function applyAgentRuntimeToChatCommand(data) {
     const storedBinding = allowSessionAgentBinding && concreteSessionId
         ? sessionAgentBindingsDb.getBinding(concreteSessionId, provider)
         : null;
-    const optionConfiguration = Array.isArray(data?.options?.agentAppBindings)
-        ? { appBindings: data.options.agentAppBindings }
+    const optionConfiguration = (
+        Array.isArray(data?.options?.agentAppBindings)
+        || Array.isArray(data?.options?.sessionSkills)
+    )
+        ? {
+            ...(Array.isArray(data?.options?.agentAppBindings) ? { appBindings: data.options.agentAppBindings } : {}),
+            ...(Array.isArray(data?.options?.sessionSkills) ? { skills: data.options.sessionSkills } : {}),
+        }
         : null;
     const sessionConfiguration = optionConfiguration || storedBinding?.configuration || null;
     const agentId = data?.options?.agentId || (allowSessionAgentBinding ? storedBinding?.agentId : '') || '';
+    const sessionSkills = Array.isArray(sessionConfiguration?.skills)
+        ? sessionConfiguration.skills.filter((skill) => typeof skill === 'string' && skill.trim()).slice(0, 60)
+        : [];
     if (!agentId) {
-        return data;
+        if (sessionSkills.length === 0) {
+            return data;
+        }
+
+        const appendSystemPrompt = await buildSkillReferencePrompt(sessionSkills, {
+            query: typeof data.command === 'string' ? data.command : '',
+            workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+        });
+        if (!appendSystemPrompt) {
+            return data;
+        }
+
+        if (allowSessionAgentBinding && concreteSessionId) {
+            sessionAgentBindingsDb.setAgent(concreteSessionId, provider, '', sessionConfiguration);
+        }
+
+        const options = {
+            ...(data.options || {}),
+            sessionSkills,
+            runtimeDiagnostics: {
+                type: 'skills',
+                allowSessionAgentBinding,
+                agentId: '',
+                agentName: '',
+                appBindings: [],
+                mcpBindings: [],
+                sessionSkills,
+                effectiveSkills: sessionSkills,
+                appendSystemPromptLength: appendSystemPrompt.length,
+                contextWindowTokens: data?.options?.contextWindowTokens || null,
+                model: data?.options?.model || '',
+            },
+        };
+
+        if (data.type === 'claude-command') {
+            options.appendSystemPrompt = appendSystemPrompt;
+            return { ...data, options };
+        }
+
+        const command = typeof data.command === 'string' ? data.command : '';
+        return {
+            ...data,
+            command: [appendSystemPrompt, '', 'User task:', command].join('\n'),
+            options,
+        };
     }
 
     const runtime = await resolveAgentRuntime(agentId, {
         query: typeof data.command === 'string' ? data.command : '',
         sessionConfiguration,
+        workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
     });
     if (!runtime) {
         return data;
@@ -1571,6 +1693,19 @@ async function applyAgentRuntimeToChatCommand(data) {
             id: runtime.agent.id,
             name: runtime.agent.name,
             version: runtime.agent.version,
+        },
+        runtimeDiagnostics: {
+            type: 'agent',
+            allowSessionAgentBinding,
+            agentId: runtime.agent.id,
+            agentName: runtime.agent.name,
+            appBindings: runtime.agent.appBindings,
+            mcpBindings: runtime.agent.appBindings.filter((binding) => String(binding?.app || '').startsWith('MCP: ')),
+            sessionSkills,
+            effectiveSkills: runtime.agent.skills,
+            appendSystemPromptLength: runtime.appendSystemPrompt.length,
+            contextWindowTokens: runtime.contextWindowTokens,
+            model: runtime.model || data?.options?.model || '',
         },
         contextWindowTokens: runtime.contextWindowTokens,
     };
@@ -1608,6 +1743,7 @@ function handleChatConnection(ws, request) {
 
             if (data.type === 'claude-command') {
                 const commandData = await applyAgentRuntimeToChatCommand(data);
+                emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -1616,6 +1752,7 @@ function handleChatConnection(ws, request) {
                 await queryClaudeSDK(commandData.command, commandData.options, writer);
             } else if (data.type === 'cursor-command') {
                 const commandData = await applyAgentRuntimeToChatCommand(data);
+                emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -1623,6 +1760,7 @@ function handleChatConnection(ws, request) {
                 await spawnCursor(commandData.command, commandData.options, writer);
             } else if (data.type === 'codex-command') {
                 const commandData = await applyAgentRuntimeToChatCommand(data);
+                emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -1630,6 +1768,7 @@ function handleChatConnection(ws, request) {
                 await queryCodex(commandData.command, commandData.options, writer);
             } else if (data.type === 'gemini-command') {
                 const commandData = await applyAgentRuntimeToChatCommand(data);
+                emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');

@@ -1,12 +1,14 @@
 import { Bot, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { AgentAppBinding, AgentConfig } from '../../../../types/agent';
 import { cn } from '../../../../lib/utils';
+import { api } from '../../../../utils/api';
 
 type AgentSessionSetupDialogProps = {
   agent: AgentConfig;
   initialBindings?: AgentAppBinding[];
+  workspacePath?: string;
   isLoading?: boolean;
   onCancel: () => void;
   onConfirm: (bindings: AgentAppBinding[]) => void;
@@ -18,22 +20,73 @@ type SlotDraft = {
   status: AgentAppBinding['status'];
 };
 
-const COMMON_APPS_BY_SLOT: Array<{ match: RegExp; apps: string[] }> = [
-  { match: /高级|工具|mcp|tool/i, apps: ['自定义 MCP'] },
-];
+type McpServerOption = {
+  key: string;
+  value: string;
+  label: string;
+};
 
-function getSlotOptions(slot: string, currentApp: string, allBindings: AgentAppBinding[]) {
+const MCP_SLOT_PATTERN = /高级|工具|mcp|tool/i;
+const CUSTOM_MCP_PLACEHOLDER_PATTERN = /自定义\s*MCP|custom\s*MCP/i;
+
+function isMcpSlot(slot: string) {
+  return MCP_SLOT_PATTERN.test(slot);
+}
+
+function isCustomMcpPlaceholder(app: string) {
+  return CUSTOM_MCP_PLACEHOLDER_PATTERN.test(app);
+}
+
+function getMcpBindingAppName(serverName: string) {
+  return `MCP: ${serverName}`;
+}
+
+function readMcpServersFromResponse(data: unknown) {
+  const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+  const nestedData = payload.data && typeof payload.data === 'object' ? payload.data as Record<string, unknown> : {};
+  const servers = Array.isArray(nestedData.servers)
+    ? nestedData.servers
+    : Array.isArray(payload.servers)
+      ? payload.servers
+      : [];
+
+  return servers
+    .map((server) => (server && typeof server === 'object' ? server as Record<string, unknown> : null))
+    .filter((server): server is Record<string, unknown> => Boolean(server && typeof server.name === 'string' && server.name.trim()));
+}
+
+function createMcpServerOption(server: Record<string, unknown>, fallbackScope: 'user' | 'project'): McpServerOption {
+  const name = String(server.name || '').trim();
+  const scope = server.scope === 'project' ? 'project' : fallbackScope;
+  const transport = typeof server.transport === 'string' ? server.transport : 'stdio';
+  const target = typeof server.command === 'string'
+    ? server.command
+    : typeof server.url === 'string'
+      ? server.url
+      : transport;
+  const value = getMcpBindingAppName(name);
+  return {
+    key: `${scope}:${server.workspacePath || 'user'}:${name}`,
+    value,
+    label: `${value} · ${scope} · ${transport}${target ? ` · ${target}` : ''}`,
+  };
+}
+
+function getSlotOptions(
+  slot: string,
+  currentApp: string,
+  allBindings: AgentAppBinding[],
+  mcpOptions: McpServerOption[],
+) {
   const options = new Set<string>();
-  if (currentApp) options.add(currentApp);
+  if (currentApp && !isCustomMcpPlaceholder(currentApp)) options.add(currentApp);
   for (const binding of allBindings) {
-    if (binding.slot === slot && binding.app) {
+    if (binding.slot === slot && binding.app && !isCustomMcpPlaceholder(binding.app)) {
       options.add(binding.app);
     }
   }
-  for (const group of COMMON_APPS_BY_SLOT) {
-    if (group.match.test(slot)) {
-      for (const app of group.apps) options.add(app);
-    }
+  if (isMcpSlot(slot)) {
+    for (const option of mcpOptions) options.add(option.value);
   }
   return Array.from(options);
 }
@@ -45,7 +98,7 @@ function createSlotDrafts(agent: AgentConfig, initialBindings?: AgentAppBinding[
     if (!binding.slot || bySlot.has(binding.slot)) continue;
     bySlot.set(binding.slot, {
       slot: binding.slot,
-      app: binding.app || '',
+      app: isCustomMcpPlaceholder(binding.app || '') ? '' : binding.app || '',
       status: binding.status || 'optional',
     });
   }
@@ -55,13 +108,84 @@ function createSlotDrafts(agent: AgentConfig, initialBindings?: AgentAppBinding[
 export default function AgentSessionSetupDialog({
   agent,
   initialBindings,
+  workspacePath = '',
   isLoading,
   onCancel,
   onConfirm,
 }: AgentSessionSetupDialogProps) {
   const initialDrafts = useMemo(() => createSlotDrafts(agent, initialBindings), [agent, initialBindings]);
   const [drafts, setDrafts] = useState<SlotDraft[]>(initialDrafts);
-  const canConfirm = drafts.every((draft) => draft.app.trim());
+  const [mcpOptions, setMcpOptions] = useState<McpServerOption[]>([]);
+  const [isLoadingMcpOptions, setIsLoadingMcpOptions] = useState(false);
+  const [mcpOptionsError, setMcpOptionsError] = useState('');
+  const needsMcpOptions = useMemo(() => drafts.some((draft) => isMcpSlot(draft.slot)), [drafts]);
+  const canConfirm = drafts.every((draft) => {
+    const app = draft.app.trim();
+    if (!app) return false;
+    return !(isMcpSlot(draft.slot) && isCustomMcpPlaceholder(app));
+  });
+
+  useEffect(() => {
+    setDrafts(initialDrafts);
+  }, [initialDrafts]);
+
+  useEffect(() => {
+    if (!needsMcpOptions) {
+      setMcpOptions([]);
+      setMcpOptionsError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadMcpOptions = async () => {
+      setIsLoadingMcpOptions(true);
+      setMcpOptionsError('');
+      try {
+        const requests: Array<Promise<McpServerOption[]>> = [
+          api.mcpServers('claude', 'user').then(async (response) => {
+            const data = await response.json();
+            if (!response.ok || data?.success === false) {
+              throw new Error(data?.error?.message || data?.error || data?.details || 'Failed to load user MCP servers');
+            }
+            return readMcpServersFromResponse(data).map((server) => createMcpServerOption(server, 'user'));
+          }),
+        ];
+
+        if (workspacePath) {
+          requests.push(api.mcpServers('claude', 'project', workspacePath).then(async (response) => {
+            const data = await response.json();
+            if (!response.ok || data?.success === false) {
+              throw new Error(data?.error?.message || data?.error || data?.details || 'Failed to load project MCP servers');
+            }
+            return readMcpServersFromResponse(data).map((server) => createMcpServerOption(server, 'project'));
+          }));
+        }
+
+        const batches = await Promise.all(requests);
+        if (cancelled) return;
+
+        const seen = new Set<string>();
+        const nextOptions = batches.flat().filter((option) => {
+          const key = option.value.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        setMcpOptions(nextOptions);
+      } catch (error) {
+        if (cancelled) return;
+        setMcpOptions([]);
+        setMcpOptionsError(error instanceof Error ? error.message : 'Failed to load MCP servers');
+      } finally {
+        if (!cancelled) setIsLoadingMcpOptions(false);
+      }
+    };
+
+    void loadMcpOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [needsMcpOptions, workspacePath]);
 
   const updateDraft = (slot: string, app: string) => {
     setDrafts((previous) => previous.map((draft) => (
@@ -101,7 +225,8 @@ export default function AgentSessionSetupDialog({
             </div>
           ) : (
             drafts.map((draft) => {
-              const options = getSlotOptions(draft.slot, draft.app, agent.appBindings);
+              const options = getSlotOptions(draft.slot, draft.app, agent.appBindings, mcpOptions);
+              const optionLabels = new Map(mcpOptions.map((option) => [option.value, option.label]));
               return (
                 <label key={draft.slot} className="grid gap-2 sm:grid-cols-[132px_1fr] sm:items-center">
                   <span className="min-w-0 truncate text-sm font-medium text-foreground">{draft.slot}</span>
@@ -116,7 +241,7 @@ export default function AgentSessionSetupDialog({
                     <option value="">选择应用</option>
                     {options.map((app) => (
                       <option key={`${draft.slot}:${app}`} value={app}>
-                        {app}
+                        {optionLabels.get(app) || app}
                       </option>
                     ))}
                   </select>
@@ -125,6 +250,23 @@ export default function AgentSessionSetupDialog({
             })
           )}
         </div>
+
+        {needsMcpOptions && (
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            <p>
+              {isLoadingMcpOptions
+                ? 'Loading configured MCP servers...'
+                : mcpOptionsError
+                  ? mcpOptionsError
+                  : mcpOptions.length === 0
+                    ? 'No configured MCP server was found. Add one in Agent Builder > Browse App > Custom MCP first.'
+                    : 'MCP slots use configured MCP servers from your provider settings.'}
+            </p>
+            <p className="mt-1">
+              工具列表会在会话启动后由 MTL-Code 原生 runtime 发现；这里绑定的是具体 MCP Server 配置。
+            </p>
+          </div>
+        )}
 
         <div className="mt-6 flex items-center justify-between gap-3">
           <button

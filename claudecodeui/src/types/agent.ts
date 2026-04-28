@@ -78,3 +78,20 @@ export interface AgentConfig {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface InstalledSkill {
+  id?: string;
+  name: string;
+  title: string;
+  description?: string;
+  scope: 'user' | 'project';
+  provider: string;
+  source?: string;
+  workspacePath?: string;
+  path: string;
+  skillPath: string;
+  callable: boolean;
+  fileCount?: number;
+  folders?: string[];
+  updatedAt?: string;
+}

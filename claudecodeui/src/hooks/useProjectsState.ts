@@ -46,7 +46,8 @@ const projectsHaveChanges = (
       nextProject.fullPath !== prevProject.fullPath ||
       serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
       serialize(nextProject.sessions) !== serialize(prevProject.sessions) ||
-      serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster);
+      serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster) ||
+      serialize(nextProject.worktree) !== serialize(prevProject.worktree);
 
     if (baseChanged) {
       return true;
@@ -170,6 +171,7 @@ export function useProjectsState({
   const [quickStartAgentId, setQuickStartAgentId] = useState('');
   const [quickStartAgentRequestId, setQuickStartAgentRequestId] = useState(0);
   const [newConversationRequestId, setNewConversationRequestId] = useState(0);
+  const [newProjectSessionRequestId, setNewProjectSessionRequestId] = useState(0);
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeSessionModeSwitchRef = useRef(false);
@@ -448,14 +450,18 @@ export function useProjectsState({
 
   const handleProjectSelect = useCallback(
     (project: Project) => {
+      const worktreeSession = project.worktree?.sessionId
+        ? getProjectSessionsWithProviders(project).find((session) => session.id === project.worktree?.sessionId)
+        : null;
+
       setWorkspaceMode('projects');
       setSelectedProject(project);
-      setSelectedSession(null);
+      setSelectedSession(worktreeSession || null);
       setSelectedConversationSession(null);
       if (activeTab === 'agents') {
         setActiveTab('chat');
       }
-      navigate('/');
+      navigate(worktreeSession ? `/session/${worktreeSession.id}` : '/');
 
       if (isMobile) {
         setSidebarOpen(false);
@@ -500,6 +506,7 @@ export function useProjectsState({
       setSelectedSession(null);
       setSelectedConversationSession(null);
       setActiveTab('chat');
+      setNewProjectSessionRequestId((previous) => previous + 1);
       navigate('/');
 
       if (isMobile) {
@@ -766,6 +773,7 @@ export function useProjectsState({
     quickStartAgentId,
     quickStartAgentRequestId,
     newConversationRequestId,
+    newProjectSessionRequestId,
     activeTab,
     sidebarOpen,
     isLoadingProjects: isMainLoading,

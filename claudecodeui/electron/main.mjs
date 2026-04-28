@@ -22,6 +22,20 @@ const backendLogPath = path.join(userDataDir, 'logs', 'backend.log');
 let backendProcess = null;
 let mainWindow = null;
 
+const resolveWindowIconPath = () => {
+  const candidates = app.isPackaged
+    ? [
+        path.join(appRoot, 'dist', 'logo-256.png'),
+        path.join(appRoot, 'dist', 'favicon.png'),
+      ]
+    : [
+        path.join(sourceAppRoot, 'public', 'logo-256.png'),
+        path.join(sourceAppRoot, 'public', 'favicon.png'),
+      ];
+
+  return candidates.find((candidate) => existsSync(candidate));
+};
+
 const findFreePort = (startPort) => new Promise((resolve) => {
   const tryPort = (port) => {
     const server = net.createServer();
@@ -147,7 +161,7 @@ const createMainWindow = async (url) => {
     minHeight: 640,
     show: false,
     title: 'MTL-Code',
-    icon: path.join(appRoot, 'dist', 'logo-256.png'),
+    icon: resolveWindowIconPath(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

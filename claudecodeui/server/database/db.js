@@ -15,6 +15,10 @@ import {
   SESSION_NAMES_LOOKUP_INDEX_SQL,
   SESSION_AGENT_BINDINGS_TABLE_SQL,
   SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL,
+  WORKTREE_DISPATCHES_TABLE_SQL,
+  WORKTREE_DISPATCHES_PARENT_INDEX_SQL,
+  WORKTREE_DISPATCHES_PATH_INDEX_SQL,
+  WORKTREE_DISPATCHES_SESSION_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 
@@ -124,6 +128,22 @@ const runMigrations = () => {
       db.exec('ALTER TABLE session_agent_bindings ADD COLUMN config_json TEXT');
     }
     db.exec(SESSION_AGENT_BINDINGS_LOOKUP_INDEX_SQL);
+    db.exec(WORKTREE_DISPATCHES_TABLE_SQL);
+    const worktreeColumns = db.prepare("PRAGMA table_info(worktree_dispatches)").all();
+    const worktreeColumnNames = worktreeColumns.map(col => col.name);
+    for (const [columnName, columnSql] of [
+      ['project_name', 'ALTER TABLE worktree_dispatches ADD COLUMN project_name TEXT'],
+      ['provider', "ALTER TABLE worktree_dispatches ADD COLUMN provider TEXT DEFAULT 'claude'"],
+      ['branch_name', 'ALTER TABLE worktree_dispatches ADD COLUMN branch_name TEXT'],
+    ]) {
+      if (!worktreeColumnNames.includes(columnName)) {
+        console.log(`Running migration: Adding ${columnName} column to worktree_dispatches`);
+        db.exec(columnSql);
+      }
+    }
+    db.exec(WORKTREE_DISPATCHES_PARENT_INDEX_SQL);
+    db.exec(WORKTREE_DISPATCHES_PATH_INDEX_SQL);
+    db.exec(WORKTREE_DISPATCHES_SESSION_INDEX_SQL);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -530,17 +550,20 @@ const sessionNamesDb = {
   },
 };
 
+const SESSION_BINDING_NO_AGENT_ID = '__session_context__';
+
 const sessionAgentBindingsDb = {
   setAgent: (sessionId, provider, agentId, configuration = null) => {
     const configJson = configuration && typeof configuration === 'object'
       ? JSON.stringify(configuration)
       : null;
+    const storedAgentId = agentId || SESSION_BINDING_NO_AGENT_ID;
     db.prepare(`
       INSERT INTO session_agent_bindings (session_id, provider, agent_id, config_json)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(session_id, provider)
       DO UPDATE SET agent_id = excluded.agent_id, config_json = excluded.config_json, updated_at = CURRENT_TIMESTAMP
-    `).run(sessionId, provider, agentId, configJson);
+    `).run(sessionId, provider, storedAgentId, configJson);
   },
 
   getBinding: (sessionId, provider) => {
@@ -558,8 +581,9 @@ const sessionAgentBindingsDb = {
         configuration = null;
       }
     }
+    const agentId = row.agent_id === SESSION_BINDING_NO_AGENT_ID ? '' : row.agent_id;
     return {
-      agentId: row.agent_id,
+      agentId,
       configuration,
     };
   },
@@ -578,6 +602,136 @@ const sessionAgentBindingsDb = {
     return db.prepare(
       'DELETE FROM session_agent_bindings WHERE agent_id = ?'
     ).run(agentId).changes;
+  },
+};
+
+function parseJsonArray(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function mapWorktreeDispatch(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    projectName: row.project_name || '',
+    sessionId: row.session_id || null,
+    provider: row.provider || 'claude',
+    parentProjectName: row.parent_project_name,
+    parentProjectPath: row.parent_project_path,
+    worktreePath: row.worktree_path,
+    baseRef: row.base_ref,
+    baseCommit: row.base_commit,
+    mode: row.mode,
+    status: row.status,
+    agentId: row.agent_id || '',
+    skills: parseJsonArray(row.skills_json).filter((item) => typeof item === 'string'),
+    appBindings: parseJsonArray(row.app_bindings_json),
+    taskPrompt: row.task_prompt || '',
+    displayName: row.display_name || '',
+    branchName: row.branch_name || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const worktreeDispatchesDb = {
+  create: (dispatch) => {
+    const normalized = {
+      provider: 'claude',
+      mode: 'managed',
+      status: 'created',
+      skills: [],
+      appBindings: [],
+      ...dispatch,
+    };
+    db.prepare(`
+      INSERT INTO worktree_dispatches (
+        id, project_name, session_id, provider, parent_project_name, parent_project_path,
+        worktree_path, base_ref, base_commit, mode, status, agent_id, skills_json,
+        app_bindings_json, task_prompt, display_name, branch_name
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      normalized.id,
+      normalized.projectName || null,
+      normalized.sessionId || null,
+      normalized.provider || 'claude',
+      normalized.parentProjectName,
+      normalized.parentProjectPath,
+      normalized.worktreePath,
+      normalized.baseRef,
+      normalized.baseCommit,
+      normalized.mode || 'managed',
+      normalized.status || 'created',
+      normalized.agentId || null,
+      JSON.stringify(Array.isArray(normalized.skills) ? normalized.skills : []),
+      JSON.stringify(Array.isArray(normalized.appBindings) ? normalized.appBindings : []),
+      normalized.taskPrompt || null,
+      normalized.displayName || null,
+      normalized.branchName || null,
+    );
+    return worktreeDispatchesDb.getById(normalized.id);
+  },
+
+  getById: (id) => {
+    const row = db.prepare('SELECT * FROM worktree_dispatches WHERE id = ?').get(id);
+    return mapWorktreeDispatch(row);
+  },
+
+  getByWorktreePath: (worktreePath) => {
+    const row = db.prepare('SELECT * FROM worktree_dispatches WHERE worktree_path = ? AND status != ?').get(worktreePath, 'archived');
+    return mapWorktreeDispatch(row);
+  },
+
+  listByParentProjectName: (parentProjectName) => {
+    const rows = db.prepare(`
+      SELECT * FROM worktree_dispatches
+      WHERE parent_project_name = ? AND status != 'archived'
+      ORDER BY created_at DESC
+    `).all(parentProjectName);
+    return rows.map(mapWorktreeDispatch);
+  },
+
+  updateProjectName: (id, projectName) => {
+    db.prepare(`
+      UPDATE worktree_dispatches
+      SET project_name = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(projectName || null, id);
+    return worktreeDispatchesDb.getById(id);
+  },
+
+  updateSession: (id, sessionId, provider = 'claude') => {
+    db.prepare(`
+      UPDATE worktree_dispatches
+      SET session_id = ?, provider = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(sessionId || null, provider || 'claude', id);
+    return worktreeDispatchesDb.getById(id);
+  },
+
+  updateStatus: (id, status) => {
+    db.prepare(`
+      UPDATE worktree_dispatches
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(status, id);
+    return worktreeDispatchesDb.getById(id);
+  },
+
+  updateBranch: (id, branchName) => {
+    db.prepare(`
+      UPDATE worktree_dispatches
+      SET branch_name = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(branchName || null, id);
+    return worktreeDispatchesDb.getById(id);
   },
 };
 
@@ -652,6 +806,7 @@ export {
   pushSubscriptionsDb,
   sessionNamesDb,
   sessionAgentBindingsDb,
+  worktreeDispatchesDb,
   applyCustomSessionNames,
   appConfigDb,
   githubTokensDb // Backward compatibility

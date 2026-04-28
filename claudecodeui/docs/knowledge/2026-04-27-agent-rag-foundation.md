@@ -61,6 +61,19 @@ At Agent runtime:
 
 For the MTL-Code provider this prompt is passed via `--append-system-prompt`. For other providers the Agent prompt is still injected in-band as before.
 
+## Relationship To MTL-Code / Claude Code Context
+
+Claude Code / MTL-Code already has project-context behavior: it can read files, inspect git state, and use its normal workspace tools during a session. That is not the same thing as a user-configurable RAG knowledge base.
+
+The Agent RAG layer in MTL-Code UI is additive:
+
+- Project code context remains owned by the MTL-Code runtime and its tools.
+- Agent uploaded knowledge is stored under `~/.mtl-code-ui/agents/knowledge`.
+- Retrieved excerpts are appended to the Agent prompt together with Agent instructions, Skill references, MCP binding metadata, memory metadata, and guardrails.
+- The UI does not bypass the MTL-Code backend; for the MTL-Code provider the merged Agent/RAG prompt is delivered through `--append-system-prompt`.
+
+This means users do not need to configure RAG for normal codebase reading. They only need Agent RAG when they want extra uploaded documents, reference folders, specs, or long-lived Agent knowledge to influence future Agent-backed conversations.
+
 ## MCP/App Bindings
 
 Agent Builder application bindings are stored on the Agent config as reusable prompt-visible context. A conversation can override the active slot choices through `session_agent_bindings.config_json`. Custom MCP entries use the app name format `MCP: <serverName>`.

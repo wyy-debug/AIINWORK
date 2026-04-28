@@ -1,10 +1,12 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, GitBranch, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
+
 import TaskIndicator from './TaskIndicator';
 import SidebarProjectSessions from './SidebarProjectSessions';
 
@@ -33,6 +35,7 @@ type SidebarProjectItemProps = {
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
+  onDispatchWorktree: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -83,6 +86,7 @@ export default function SidebarProjectItem({
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
+  onDispatchWorktree,
   onSessionSelect,
   onDeleteSession,
   onLoadMoreSessions,
@@ -99,6 +103,7 @@ export default function SidebarProjectItem({
   const sessionCountDisplay = getSessionCountDisplay(sessions, hasMoreSessions);
   const sessionCountLabel = `${sessionCountDisplay} session${sessions.length === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
+  const canDispatchWorktree = !project.worktree;
 
   const toggleProject = () => onToggleProject(project.name);
   const toggleStarProject = () => onToggleStarProject(project.name);
@@ -244,6 +249,19 @@ export default function SidebarProjectItem({
                     >
                       <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
                     </button>
+
+                    {canDispatchWorktree && (
+                      <button
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-500/10 active:scale-90 dark:border-blue-900/60 dark:bg-blue-950/30"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDispatchWorktree(project);
+                        }}
+                        title="派发工作树"
+                      >
+                        <GitBranch className="h-4 w-4 text-blue-600 dark:text-blue-300" />
+                      </button>
+                    )}
 
                     <button
                       className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
@@ -392,6 +410,18 @@ export default function SidebarProjectItem({
                 >
                   <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
                 </div>
+                {canDispatchWorktree && (
+                  <div
+                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-blue-50 group-hover:opacity-100 dark:hover:bg-blue-950/30"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDispatchWorktree(project);
+                    }}
+                    title="派发工作树"
+                  >
+                    <GitBranch className="h-3 w-3 text-blue-600 dark:text-blue-300" />
+                  </div>
+                )}
                 {isExpanded ? (
                   <ChevronDown className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
                 ) : (

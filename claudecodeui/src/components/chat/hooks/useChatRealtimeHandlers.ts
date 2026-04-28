@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
-import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
-import type { PendingPermissionRequest } from '../types/types';
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import type { AgentRuntimeDiagnostics, PendingPermissionRequest } from '../types/types';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -44,6 +44,7 @@ type LatestChatMessage = {
   tokens?: number;
   canInterrupt?: boolean;
   tokenBudget?: unknown;
+  agentRuntime?: AgentRuntimeDiagnostics;
   newSessionId?: string;
   aborted?: boolean;
   [key: string]: any;
@@ -60,6 +61,7 @@ interface UseChatRealtimeHandlersArgs {
   setCanAbortSession: (canAbort: boolean) => void;
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
+  setAgentRuntimeDiagnostics?: Dispatch<SetStateAction<AgentRuntimeDiagnostics | null>>;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   streamBufferRef: MutableRefObject<string>;
@@ -89,6 +91,7 @@ export function useChatRealtimeHandlers({
   setCanAbortSession,
   setClaudeStatus,
   setTokenBudget,
+  setAgentRuntimeDiagnostics,
   setPendingPermissionRequests,
   pendingViewSessionRef,
   streamBufferRef,
@@ -182,6 +185,20 @@ export function useChatRealtimeHandlers({
     /* ---------------------------------------------------------------- */
 
     const sid = msg.sessionId || activeViewSessionId;
+
+    if (msg.kind === 'status' && msg.text === 'agent_runtime_debug') {
+      if (sid && activeViewSessionId && sid !== activeViewSessionId) {
+        return;
+      }
+      const runtime = msg.agentRuntime && typeof msg.agentRuntime === 'object'
+        ? msg.agentRuntime as AgentRuntimeDiagnostics
+        : null;
+      setAgentRuntimeDiagnostics?.(runtime ? {
+        ...runtime,
+        receivedAt: new Date().toLocaleString(),
+      } : null);
+      return;
+    }
 
     // --- Streaming: buffer for performance ---
     if (msg.kind === 'stream_delta') {
@@ -363,6 +380,7 @@ export function useChatRealtimeHandlers({
     setCanAbortSession,
     setClaudeStatus,
     setTokenBudget,
+    setAgentRuntimeDiagnostics,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamBufferRef,

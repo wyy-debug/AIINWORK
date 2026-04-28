@@ -1,11 +1,13 @@
 import { useEffect } from 'react';
 import type { TFunction } from 'i18next';
+
 import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type {
   LoadingSessionsByProject,
   MCPServerStatus,
   SessionWithProvider,
 } from '../../types/types';
+
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
 
@@ -37,6 +39,7 @@ export type SidebarProjectListProps = {
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
+  onDispatchWorktree: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -81,6 +84,7 @@ export default function SidebarProjectList({
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
+  onDispatchWorktree,
   onSessionSelect,
   onDeleteSession,
   onLoadMoreSessions,
@@ -143,6 +147,7 @@ export default function SidebarProjectList({
               onCancelEditingProject={onCancelEditingProject}
               onSaveProjectName={onSaveProjectName}
               onDeleteProject={onDeleteProject}
+              onDispatchWorktree={onDispatchWorktree}
               onSessionSelect={onSessionSelect}
               onDeleteSession={onDeleteSession}
               onLoadMoreSessions={onLoadMoreSessions}

@@ -30,6 +30,7 @@
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "client": "vite",
     "build": "npm run build:client && npm run build:server",
+    "icons:app": "node scripts/generate-app-icons.mjs",
     "package:preview-win": "node scripts/package-preview-win.mjs",
     "package:electron-win": "node scripts/package-electron-win.mjs",
     "build:client": "vite build",
@@ -199,6 +200,7 @@
       }
     ],
     "win": {
+      "icon": "public/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -213,6 +215,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "installerIcon": "public/icon.ico",
+      "uninstallerIcon": "public/icon.ico",
+      "installerHeaderIcon": "public/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "MTL-Code"
