@@ -37,7 +37,7 @@ export default function PluginIcon({ pluginName, iconFile, className }: Props) {
   return (
     <span
       className={className}
-      // SVG is fetched from the user's own installed plugin â€?same trust level as the plugin code itself
+      // SVG is fetched from the user's own installed plugin; it has the same trust level as the plugin code itself.
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );

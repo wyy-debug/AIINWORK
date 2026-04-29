@@ -1,0 +1,15 @@
+{
+  "name": "soc-redmine-review-kit",
+  "version": "0.1.0",
+  "description": "SOC Redmine review agent and skills.",
+  "type": "module",
+  "scripts": {
+    "publish:hub": "node scripts/publish-to-hub.mjs",
+    "validate:skills": "node scripts/validate-skills.mjs",
+    "check": "node --check scripts/publish-to-hub.mjs && node --check scripts/validate-skills.mjs && npm run validate:skills"
+  },
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=20"
+  }
+}

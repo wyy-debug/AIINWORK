@@ -12,6 +12,10 @@ export interface ProjectSession {
   updated_at?: string;
   lastActivity?: string;
   messageCount?: number;
+  isPinned?: boolean;
+  pinnedAt?: string | null;
+  isArchived?: boolean;
+  archivedAt?: string | null;
   __provider?: LLMProvider;
   __projectName?: string;
   [key: string]: unknown;

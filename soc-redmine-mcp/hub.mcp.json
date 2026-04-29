@@ -1,0 +1,47 @@
+{
+  "kind": "mcp-server",
+  "name": "soc-redmine",
+  "title": "SOC Redmine MCP",
+  "description": "Fetch SOC Redmine issue context and retrieve revision diffs for review agents.",
+  "author": "AIINWORK",
+  "version": "0.1.0",
+  "tags": ["mcp", "redmine", "soc", "review"],
+  "capabilities": ["Fetch Redmine issues", "List changesets", "Retrieve local git diffs", "Redmine diff fallback"],
+  "mcp": {
+    "serverName": "soc-redmine",
+    "transport": "stdio",
+    "command": "node",
+    "args": ["${installDir}/src/server.js"],
+    "env": {
+      "REDMINE_BASE_URL": "http://soc-redmine.wd.com"
+    },
+    "postInstall": {
+      "type": "npm-install",
+      "args": ["install", "--omit=dev", "--ignore-scripts"]
+    },
+    "setupFields": [
+      {
+        "key": "REDMINE_BASE_URL",
+        "label": "Redmine URL",
+        "type": "text",
+        "target": "env",
+        "required": true,
+        "defaultValue": "http://soc-redmine.wd.com",
+        "description": "SOC Redmine base URL."
+      },
+      {
+        "key": "REDMINE_API_KEY",
+        "label": "Redmine API Key",
+        "type": "password",
+        "target": "env",
+        "required": true,
+        "description": "Stored only in local MCP config. Do not publish this value."
+      }
+    ],
+    "tools": [
+      { "name": "get_issue", "description": "Fetch issue metadata, journals, attachments, and changesets." },
+      { "name": "get_issue_changesets", "description": "Fetch linked revisions and changed files." },
+      { "name": "get_revision_diff", "description": "Get a revision patch from local git, with Redmine fallback." }
+    ]
+  }
+}

@@ -20,6 +20,7 @@ export type SessionDeleteConfirmation = {
   sessionId: string;
   sessionTitle: string;
   provider: LLMProvider;
+  isConversation?: boolean;
 };
 
 export type SidebarProps = {

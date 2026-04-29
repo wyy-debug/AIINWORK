@@ -1,0 +1,14 @@
+{
+  "host": "0.0.0.0",
+  "port": 4877,
+  "dataDir": "D:\\mtl-agent-skill-hub-data",
+  "adminToken": "replace-with-a-long-random-token",
+  "submitToken": "",
+  "name": "Agent/Skill Hub",
+  "description": "Shared Agent templates and Skills.",
+  "publicBasePath": "/agent-repository",
+  "adminBasePath": "/api/admin",
+  "maxContentBytes": 2097152,
+  "maxPackageFiles": 200,
+  "maxPackageBytes": 20971520
+}

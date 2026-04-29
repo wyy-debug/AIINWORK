@@ -148,6 +148,22 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         });
         break;
 
+      case 'context_compaction':
+        converted.push({
+          id: msg.id,
+          type: 'system',
+          content: msg.content || 'Conversation compacted',
+          timestamp: msg.timestamp,
+          isContextCompaction: true,
+          compactType: msg.compactType,
+          compactTrigger: msg.compactTrigger,
+          compactSummary: msg.compactSummary || msg.summary,
+          preTokens: msg.preTokens,
+          tokensSaved: msg.tokensSaved,
+          compactedToolIds: msg.compactedToolIds,
+        });
+        break;
+
       case 'stream_delta':
         if (msg.content) {
           converted.push({

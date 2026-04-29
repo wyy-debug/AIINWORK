@@ -24,6 +24,11 @@ import {
   CheckIcon,
   ChevronDownIcon,
   SearchIcon,
+  AtSignIcon,
+  FileIcon,
+  Loader2Icon,
+  DownloadIcon,
+  CloudIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -38,7 +43,7 @@ import {
   PromptInputSubmit,
 } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
-import type { AgentAppBinding, AgentConfig, InstalledSkill } from '../../../../types/agent';
+import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../../types/agent';
 import type { AgentRuntimeDiagnostics, PendingPermissionRequest, Provider } from '../../types/types';
 
 import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
@@ -79,6 +84,13 @@ interface ChatComposerProps {
   selectedAgentAppBindings: AgentAppBinding[];
   onSelectedAgentIdChange: (agentId: string) => void;
   installedSkills: InstalledSkill[];
+  repositorySkills: RepositorySkillItem[];
+  repositorySkillsLoading: boolean;
+  repositorySkillsError: string | null;
+  installingRepositorySkillKey: string;
+  onInstallRepositorySkill: (
+    skill: RepositorySkillItem,
+  ) => Promise<{ success: boolean; skillName?: string; error?: string }>;
   selectedSkillNames: string[];
   onToggleSkillName: (skillName: string) => void;
   onClearSkillNames: () => void;
@@ -100,6 +112,9 @@ interface ChatComposerProps {
   imageErrors: Map<string, string>;
   showFileDropdown: boolean;
   filteredFiles: MentionableFile[];
+  fileMentionQuery: string;
+  isLoadingFileMentions: boolean;
+  fileMentionError: string | null;
   selectedFileIndex: number;
   onSelectFile: (file: MentionableFile) => void;
   filteredCommands: SlashCommand[];
@@ -140,6 +155,11 @@ export default function ChatComposer({
   selectedAgentAppBindings,
   onSelectedAgentIdChange,
   installedSkills,
+  repositorySkills,
+  repositorySkillsLoading,
+  repositorySkillsError,
+  installingRepositorySkillKey,
+  onInstallRepositorySkill,
   selectedSkillNames,
   onToggleSkillName,
   onClearSkillNames,
@@ -161,6 +181,9 @@ export default function ChatComposer({
   imageErrors,
   showFileDropdown,
   filteredFiles,
+  fileMentionQuery,
+  isLoadingFileMentions,
+  fileMentionError,
   selectedFileIndex,
   onSelectFile,
   filteredCommands,
@@ -191,6 +214,7 @@ export default function ChatComposer({
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isSkillMenuOpen, setIsSkillMenuOpen] = useState(false);
   const [skillSearch, setSkillSearch] = useState('');
+  const [skillMenuNotice, setSkillMenuNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [skillMenuPosition, setSkillMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
   const skillMenuButtonRef = useRef<HTMLButtonElement>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
@@ -212,17 +236,25 @@ export default function ChatComposer({
     () => new Set(selectedSkillNames.map((name) => name.toLowerCase())),
     [selectedSkillNames],
   );
+  const installedSkillKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const skill of installedSkills) {
+      [skill.id, skill.name, skill.title]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .forEach((value) => keys.add(value.trim().toLowerCase()));
+    }
+    return keys;
+  }, [installedSkills]);
+  const normalizedSkillSearch = skillSearch.trim().toLowerCase();
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null;
   const selectedMcpBindings = selectedAgentAppBindings.filter((binding) => binding.app.trim().startsWith('MCP: '));
   const filteredInstalledSkills = useMemo(() => {
-    const normalizedQuery = skillSearch.trim().toLowerCase();
-    const matches = normalizedQuery
-      ? installedSkills.filter((skill) => (
-        `${skill.name} ${skill.title} ${skill.description || ''} ${skill.provider} ${skill.scope}`
-          .toLowerCase()
-          .includes(normalizedQuery)
-      ))
-      : installedSkills;
+    const matches = installedSkills.filter((skill) => (
+      !normalizedSkillSearch
+      || `${skill.name} ${skill.title} ${skill.description || ''} ${skill.provider} ${skill.scope}`
+        .toLowerCase()
+        .includes(normalizedSkillSearch)
+    ));
 
     return [...matches].sort((left, right) => {
       const leftLabel = left.title || left.name;
@@ -233,7 +265,30 @@ export default function ChatComposer({
       if (leftSelected !== rightSelected) return leftSelected ? -1 : 1;
       return leftLabel.localeCompare(rightLabel);
     });
-  }, [installedSkills, selectedSkillKeys, skillSearch]);
+  }, [installedSkills, normalizedSkillSearch, selectedSkillKeys]);
+  const filteredRepositorySkills = useMemo(() => {
+    return repositorySkills
+      .filter((skill) => {
+        const candidates = [skill.id, skill.name, skill.title].map((value) => String(value || '').toLowerCase());
+        if (candidates.some((value) => installedSkillKeys.has(value))) {
+          return false;
+        }
+        return !normalizedSkillSearch || [
+          skill.name,
+          skill.title,
+          skill.description || '',
+          skill.repoName || '',
+          skill.author || '',
+          ...(skill.tags || []),
+        ].join(' ').toLowerCase().includes(normalizedSkillSearch);
+      })
+      .sort((left, right) => {
+        const likesDiff = Number(right.likes || 0) - Number(left.likes || 0);
+        if (likesDiff !== 0) return likesDiff;
+        return (left.title || left.name).localeCompare(right.title || right.name);
+      });
+  }, [installedSkillKeys, normalizedSkillSearch, repositorySkills]);
+  const hasSkillChoices = installedSkills.length > 0 || repositorySkills.length > 0 || repositorySkillsLoading;
   const selectedSkillSummaries = selectedSkillNames.map((skillName) => {
     const normalized = skillName.toLowerCase();
     const installedSkill = installedSkills.find((skill) => (
@@ -294,6 +349,22 @@ export default function ChatComposer({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isSkillMenuOpen]);
+
+  const handleInstallRepositorySkill = async (skill: RepositorySkillItem) => {
+    setSkillMenuNotice(null);
+    const result = await onInstallRepositorySkill(skill);
+    if (result.success) {
+      setSkillMenuNotice({
+        type: 'success',
+        text: `${skill.title || skill.name} 已安装并绑定到当前会话`,
+      });
+      return;
+    }
+    setSkillMenuNotice({
+      type: 'error',
+      text: result.error || '安装 Hub Skill 失败',
+    });
+  };
 
   return (
     <div className="flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
@@ -373,30 +444,67 @@ export default function ChatComposer({
             </button>
           </div>
         )}
-        {showFileDropdown && filteredFiles.length > 0 && (
-          <div className="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-xl border border-border/50 bg-card/95 shadow-lg backdrop-blur-md">
-            {filteredFiles.map((file, index) => (
-              <div
-                key={file.path}
-                className={`cursor-pointer touch-manipulation border-b border-border/30 px-4 py-3 last:border-b-0 ${
-                  index === selectedFileIndex
-                    ? 'bg-primary/8 text-primary'
-                    : 'text-foreground hover:bg-accent/50'
-                }`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onSelectFile(file);
-                }}
-              >
-                <div className="text-sm font-medium">{file.name}</div>
-                <div className="font-mono text-xs text-muted-foreground">{file.path}</div>
+        {showFileDropdown && (
+          <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-xl border border-border/60 bg-card/95 shadow-xl ring-1 ring-black/5 backdrop-blur-md">
+            <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <AtSignIcon className="h-4 w-4" />
+                </span>
+                <span className="truncate">选择项目文件</span>
               </div>
-            ))}
+              <span className="max-w-[42%] truncate font-mono text-xs text-muted-foreground">
+                {fileMentionQuery ? `@${fileMentionQuery}` : '@'}
+              </span>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto p-1.5">
+              {isLoadingFileMentions && (
+                <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
+                  <Loader2Icon className="h-4 w-4 animate-spin" />
+                  <span>正在搜索项目文件...</span>
+                </div>
+              )}
+
+              {!isLoadingFileMentions && fileMentionError && (
+                <div className="px-3 py-4 text-sm text-destructive">
+                  文件搜索失败：{fileMentionError}
+                </div>
+              )}
+
+              {!isLoadingFileMentions && !fileMentionError && filteredFiles.length === 0 && (
+                <div className="px-3 py-4 text-sm text-muted-foreground">
+                  没有找到匹配文件
+                </div>
+              )}
+
+              {!isLoadingFileMentions && !fileMentionError && filteredFiles.map((file, index) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  className={`flex w-full cursor-pointer touch-manipulation items-start gap-2 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                    index === selectedFileIndex
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-foreground hover:bg-accent/60'
+                  }`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSelectFile(file);
+                  }}
+                >
+                  <FileIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{file.name}</span>
+                    <span className="block truncate font-mono text-xs text-muted-foreground">{file.path}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -436,7 +544,9 @@ export default function ChatComposer({
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-foreground">添加 Skill</div>
                   <div className="text-[11px] text-muted-foreground">
-                    {selectedSkillNames.length > 0 ? `${selectedSkillNames.length} 个已绑定` : `${installedSkills.length} 个可选`}
+                    {selectedSkillNames.length > 0
+                      ? `${selectedSkillNames.length} 个已绑定`
+                      : `${installedSkills.length} 本地 · ${repositorySkills.length} Hub`}
                   </div>
                 </div>
               </div>
@@ -457,15 +567,34 @@ export default function ChatComposer({
                   value={skillSearch}
                   onChange={(event) => setSkillSearch(event.target.value)}
                   className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-                  placeholder="搜索 Skill"
+                  placeholder="搜索本地或 Hub Skill"
                   autoFocus
                 />
               </div>
+              {skillMenuNotice && (
+                <div
+                  className={cn(
+                    'mt-2 rounded-lg border px-2.5 py-2 text-xs',
+                    skillMenuNotice.type === 'success'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                      : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+                  )}
+                >
+                  {skillMenuNotice.text}
+                </div>
+              )}
             </div>
 
-            <div className="max-h-[292px] overflow-y-auto p-1.5" role="listbox" aria-label="可用 Skill">
-              {filteredInstalledSkills.length === 0 && (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">没有匹配的 Skill</div>
+            <div
+              className="max-h-[320px] overflow-y-auto p-1.5"
+              role="listbox"
+              aria-label="可用 Skill"
+              onWheel={(event) => event.stopPropagation()}
+            >
+              {filteredInstalledSkills.length > 0 && (
+                <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  本地已安装
+                </div>
               )}
               {filteredInstalledSkills.map((skill) => {
                 const label = skill.title || skill.name;
@@ -515,6 +644,76 @@ export default function ChatComposer({
                   </button>
                 );
               })}
+
+              {repositorySkillsLoading && (
+                <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground">
+                  <Loader2Icon className="h-4 w-4 animate-spin" />
+                  正在读取 Hub Skills...
+                </div>
+              )}
+
+              {repositorySkillsError && (
+                <div className="mx-1.5 my-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                  {repositorySkillsError}
+                </div>
+              )}
+
+              {filteredRepositorySkills.length > 0 && (
+                <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  云端 Hub
+                </div>
+              )}
+
+              {filteredRepositorySkills.map((skill) => {
+                const key = `${skill.repoId}:${skill.id}`;
+                const label = skill.title || skill.name;
+                const installing = installingRepositorySkillKey === key;
+
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => void handleInstallRepositorySkill(skill)}
+                    disabled={installing}
+                    className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors hover:bg-muted/70 disabled:cursor-wait disabled:opacity-70"
+                    role="option"
+                    aria-selected={false}
+                  >
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300">
+                      <CloudIcon className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{label}</span>
+                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                        {skill.repoName || 'Hub'} / {skill.author || 'remote'}
+                        {skill.version ? ` / v${skill.version}` : ''}
+                      </span>
+                      {skill.description && (
+                        <span className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                          {skill.description}
+                        </span>
+                      )}
+                    </span>
+                    <span className="bg-primary/8 mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 px-2 py-0.5 text-[11px] font-medium text-primary">
+                      {installing ? (
+                        <>
+                          <Loader2Icon className="h-3 w-3 animate-spin" />
+                          安装中
+                        </>
+                      ) : (
+                        <>
+                          <DownloadIcon className="h-3 w-3" />
+                          安装
+                        </>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+
+              {filteredInstalledSkills.length === 0 && filteredRepositorySkills.length === 0 && !repositorySkillsLoading && (
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">没有匹配的 Skill</div>
+              )}
             </div>
           </div>
         )}
@@ -614,13 +813,14 @@ export default function ChatComposer({
               </label>
             )}
 
-            {installedSkills.length > 0 && (
+            {hasSkillChoices && (
               <button
                 ref={skillMenuButtonRef}
                 type="button"
                 onClick={() => {
                   setIsSkillMenuOpen((previous) => !previous);
                   setSkillSearch('');
+                  setSkillMenuNotice(null);
                 }}
                 disabled={isLoading}
                 aria-haspopup="listbox"

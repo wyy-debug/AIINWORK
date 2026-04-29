@@ -74,6 +74,8 @@ The Agent RAG layer in MTL-Code UI is additive:
 
 This means users do not need to configure RAG for normal codebase reading. They only need Agent RAG when they want extra uploaded documents, reference folders, specs, or long-lived Agent knowledge to influence future Agent-backed conversations.
 
+Context compaction is a separate runtime concern. MTL-Code / Claude Code automatically compacts long conversations near the configured context window, and the UI now renders persisted `compact_boundary` / `microcompact_boundary` events as explicit chat timeline cards with an expandable compaction summary when the runtime writes one.
+
 ## MCP/App Bindings
 
 Agent Builder application bindings are stored on the Agent config as reusable prompt-visible context. A conversation can override the active slot choices through `session_agent_bindings.config_json`. Custom MCP entries use the app name format `MCP: <serverName>`.

@@ -70,15 +70,15 @@ export function VersionUpgradeModal({
 
             if (response.ok) {
                 setUpdateOutput(prev => prev + data.output + '\n');
-                setUpdateOutput(prev => prev + '\nâœ?Update completed successfully!\n');
+                setUpdateOutput(prev => prev + '\nUpdate completed successfully!\n');
                 setUpdateOutput(prev => prev + 'Please restart the server to apply changes.' + '\n');
             } else {
                 setUpdateError(data.error || 'Update failed');
-                setUpdateOutput(prev => prev + '\nâ?Update failed: ' + (data.error || 'Unknown error') + '\n');
+                setUpdateOutput(prev => prev + '\nUpdate failed: ' + (data.error || 'Unknown error') + '\n');
             }
         } catch (error: any) {
             setUpdateError(error.message);
-            setUpdateOutput(prev => prev + '\nâ?Update failed: ' + error.message + '\n');
+            setUpdateOutput(prev => prev + '\nUpdate failed: ' + error.message + '\n');
         } finally {
             setIsUpdating(false);
         }

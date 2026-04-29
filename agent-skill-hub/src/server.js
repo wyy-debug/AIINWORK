@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import express from 'express';
+import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,20 +9,99 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-const PORT = Number(process.env.PORT || process.env.HUB_PORT || 4877);
-const HOST = process.env.HOST || process.env.HUB_HOST || '0.0.0.0';
-const PUBLIC_BASE_PATH = process.env.HUB_PUBLIC_BASE_PATH || '/agent-repository';
-const ADMIN_BASE_PATH = process.env.HUB_ADMIN_BASE_PATH || '/api/admin';
-const DATA_ROOT = process.env.HUB_DATA_DIR
-  || process.env.MTL_CODE_REMOTE_AGENT_REPOSITORY_DIR
-  || path.join(os.homedir(), '.mtl-agent-skill-hub');
+function readJsonFile(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Failed to read Hub config ${filePath}: ${error.message}`);
+  }
+}
+
+function getExeDir() {
+  const exePath = process.execPath || '';
+  if (path.basename(exePath).toLowerCase() === 'agent-skill-hub.exe') {
+    return path.dirname(exePath);
+  }
+  return null;
+}
+
+function loadHubConfig() {
+  const explicitPath = process.env.HUB_CONFIG || process.env.AGENT_SKILL_HUB_CONFIG;
+  if (explicitPath) {
+    const resolved = path.resolve(explicitPath);
+    const config = readJsonFile(resolved);
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new Error(`Hub config must be a JSON object: ${resolved}`);
+    }
+    return { path: resolved, data: config };
+  }
+
+  const candidates = [
+    path.join(process.cwd(), 'hub.config.json'),
+    getExeDir() ? path.join(getExeDir(), 'hub.config.json') : null,
+    path.resolve(__dirname, '..', 'hub.config.json'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const config = readJsonFile(candidate);
+    if (config && typeof config === 'object' && !Array.isArray(config)) {
+      return { path: candidate, data: config };
+    }
+  }
+
+  return { path: null, data: {} };
+}
+
+const HUB_CONFIG = loadHubConfig();
+
+function readConfigValue(keys, configKey, fallback) {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  const value = HUB_CONFIG.data?.[configKey];
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return fallback;
+}
+
+function readConfigNumber(keys, configKey, fallback) {
+  const value = readConfigValue(keys, configKey, fallback);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const PORT = readConfigNumber(['PORT', 'HUB_PORT'], 'port', 4877);
+const HOST = readConfigValue(['HOST', 'HUB_HOST'], 'host', '0.0.0.0');
+const PUBLIC_BASE_PATH = readConfigValue(['HUB_PUBLIC_BASE_PATH'], 'publicBasePath', '/agent-repository');
+const ADMIN_BASE_PATH = readConfigValue(['HUB_ADMIN_BASE_PATH'], 'adminBasePath', '/api/admin');
+const DATA_ROOT = readConfigValue(
+  ['HUB_DATA_DIR', 'MTL_CODE_REMOTE_AGENT_REPOSITORY_DIR'],
+  'dataDir',
+  path.join(os.homedir(), '.mtl-agent-skill-hub'),
+);
 const STORE_PATH = path.join(DATA_ROOT, 'store.json');
 const CONTENT_ROOT = path.join(DATA_ROOT, 'content');
 const PUBLISHED_DIR = path.join(CONTENT_ROOT, 'published');
 const SUBMISSIONS_DIR = path.join(CONTENT_ROOT, 'submissions');
-const MAX_CONTENT_BYTES = Number(process.env.HUB_MAX_CONTENT_BYTES || 2 * 1024 * 1024);
-const MAX_PACKAGE_FILES = Number(process.env.HUB_MAX_PACKAGE_FILES || 200);
-const MAX_PACKAGE_BYTES = Number(process.env.HUB_MAX_PACKAGE_BYTES || 20 * 1024 * 1024);
+const MAX_CONTENT_BYTES = readConfigNumber(['HUB_MAX_CONTENT_BYTES'], 'maxContentBytes', 2 * 1024 * 1024);
+const MAX_PACKAGE_FILES = readConfigNumber(['HUB_MAX_PACKAGE_FILES'], 'maxPackageFiles', 200);
+const MAX_PACKAGE_BYTES = readConfigNumber(['HUB_MAX_PACKAGE_BYTES'], 'maxPackageBytes', 20 * 1024 * 1024);
 const BODY_LIMIT_MB = Math.ceil((Math.max(MAX_CONTENT_BYTES, MAX_PACKAGE_BYTES) + 1024 * 1024) / 1024 / 1024);
 
 app.set('trust proxy', true);
@@ -33,15 +113,19 @@ function nowIso() {
 }
 
 function configuredName() {
-  return process.env.HUB_NAME
-    || process.env.MTL_CODE_REMOTE_REPOSITORY_NAME
-    || 'Agent/Skill Hub';
+  return readConfigValue(
+    ['HUB_NAME', 'MTL_CODE_REMOTE_REPOSITORY_NAME'],
+    'name',
+    'Agent/Skill Hub',
+  );
 }
 
 function configuredDescription() {
-  return process.env.HUB_DESCRIPTION
-    || process.env.MTL_CODE_REMOTE_REPOSITORY_DESCRIPTION
-    || 'Shared Agent templates and Skills.';
+  return readConfigValue(
+    ['HUB_DESCRIPTION', 'MTL_CODE_REMOTE_REPOSITORY_DESCRIPTION'],
+    'description',
+    'Shared Agent templates and Skills.',
+  );
 }
 
 function createEmptyStore() {
@@ -121,6 +205,9 @@ function validateSlug(slug) {
 function normalizeKind(kind) {
   const value = String(kind || '').trim().toLowerCase();
   if (value === 'skill' || value === 'skills') return 'skill';
+  if (value === 'mcp' || value === 'mcps' || value === 'mcp-server' || value === 'mcp_servers' || value === 'mcp-server-template') {
+    return 'mcp-server';
+  }
   if (value === 'agent' || value === 'agents' || value === 'template' || value === 'agent-template') {
     return 'agent-template';
   }
@@ -128,7 +215,9 @@ function normalizeKind(kind) {
 }
 
 function publicKindLabel(kind) {
-  return kind === 'skill' ? 'Skill' : 'Agent Template';
+  if (kind === 'skill') return 'Skill';
+  if (kind === 'mcp-server') return 'MCP Server';
+  return 'Agent Template';
 }
 
 function publicItemId(kind, name) {
@@ -161,6 +250,163 @@ function safeStringArray(value, limit = 24) {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .slice(0, limit);
+}
+
+function safeDependencyEntry(entry, fallbackKind) {
+  if (typeof entry === 'string') {
+    const name = entry.trim();
+    return name ? { kind: fallbackKind, name } : null;
+  }
+  if (!entry || typeof entry !== 'object') return null;
+  const kind = normalizeKind(entry.kind || entry.type) || fallbackKind;
+  if (!['skill', 'mcp-server'].includes(kind)) return null;
+  const name = String(
+    entry.name
+    || entry.serverName
+    || entry.itemId
+    || entry.id
+    || entry.title
+    || '',
+  ).trim();
+  if (!name) return null;
+  const configuration = entry.configuration && typeof entry.configuration === 'object'
+    ? entry.configuration
+    : entry.mcpValues && typeof entry.mcpValues === 'object'
+      ? { mcpValues: entry.mcpValues }
+      : undefined;
+  return {
+    kind,
+    name,
+    id: typeof entry.id === 'string' ? entry.id.trim() : undefined,
+    itemId: typeof entry.itemId === 'string' ? entry.itemId.trim() : undefined,
+    repoId: typeof entry.repoId === 'string' ? entry.repoId.trim() : undefined,
+    optional: Boolean(entry.optional),
+    overwrite: typeof entry.overwrite === 'boolean' ? entry.overwrite : undefined,
+    ...(configuration ? { configuration } : {}),
+  };
+}
+
+function safeDependencies(value, source = {}) {
+  const dependencies = { skills: [], mcpServers: [] };
+  const add = (entry, fallbackKind) => {
+    const normalized = safeDependencyEntry(entry, fallbackKind);
+    if (!normalized) return;
+    const list = normalized.kind === 'mcp-server' ? dependencies.mcpServers : dependencies.skills;
+    const key = `${normalized.repoId || ''}:${normalized.itemId || normalized.id || normalized.name}`.toLowerCase();
+    if (!list.some((candidate) => `${candidate.repoId || ''}:${candidate.itemId || candidate.id || candidate.name}`.toLowerCase() === key)) {
+      list.push(normalized);
+    }
+  };
+  if (Array.isArray(value)) {
+    value.forEach((entry) => add(entry, 'skill'));
+  } else if (value && typeof value === 'object') {
+    [
+      value.skills,
+      value.skillDependencies,
+      value.requiredSkills,
+    ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'skill'));
+    [
+      value.mcpServers,
+      value.mcps,
+      value.mcpDependencies,
+      value.requiredMcpServers,
+      value.requiredMcps,
+    ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'mcp-server'));
+  }
+  [
+    source.skills,
+    source.skillDependencies,
+    source.requiredSkills,
+  ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'skill'));
+  [
+    source.mcpServers,
+    source.mcps,
+    source.mcpDependencies,
+    source.requiredMcpServers,
+    source.requiredMcps,
+  ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'mcp-server'));
+  return dependencies;
+}
+
+function safeRecord(value, limit = 32) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry) => typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      .slice(0, limit),
+  );
+}
+
+function safeMcpField(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const key = String(entry.key || entry.name || '').trim();
+  if (!key) return null;
+  const type = String(entry.type || 'text').trim().toLowerCase();
+  const target = String(entry.target || entry.scope || 'env').trim().toLowerCase();
+  return {
+    key,
+    label: String(entry.label || key).trim(),
+    type: ['text', 'password', 'path', 'path-list', 'number', 'select', 'boolean'].includes(type) ? type : 'text',
+    target: ['env', 'arg', 'args', 'cwd', 'url', 'header', 'tool-argument', 'metadata'].includes(target) ? target : 'env',
+    required: Boolean(entry.required),
+    placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : '',
+    description: typeof entry.description === 'string' ? entry.description : '',
+    defaultValue: typeof entry.defaultValue === 'string'
+      ? entry.defaultValue
+      : typeof entry.default === 'string'
+        ? entry.default
+        : '',
+    options: safeStringArray(entry.options, 24),
+  };
+}
+
+function safeMcpDefinition(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const transport = String(value.transport || value.type || 'stdio').trim().toLowerCase();
+  const setupFields = Array.isArray(value.setupFields || value.configuration || value.configSchema)
+    ? (value.setupFields || value.configuration || value.configSchema).map(safeMcpField).filter(Boolean).slice(0, 32)
+    : [];
+  const runtimeFields = Array.isArray(value.runtimeFields || value.toolInputs)
+    ? (value.runtimeFields || value.toolInputs).map(safeMcpField).filter(Boolean).slice(0, 32)
+    : [];
+  const tools = Array.isArray(value.tools)
+    ? value.tools
+      .map((tool) => {
+        if (typeof tool === 'string') return { name: tool };
+        if (!tool || typeof tool !== 'object') return null;
+        const name = String(tool.name || '').trim();
+        if (!name) return null;
+        return {
+          name,
+          description: typeof tool.description === 'string' ? tool.description : '',
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 64)
+    : [];
+
+  return {
+    serverName: String(value.serverName || value.name || '').trim(),
+    transport: ['stdio', 'http', 'sse'].includes(transport) ? transport : 'stdio',
+    command: typeof value.command === 'string' ? value.command.trim() : '',
+    args: safeStringArray(value.args, 64),
+    env: safeRecord(value.env, 64),
+    cwd: typeof value.cwd === 'string' ? value.cwd.trim() : '',
+    url: typeof value.url === 'string' ? value.url.trim() : '',
+    headers: safeRecord(value.headers, 64),
+    setupFields,
+    runtimeFields,
+    tools,
+    postInstall: value.postInstall && typeof value.postInstall === 'object'
+      ? {
+          type: typeof value.postInstall.type === 'string' ? value.postInstall.type.trim() : '',
+          command: typeof value.postInstall.command === 'string' ? value.postInstall.command.trim() : '',
+          args: safeStringArray(value.postInstall.args, 32),
+        }
+      : typeof value.postInstall === 'string'
+        ? { type: value.postInstall, command: '', args: [] }
+        : null,
+  };
 }
 
 function safeSupportedApps(value) {
@@ -249,6 +495,18 @@ function formatSkillMarkdown({ name, title, description, content }) {
   ].join('\n');
 }
 
+function formatMcpMarkdown({ name, title, description, content }) {
+  const body = String(content || description || `MCP server package for ${title || name}.`).trim();
+  return [
+    '# MCP Server',
+    '',
+    `Name: ${name}`,
+    '',
+    body,
+    '',
+  ].join('\n');
+}
+
 function prepareContent(kind, payload) {
   const content = String(payload.content || '').trim();
   if (!content) {
@@ -265,14 +523,16 @@ function prepareContent(kind, payload) {
 
   const formatted = kind === 'skill'
     ? formatSkillMarkdown({ name, title: payload.title, description: payload.description, content })
-    : formatAgentTemplateMarkdown({
-        name,
-        description: payload.description,
-        content,
-        tools: payload.tools,
-        model: payload.model,
-        color: payload.color,
-      });
+    : kind === 'mcp-server'
+      ? formatMcpMarkdown({ name, title: payload.title, description: payload.description, content })
+      : formatAgentTemplateMarkdown({
+          name,
+          description: payload.description,
+          content,
+          tools: payload.tools,
+          model: payload.model,
+          color: payload.color,
+        });
 
   return { name, formatted };
 }
@@ -292,7 +552,7 @@ function normalizePackageFiles(value, { requireSkillMd = false } = {}) {
     return [];
   }
   if (value.length > MAX_PACKAGE_FILES) {
-    throw new Error(`skill package can include at most ${MAX_PACKAGE_FILES} files`);
+    throw new Error(`package can include at most ${MAX_PACKAGE_FILES} files`);
   }
 
   const files = [];
@@ -302,7 +562,7 @@ function normalizePackageFiles(value, { requireSkillMd = false } = {}) {
     if (!entry || typeof entry !== 'object') continue;
     const relativePath = safeRelativePath(entry.path || entry.name);
     if (!relativePath || relativePath.endsWith('/')) {
-      throw new Error('skill package contains an invalid file path');
+      throw new Error('package contains an invalid file path');
     }
     const key = relativePath.toLowerCase();
     if (seen.has(key)) {
@@ -323,7 +583,7 @@ function normalizePackageFiles(value, { requireSkillMd = false } = {}) {
   }
 
   if (files.length === 0) {
-    throw new Error('skill package must include at least one file');
+    throw new Error('package must include at least one file');
   }
   if (requireSkillMd && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
     throw new Error('skill package must include SKILL.md at the package root');
@@ -405,7 +665,7 @@ async function writeStoredPackage(rootPath, files) {
   return packageFiles;
 }
 
-async function readStoredPackageFiles(packageFiles) {
+async function readStoredPackageFiles(packageFiles, { requireSkillMd = false } = {}) {
   if (!Array.isArray(packageFiles) || packageFiles.length === 0) return [];
   const files = [];
   let totalBytes = 0;
@@ -415,14 +675,27 @@ async function readStoredPackageFiles(packageFiles) {
     const buffer = await readStoredBuffer(file.contentPath);
     totalBytes += buffer.length;
     if (totalBytes > MAX_PACKAGE_BYTES) {
-      throw new Error(`skill package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
+      throw new Error(`package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
     }
     files.push({ path: relativePath, buffer, size: buffer.length });
   }
-  if (files.length > 0 && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
+  if (requireSkillMd && files.length > 0 && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
     throw new Error('skill package must include SKILL.md at the package root');
   }
   return files;
+}
+
+function getPrimaryPackageFilePath(kind, packageFiles) {
+  const files = Array.isArray(packageFiles) ? packageFiles : [];
+  const lower = (file) => String(file.path || '').toLowerCase();
+  if (kind === 'skill') {
+    return files.find((file) => lower(file) === 'skill.md')?.path || 'SKILL.md';
+  }
+  return files.find((file) => lower(file) === 'hub.mcp.json')?.path
+    || files.find((file) => lower(file) === 'package.json')?.path
+    || files.find((file) => lower(file) === 'readme.md')?.path
+    || files[0]?.path
+    || 'package.json';
 }
 
 async function removeStoredContent(contentPath) {
@@ -486,6 +759,7 @@ function toCatalogItem(store, item) {
       })
       .filter(Boolean)
     : [];
+  const primaryPackageFilePath = getPrimaryPackageFilePath(item.kind, packageFiles);
 
   return {
     id: item.name,
@@ -500,12 +774,14 @@ function toCatalogItem(store, item) {
     supportedApps: safeSupportedApps(item.supportedApps),
     appSlots: safeAppSlots(item.appSlots),
     capabilities: safeStringArray(item.capabilities),
+    ...(item.kind === 'agent-template' ? { dependencies: safeDependencies(item.dependencies || item.requires, item) } : {}),
+    ...(item.kind === 'mcp-server' && item.mcp ? { mcp: safeMcpDefinition(item.mcp) } : {}),
     likes: currentLikes(store, item.id),
     downloads: Number(item.downloads || 0),
     createdAt: item.createdAt || null,
     updatedAt: item.updatedAt || null,
     contentUrl: packageFiles.length > 0
-      ? `./content/${encodeURIComponent(item.id)}/SKILL.md`
+      ? `./content/${encodeURIComponent(item.id)}/${encodePackagePath(primaryPackageFilePath)}`
       : `./content/${encodeURIComponent(item.id)}.md`,
     ...(packageFiles.length > 0 ? { packageFiles } : {}),
     likeUrl: `./items/${encodeURIComponent(item.id)}/like`,
@@ -525,6 +801,8 @@ function toAdminSubmission(store, submission, includeContent = false, content = 
     supportedApps: safeSupportedApps(submission.supportedApps),
     appSlots: safeAppSlots(submission.appSlots),
     capabilities: safeStringArray(submission.capabilities),
+    ...(submission.kind === 'agent-template' ? { dependencies: safeDependencies(submission.dependencies || submission.requires, submission) } : {}),
+    ...(submission.kind === 'mcp-server' && submission.mcp ? { mcp: safeMcpDefinition(submission.mcp) } : {}),
     status: submission.status || 'pending',
     submittedAt: submission.submittedAt || null,
     reviewedAt: submission.reviewedAt || null,
@@ -547,11 +825,19 @@ function toAdminItem(store, item, includeContent = false, content = null) {
 }
 
 function getSubmitToken() {
-  return process.env.HUB_SUBMIT_TOKEN || process.env.MTL_CODE_REPOSITORY_SUBMIT_TOKEN || '';
+  return readConfigValue(
+    ['HUB_SUBMIT_TOKEN', 'MTL_CODE_REPOSITORY_SUBMIT_TOKEN'],
+    'submitToken',
+    '',
+  );
 }
 
 function getAdminToken() {
-  return process.env.HUB_ADMIN_TOKEN || process.env.MTL_CODE_HUB_ADMIN_TOKEN || '';
+  return readConfigValue(
+    ['HUB_ADMIN_TOKEN', 'MTL_CODE_HUB_ADMIN_TOKEN'],
+    'adminToken',
+    '',
+  );
 }
 
 function displayHost(host) {
@@ -623,17 +909,17 @@ function requireAdmin(req, res, next) {
 
 async function createSubmission(payload, req) {
   const kind = normalizeKind(payload.kind);
-  if (!kind) throw new Error('kind must be "agent-template" or "skill"');
+  if (!kind) throw new Error('kind must be "agent-template", "skill", or "mcp-server"');
 
   let name;
   let formatted = null;
   let packageFiles = [];
-  if (kind === 'skill' && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
+  if ((kind === 'skill' || kind === 'mcp-server') && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
     name = sanitizeSlug(payload.name || payload.title);
     if (!validateSlug(name)) {
       throw new Error('name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
     }
-    packageFiles = normalizePackageFiles(payload.packageFiles, { requireSkillMd: true });
+    packageFiles = normalizePackageFiles(payload.packageFiles, { requireSkillMd: kind === 'skill' });
   } else {
     const prepared = prepareContent(kind, payload);
     name = prepared.name;
@@ -646,7 +932,7 @@ async function createSubmission(payload, req) {
   if (packageFiles.length > 0) {
     const packageRoot = getSubmissionPackageRoot(submissionId);
     storedPackageFiles = await writeStoredPackage(packageRoot, packageFiles);
-    contentPath = path.join(packageRoot, 'SKILL.md');
+    contentPath = path.join(packageRoot, getPrimaryPackageFilePath(kind, storedPackageFiles));
   } else {
     await writeStoredContent(contentPath, formatted);
   }
@@ -663,6 +949,8 @@ async function createSubmission(payload, req) {
     supportedApps: safeSupportedApps(payload.supportedApps || payload.apps || payload.integrations),
     appSlots: safeAppSlots(payload.appSlots || payload.setupSlots || payload.applicationSlots),
     capabilities: safeStringArray(payload.capabilities || payload.features),
+    ...(kind === 'agent-template' ? { dependencies: safeDependencies(payload.dependencies || payload.requires, payload) } : {}),
+    ...(kind === 'mcp-server' ? { mcp: safeMcpDefinition(payload.mcp || payload.mcpServer || payload.runtime) } : {}),
     status: 'pending',
     contentPath,
     ...(storedPackageFiles.length > 0 ? { packageFiles: storedPackageFiles } : {}),
@@ -689,16 +977,16 @@ async function publishSubmission(store, submission, payload = {}) {
 
   let publishedContentPath = getPublishedContentPath(itemId);
   let publishedPackageFiles = [];
-  if (kind === 'skill' && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
-    const files = normalizePackageFiles(payload.packageFiles, { requireSkillMd: true });
+  if ((kind === 'skill' || kind === 'mcp-server') && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
+    const files = normalizePackageFiles(payload.packageFiles, { requireSkillMd: kind === 'skill' });
     const packageRoot = getPublishedPackageRoot(itemId);
     publishedPackageFiles = await writeStoredPackage(packageRoot, files);
-    publishedContentPath = path.join(packageRoot, 'SKILL.md');
-  } else if (kind === 'skill' && Array.isArray(submission.packageFiles) && submission.packageFiles.length > 0 && !(typeof payload.content === 'string' && payload.content.trim())) {
-    const files = await readStoredPackageFiles(submission.packageFiles);
+    publishedContentPath = path.join(packageRoot, getPrimaryPackageFilePath(kind, publishedPackageFiles));
+  } else if ((kind === 'skill' || kind === 'mcp-server') && Array.isArray(submission.packageFiles) && submission.packageFiles.length > 0 && !(typeof payload.content === 'string' && payload.content.trim())) {
+    const files = await readStoredPackageFiles(submission.packageFiles, { requireSkillMd: kind === 'skill' });
     const packageRoot = getPublishedPackageRoot(itemId);
     publishedPackageFiles = await writeStoredPackage(packageRoot, files);
-    publishedContentPath = path.join(packageRoot, 'SKILL.md');
+    publishedContentPath = path.join(packageRoot, getPrimaryPackageFilePath(kind, publishedPackageFiles));
   } else {
     const content = typeof payload.content === 'string' && payload.content.trim()
       ? prepareContent(kind, { ...submission, ...payload, name }).formatted
@@ -719,6 +1007,10 @@ async function publishSubmission(store, submission, payload = {}) {
     supportedApps: safeSupportedApps(payload.supportedApps || submission.supportedApps),
     appSlots: safeAppSlots(payload.appSlots || submission.appSlots),
     capabilities: safeStringArray(payload.capabilities || submission.capabilities),
+    ...(kind === 'agent-template' ? { dependencies: safeDependencies(payload.dependencies || payload.requires || submission.dependencies || submission.requires, payload.dependencies || payload.requires ? payload : submission) } : {}),
+    ...(kind === 'mcp-server'
+      ? { mcp: safeMcpDefinition(payload.mcp || payload.mcpServer || payload.runtime || submission.mcp) }
+      : {}),
     version: String(payload.version || previous?.version || '1.0.0').trim(),
     status: 'published',
     contentPath: publishedContentPath,
@@ -744,17 +1036,17 @@ async function publishSubmission(store, submission, payload = {}) {
 
 async function publishDirect(store, payload) {
   const kind = normalizeKind(payload.kind);
-  if (!kind) throw new Error('kind must be "agent-template" or "skill"');
+  if (!kind) throw new Error('kind must be "agent-template", "skill", or "mcp-server"');
 
   let name;
   let formatted = null;
   let packageFiles = [];
-  if (kind === 'skill' && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
+  if ((kind === 'skill' || kind === 'mcp-server') && Array.isArray(payload.packageFiles) && payload.packageFiles.length > 0) {
     name = sanitizeSlug(payload.name || payload.title);
     if (!validateSlug(name)) {
       throw new Error('name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
     }
-    packageFiles = normalizePackageFiles(payload.packageFiles, { requireSkillMd: true });
+    packageFiles = normalizePackageFiles(payload.packageFiles, { requireSkillMd: kind === 'skill' });
   } else {
     const prepared = prepareContent(kind, payload);
     name = prepared.name;
@@ -772,7 +1064,7 @@ async function publishDirect(store, payload) {
   if (packageFiles.length > 0) {
     const packageRoot = getPublishedPackageRoot(itemId);
     storedPackageFiles = await writeStoredPackage(packageRoot, packageFiles);
-    contentPath = path.join(packageRoot, 'SKILL.md');
+    contentPath = path.join(packageRoot, getPrimaryPackageFilePath(kind, storedPackageFiles));
   } else {
     await writeStoredContent(contentPath, formatted);
   }
@@ -790,6 +1082,8 @@ async function publishDirect(store, payload) {
     supportedApps: safeSupportedApps(payload.supportedApps || payload.apps || payload.integrations),
     appSlots: safeAppSlots(payload.appSlots || payload.setupSlots || payload.applicationSlots),
     capabilities: safeStringArray(payload.capabilities || payload.features),
+    ...(kind === 'agent-template' ? { dependencies: safeDependencies(payload.dependencies || payload.requires, payload) } : {}),
+    ...(kind === 'mcp-server' ? { mcp: safeMcpDefinition(payload.mcp || payload.mcpServer || payload.runtime) } : {}),
     version: String(payload.version || previous?.version || '1.0.0').trim(),
     status: 'published',
     contentPath,
@@ -1070,6 +1364,12 @@ adminRouter.patch('/items/:itemId', async (req, res) => {
       capabilities: Array.isArray(req.body?.capabilities) || typeof req.body?.capabilities === 'string'
         ? safeStringArray(req.body.capabilities)
         : current.capabilities,
+      ...(current.kind === 'agent-template' && (req.body?.dependencies || req.body?.requires)
+        ? { dependencies: safeDependencies(req.body.dependencies || req.body.requires, req.body) }
+        : {}),
+      ...(current.kind === 'mcp-server' && (req.body?.mcp || req.body?.mcpServer || req.body?.runtime)
+        ? { mcp: safeMcpDefinition(req.body.mcp || req.body.mcpServer || req.body.runtime) }
+        : {}),
       version: typeof req.body?.version === 'string' ? req.body.version.trim() : current.version,
       updatedAt: nowIso(),
     };
@@ -1120,6 +1420,7 @@ app.listen(PORT, HOST, () => {
   const adminMode = getAdminToken() ? 'token protected' : 'local-only without HUB_ADMIN_TOKEN';
   const localUrl = `http://${displayHost(HOST)}:${PORT}`;
   console.log(`Agent/Skill Hub listening on ${HOST}:${PORT}`);
+  console.log(`Config: ${HUB_CONFIG.path || 'defaults + environment'}`);
   console.log(`Local URL: ${localUrl}`);
   console.log(`Catalog URL: ${localUrl}${PUBLIC_BASE_PATH}/catalog.json`);
   for (const url of getLanAccessUrls()) {

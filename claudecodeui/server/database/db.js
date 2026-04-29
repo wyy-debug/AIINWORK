@@ -119,6 +119,17 @@ const runMigrations = () => {
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SQL);
     db.exec(APP_CONFIG_TABLE_SQL);
     db.exec(SESSION_NAMES_TABLE_SQL);
+    const sessionNameColumns = db.prepare("PRAGMA table_info(session_names)").all();
+    const sessionNameColumnNames = sessionNameColumns.map(col => col.name);
+    for (const [columnName, columnSql] of [
+      ['pinned_at', 'ALTER TABLE session_names ADD COLUMN pinned_at DATETIME'],
+      ['archived_at', 'ALTER TABLE session_names ADD COLUMN archived_at DATETIME'],
+    ]) {
+      if (!sessionNameColumnNames.includes(columnName)) {
+        console.log(`Running migration: Adding ${columnName} column to session_names`);
+        db.exec(columnSql);
+      }
+    }
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
     db.exec(SESSION_AGENT_BINDINGS_TABLE_SQL);
     const sessionAgentBindingColumns = db.prepare("PRAGMA table_info(session_agent_bindings)").all();
@@ -542,6 +553,48 @@ const sessionNamesDb = {
     return new Map(rows.map(r => [r.session_id, r.custom_name]));
   },
 
+  getMetadataForSessions: (sessionIds, provider) => {
+    if (!sessionIds.length) return new Map();
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT session_id, custom_name, pinned_at, archived_at FROM session_names
+       WHERE session_id IN (${placeholders}) AND provider = ?`
+    ).all(...sessionIds, provider);
+    return new Map(rows.map(row => [row.session_id, {
+      customName: row.custom_name || '',
+      pinnedAt: row.pinned_at || null,
+      archivedAt: row.archived_at || null,
+    }]));
+  },
+
+  setMetadata: (sessionId, provider, metadata = {}) => {
+    const existing = db.prepare(
+      'SELECT custom_name, pinned_at, archived_at FROM session_names WHERE session_id = ? AND provider = ?'
+    ).get(sessionId, provider) || {};
+    const existingName = existing.custom_name || '';
+    const nextPinnedAt = Object.prototype.hasOwnProperty.call(metadata, 'pinned')
+      ? metadata.pinned ? new Date().toISOString() : null
+      : existing.pinned_at || null;
+    const nextArchivedAt = Object.prototype.hasOwnProperty.call(metadata, 'archived')
+      ? metadata.archived ? new Date().toISOString() : null
+      : existing.archived_at || null;
+    db.prepare(`
+      INSERT INTO session_names (session_id, provider, custom_name, pinned_at, archived_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, provider)
+      DO UPDATE SET
+        pinned_at = excluded.pinned_at,
+        archived_at = excluded.archived_at,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(
+      sessionId,
+      provider,
+      existingName,
+      nextPinnedAt,
+      nextArchivedAt,
+    );
+  },
+
   // Delete a custom session name
   deleteName: (sessionId, provider) => {
     return db.prepare(
@@ -740,10 +793,15 @@ function applyCustomSessionNames(sessions, provider) {
   if (!sessions?.length) return;
   try {
     const ids = sessions.map(s => s.id);
-    const customNames = sessionNamesDb.getNames(ids, provider);
+    const metadataBySession = sessionNamesDb.getMetadataForSessions(ids, provider);
     for (const session of sessions) {
-      const custom = customNames.get(session.id);
-      if (custom) session.summary = custom;
+      const metadata = metadataBySession.get(session.id);
+      if (!metadata) continue;
+      if (metadata.customName) session.summary = metadata.customName;
+      session.pinnedAt = metadata.pinnedAt;
+      session.archivedAt = metadata.archivedAt;
+      session.isPinned = Boolean(metadata.pinnedAt);
+      session.isArchived = Boolean(metadata.archivedAt);
     }
   } catch (error) {
     console.warn(`[DB] Failed to apply custom session names for ${provider}:`, error.message);

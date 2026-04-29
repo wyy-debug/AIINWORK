@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+
 import type { LLMProvider } from '../types/app';
 import { apiFetch } from '../utils/api';
 
@@ -27,7 +28,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'context_compaction';
 
 export interface NormalizedMessage {
   id: string;
@@ -55,6 +57,14 @@ export interface NormalizedMessage {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  compactType?: 'full' | 'micro' | 'summary' | string;
+  compactTrigger?: string;
+  compactSummary?: string;
+  compactMetadata?: unknown;
+  microcompactMetadata?: unknown;
+  preTokens?: number;
+  tokensSaved?: number;
+  compactedToolIds?: unknown;
   exitCode?: number;
   actualSessionId?: string;
   parentToolUseId?: string;

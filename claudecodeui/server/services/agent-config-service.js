@@ -513,10 +513,10 @@ export async function buildAgentSystemPrompt(agent, options = {}) {
   return lines.filter((line) => line !== undefined && line !== null).join('\n');
 }
 
-export async function buildSkillReferencePrompt(skillNames = [], options = {}) {
+export async function resolveSkillReferences(skillNames = [], options = {}) {
   const normalizedSkillNames = normalizeStringArray(skillNames, 60, 120);
   if (normalizedSkillNames.length === 0) {
-    return '';
+    return { prompt: '', details: [], promptLength: 0 };
   }
 
   let installedSkills = [];
@@ -527,21 +527,43 @@ export async function buildSkillReferencePrompt(skillNames = [], options = {}) {
     installedSkills = [];
   }
 
+  const details = normalizedSkillNames.map((skillName) => {
+    const installed = installedSkills.find((skill) => (
+      skill.name.toLowerCase() === String(skillName).toLowerCase()
+      || skill.title.toLowerCase() === String(skillName).toLowerCase()
+    ));
+    const line = installed
+      ? `- ${skillName} (installed, ${installed.provider}/${installed.scope}, ${installed.skillPath})`
+      : `- ${skillName} (not installed; do not rely on this Skill until the user installs it)`;
+    return {
+      name: skillName,
+      label: installed?.title || skillName,
+      path: installed?.skillPath || '',
+      scope: installed?.scope || '',
+      provider: installed?.provider || '',
+      callable: Boolean(installed?.callable),
+      exists: Boolean(installed?.skillPath),
+      promptLength: line.length,
+      line,
+    };
+  });
+
   const lines = [
     'Preferred skills for this conversation:',
-    ...normalizedSkillNames.map((skillName) => {
-      const installed = installedSkills.find((skill) => (
-        skill.name.toLowerCase() === String(skillName).toLowerCase()
-        || skill.title.toLowerCase() === String(skillName).toLowerCase()
-      ));
-      return installed
-        ? `- ${skillName} (installed, ${installed.provider}/${installed.scope}, ${installed.skillPath})`
-        : `- ${skillName} (not installed; do not rely on this Skill until the user installs it)`;
-    }),
+    ...details.map((detail) => detail.line),
     'When a preferred Skill is installed, read and follow its SKILL.md instructions before applying that specialized workflow. These Skills narrow the workflow for this conversation and do not grant extra permissions by themselves.',
   ];
 
-  return lines.join('\n');
+  const prompt = lines.join('\n');
+  return {
+    prompt,
+    details: details.map(({ line, ...detail }) => detail),
+    promptLength: prompt.length,
+  };
+}
+
+export async function buildSkillReferencePrompt(skillNames = [], options = {}) {
+  return (await resolveSkillReferences(skillNames, options)).prompt;
 }
 
 function applyRuntimeAgentConfiguration(agent, configuration = {}) {

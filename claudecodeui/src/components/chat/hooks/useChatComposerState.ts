@@ -426,6 +426,9 @@ export function useChatComposerState({
   const {
     showFileDropdown,
     filteredFiles,
+    fileMentionQuery,
+    isLoadingFileMentions,
+    fileMentionError,
     selectedFileIndex,
     renderInputWithMentions,
     selectFile,
@@ -672,6 +675,11 @@ export function useChatComposerState({
       };
 
       const toolsSettings = getToolsSettings();
+      const skipToolPermissions = Boolean(
+        toolsSettings?.skipPermissions
+        || toolsSettings?.permissionMode === 'bypassPermissions'
+        || permissionMode === 'bypassPermissions',
+      );
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
 
@@ -690,7 +698,7 @@ export function useChatComposerState({
             agentAppBindings: activeAgentAppBindings,
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
-            skipPermissions: toolsSettings?.skipPermissions || false,
+            skipPermissions: skipToolPermissions,
             sessionSummary,
             toolsSettings,
             clientMessageId,
@@ -733,6 +741,7 @@ export function useChatComposerState({
             allowSessionAgentBinding,
             sessionSummary,
             permissionMode,
+            skipPermissions: skipToolPermissions,
             toolsSettings,
             clientMessageId,
           },
@@ -748,6 +757,7 @@ export function useChatComposerState({
             resume: Boolean(backendSessionId),
             toolsSettings,
             permissionMode,
+            skipPermissions: skipToolPermissions,
             model: claudeModel,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
@@ -1066,6 +1076,9 @@ export function useChatComposerState({
     handleToggleCommandMenu,
     showFileDropdown,
     filteredFiles: filteredFiles as MentionableFile[],
+    fileMentionQuery,
+    isLoadingFileMentions,
+    fileMentionError,
     selectedFileIndex,
     renderInputWithMentions,
     selectFile,

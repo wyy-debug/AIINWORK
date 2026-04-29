@@ -27,7 +27,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'context_compaction';
 
 /**
  * Provider-neutral message event emitted over REST and realtime transports.
@@ -64,6 +65,14 @@ export type NormalizedMessage = {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  compactType?: 'full' | 'micro' | 'summary' | string;
+  compactTrigger?: string;
+  compactSummary?: string;
+  compactMetadata?: unknown;
+  microcompactMetadata?: unknown;
+  preTokens?: number;
+  tokensSaved?: number;
+  compactedToolIds?: unknown;
   tokenBudget?: unknown;
   subagentTools?: unknown;
   toolUseResult?: unknown;

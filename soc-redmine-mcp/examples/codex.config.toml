@@ -1,0 +1,4 @@
+[mcp_servers.soc-redmine]
+command = "node"
+args = ["E:\\AIINWORK\\soc-redmine-mcp\\src\\server.js"]
+env = { REDMINE_BASE_URL = "http://soc-redmine.wd.com", REDMINE_API_KEY = "<your-redmine-api-key>" }

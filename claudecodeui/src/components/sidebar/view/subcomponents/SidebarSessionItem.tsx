@@ -1,5 +1,6 @@
-import { Check, Clock, Edit2, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Clock, Edit2, Pin, PinOff, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import { formatTimeAgo } from '../../../../utils/dateUtils';
@@ -19,6 +20,8 @@ type SidebarSessionItemProps = {
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onTogglePinSession: (session: SessionWithProvider) => void;
+  onToggleArchiveSession: (session: SessionWithProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
@@ -41,6 +44,8 @@ export default function SidebarSessionItem({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
+  onTogglePinSession,
+  onToggleArchiveSession,
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
@@ -48,6 +53,8 @@ export default function SidebarSessionItem({
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
+  const isPinned = Boolean(session.isPinned);
+  const isArchived = Boolean(session.isArchived);
 
   const selectMobileSession = () => {
     onProjectSelect(project);
@@ -75,6 +82,7 @@ export default function SidebarSessionItem({
           className={cn(
             'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
             isSelected ? 'bg-primary/5 border-primary/20' : '',
+            isArchived && 'opacity-60',
             !isSelected && sessionView.isActive
               ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
               : 'border-border/30',
@@ -110,15 +118,37 @@ export default function SidebarSessionItem({
             </div>
 
             {!sessionView.isCursorSession && (
-              <button
-                className="ml-1 flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  requestDeleteSession();
-                }}
-              >
-                <Trash2 className="h-2.5 w-2.5 text-red-600 dark:text-red-400" />
-              </button>
+              <div className="ml-1 flex items-center gap-1">
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePinSession(session);
+                  }}
+                  title={isPinned ? '取消置顶' : '置顶'}
+                >
+                  {isPinned ? <PinOff className="h-2.5 w-2.5" /> : <Pin className="h-2.5 w-2.5" />}
+                </button>
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleArchiveSession(session);
+                  }}
+                  title={isArchived ? '恢复' : '归档'}
+                >
+                  {isArchived ? <ArchiveRestore className="h-2.5 w-2.5" /> : <Archive className="h-2.5 w-2.5" />}
+                </button>
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    requestDeleteSession();
+                  }}
+                >
+                  <Trash2 className="h-2.5 w-2.5 text-red-600 dark:text-red-400" />
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -130,6 +160,7 @@ export default function SidebarSessionItem({
           className={cn(
             'w-full justify-start p-2 h-auto font-normal text-left hover:bg-accent/50 transition-colors duration-200',
             isSelected && 'bg-accent text-accent-foreground',
+            isArchived && 'opacity-60',
           )}
           onClick={() => onSessionSelect(session, project.name)}
         >
@@ -200,6 +231,34 @@ export default function SidebarSessionItem({
               </>
             ) : (
               <>
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePinSession(session);
+                  }}
+                  title={isPinned ? '取消置顶' : '置顶'}
+                >
+                  {isPinned ? (
+                    <PinOff className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  ) : (
+                    <Pin className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  )}
+                </button>
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleArchiveSession(session);
+                  }}
+                  title={isArchived ? '恢复会话' : '归档会话'}
+                >
+                  {isArchived ? (
+                    <ArchiveRestore className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  ) : (
+                    <Archive className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  )}
+                </button>
                 <button
                   className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
                   onClick={(event) => {

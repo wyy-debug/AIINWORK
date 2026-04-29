@@ -1,0 +1,4 @@
+[mcp_servers.ainwork-code-search]
+command = "node"
+args = ["E:\\AIINWORK\\ainwork-code-search-mcp\\src\\server.js"]
+env = { GITNEXUS_PACKAGE = "gitnexus@1.6.3", GITNEXUS_IGNORE_SCRIPTS = "true", GITNEXUS_MCP_TIMEOUT_MS = "60000" }

@@ -46,6 +46,52 @@ function isInternalContent(content: string): boolean {
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
 }
 
+function isCompactBoundaryRecord(raw: AnyRecord): boolean {
+  return raw.type === 'system'
+    && (raw.subtype === 'compact_boundary' || raw.subtype === 'microcompact_boundary');
+}
+
+function getCompactSummaryContent(raw: AnyRecord | undefined): string | null {
+  if (!raw || raw.message?.role !== 'user' || typeof raw.message?.content !== 'string') {
+    return null;
+  }
+
+  const content = raw.message.content;
+  const looksLikeCompactSummary = raw.isCompactSummary === true
+    || content.startsWith('This session is being continued from a previous conversation that ran out of context.');
+
+  if (!looksLikeCompactSummary) {
+    return null;
+  }
+
+  const summaryMarker = '\n\nSummary:';
+  const summaryStart = content.indexOf(summaryMarker);
+  let summary = summaryStart >= 0
+    ? content.slice(summaryStart + summaryMarker.length)
+    : content;
+
+  const detailsMarker = '\n\nIf you need specific details from before compaction';
+  const detailsStart = summary.indexOf(detailsMarker);
+  if (detailsStart >= 0) {
+    summary = summary.slice(0, detailsStart);
+  }
+
+  return summary.trim() || null;
+}
+
+function getNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getCompactTrigger(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return undefined;
+  }
+
+  const trigger = (metadata as AnyRecord).trigger;
+  return typeof trigger === 'string' && trigger.trim() ? trigger.trim() : undefined;
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -67,6 +113,45 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const messages: NormalizedMessage[] = [];
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
+
+    if (isCompactBoundaryRecord(raw)) {
+      const compactMetadata = raw.compactMetadata || raw.compact_metadata || {};
+      const microcompactMetadata = raw.microcompactMetadata || raw.microcompact_metadata || {};
+      const isMicrocompact = raw.subtype === 'microcompact_boundary';
+      const metadata = isMicrocompact ? microcompactMetadata : compactMetadata;
+
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'context_compaction',
+        compactType: isMicrocompact ? 'micro' : 'full',
+        content: typeof raw.content === 'string'
+          ? raw.content
+          : (isMicrocompact ? 'Context microcompacted' : 'Conversation compacted'),
+        compactTrigger: getCompactTrigger(metadata),
+        compactMetadata,
+        microcompactMetadata,
+        preTokens: getNumber((metadata as AnyRecord).preTokens ?? (metadata as AnyRecord).pre_tokens),
+        tokensSaved: getNumber((metadata as AnyRecord).tokensSaved ?? (metadata as AnyRecord).tokens_saved),
+        compactedToolIds: (metadata as AnyRecord).compactedToolIds ?? (metadata as AnyRecord).compacted_tool_ids,
+      })];
+    }
+
+    const compactSummary = getCompactSummaryContent(raw);
+    if (compactSummary) {
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'context_compaction',
+        compactType: 'summary',
+        content: 'Compaction summary',
+        compactSummary,
+      })];
+    }
 
     if (raw.message?.role === 'user' && raw.message?.content) {
       if (Array.isArray(raw.message.content)) {
@@ -273,7 +358,23 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const normalized: NormalizedMessage[] = [];
-    for (const raw of rawMessages) {
+    for (let index = 0; index < rawMessages.length; index++) {
+      const raw = rawMessages[index];
+      if (isCompactBoundaryRecord(raw)) {
+        const events = this.normalizeMessage(raw, sessionId);
+        const compactSummary = getCompactSummaryContent(rawMessages[index + 1]);
+        if (compactSummary) {
+          for (const event of events) {
+            if (event.kind === 'context_compaction') {
+              event.compactSummary = compactSummary;
+            }
+          }
+          index++;
+        }
+        normalized.push(...events);
+        continue;
+      }
+
       normalized.push(...this.normalizeMessage(raw, sessionId));
     }
 

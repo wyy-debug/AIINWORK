@@ -1,8 +1,11 @@
 import fs, { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
+import { spawn } from 'child_process';
 
 import express from 'express';
+
+import { providerMcpService } from '../modules/providers/services/mcp.service.js';
 
 const router = express.Router();
 
@@ -79,23 +82,23 @@ function ensureLocalRepository() {
     fs.writeFileSync(LOCAL_CATALOG_PATH, JSON.stringify(createEmptyCatalog(), null, 2), { mode: 0o600 });
   }
   if (!fs.existsSync(SOURCES_PATH)) {
-    fs.writeFileSync(SOURCES_PATH, JSON.stringify({ schemaVersion: 1, sources: [DEFAULT_SOURCE] }, null, 2), { mode: 0o600 });
+    fs.writeFileSync(SOURCES_PATH, JSON.stringify({ schemaVersion: 1, sources: [] }, null, 2), { mode: 0o600 });
   }
 }
 
 function readSources() {
   ensureLocalRepository();
-  const payload = readJsonSync(SOURCES_PATH, { schemaVersion: 1, sources: [DEFAULT_SOURCE] });
+  const payload = readJsonSync(SOURCES_PATH, { schemaVersion: 1, sources: [] });
   const sources = Array.isArray(payload.sources) ? payload.sources : [];
   const byId = new Map();
-  byId.set(LOCAL_REPOSITORY_ID, DEFAULT_SOURCE);
   for (const source of sources) {
     if (!source || typeof source !== 'object') continue;
     if (!source.id || typeof source.id !== 'string') continue;
+    if (source.id === LOCAL_REPOSITORY_ID || source.type === 'local') continue;
     byId.set(source.id, {
       ...source,
       enabled: source.enabled !== false,
-      writable: source.id === LOCAL_REPOSITORY_ID ? true : Boolean(source.writable),
+      writable: Boolean(source.writable),
     });
   }
   return {
@@ -105,11 +108,13 @@ function readSources() {
 }
 
 async function saveSources(sources) {
-  const normalized = sources.map((source) => ({
-    ...source,
-    enabled: source.enabled !== false,
-    writable: source.id === LOCAL_REPOSITORY_ID ? true : Boolean(source.writable),
-  }));
+  const normalized = sources
+    .filter((source) => source && source.id !== LOCAL_REPOSITORY_ID && source.type !== 'local')
+    .map((source) => ({
+      ...source,
+      enabled: source.enabled !== false,
+      writable: Boolean(source.writable),
+    }));
   await writeJson(SOURCES_PATH, { schemaVersion: 1, sources: normalized });
 }
 
@@ -161,6 +166,9 @@ function validateSlug(slug) {
 function normalizeKind(kind) {
   const value = String(kind || '').trim().toLowerCase();
   if (value === 'skill' || value === 'skills') return 'skill';
+  if (value === 'mcp' || value === 'mcps' || value === 'mcp-server' || value === 'mcp_servers' || value === 'mcp-server-template') {
+    return 'mcp-server';
+  }
   if (value === 'agent' || value === 'agents' || value === 'template' || value === 'agent-template') {
     return 'agent-template';
   }
@@ -176,7 +184,9 @@ function getRawItemSlug(rawItem) {
 }
 
 function publicKindLabel(kind) {
-  return kind === 'skill' ? 'Skill' : 'Agent Template';
+  if (kind === 'skill') return 'Skill';
+  if (kind === 'mcp-server') return 'MCP Server';
+  return 'Agent Template';
 }
 
 function normalizeStringArray(value) {
@@ -186,6 +196,170 @@ function normalizeStringArray(value) {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .slice(0, 24);
+}
+
+function normalizeInstallName(value) {
+  return sanitizeSlug(value)
+    .replace(/^(agent-template|skill|mcp-server)-/, '')
+    .replace(/^mcp-/, '')
+    .replace(/^skill-/, '');
+}
+
+function normalizeDependencyEntry(entry, fallbackKind) {
+  if (typeof entry === 'string') {
+    const name = entry.trim();
+    return name ? { kind: fallbackKind, name } : null;
+  }
+  if (!entry || typeof entry !== 'object') return null;
+  const kind = normalizeKind(entry.kind || entry.type) || fallbackKind;
+  if (!['skill', 'mcp-server'].includes(kind)) return null;
+  const name = String(
+    entry.name
+    || entry.serverName
+    || entry.itemId
+    || entry.id
+    || entry.title
+    || '',
+  ).trim();
+  if (!name) return null;
+  const configuration = entry.configuration && typeof entry.configuration === 'object'
+    ? entry.configuration
+    : entry.mcpValues && typeof entry.mcpValues === 'object'
+      ? { mcpValues: entry.mcpValues }
+      : undefined;
+  return {
+    kind,
+    name,
+    id: typeof entry.id === 'string' ? entry.id.trim() : undefined,
+    itemId: typeof entry.itemId === 'string' ? entry.itemId.trim() : undefined,
+    repoId: typeof entry.repoId === 'string' ? entry.repoId.trim() : undefined,
+    optional: Boolean(entry.optional),
+    overwrite: typeof entry.overwrite === 'boolean' ? entry.overwrite : undefined,
+    ...(configuration ? { configuration } : {}),
+  };
+}
+
+function normalizeAgentDependencies(value, rawItem = {}) {
+  const dependencies = { skills: [], mcpServers: [] };
+  const add = (entry, fallbackKind) => {
+    const normalized = normalizeDependencyEntry(entry, fallbackKind);
+    if (!normalized) return;
+    const list = normalized.kind === 'mcp-server' ? dependencies.mcpServers : dependencies.skills;
+    const key = `${normalized.repoId || ''}:${normalized.itemId || normalized.id || normalized.name}`.toLowerCase();
+    if (!list.some((candidate) => `${candidate.repoId || ''}:${candidate.itemId || candidate.id || candidate.name}`.toLowerCase() === key)) {
+      list.push(normalized);
+    }
+  };
+
+  if (Array.isArray(value)) {
+    value.forEach((entry) => add(entry, 'skill'));
+  } else if (value && typeof value === 'object') {
+    [
+      value.skills,
+      value.skillDependencies,
+      value.requiredSkills,
+    ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'skill'));
+    [
+      value.mcpServers,
+      value.mcps,
+      value.mcpDependencies,
+      value.requiredMcpServers,
+      value.requiredMcps,
+    ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'mcp-server'));
+  }
+
+  [
+    rawItem.skills,
+    rawItem.skillDependencies,
+    rawItem.requiredSkills,
+  ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'skill'));
+  [
+    rawItem.mcpServers,
+    rawItem.mcps,
+    rawItem.mcpDependencies,
+    rawItem.requiredMcpServers,
+    rawItem.requiredMcps,
+  ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'mcp-server'));
+
+  return dependencies;
+}
+
+function normalizeRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry) => typeof entry[0] === 'string' && typeof entry[1] === 'string'),
+  );
+}
+
+function normalizeMcpField(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const key = String(entry.key || entry.name || '').trim();
+  if (!key) return null;
+  const type = String(entry.type || 'text').trim().toLowerCase();
+  const target = String(entry.target || entry.scope || 'env').trim().toLowerCase();
+  return {
+    key,
+    label: String(entry.label || key).trim(),
+    type: ['text', 'password', 'path', 'path-list', 'number', 'select', 'boolean'].includes(type) ? type : 'text',
+    target: ['env', 'arg', 'args', 'cwd', 'url', 'header', 'tool-argument', 'metadata'].includes(target) ? target : 'env',
+    required: Boolean(entry.required),
+    placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : '',
+    description: typeof entry.description === 'string' ? entry.description : '',
+    defaultValue: typeof entry.defaultValue === 'string'
+      ? entry.defaultValue
+      : typeof entry.default === 'string'
+        ? entry.default
+        : '',
+    options: normalizeStringArray(entry.options),
+  };
+}
+
+function normalizeMcpDefinition(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const transport = String(value.transport || value.type || 'stdio').trim().toLowerCase();
+  const setupFields = Array.isArray(value.setupFields || value.configuration || value.configSchema)
+    ? (value.setupFields || value.configuration || value.configSchema).map(normalizeMcpField).filter(Boolean)
+    : [];
+  const runtimeFields = Array.isArray(value.runtimeFields || value.toolInputs)
+    ? (value.runtimeFields || value.toolInputs).map(normalizeMcpField).filter(Boolean)
+    : [];
+  const tools = Array.isArray(value.tools)
+    ? value.tools
+      .map((tool) => {
+        if (typeof tool === 'string') return { name: tool, description: '' };
+        if (!tool || typeof tool !== 'object') return null;
+        const name = String(tool.name || '').trim();
+        if (!name) return null;
+        return {
+          name,
+          description: typeof tool.description === 'string' ? tool.description : '',
+        };
+      })
+      .filter(Boolean)
+    : [];
+  return {
+    serverName: String(value.serverName || value.name || '').trim(),
+    transport: ['stdio', 'http', 'sse'].includes(transport) ? transport : 'stdio',
+    command: typeof value.command === 'string' ? value.command.trim() : '',
+    args: normalizeStringArray(value.args),
+    env: normalizeRecord(value.env),
+    cwd: typeof value.cwd === 'string' ? value.cwd.trim() : '',
+    url: typeof value.url === 'string' ? value.url.trim() : '',
+    headers: normalizeRecord(value.headers),
+    setupFields,
+    runtimeFields,
+    tools,
+    postInstall: value.postInstall && typeof value.postInstall === 'object'
+      ? {
+          type: typeof value.postInstall.type === 'string' ? value.postInstall.type.trim() : '',
+          command: typeof value.postInstall.command === 'string' ? value.postInstall.command.trim() : '',
+          args: normalizeStringArray(value.postInstall.args),
+        }
+      : typeof value.postInstall === 'string'
+        ? { type: value.postInstall, command: '', args: [] }
+        : null,
+  };
 }
 
 function normalizeSupportedApps(value) {
@@ -357,6 +531,12 @@ function extractItems(catalog) {
   if (Array.isArray(catalog?.skills)) {
     items.push(...catalog.skills.map((item) => ({ ...item, kind: item.kind || 'skill' })));
   }
+  if (Array.isArray(catalog?.mcpServers)) {
+    items.push(...catalog.mcpServers.map((item) => ({ ...item, kind: item.kind || 'mcp-server' })));
+  }
+  if (Array.isArray(catalog?.mcps)) {
+    items.push(...catalog.mcps.map((item) => ({ ...item, kind: item.kind || 'mcp-server' })));
+  }
   return items;
 }
 
@@ -367,6 +547,14 @@ function resolveRemoteUrl(baseUrl, candidate) {
   } catch {
     return null;
   }
+}
+
+function deriveRemoteHubAdminItemsUrl(catalogUrl) {
+  const url = new URL(catalogUrl);
+  url.pathname = '/api/agent-repository-server/items';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 }
 
 function normalizeCatalogPackageFiles(rawItem, source) {
@@ -436,7 +624,9 @@ function normalizeCatalogItem(rawItem, source, catalog, likesState) {
   const likeUrl = rawItem.likeUrl && source.url
     ? resolveRemoteUrl(source.url, rawItem.likeUrl)
     : rawItem.likeUrl || null;
-  const packageFiles = kind === 'skill' ? normalizeCatalogPackageFiles(rawItem, source) : [];
+  const packageFiles = kind === 'skill' || kind === 'mcp-server'
+    ? normalizeCatalogPackageFiles(rawItem, source)
+    : [];
 
   return {
     id,
@@ -451,6 +641,10 @@ function normalizeCatalogItem(rawItem, source, catalog, likesState) {
     supportedApps: normalizeSupportedApps(rawItem.supportedApps || rawItem.apps || rawItem.integrations),
     appSlots: normalizeAppSlots(rawItem.appSlots || rawItem.setupSlots || rawItem.applicationSlots),
     capabilities: normalizeStringArray(rawItem.capabilities || rawItem.features),
+    ...(kind === 'agent-template'
+      ? { dependencies: normalizeAgentDependencies(rawItem.dependencies || rawItem.requires, rawItem) }
+      : {}),
+    ...(kind === 'mcp-server' ? { mcp: normalizeMcpDefinition(rawItem.mcp || rawItem.mcpServer || rawItem.runtime) } : {}),
     likes,
     liked: Boolean(likesState.liked[key]),
     downloads: Number(rawItem.downloads || rawItem.downloadCount || 0),
@@ -610,7 +804,7 @@ async function readItemContent(item) {
 }
 
 async function readItemPackageFiles(item) {
-  if (item.kind !== 'skill' || !Array.isArray(item.packageFiles) || item.packageFiles.length === 0) {
+  if (!['skill', 'mcp-server'].includes(item.kind) || !Array.isArray(item.packageFiles) || item.packageFiles.length === 0) {
     return [];
   }
 
@@ -642,7 +836,7 @@ async function readItemPackageFiles(item) {
     files.push({ path: relativePath, buffer, size: buffer.length });
   }
 
-  if (!files.some((file) => file.path.toLowerCase() === 'skill.md')) {
+  if (item.kind === 'skill' && !files.some((file) => file.path.toLowerCase() === 'skill.md')) {
     throw new Error('skill package must include SKILL.md at the package root');
   }
   return files;
@@ -680,8 +874,179 @@ function applyAgentConfiguration(content, configuration) {
   return `${String(content || '').trimEnd()}\n${lines.join('\n')}`;
 }
 
+function applyMcpTemplate(value, replacements) {
+  if (typeof value !== 'string') return value;
+  return value
+    .replace(/\$\{installDir\}/g, replacements.installDir)
+    .replace(/\$\{installPath\}/g, replacements.installDir)
+    .replace(/\$\{projectPath\}/g, replacements.projectPath || '')
+    .replace(/\$\{workspacePath\}/g, replacements.projectPath || '');
+}
+
+function normalizeMcpValues(configuration) {
+  if (!configuration || typeof configuration !== 'object') return {};
+  const source = configuration.mcpValues && typeof configuration.mcpValues === 'object'
+    ? configuration.mcpValues
+    : configuration;
+  return normalizeRecord(source);
+}
+
+function buildMcpServerPayload(item, installDir, target, projectPath, configuration) {
+  const mcp = item.mcp || {};
+  const serverName = sanitizeSlug(mcp.serverName || item.name || item.id, 'mcp-server');
+  const transport = ['stdio', 'http', 'sse'].includes(mcp.transport) ? mcp.transport : 'stdio';
+  const replacements = { installDir, projectPath: projectPath || '' };
+  const values = normalizeMcpValues(configuration);
+  const setupFields = Array.isArray(mcp.setupFields) ? mcp.setupFields : [];
+  const env = {};
+  for (const [key, value] of Object.entries(mcp.env || {})) {
+    env[key] = applyMcpTemplate(value, replacements);
+  }
+  const headers = {};
+  for (const [key, value] of Object.entries(mcp.headers || {})) {
+    headers[key] = applyMcpTemplate(value, replacements);
+  }
+
+  let command = applyMcpTemplate(mcp.command || '', replacements);
+  let args = Array.isArray(mcp.args) ? mcp.args.map((arg) => applyMcpTemplate(arg, replacements)) : [];
+  let cwd = applyMcpTemplate(mcp.cwd || installDir, replacements);
+  let url = applyMcpTemplate(mcp.url || '', replacements);
+
+  for (const field of setupFields) {
+    const key = String(field.key || '').trim();
+    if (!key) continue;
+    const value = values[key] || field.defaultValue || '';
+    if (field.required && !String(value).trim()) {
+      throw new Error(`MCP configuration "${field.label || key}" is required`);
+    }
+    if (!String(value).trim()) continue;
+    if (field.target === 'arg' || field.target === 'args') {
+      args.push(applyMcpTemplate(value, replacements));
+    } else if (field.target === 'cwd') {
+      cwd = applyMcpTemplate(value, replacements);
+    } else if (field.target === 'url') {
+      url = applyMcpTemplate(value, replacements);
+    } else if (field.target === 'header') {
+      headers[key] = applyMcpTemplate(value, replacements);
+    } else if (field.target !== 'tool-argument' && field.target !== 'metadata') {
+      env[key] = applyMcpTemplate(value, replacements);
+    }
+  }
+
+  return {
+    name: serverName,
+    scope: target === 'project' ? 'project' : 'user',
+    workspacePath: target === 'project' ? projectPath : undefined,
+    transport,
+    command,
+    args,
+    env,
+    cwd,
+    url,
+    headers,
+  };
+}
+
+function quoteWindowsShellArg(value) {
+  const text = String(value);
+  if (!/[ \t\n\v"]/.test(text)) return text;
+  return `"${text.replace(/(\\*)"/g, '$1$1\\"').replace(/\\+$/g, '$&$&')}"`;
+}
+
+function normalizeSpawnCommand(command, args) {
+  if (
+    process.platform === 'win32'
+    && /\.(?:cmd|bat)$/i.test(String(command || '').trim())
+  ) {
+    const shell = process.env.ComSpec || 'cmd.exe';
+    return {
+      command: shell,
+      args: ['/d', '/s', '/c', [command, ...args].map(quoteWindowsShellArg).join(' ')],
+    };
+  }
+  return { command, args };
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    let child;
+    try {
+      const normalized = normalizeSpawnCommand(command, Array.isArray(args) ? args : []);
+      child = spawn(normalized.command, normalized.args, {
+        cwd: options.cwd,
+        env: { ...process.env, ...(options.env || {}) },
+        shell: false,
+        windowsHide: true,
+      });
+    } catch (error) {
+      finish({ code: -1, stdout, stderr: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // ignore
+      }
+      finish({ code: -1, stdout, stderr: `${stderr}${stderr ? '\n' : ''}Command timed out` });
+    }, options.timeoutMs || 120_000);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      finish({ code: -1, stdout, stderr: error.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      finish({ code: code ?? 0, stdout, stderr });
+    });
+  });
+}
+
+async function runMcpPostInstallIfNeeded(item, installDir) {
+  const postInstall = item.mcp?.postInstall;
+  const wantsNpmInstall = postInstall?.type === 'npm-install'
+    || postInstall?.type === 'npm'
+    || item.mcp?.npmInstall === true;
+  if (!wantsNpmInstall) return null;
+  const packageJsonPath = path.join(installDir, 'package.json');
+  if (!fs.existsSync(packageJsonPath)) return null;
+  const command = String(postInstall?.command || '').trim()
+    || (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const args = Array.isArray(postInstall?.args) && postInstall.args.length > 0
+    ? postInstall.args
+    : ['install', '--omit=dev', '--ignore-scripts'];
+  const result = await runProcess(command, args, { cwd: installDir, timeoutMs: 180_000 });
+  if (result.code !== 0) {
+    throw new Error(`MCP package post-install failed: ${result.stderr || result.stdout || `exit ${result.code}`}`);
+  }
+  return { command, args, stdout: result.stdout, stderr: result.stderr };
+}
+
 function getMtlCodeConfigDir() {
   return process.env.MTL_CODE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.mtl-code');
+}
+
+function getMcpInstallBase(target, projectPath) {
+  if (target === 'project') {
+    if (!projectPath || typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) {
+      throw new Error('Project install requires an absolute projectPath');
+    }
+    return path.join(path.resolve(projectPath), '.mtl-code', 'mcp-servers');
+  }
+  return path.join(getMtlCodeConfigDir(), 'mcp-servers');
 }
 
 function resolveInstallTarget(kind, name, target, projectPath) {
@@ -697,11 +1062,17 @@ function resolveInstallTarget(kind, name, target, projectPath) {
     if (kind === 'skill') {
       return path.join(projectRoot, '.claude', 'skills', safeName, 'SKILL.md');
     }
+    if (kind === 'mcp-server') {
+      return path.join(getMcpInstallBase(target, projectPath), safeName);
+    }
     return path.join(projectRoot, '.claude', 'agents', `${safeName}.md`);
   }
   const home = getMtlCodeConfigDir();
   if (kind === 'skill') {
     return path.join(home, 'skills', safeName, 'SKILL.md');
+  }
+  if (kind === 'mcp-server') {
+    return path.join(getMcpInstallBase(target, projectPath), safeName);
   }
   return path.join(home, 'agents', `${safeName}.md`);
 }
@@ -712,10 +1083,12 @@ async function writeInstallFile(filePath, content, overwrite) {
   await fsp.writeFile(filePath, content, { flag, mode: 0o600 });
 }
 
-function assertInstallPathSafe(targetPath, target = 'user', projectPath = '') {
+function assertInstallPathSafe(targetPath, target = 'user', projectPath = '', kind = '') {
   const resolved = path.resolve(targetPath);
   const base = target === 'project'
-    ? path.resolve(projectPath, '.claude')
+    ? kind === 'mcp-server'
+      ? path.resolve(projectPath, '.mtl-code')
+      : path.resolve(projectPath, '.claude')
     : path.resolve(getMtlCodeConfigDir());
   if (resolved === base || resolved.startsWith(base + path.sep)) {
     return resolved;
@@ -723,9 +1096,9 @@ function assertInstallPathSafe(targetPath, target = 'user', projectPath = '') {
   throw new Error('Install target is outside the allowed install directory');
 }
 
-async function writeInstallPackage(targetDir, files, overwrite, { target = 'user', projectPath = '' } = {}) {
+async function writeInstallPackage(targetDir, files, overwrite, { target = 'user', projectPath = '', kind = 'skill' } = {}) {
   const root = path.resolve(targetDir);
-  assertInstallPathSafe(root, target, projectPath);
+  assertInstallPathSafe(root, target, projectPath, kind);
   if (overwrite) {
     await fsp.rm(root, { recursive: true, force: true });
   }
@@ -742,6 +1115,8 @@ async function writeInstallPackage(targetDir, files, overwrite, { target = 'user
       if (fs.existsSync(targetPath)) {
         const error = new Error(`Install target already exists: ${relativePath}`);
         error.code = 'EEXIST';
+        error.relativePath = relativePath;
+        error.installPath = root;
         throw error;
       }
     }
@@ -755,15 +1130,218 @@ async function writeInstallPackage(targetDir, files, overwrite, { target = 'user
   }
 }
 
+function dependencyLookupValues(dependency) {
+  return [
+    dependency.itemId,
+    dependency.id,
+    dependency.name,
+  ]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim());
+}
+
+function dependencyMatchesItem(item, dependency) {
+  const rawValues = dependencyLookupValues(dependency);
+  const normalizedValues = new Set(rawValues.map(normalizeInstallName).filter(Boolean));
+  const directValues = new Set(rawValues.map((value) => value.toLowerCase()));
+  const itemValues = [
+    item.id,
+    item.name,
+    item.title,
+    item.mcp?.serverName,
+  ].filter((value) => typeof value === 'string' && value.trim());
+  if (itemValues.some((value) => directValues.has(value.toLowerCase()))) {
+    return true;
+  }
+  return itemValues.some((value) => normalizedValues.has(normalizeInstallName(value)));
+}
+
+function findDependencyItem(catalog, dependency, parentRepoId) {
+  const kind = dependency.kind === 'mcp-server' ? 'mcp-server' : 'skill';
+  const candidates = catalog.items.filter((item) => (
+    item.kind === kind
+    && (!dependency.repoId || item.repoId === dependency.repoId)
+  ));
+  const sameRepo = candidates.filter((item) => item.repoId === parentRepoId);
+  return [...sameRepo, ...candidates].find((item) => dependencyMatchesItem(item, dependency)) || null;
+}
+
+async function bumpLocalDownload(item) {
+  if (item.repoId !== LOCAL_REPOSITORY_ID) return;
+  const catalog = await readLocalCatalog();
+  const index = catalog.items.findIndex((candidate) => {
+    const candidateKind = normalizeKind(candidate.kind);
+    return candidateKind === item.kind && getPublicItemId(candidateKind, getRawItemSlug(candidate)) === item.id;
+  });
+  if (index >= 0) {
+    catalog.items[index].downloads = Number(catalog.items[index].downloads || 0) + 1;
+    await saveLocalCatalog(catalog);
+  }
+}
+
+function dependencySummary(item, result, status = 'installed') {
+  return {
+    kind: item.kind,
+    repoId: item.repoId,
+    itemId: item.id,
+    name: item.name,
+    title: item.title,
+    status,
+    installPath: result?.installPath || null,
+    ...(result?.mcpServer ? { mcpServer: result.mcpServer } : {}),
+    ...(result?.postInstall ? { postInstall: result.postInstall } : {}),
+  };
+}
+
+function isMissingRequiredMcpConfiguration(error) {
+  return typeof error?.message === 'string'
+    && /^MCP configuration ".+" is required$/.test(error.message);
+}
+
+async function installRepositoryItem(item, options = {}) {
+  const {
+    target = 'user',
+    projectPath,
+    overwrite = false,
+    configuration,
+    catalog,
+    installDependencies = true,
+    visited = new Set(),
+  } = options;
+  const visitKey = `${item.repoId}:${item.id}`;
+  if (visited.has(visitKey)) {
+    return {
+      success: true,
+      item,
+      installPath: null,
+      target,
+      dependencies: [],
+      skipped: true,
+    };
+  }
+  visited.add(visitKey);
+
+  const dependencies = [];
+  if (installDependencies && item.kind === 'agent-template') {
+    const dependencyCatalog = catalog || await loadCatalogs();
+    const declared = item.dependencies || { skills: [], mcpServers: [] };
+    const dependencyEntries = [
+      ...(Array.isArray(declared.skills) ? declared.skills : []),
+      ...(Array.isArray(declared.mcpServers) ? declared.mcpServers : []),
+    ];
+
+    for (const dependency of dependencyEntries) {
+      const dependencyItem = findDependencyItem(dependencyCatalog, dependency, item.repoId);
+      if (!dependencyItem) {
+        const label = `${dependency.kind === 'mcp-server' ? 'MCP' : 'Skill'} ${dependency.name}`;
+        if (dependency.optional) {
+          dependencies.push({ kind: dependency.kind, name: dependency.name, status: 'missing-optional' });
+          continue;
+        }
+        throw new Error(`Agent dependency not found: ${label}`);
+      }
+
+      try {
+        const dependencyResult = await installRepositoryItem(dependencyItem, {
+          target,
+          projectPath,
+          overwrite: dependency.overwrite ?? false,
+          configuration: dependency.configuration,
+          catalog: dependencyCatalog,
+          installDependencies: false,
+          visited,
+        });
+        dependencies.push(dependencySummary(dependencyItem, dependencyResult));
+      } catch (error) {
+        if (error?.code === 'EEXIST') {
+          dependencies.push(dependencySummary(dependencyItem, {
+            installPath: error.installPath,
+          }, 'already-installed'));
+          continue;
+        }
+        if (dependencyItem.kind === 'mcp-server' && isMissingRequiredMcpConfiguration(error)) {
+          dependencies.push({
+            kind: dependencyItem.kind,
+            repoId: dependencyItem.repoId,
+            itemId: dependencyItem.id,
+            name: dependencyItem.name,
+            title: dependencyItem.title,
+            status: 'needs-configuration',
+            error: error.message,
+          });
+          continue;
+        }
+        if (dependency.optional) {
+          dependencies.push({
+            kind: dependencyItem.kind,
+            repoId: dependencyItem.repoId,
+            itemId: dependencyItem.id,
+            name: dependencyItem.name,
+            title: dependencyItem.title,
+            status: 'failed-optional',
+            error: error.message,
+          });
+          continue;
+        }
+        throw new Error(`Agent dependency install failed (${dependencyItem.title || dependencyItem.name}): ${error.message}`);
+      }
+    }
+  }
+
+  const installPath = resolveInstallTarget(item.kind, item.name || item.id, target, projectPath);
+  let responseContent;
+  let responseInstallPath = installPath;
+  let mcpServer = null;
+  let postInstall = null;
+
+  if (item.kind === 'mcp-server') {
+    const packageFiles = await readItemPackageFiles(item);
+    if (packageFiles.length > 0) {
+      await writeInstallPackage(installPath, packageFiles, Boolean(overwrite), { target, projectPath, kind: item.kind });
+    } else {
+      await ensureDir(installPath);
+    }
+    responseInstallPath = installPath;
+    postInstall = await runMcpPostInstallIfNeeded(item, installPath);
+    const mcpPayload = buildMcpServerPayload(item, installPath, target, projectPath, configuration);
+    mcpServer = await providerMcpService.upsertProviderMcpServer('claude', mcpPayload);
+  } else if (item.kind === 'skill' && Array.isArray(item.packageFiles) && item.packageFiles.length > 0) {
+    const packageFiles = await readItemPackageFiles(item);
+    const installDir = path.dirname(installPath);
+    await writeInstallPackage(installDir, packageFiles, Boolean(overwrite), { target, projectPath, kind: item.kind });
+    responseInstallPath = installDir;
+  } else {
+    const rawContent = await readItemContent(item);
+    const content = item.kind === 'agent-template'
+      ? applyAgentConfiguration(rawContent, configuration)
+      : rawContent;
+    await writeInstallFile(installPath, content, Boolean(overwrite));
+    responseContent = item.kind === 'agent-template' ? content : undefined;
+  }
+
+  await bumpLocalDownload(item);
+
+  return {
+    success: true,
+    item,
+    installPath: responseInstallPath,
+    target,
+    content: responseContent,
+    dependencies,
+    ...(mcpServer ? { mcpServer } : {}),
+    ...(postInstall ? { postInstall } : {}),
+  };
+}
+
 async function removeInstallTarget(kind, name, target, projectPath) {
   const installPath = resolveInstallTarget(kind, name, target, projectPath);
   const targetPath = kind === 'skill' ? path.dirname(installPath) : installPath;
-  const resolvedTarget = assertInstallPathSafe(targetPath, target, projectPath);
-  await fsp.rm(resolvedTarget, { recursive: kind === 'skill', force: true });
+  const resolvedTarget = assertInstallPathSafe(targetPath, target, projectPath, kind);
+  await fsp.rm(resolvedTarget, { recursive: kind === 'skill' || kind === 'mcp-server', force: true });
   return resolvedTarget;
 }
 
-async function upsertLocalItem({ kind, name, title, description, author, tags, content, packageFiles, overwrite, icon, supportedApps, appSlots, capabilities }) {
+async function upsertLocalItem({ kind, name, title, description, author, tags, content, packageFiles, overwrite, icon, supportedApps, appSlots, capabilities, dependencies, mcp }) {
   const id = sanitizeSlug(name || title);
   if (!validateSlug(id)) {
     throw new Error('Name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
@@ -778,9 +1356,11 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
   const createdAt = existingIndex >= 0 ? catalog.items[existingIndex].createdAt || nowIso() : nowIso();
   const contentPath = kind === 'skill'
     ? `skills/${id}/SKILL.md`
-    : `agents/${id}/${id}.md`;
-  const normalizedPackageFiles = kind === 'skill'
-    ? normalizePackageFiles(packageFiles, { requireSkillMd: Array.isArray(packageFiles) && packageFiles.length > 0 })
+    : kind === 'mcp-server'
+      ? `mcp/${id}/package.json`
+      : `agents/${id}/${id}.md`;
+  const normalizedPackageFiles = kind === 'skill' || kind === 'mcp-server'
+    ? normalizePackageFiles(packageFiles, { requireSkillMd: kind === 'skill' && Array.isArray(packageFiles) && packageFiles.length > 0 })
     : [];
 
   const resolved = resolveLocalContentPath(contentPath);
@@ -789,8 +1369,8 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
   }
 
   let catalogPackageFiles = [];
-  if (kind === 'skill' && normalizedPackageFiles.length > 0) {
-    const packageRootPath = `skills/${id}`;
+  if ((kind === 'skill' || kind === 'mcp-server') && normalizedPackageFiles.length > 0) {
+    const packageRootPath = kind === 'mcp-server' ? `mcp/${id}` : `skills/${id}`;
     const packageRoot = resolveLocalContentPath(packageRootPath);
     if (!packageRoot) throw new Error('Invalid repository package path');
     if (existingIndex >= 0 && overwrite) {
@@ -814,7 +1394,9 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
     }
     const finalContent = kind === 'skill'
       ? formatSkillMarkdown({ name: id, title, description, content })
-      : formatAgentTemplateMarkdown({ name: id, description, prompt: content });
+      : kind === 'mcp-server'
+        ? String(content || description || `MCP server package for ${title || id}.`)
+        : formatAgentTemplateMarkdown({ name: id, description, prompt: content });
     await ensureDir(path.dirname(resolved));
     await fsp.writeFile(resolved, finalContent, { mode: 0o600 });
   }
@@ -831,6 +1413,8 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
     supportedApps: normalizeSupportedApps(supportedApps),
     appSlots: normalizeAppSlots(appSlots),
     capabilities: normalizeStringArray(capabilities),
+    ...(kind === 'agent-template' ? { dependencies: normalizeAgentDependencies(dependencies) } : {}),
+    ...(kind === 'mcp-server' ? { mcp: normalizeMcpDefinition(mcp) } : {}),
     version: '1.0.0',
     likes: existingIndex >= 0 ? Number(catalog.items[existingIndex].likes || 0) : 0,
     downloads: existingIndex >= 0 ? Number(catalog.items[existingIndex].downloads || 0) : 0,
@@ -997,10 +1581,29 @@ router.get('/catalog', async (req, res) => {
 });
 
 router.post('/upload', async (req, res) => {
+  res.status(410).json({
+    error: 'Local repository upload is disabled',
+    details: 'Upload to a configured remote Agent/Skill/MCP Hub instead.',
+  });
+});
+
+router.post('/remote-upload', async (req, res) => {
   try {
+    const { repoId, adminToken } = req.body || {};
+    if (!repoId || typeof repoId !== 'string') {
+      return res.status(400).json({ error: 'repoId is required' });
+    }
+    if (!adminToken || typeof adminToken !== 'string') {
+      return res.status(400).json({ error: 'adminToken is required' });
+    }
+    const { sources } = readSources();
+    const source = sources.find((candidate) => candidate.id === repoId && candidate.type !== 'local');
+    if (!source?.url) {
+      return res.status(404).json({ error: 'Remote repository source not found' });
+    }
     const kind = normalizeKind(req.body?.kind);
     if (!kind) {
-      return res.status(400).json({ error: 'kind must be "agent-template" or "skill"' });
+      return res.status(400).json({ error: 'kind must be "agent-template", "skill", or "mcp-server"' });
     }
     const {
       name,
@@ -1015,6 +1618,71 @@ router.post('/upload', async (req, res) => {
       supportedApps,
       appSlots,
       capabilities,
+      dependencies,
+      mcp,
+    } = req.body || {};
+    if ((!content || typeof content !== 'string') && (!Array.isArray(packageFiles) || packageFiles.length === 0)) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+    const remoteUrl = deriveRemoteHubAdminItemsUrl(source.url);
+    const response = await fetch(remoteUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        kind,
+        name,
+        title,
+        description,
+        author,
+        tags,
+        content,
+        packageFiles,
+        overwrite: Boolean(overwrite),
+        icon,
+        supportedApps,
+        appSlots,
+        capabilities,
+        dependencies,
+        mcp,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data.error || 'Failed to upload repository item to remote Hub',
+        details: data.details || data.message || `Remote Hub returned HTTP ${response.status}`,
+      });
+    }
+    res.json({ success: true, item: data.item || data.catalogItem || null, repository: source });
+  } catch (error) {
+    res.status(400).json({ error: 'Failed to upload repository item to remote Hub', details: error.message });
+  }
+});
+
+router.post('/local/upload', async (req, res) => {
+  try {
+    const kind = normalizeKind(req.body?.kind);
+    if (!kind) {
+      return res.status(400).json({ error: 'kind must be "agent-template", "skill", or "mcp-server"' });
+    }
+    const {
+      name,
+      title,
+      description,
+      author,
+      tags,
+      content,
+      packageFiles,
+      overwrite = false,
+      icon,
+      supportedApps,
+      appSlots,
+      capabilities,
+      dependencies,
+      mcp,
     } = req.body || {};
     if ((!content || typeof content !== 'string') && (!Array.isArray(packageFiles) || packageFiles.length === 0)) {
       return res.status(400).json({ error: 'content is required' });
@@ -1033,10 +1701,12 @@ router.post('/upload', async (req, res) => {
       supportedApps,
       appSlots,
       capabilities,
+      dependencies,
+      mcp,
     });
     res.json({ success: true, item });
   } catch (error) {
-    res.status(400).json({ error: 'Failed to upload repository item', details: error.message });
+    res.status(400).json({ error: 'Failed to upload local repository item', details: error.message });
   }
 });
 
@@ -1099,49 +1769,30 @@ router.post('/install', async (req, res) => {
     if (!repoId || !itemId) {
       return res.status(400).json({ error: 'repoId and itemId are required' });
     }
-    const item = await findPublicItem(String(repoId), String(itemId));
+    const catalog = await loadCatalogs();
+    const item = catalog.items.find((candidate) => candidate.repoId === String(repoId) && candidate.id === String(itemId)) || null;
     if (!item) {
       return res.status(404).json({ error: 'Repository item not found' });
     }
-    const installPath = resolveInstallTarget(item.kind, item.name || item.id, target, projectPath);
-    let responseContent;
-    let responseInstallPath = installPath;
-
-    if (item.kind === 'skill' && Array.isArray(item.packageFiles) && item.packageFiles.length > 0) {
-      const packageFiles = await readItemPackageFiles(item);
-      const installDir = path.dirname(installPath);
-      await writeInstallPackage(installDir, packageFiles, Boolean(overwrite), { target, projectPath });
-      responseInstallPath = installDir;
-    } else {
-      const rawContent = await readItemContent(item);
-      const content = item.kind === 'agent-template'
-        ? applyAgentConfiguration(rawContent, configuration)
-        : rawContent;
-      await writeInstallFile(installPath, content, Boolean(overwrite));
-      responseContent = item.kind === 'agent-template' ? content : undefined;
-    }
-
-    if (item.repoId === LOCAL_REPOSITORY_ID) {
-      const catalog = await readLocalCatalog();
-      const index = catalog.items.findIndex((candidate) => {
-        const candidateKind = normalizeKind(candidate.kind);
-        return candidateKind === item.kind && getPublicItemId(candidateKind, getRawItemSlug(candidate)) === item.id;
-      });
-      if (index >= 0) {
-        catalog.items[index].downloads = Number(catalog.items[index].downloads || 0) + 1;
-        await saveLocalCatalog(catalog);
-      }
-    }
-
-    res.json({
-      success: true,
-      item,
-      installPath: responseInstallPath,
+    const result = await installRepositoryItem(item, {
       target,
-      content: responseContent,
+      projectPath,
+      overwrite: Boolean(overwrite),
+      configuration,
+      catalog,
     });
+    res.json(result);
   } catch (error) {
     const status = error?.code === 'EEXIST' ? 409 : 400;
+    if (error?.code === 'EEXIST') {
+      return res.status(status).json({
+        error: 'Install target already exists',
+        code: 'INSTALL_TARGET_EXISTS',
+        details: `安装目标已经存在：${error.relativePath || '文件已存在'}。请点击“更新”，或勾选“Overwrite existing installed files”后重试。`,
+        conflictPath: error.relativePath || null,
+        installPath: error.installPath || null,
+      });
+    }
     res.status(status).json({ error: 'Failed to install repository item', details: error.message });
   }
 });
@@ -1157,17 +1808,29 @@ router.delete('/install', async (req, res) => {
       return res.status(404).json({ error: 'Repository item not found' });
     }
 
+    const itemKind = item.kind;
     const installPath = await removeInstallTarget(
       item.kind,
       item.name || item.id,
       target,
       projectPath,
     );
+    let mcpRemoved = null;
+    if (itemKind === 'mcp-server') {
+      const mcp = item.mcp || {};
+      const serverName = sanitizeSlug(mcp.serverName || item.name || item.id, 'mcp-server');
+      mcpRemoved = await providerMcpService.removeProviderMcpServer('claude', {
+        name: serverName,
+        scope: target === 'project' ? 'project' : 'user',
+        workspacePath: target === 'project' ? projectPath : undefined,
+      });
+    }
     res.json({
       success: true,
       item,
       installPath,
       target,
+      ...(mcpRemoved ? { mcpRemoved } : {}),
     });
   } catch (error) {
     res.status(400).json({ error: 'Failed to uninstall repository item', details: error.message });

@@ -95,3 +95,18 @@ export interface InstalledSkill {
   folders?: string[];
   updatedAt?: string;
 }
+
+export interface RepositorySkillItem {
+  id: string;
+  repoId: string;
+  repoName?: string;
+  name: string;
+  title: string;
+  description?: string;
+  author?: string;
+  version?: string;
+  tags?: string[];
+  downloads?: number;
+  likes?: number;
+  sourceUrl?: string | null;
+}

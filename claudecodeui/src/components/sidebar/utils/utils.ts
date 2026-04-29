@@ -122,9 +122,15 @@ export const getAllSessions = (
     __provider: 'gemini' as const,
   }));
 
-  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions].sort(
-    (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
-  );
+  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions].sort((a, b) => {
+    if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
+      return a.isPinned ? -1 : 1;
+    }
+    if (Boolean(a.isArchived) !== Boolean(b.isArchived)) {
+      return a.isArchived ? 1 : -1;
+    }
+    return getSessionDate(b).getTime() - getSessionDate(a).getTime();
+  });
 };
 
 export const getProjectLastActivity = (

@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
   ChatMessage,
@@ -12,8 +13,10 @@ import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import ContextCompactionCard from './ContextCompactionCard';
 
 type DiffLine = {
   type: string;
@@ -108,6 +111,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
   if (shouldHideThinkingMessage) {
     return null;
+  }
+
+  if (message.isContextCompaction) {
+    return (
+      <div
+        ref={messageRef}
+        data-message-timestamp={message.timestamp || undefined}
+        className="chat-message system px-3 sm:px-0"
+      >
+        <ContextCompactionCard message={message} formattedTime={formattedTime} />
+      </div>
+    );
   }
 
   return (

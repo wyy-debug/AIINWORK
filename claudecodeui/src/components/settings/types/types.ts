@@ -20,6 +20,7 @@ export type ClaudePermissionsState = {
   allowedTools: string[];
   disallowedTools: string[];
   skipPermissions: boolean;
+  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 };
 
 export type NotificationPreferencesState = {

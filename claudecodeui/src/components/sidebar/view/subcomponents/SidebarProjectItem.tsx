@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, GitBranch, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, GitBranch, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -36,6 +36,7 @@ type SidebarProjectItemProps = {
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
   onDispatchWorktree: (project: Project) => void;
+  onShowWorktreeTasks: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -49,6 +50,8 @@ type SidebarProjectItemProps = {
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onTogglePinSession: (session: SessionWithProvider) => void;
+  onToggleArchiveSession: (session: SessionWithProvider) => void;
   t: TFunction;
 };
 
@@ -87,6 +90,7 @@ export default function SidebarProjectItem({
   onSaveProjectName,
   onDeleteProject,
   onDispatchWorktree,
+  onShowWorktreeTasks,
   onSessionSelect,
   onDeleteSession,
   onLoadMoreSessions,
@@ -95,6 +99,8 @@ export default function SidebarProjectItem({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
+  onTogglePinSession,
+  onToggleArchiveSession,
   t,
 }: SidebarProjectItemProps) {
   const isSelected = selectedProject?.name === project.name;
@@ -263,6 +269,19 @@ export default function SidebarProjectItem({
                       </button>
                     )}
 
+                    {canDispatchWorktree && (
+                      <button
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-500/10 active:scale-90 dark:border-slate-800 dark:bg-slate-900/30"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onShowWorktreeTasks(project);
+                        }}
+                        title="工作树任务"
+                      >
+                        <ClipboardList className="h-4 w-4 text-slate-600 dark:text-slate-300" />
+                      </button>
+                    )}
+
                     <button
                       className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
                       onClick={(event) => {
@@ -422,6 +441,18 @@ export default function SidebarProjectItem({
                     <GitBranch className="h-3 w-3 text-blue-600 dark:text-blue-300" />
                   </div>
                 )}
+                {canDispatchWorktree && (
+                  <div
+                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-slate-100 group-hover:opacity-100 dark:hover:bg-slate-900/30"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onShowWorktreeTasks(project);
+                    }}
+                    title="工作树任务"
+                  >
+                    <ClipboardList className="h-3 w-3 text-slate-600 dark:text-slate-300" />
+                  </div>
+                )}
                 {isExpanded ? (
                   <ChevronDown className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
                 ) : (
@@ -447,6 +478,8 @@ export default function SidebarProjectItem({
         onStartEditingSession={onStartEditingSession}
         onCancelEditingSession={onCancelEditingSession}
         onSaveEditingSession={onSaveEditingSession}
+        onTogglePinSession={onTogglePinSession}
+        onToggleArchiveSession={onToggleArchiveSession}
         onProjectSelect={onProjectSelect}
         onSessionSelect={onSessionSelect}
         onDeleteSession={onDeleteSession}

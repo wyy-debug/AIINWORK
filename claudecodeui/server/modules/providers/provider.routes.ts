@@ -1,11 +1,13 @@
-import { access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { access, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import express, { type Request, type Response } from 'express';
 
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
-import type { LLMProvider, McpScope, McpTransport, UpsertProviderMcpServerInput } from '@/shared/types.js';
+import type { LLMProvider, McpScope, McpTransport, ProviderMcpServer, UpsertProviderMcpServerInput } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
 const router = express.Router();
@@ -184,6 +186,189 @@ const findExecutable = async (command: string): Promise<string | null> => {
   return null;
 };
 
+type McpDiagnosticCheck = {
+  id: string;
+  status: 'pass' | 'warn' | 'fail';
+  message: string;
+  detail?: string;
+};
+
+const safeServerDirName = (name: string): string =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'mcp-server';
+
+const exists = async (targetPath: string): Promise<boolean> => {
+  try {
+    await stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readJsonIfExists = async (targetPath: string): Promise<Record<string, unknown> | null> => {
+  try {
+    return JSON.parse(await readFile(targetPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+};
+
+const resolveInstalledMcpDir = (
+  server: ProviderMcpServer,
+  workspacePath: string | undefined,
+): string => {
+  if (server.cwd && server.cwd.includes(`${path.sep}.mtl-code${path.sep}mcp-servers${path.sep}`)) {
+    return server.cwd;
+  }
+
+  const serverDirName = safeServerDirName(server.name);
+  if (server.scope === 'project' && workspacePath) {
+    return path.join(workspacePath, '.mtl-code', 'mcp-servers', serverDirName);
+  }
+
+  return path.join(os.homedir(), '.mtl-code', 'mcp-servers', serverDirName);
+};
+
+const normalizeSetupFields = (manifest: Record<string, unknown> | null) => {
+  const mcp = manifest?.mcp && typeof manifest.mcp === 'object'
+    ? manifest.mcp as Record<string, unknown>
+    : {};
+  const rawFields = Array.isArray(mcp.setupFields)
+    ? mcp.setupFields
+    : Array.isArray(manifest?.setupFields)
+      ? manifest?.setupFields
+      : [];
+
+  return rawFields
+    .filter((field): field is Record<string, unknown> => Boolean(field) && typeof field === 'object')
+    .map((field) => ({
+      key: typeof field.key === 'string' ? field.key.trim() : '',
+      label: typeof field.label === 'string' ? field.label.trim() : '',
+      type: typeof field.type === 'string' ? field.type.trim() : '',
+      target: typeof field.target === 'string' ? field.target.trim() : 'env',
+      required: field.required === true,
+    }))
+    .filter((field) => field.key);
+};
+
+const normalizeManifestTools = (manifest: Record<string, unknown> | null): string[] => {
+  const mcp = manifest?.mcp && typeof manifest.mcp === 'object'
+    ? manifest.mcp as Record<string, unknown>
+    : {};
+  const rawTools = Array.isArray(mcp.tools) ? mcp.tools : [];
+  return rawTools
+    .map((tool) => {
+      if (typeof tool === 'string') return tool;
+      if (tool && typeof tool === 'object' && typeof (tool as Record<string, unknown>).name === 'string') {
+        return String((tool as Record<string, unknown>).name);
+      }
+      return '';
+    })
+    .filter(Boolean);
+};
+
+const redactSecrets = (text: string, env: Record<string, string> = {}): string => {
+  let redacted = text;
+  for (const [key, value] of Object.entries(env)) {
+    if (!value || value.length < 4) continue;
+    if (/key|token|secret|password|authorization/i.test(key)) {
+      redacted = redacted.split(value).join('[redacted]');
+    }
+  }
+  return redacted.slice(0, 1200);
+};
+
+const checkLaunchable = async (
+  server: ProviderMcpServer,
+  executable: string | null,
+  installDir: string,
+): Promise<McpDiagnosticCheck> => new Promise((resolve) => {
+  if (server.transport !== 'stdio') {
+    resolve({
+      id: 'launchable',
+      status: 'warn',
+      message: '非 stdio MCP 无法在本地拉起进程，已跳过启动检测。',
+      detail: server.url || '',
+    });
+    return;
+  }
+
+  if (!executable) {
+    resolve({
+      id: 'launchable',
+      status: 'fail',
+      message: '启动命令不可用，无法检测 MCP Server。',
+      detail: server.command || '',
+    });
+    return;
+  }
+
+  const cwd = server.cwd || installDir;
+  const child = spawn(executable, server.args || [], {
+    cwd,
+    env: {
+      ...process.env,
+      ...(server.env || {}),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+
+  let output = '';
+  let settled = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const finish = (check: McpDiagnosticCheck) => {
+    if (settled) return;
+    settled = true;
+    if (timeout) clearTimeout(timeout);
+    resolve(check);
+  };
+  const collect = (chunk: Buffer | string) => {
+    output += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+    if (output.length > 2000) {
+      output = output.slice(-2000);
+    }
+  };
+
+  child.stdout?.on('data', collect);
+  child.stderr?.on('data', collect);
+  child.on('error', (error) => {
+    finish({
+      id: 'launchable',
+      status: 'fail',
+      message: 'MCP Server 启动失败。',
+      detail: redactSecrets(error.message, server.env),
+    });
+  });
+
+  timeout = setTimeout(() => {
+    child.kill();
+    finish({
+      id: 'launchable',
+      status: 'pass',
+      message: 'MCP Server 可以启动并保持运行。',
+      detail: '进程在检测窗口内保持存活，已自动结束检测进程。',
+    });
+  }, 2500);
+
+  child.on('exit', (code) => {
+    const detail = redactSecrets(output.trim(), server.env);
+    finish({
+      id: 'launchable',
+      status: code === 0 ? 'warn' : 'fail',
+      message: code === 0
+        ? 'MCP Server 启动后很快退出，可能是自检型入口。'
+        : `MCP Server 启动后退出，退出码 ${code ?? 'unknown'}。`,
+      detail,
+    });
+  });
+});
+
 const inspectProviderMcpServer = async (
   provider: LLMProvider,
   name: string,
@@ -285,6 +470,142 @@ const inspectProviderMcpServer = async (
   };
 };
 
+const diagnoseProviderMcpServer = async (
+  provider: LLMProvider,
+  name: string,
+  scope: McpScope | undefined,
+  workspacePath: string | undefined,
+) => {
+  const requestedScope = scope || 'user';
+  const servers = await providerMcpService.listProviderMcpServersForScope(provider, requestedScope, { workspacePath });
+  const server = servers.find((candidate) => candidate.name === name);
+  if (!server) {
+    throw new AppError('MCP server not found.', {
+      code: 'MCP_SERVER_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+
+  const installDir = resolveInstalledMcpDir(server, workspacePath);
+  const manifest = await readJsonIfExists(path.join(installDir, 'hub.mcp.json'));
+  const packageJson = await readJsonIfExists(path.join(installDir, 'package.json'));
+  const setupFields = normalizeSetupFields(manifest);
+  const manifestTools = normalizeManifestTools(manifest);
+  const checks: McpDiagnosticCheck[] = [];
+
+  checks.push({
+    id: 'config-written',
+    status: 'pass',
+    message: 'MCP 配置已写入 provider 配置。',
+    detail: `${server.scope}:${server.transport}`,
+  });
+
+  checks.push({
+    id: 'package-installed',
+    status: await exists(installDir) ? 'pass' : 'fail',
+    message: await exists(installDir)
+      ? 'MCP 包已安装到本机。'
+      : '未找到 MCP 安装目录。',
+    detail: installDir,
+  });
+
+  const packageDependencies = packageJson && typeof packageJson === 'object' && packageJson.dependencies && typeof packageJson.dependencies === 'object'
+    ? Object.keys(packageJson.dependencies as Record<string, unknown>)
+    : [];
+  const hasNodeModules = await exists(path.join(installDir, 'node_modules'));
+  checks.push({
+    id: 'dependencies-installed',
+    status: packageDependencies.length === 0 || hasNodeModules ? 'pass' : 'fail',
+    message: packageDependencies.length === 0
+      ? 'MCP 包没有声明 npm 运行依赖。'
+      : hasNodeModules
+        ? 'MCP npm 依赖已安装。'
+        : 'MCP npm 依赖缺失，请重新安装或执行 postInstall。',
+    detail: packageDependencies.length > 0 ? packageDependencies.join(', ') : undefined,
+  });
+
+  const requiredFields = setupFields
+    .filter((field) => field.required)
+    .map((field) => {
+      const configured = field.target === 'env'
+        ? Boolean(server.env?.[field.key]?.trim())
+        : field.target === 'header'
+          ? Boolean(server.headers?.[field.key]?.trim())
+          : Boolean(
+              field.target === 'cwd'
+                ? server.cwd
+                : field.target === 'url'
+                  ? server.url
+                  : field.target === 'arg' || field.target === 'args'
+                    ? server.args?.some((arg) => arg.includes(field.key))
+                    : false,
+            );
+      return {
+        key: field.key,
+        label: field.label || field.key,
+        type: field.type,
+        target: field.target,
+        required: field.required,
+        configured,
+      };
+    });
+  const missingRequiredFields = requiredFields.filter((field) => !field.configured);
+  checks.push({
+    id: 'required-setup',
+    status: missingRequiredFields.length === 0 ? 'pass' : 'fail',
+    message: missingRequiredFields.length === 0
+      ? '必填配置已写入。'
+      : '存在缺失的必填配置。',
+    detail: requiredFields
+      .map((field) => `${field.key}: ${field.configured ? 'configured' : 'missing'}`)
+      .join(', '),
+  });
+
+  let executable: string | null = null;
+  if (server.transport === 'stdio') {
+    executable = await findExecutable(server.command || '');
+    checks.push({
+      id: 'command',
+      status: executable ? 'pass' : 'fail',
+      message: executable ? '启动命令可用。' : '启动命令不可用。',
+      detail: executable || server.command || '',
+    });
+  }
+
+  if (missingRequiredFields.length > 0) {
+    checks.push({
+      id: 'launchable',
+      status: 'fail',
+      message: '缺少必填配置，已跳过启动检测。',
+      detail: missingRequiredFields.map((field) => `${field.key}: missing`).join(', '),
+    });
+  } else {
+    checks.push(await checkLaunchable(server, executable, installDir));
+  }
+
+  checks.push({
+    id: 'runtime-tools',
+    status: manifestTools.length > 0 ? 'pass' : 'warn',
+    message: manifestTools.length > 0
+      ? 'manifest 中声明了可用工具；实际工具列表仍由 MTL-Code runtime 会话启动后发现。'
+      : '未找到独立 tool-list API；工具列表将在会话启动后由 MTL-Code runtime 发现。',
+    detail: manifestTools.join(', ') || 'runtime discovery',
+  });
+
+  const failed = checks.some((check) => check.status === 'fail');
+  const warned = checks.some((check) => check.status === 'warn');
+  return {
+    provider,
+    server,
+    scope: requestedScope,
+    installDir,
+    status: failed ? 'error' : warned ? 'warning' : 'ok',
+    checkedAt: new Date().toISOString(),
+    requiredFields,
+    checks,
+  };
+};
+
 router.get(
   '/:provider/auth/status',
   asyncHandler(async (req: Request, res: Response) => {
@@ -331,6 +652,18 @@ router.get(
     const name = readPathParam(req.params.name, 'name');
     const inspection = await inspectProviderMcpServer(provider, name, scope, workspacePath);
     res.json(createApiSuccessResponse(inspection));
+  }),
+);
+
+router.get(
+  '/:provider/mcp/servers/:name/diagnose',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    const scope = parseMcpScope(req.query.scope);
+    const workspacePath = readOptionalQueryString(req.query.workspacePath);
+    const name = readPathParam(req.params.name, 'name');
+    const diagnostics = await diagnoseProviderMcpServer(provider, name, scope, workspacePath);
+    res.json(createApiSuccessResponse(diagnostics));
   }),
 );
 

@@ -35,6 +35,13 @@ export interface ChatMessage {
   isThinking?: boolean;
   isStreaming?: boolean;
   isInteractivePrompt?: boolean;
+  isContextCompaction?: boolean;
+  compactType?: 'full' | 'micro' | 'summary' | string;
+  compactTrigger?: string;
+  compactSummary?: string;
+  preTokens?: number;
+  tokensSaved?: number;
+  compactedToolIds?: unknown;
   isToolUse?: boolean;
   toolName?: string;
   toolInput?: unknown;
@@ -54,6 +61,7 @@ export interface ClaudeSettings {
   allowedTools: string[];
   disallowedTools: string[];
   skipPermissions: boolean;
+  permissionMode?: PermissionMode;
   projectSortOrder: string;
   lastUpdated?: string;
   [key: string]: unknown;
@@ -86,6 +94,23 @@ export interface AgentRuntimePermissionSnapshot {
   allowedTools: string[];
   disallowedTools: string[];
   bypassPermissions: boolean;
+  sources?: {
+    global?: Record<string, unknown>;
+    session?: Record<string, unknown>;
+    project?: Record<string, unknown>;
+  };
+  conflicts?: string[];
+}
+
+export interface AgentRuntimeSkillDetail {
+  name: string;
+  label: string;
+  path: string;
+  scope: string;
+  provider?: string;
+  callable: boolean;
+  exists: boolean;
+  promptLength: number;
 }
 
 export interface AgentRuntimeDiagnostics {
@@ -98,6 +123,8 @@ export interface AgentRuntimeDiagnostics {
   mcpBindings?: AgentAppBinding[];
   sessionSkills?: string[];
   effectiveSkills?: string[];
+  skillDetails?: AgentRuntimeSkillDetail[];
+  skillPromptLength?: number;
   appendSystemPromptLength?: number;
   model?: string;
   contextWindowTokens?: number | null;

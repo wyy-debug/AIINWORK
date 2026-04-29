@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { useTheme } from '../../../contexts/ThemeContext';
 import { apiFetch } from '../../../utils/api';
 import {
@@ -15,6 +16,7 @@ import type {
   ProjectSortOrder,
   SettingsMainTab,
 } from '../types/types';
+import type { PermissionMode } from '../../chat/types/types';
 
 type ThemeContextValue = {
   isDarkMode: boolean;
@@ -30,6 +32,7 @@ type ClaudeSettingsStorage = {
   allowedTools?: string[];
   disallowedTools?: string[];
   skipPermissions?: boolean;
+  permissionMode?: PermissionMode;
   projectSortOrder?: ProjectSortOrder;
 };
 
@@ -93,6 +96,7 @@ const createEmptyClaudePermissions = (): ClaudePermissionsState => ({
   allowedTools: [],
   disallowedTools: [],
   skipPermissions: false,
+  permissionMode: 'default',
 });
 
 const createEmptyCursorPermissions = (): CursorPermissionsState => ({
@@ -144,6 +148,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         allowedTools: savedClaudeSettings.allowedTools || [],
         disallowedTools: savedClaudeSettings.disallowedTools || [],
         skipPermissions: Boolean(savedClaudeSettings.skipPermissions),
+        permissionMode: savedClaudeSettings.permissionMode || 'default',
       });
       setProjectSortOrder(savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name');
 
@@ -204,9 +209,11 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         allowedTools: claudePermissions.allowedTools,
         disallowedTools: claudePermissions.disallowedTools,
         skipPermissions: claudePermissions.skipPermissions,
+        permissionMode: claudePermissions.permissionMode || 'default',
         projectSortOrder,
         lastUpdated: now,
       }));
+      window.dispatchEvent(new Event('claudeSettingsChanged'));
 
       localStorage.setItem('cursor-tools-settings', JSON.stringify({
         allowedCommands: cursorPermissions.allowedCommands,
@@ -242,6 +249,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     claudePermissions.allowedTools,
     claudePermissions.disallowedTools,
     claudePermissions.skipPermissions,
+    claudePermissions.permissionMode,
     codexPermissionMode,
     cursorPermissions.allowedCommands,
     cursorPermissions.disallowedCommands,

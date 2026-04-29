@@ -1,33 +1,29 @@
 #!/usr/bin/env node
 // Load environment variables before other imports execute
 import './load-env.js';
-import fs from 'fs';
+import { spawn } from 'child_process';
+import fs, { promises as fsPromises } from 'fs';
+import http from 'http';
+import os from 'os';
 import path from 'path';
-import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
+
+import cors from 'cors';
+import express from 'express';
+import mime from 'mime-types';
+import pty from 'node-pty';
+import { WebSocketServer, WebSocket } from 'ws';
 
 import { AppError, createNormalizedMessage } from '@/shared/utils.js';
 
+import { getConnectableHost } from '../shared/networkHosts.js';
 
-const __dirname = getModuleDir(import.meta.url);
-// The server source runs from /server, while the compiled output runs from /dist-server/server.
-// Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
-const APP_ROOT = findAppRoot(__dirname);
-const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
-
-import { c } from './utils/colors.js';
-
-console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
-
-import express from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
-import os from 'os';
-import http from 'http';
-import cors from 'cors';
-import { promises as fsPromises } from 'fs';
-import { spawn } from 'child_process';
-import pty from 'node-pty';
-import mime from 'mime-types';
-
+import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { IS_PLATFORM } from './constants/config.js';
+import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
+import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
+import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
+import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
+import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
 import {
     getProjects,
     getSessions,
@@ -40,37 +36,40 @@ import {
     clearProjectDirectoryCache,
     searchConversations,
 } from './projects.js';
-import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
-import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
-import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
-import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
-import sessionManager from './sessionManager.js';
-import gitRoutes from './routes/git.js';
-import authRoutes from './routes/auth.js';
-import cursorRoutes from './routes/cursor.js';
-import taskmasterRoutes from './routes/taskmaster.js';
-import mcpUtilsRoutes from './routes/mcp-utils.js';
-import commandsRoutes from './routes/commands.js';
-import settingsRoutes from './routes/settings.js';
+import agentRepositoryRoutes from './routes/agent-repository.js';
 import agentRoutes from './routes/agent.js';
 import agentsRoutes from './routes/agents.js';
-import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
-import userRoutes from './routes/user.js';
+import authRoutes from './routes/auth.js';
 import codexRoutes from './routes/codex.js';
+import commandsRoutes from './routes/commands.js';
+import cursorRoutes from './routes/cursor.js';
 import geminiRoutes from './routes/gemini.js';
-import pluginsRoutes from './routes/plugins.js';
-import agentRepositoryRoutes from './routes/agent-repository.js';
-import sessionAgentRoutes from './routes/session-agents.js';
+import gitRoutes from './routes/git.js';
+import mcpUtilsRoutes from './routes/mcp-utils.js';
 import messagesRoutes from './routes/messages.js';
-import worktreeRoutes from './routes/worktrees.js';
+import pluginsRoutes from './routes/plugins.js';
+import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
 import providerRoutes from './modules/providers/provider.routes.js';
-import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
+import sessionAgentRoutes from './routes/session-agents.js';
+import settingsRoutes from './routes/settings.js';
+import taskmasterRoutes from './routes/taskmaster.js';
+import userRoutes from './routes/user.js';
+import worktreeRoutes from './routes/worktrees.js';
+import sessionManager from './sessionManager.js';
+import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
 import { configureWebPush } from './services/vapid-keys.js';
-import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
-import { IS_PLATFORM } from './constants/config.js';
-import { getConnectableHost } from '../shared/networkHosts.js';
-import { buildSkillReferencePrompt, resolveAgentRuntime } from './services/agent-config-service.js';
+import { c } from './utils/colors.js';
+import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
+import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
+import { stripAnsiSequences, normalizeDetectedUrl, extractUrlsFromText, shouldAutoOpenUrlFromOutput } from './utils/url-detection.js';
+
+const __dirname = getModuleDir(import.meta.url);
+// The server source runs from /server, while the compiled output runs from /dist-server/server.
+// Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
+const APP_ROOT = findAppRoot(__dirname);
+const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
+
+console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 const MTL_CODE_DEFAULT_CLI = 'mtl-code';
@@ -257,7 +256,6 @@ const server = http.createServer(app);
 const ptySessionsMap = new Map();
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
-import { stripAnsiSequences, normalizeDetectedUrl, extractUrlsFromText, shouldAutoOpenUrlFromOutput } from './utils/url-detection.js';
 
 // Single WebSocket server that handles both paths
 const wss = new WebSocketServer({
@@ -533,6 +531,7 @@ app.delete('/api/conversations/sessions/:sessionId', authenticateToken, async (r
         const { sessionId } = req.params;
         await deleteSession(getStandaloneConversationProjectName(), sessionId);
         sessionNamesDb.deleteName(sessionId, 'claude');
+        sessionAgentBindingsDb.deleteAgent(sessionId, 'claude');
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error deleting standalone conversation ${req.params.sessionId}:`, error);
@@ -558,6 +557,7 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
         await deleteSession(projectName, sessionId);
         sessionNamesDb.deleteName(sessionId, 'claude');
+        sessionAgentBindingsDb.deleteAgent(sessionId, 'claude');
         console.log(`[API] Session ${sessionId} deleted successfully`);
         res.json({ success: true });
     } catch (error) {
@@ -588,6 +588,28 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, async (req, res) =
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error renaming session ${req.params.sessionId}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/api/sessions/:sessionId/metadata', authenticateToken, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
+        if (!safeSessionId || safeSessionId !== String(sessionId)) {
+            return res.status(400).json({ error: 'Invalid sessionId' });
+        }
+        const { provider = 'claude', pinned, archived } = req.body || {};
+        if (!VALID_PROVIDERS.includes(provider)) {
+            return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+        }
+        const metadata = {};
+        if (typeof pinned === 'boolean') metadata.pinned = pinned;
+        if (typeof archived === 'boolean') metadata.archived = archived;
+        sessionNamesDb.setMetadata(safeSessionId, provider, metadata);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(`[API] Error updating session metadata ${req.params.sessionId}:`, error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -856,6 +878,165 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
         } else {
             res.status(500).json({ error: error.message });
         }
+    }
+});
+
+const FILE_MENTION_IGNORED_DIRECTORIES = new Set([
+    '.git',
+    '.hg',
+    '.svn',
+    '.next',
+    '.turbo',
+    '.vite',
+    '.cache',
+    '.gradle',
+    '.idea',
+    '.vs',
+    '.vscode',
+    'node_modules',
+    'dist',
+    'build',
+    'out',
+    'coverage',
+    'Library',
+    'Temp',
+    'Obj',
+    'Logs',
+]);
+const FILE_MENTION_MAX_VISITED_ENTRIES = 25000;
+
+function toProjectRelativePath(projectRoot, filePath) {
+    return path.relative(projectRoot, filePath).split(path.sep).join('/');
+}
+
+function scoreFileMention(relativePath, query, order) {
+    if (!query) {
+        return order;
+    }
+
+    const normalizedPath = relativePath.toLowerCase();
+    const fileName = path.basename(relativePath).toLowerCase();
+    const normalizedQuery = query.toLowerCase();
+    const queryParts = normalizedQuery.split(/[\\/._\-\s]+/).filter(Boolean);
+
+    if (fileName === normalizedQuery) return 0;
+    if (fileName.startsWith(normalizedQuery)) return 1;
+    if (normalizedPath.startsWith(normalizedQuery)) return 2;
+    if (fileName.includes(normalizedQuery)) return 3;
+    if (normalizedPath.includes(normalizedQuery)) return 4;
+    if (queryParts.length > 0 && queryParts.every((part) => normalizedPath.includes(part))) return 5;
+    return -1;
+}
+
+async function searchProjectMentionFiles(projectRoot, rawQuery, limit) {
+    const normalizedRoot = path.resolve(projectRoot);
+    const query = String(rawQuery || '').trim().replace(/^@+/, '').replace(/\\/g, '/');
+    const queue = [normalizedRoot];
+    const matches = [];
+    let visitedEntries = 0;
+    let order = 0;
+
+    while (queue.length > 0 && visitedEntries < FILE_MENTION_MAX_VISITED_ENTRIES) {
+        const currentDirectory = queue.shift();
+        let entries;
+
+        try {
+            entries = await fsPromises.readdir(currentDirectory, { withFileTypes: true });
+        } catch (error) {
+            if (error?.code !== 'EACCES' && error?.code !== 'EPERM') {
+                console.warn('[WARN] File mention search skipped directory:', currentDirectory, error?.message || error);
+            }
+            continue;
+        }
+
+        visitedEntries += entries.length;
+        const sortedEntries = entries.sort((left, right) => left.name.localeCompare(right.name));
+        const childDirectories = [];
+
+        for (const entry of sortedEntries) {
+            if (FILE_MENTION_IGNORED_DIRECTORIES.has(entry.name)) {
+                continue;
+            }
+
+            const entryPath = path.join(currentDirectory, entry.name);
+
+            if (entry.isDirectory()) {
+                childDirectories.push(entryPath);
+                continue;
+            }
+
+            if (!entry.isFile()) {
+                continue;
+            }
+
+            const relativePath = toProjectRelativePath(normalizedRoot, entryPath);
+            const score = scoreFileMention(relativePath, query, order);
+            order += 1;
+            if (score < 0) {
+                continue;
+            }
+
+            matches.push({
+                name: entry.name,
+                path: relativePath,
+                relativePath,
+                score,
+                order,
+            });
+
+            if (!query && matches.length >= limit) {
+                break;
+            }
+        }
+
+        if (!query && matches.length >= limit) {
+            break;
+        }
+
+        queue.push(...childDirectories);
+    }
+
+    return matches
+        .sort((left, right) => {
+            if (left.score !== right.score) return left.score - right.score;
+            if (left.path.length !== right.path.length) return left.path.length - right.path.length;
+            return left.path.localeCompare(right.path);
+        })
+        .slice(0, limit)
+        .map((file) => ({
+            name: file.name,
+            path: file.path,
+            relativePath: file.relativePath,
+        }));
+}
+
+app.get('/api/projects/:projectName/files/search', authenticateToken, async (req, res) => {
+    try {
+        const requestedLimit = parseInt(String(req.query.limit || '60'), 10);
+        const limit = Number.isFinite(requestedLimit)
+            ? Math.min(Math.max(requestedLimit, 1), 100)
+            : 60;
+
+        const projectRoot = await extractProjectDirectory(req.params.projectName).catch(() => null);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        try {
+            await fsPromises.access(projectRoot);
+        } catch {
+            return res.status(404).json({ error: `Project path not found: ${projectRoot}` });
+        }
+
+        const files = await searchProjectMentionFiles(projectRoot, req.query.q, limit);
+        res.json({
+            files,
+            query: String(req.query.q || ''),
+            limit,
+        });
+    } catch (error) {
+        console.error('[ERROR] File mention search error:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -1563,6 +1744,11 @@ function createRuntimePermissionSnapshot(data) {
     const bypassPermissions = permissionMode !== 'plan' && Boolean(
         skipPermissions || permissionMode === 'bypassPermissions'
     );
+    const allowedSet = new Set(toolsSettings.allowedTools.map((tool) => tool.trim()).filter(Boolean));
+    const conflicts = toolsSettings.disallowedTools
+        .map((tool) => tool.trim())
+        .filter((tool) => tool && allowedSet.has(tool))
+        .map((tool) => `${tool} is both allowed and disallowed`);
 
     return {
         permissionMode,
@@ -1570,6 +1756,21 @@ function createRuntimePermissionSnapshot(data) {
         allowedTools: toolsSettings.allowedTools,
         disallowedTools: toolsSettings.disallowedTools,
         bypassPermissions,
+        sources: {
+            global: {
+                allowedTools: toolsSettings.allowedTools,
+                disallowedTools: toolsSettings.disallowedTools,
+                skipPermissions: toolsSettings.skipPermissions,
+            },
+            session: {
+                permissionMode,
+                skipPermissions: Boolean(options.skipPermissions),
+            },
+            project: {
+                projectPath: options.projectPath || options.cwd || '',
+            },
+        },
+        conflicts,
     };
 }
 
@@ -1630,10 +1831,11 @@ async function applyAgentRuntimeToChatCommand(data) {
             return data;
         }
 
-        const appendSystemPrompt = await buildSkillReferencePrompt(sessionSkills, {
+        const skillReferences = await resolveSkillReferences(sessionSkills, {
             query: typeof data.command === 'string' ? data.command : '',
             workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
         });
+        const appendSystemPrompt = skillReferences.prompt;
         if (!appendSystemPrompt) {
             return data;
         }
@@ -1654,6 +1856,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                 mcpBindings: [],
                 sessionSkills,
                 effectiveSkills: sessionSkills,
+                skillDetails: skillReferences.details,
+                skillPromptLength: skillReferences.promptLength,
                 appendSystemPromptLength: appendSystemPrompt.length,
                 contextWindowTokens: data?.options?.contextWindowTokens || null,
                 model: data?.options?.model || '',
@@ -1681,6 +1885,10 @@ async function applyAgentRuntimeToChatCommand(data) {
     if (!runtime) {
         return data;
     }
+    const skillReferences = await resolveSkillReferences(runtime.agent.skills, {
+        query: typeof data.command === 'string' ? data.command : '',
+        workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+    });
 
     if (allowSessionAgentBinding && concreteSessionId) {
         sessionAgentBindingsDb.setAgent(concreteSessionId, provider, runtime.agent.id, sessionConfiguration);
@@ -1703,6 +1911,8 @@ async function applyAgentRuntimeToChatCommand(data) {
             mcpBindings: runtime.agent.appBindings.filter((binding) => String(binding?.app || '').startsWith('MCP: ')),
             sessionSkills,
             effectiveSkills: runtime.agent.skills,
+            skillDetails: skillReferences.details,
+            skillPromptLength: skillReferences.promptLength,
             appendSystemPromptLength: runtime.appendSystemPrompt.length,
             contextWindowTokens: runtime.contextWindowTokens,
             model: runtime.model || data?.options?.model || '',

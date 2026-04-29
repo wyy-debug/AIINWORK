@@ -6,7 +6,8 @@ Standalone Agent template and Skill repository service for MTL-Code compatible c
 
 ```powershell
 npm install
-$env:HUB_ADMIN_TOKEN="change-me"
+Copy-Item .\hub.config.example.json .\hub.config.json
+notepad .\hub.config.json
 npm start
 ```
 
@@ -36,18 +37,18 @@ dist\agent-skill-hub.exe
 Run it directly:
 
 ```powershell
-$env:HUB_ADMIN_TOKEN="change-me"
 .\dist\agent-skill-hub.exe
 ```
 
 The Hub listens on `0.0.0.0` by default, so machines on the LAN can reach it if Windows Firewall allows the port. Example LAN startup:
 
-```powershell
-$env:PORT="4877"
-$env:HOST="0.0.0.0"
-$env:HUB_DATA_DIR="D:\mtl-agent-skill-hub-data"
-$env:HUB_ADMIN_TOKEN="change-me"
-.\dist\agent-skill-hub.exe
+```json
+{
+  "host": "0.0.0.0",
+  "port": 4877,
+  "dataDir": "D:\\mtl-agent-skill-hub-data",
+  "adminToken": "replace-with-a-long-random-token"
+}
 ```
 
 Example Windows Firewall rule:
@@ -55,6 +56,67 @@ Example Windows Firewall rule:
 ```powershell
 New-NetFirewallRule -DisplayName "Agent Skill Hub 4877" -Direction Inbound -Protocol TCP -LocalPort 4877 -Action Allow
 ```
+
+### Fixed Remote Startup Script
+
+For a remote Windows Hub, use `hub.config.json` and the checked-in startup
+script so every launch uses the same host, port, data directory, and token.
+
+1. Copy the private JSON config template:
+
+```powershell
+Copy-Item .\hub.config.example.json .\hub.config.json
+notepad .\hub.config.json
+```
+
+2. Set stable values in `hub.config.json`:
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 4877,
+  "dataDir": "D:\\mtl-agent-skill-hub-data",
+  "adminToken": "replace-with-a-long-random-token",
+  "submitToken": "",
+  "name": "Agent/Skill Hub",
+  "description": "Shared Agent templates and Skills.",
+  "publicBasePath": "/agent-repository",
+  "adminBasePath": "/api/admin"
+}
+```
+
+3. Start the portable exe:
+
+```powershell
+.\scripts\start-hub.ps1
+```
+
+Or double-click / call:
+
+```cmd
+scripts\start-hub.cmd
+```
+
+To create the Windows Firewall rule during startup, run PowerShell as
+Administrator once:
+
+```powershell
+.\scripts\start-hub.ps1 -OpenFirewall
+```
+
+`hub.config.json` is ignored by git. Keep it on the remote machine and reuse the
+same `dataDir`; changing that directory makes the Hub look empty because catalog
+metadata and uploaded Skill package files live there.
+
+The Hub process itself reads JSON config at startup. Lookup order:
+
+1. `HUB_CONFIG` / `AGENT_SKILL_HUB_CONFIG`
+2. `hub.config.json` in the current working directory
+3. `hub.config.json` next to `agent-skill-hub.exe`
+4. built-in defaults
+
+Environment variables such as `PORT`, `HUB_DATA_DIR`, and `HUB_ADMIN_TOKEN`
+still work and override JSON values for one-off maintenance runs.
 
 Catalog URL examples:
 
@@ -124,6 +186,38 @@ Skill packages can be submitted or published with `packageFiles` instead of a si
 ```
 
 The admin UI can also select a Skill folder. The folder must contain `SKILL.md` at its root; subfolders such as `agents/`, `references/`, and `scripts/` are preserved in the public catalog.
+
+MCP server packages use `kind: "mcp-server"` and can expose setup fields that MTL-Code shows after Pull:
+
+```json
+{
+  "kind": "mcp-server",
+  "name": "ainwork-code-search",
+  "title": "AIINWORK Code Search MCP",
+  "packageFiles": [
+    { "path": "package.json", "encoding": "utf8", "content": "{...}" },
+    { "path": "src/server.js", "encoding": "utf8", "content": "..." }
+  ],
+  "mcp": {
+    "serverName": "ainwork-code-search",
+    "transport": "stdio",
+    "command": "node",
+    "args": ["${installDir}/src/server.js"],
+    "postInstall": { "type": "npm-install" },
+    "setupFields": [
+      {
+        "key": "AINWORK_DEFAULT_CODE_ROOT",
+        "label": "root",
+        "type": "path",
+        "target": "env",
+        "required": true
+      }
+    ]
+  }
+}
+```
+
+`setupFields` are not secrets unless you mark them as `password`; the values are written into the local MCP config for the user who pulls the package. Tool schemas and live tool lists are still discovered by the MTL-Code/Claude Code runtime after the MCP server starts.
 
 ## Admin API
 

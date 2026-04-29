@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { CLAUDE_MODELS } from '../../../../shared/modelConstants';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
@@ -9,6 +10,47 @@ interface UseChatProviderStateArgs {
 
 const MTL_CODE_PROVIDER: LLMProvider = 'claude';
 const MTL_CODE_MODEL = CLAUDE_MODELS.DEFAULT;
+const CLAUDE_SETTINGS_KEY = 'claude-settings';
+
+const toPermissionMode = (value: unknown): PermissionMode => (
+  value === 'acceptEdits'
+  || value === 'bypassPermissions'
+  || value === 'plan'
+    ? value
+    : 'default'
+);
+
+const readStoredPermissionMode = (): PermissionMode => {
+  try {
+    const rawSettings = localStorage.getItem(CLAUDE_SETTINGS_KEY);
+    if (!rawSettings) {
+      return 'default';
+    }
+    const settings = JSON.parse(rawSettings) as { permissionMode?: unknown };
+    return toPermissionMode(settings.permissionMode);
+  } catch {
+    return 'default';
+  }
+};
+
+const writeStoredPermissionMode = (permissionMode: PermissionMode) => {
+  try {
+    const rawSettings = localStorage.getItem(CLAUDE_SETTINGS_KEY);
+    const settings = rawSettings ? JSON.parse(rawSettings) as Record<string, unknown> : {};
+    localStorage.setItem(CLAUDE_SETTINGS_KEY, JSON.stringify({
+      ...settings,
+      permissionMode,
+      lastUpdated: new Date().toISOString(),
+    }));
+  } catch {
+    localStorage.setItem(CLAUDE_SETTINGS_KEY, JSON.stringify({
+      permissionMode,
+      lastUpdated: new Date().toISOString(),
+    }));
+  }
+
+  window.dispatchEvent(new Event('claudeSettingsChanged'));
+};
 
 const readStoredMtlCodeModel = () => {
   const stored = localStorage.getItem('claude-model');
@@ -18,7 +60,7 @@ const readStoredMtlCodeModel = () => {
 };
 
 export function useChatProviderState({ selectedSession }: UseChatProviderStateArgs) {
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => readStoredPermissionMode());
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   const [provider, setProvider] = useState<LLMProvider>(MTL_CODE_PROVIDER);
   const [cursorModel, setCursorModel] = useState<string>(() => {
@@ -50,12 +92,18 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   }, [claudeModel, provider]);
 
   useEffect(() => {
-    if (!selectedSession?.id) {
-      return;
-    }
+    const syncPermissionMode = () => {
+      setPermissionMode(readStoredPermissionMode());
+    };
 
-    const savedMode = localStorage.getItem(`permissionMode-${selectedSession.id}`);
-    setPermissionMode((savedMode as PermissionMode) || 'default');
+    syncPermissionMode();
+    window.addEventListener('storage', syncPermissionMode);
+    window.addEventListener('claudeSettingsChanged', syncPermissionMode);
+
+    return () => {
+      window.removeEventListener('storage', syncPermissionMode);
+      window.removeEventListener('claudeSettingsChanged', syncPermissionMode);
+    };
   }, [selectedSession?.id]);
 
   useEffect(() => {
@@ -82,11 +130,8 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     const nextIndex = (currentIndex + 1) % modes.length;
     const nextMode = modes[nextIndex];
     setPermissionMode(nextMode);
-
-    if (selectedSession?.id) {
-      localStorage.setItem(`permissionMode-${selectedSession.id}`, nextMode);
-    }
-  }, [permissionMode, provider, selectedSession?.id]);
+    writeStoredPermissionMode(nextMode);
+  }, [permissionMode, provider]);
 
   return {
     provider,

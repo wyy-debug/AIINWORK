@@ -350,6 +350,24 @@ function shouldUseBareMode(env = process.env) {
   return value !== '0' && value !== 'false' && value !== 'off';
 }
 
+function hasRequestedMcpBindings(options = {}) {
+  const bindings = options.runtimeDiagnostics?.mcpBindings;
+  return Array.isArray(bindings) && bindings.length > 0;
+}
+
+function getMtlCodeGlobalConfigFile(env = process.env) {
+  const home = osHomedirFallback();
+  const configDir = env.MTL_CODE_CONFIG_DIR || env.CLAUDE_CONFIG_DIR || home;
+  const mtlCodeConfigPath = path.join(configDir, '.mtl-code.json');
+  const legacyClaudeConfigPath = path.join(env.CLAUDE_CONFIG_DIR || home, '.claude.json');
+
+  if (!env.MTL_CODE_CONFIG_DIR && existsSync(legacyClaudeConfigPath) && !existsSync(mtlCodeConfigPath)) {
+    return legacyClaudeConfigPath;
+  }
+
+  return mtlCodeConfigPath;
+}
+
 function buildMtlCodeArgs(options = {}, env = process.env) {
   const { sessionId, toolsSettings, permissionMode } = options;
   const settings = normalizeToolSettings(toolsSettings);
@@ -368,6 +386,13 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 
   if (shouldUseBareMode(env)) {
     args.splice(1, 0, '--bare');
+  }
+
+  if (hasRequestedMcpBindings(options)) {
+    const mcpConfigPath = getMtlCodeGlobalConfigFile(env);
+    if (existsSync(mcpConfigPath)) {
+      args.push('--mcp-config', mcpConfigPath);
+    }
   }
 
   if (sessionId) {

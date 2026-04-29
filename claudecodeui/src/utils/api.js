@@ -49,6 +49,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ summary, provider }),
     }),
+  updateSessionMetadata: (sessionId, metadata, provider = 'claude') =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/metadata`, {
+      method: 'PATCH',
+      body: JSON.stringify({ provider, ...metadata }),
+    }),
   deleteCodexSession: (sessionId) =>
     apiFetch(`/api/codex/sessions/${sessionId}`, {
       method: 'DELETE',
@@ -176,6 +181,11 @@ export const api = {
     if (workspacePath) params.set('workspacePath', workspacePath);
     return apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers/${encodeURIComponent(serverName)}/inspect?${params.toString()}`);
   },
+  diagnoseMcpServer: (provider = 'claude', serverName, scope = 'user', workspacePath = '') => {
+    const params = new URLSearchParams({ scope });
+    if (workspacePath) params.set('workspacePath', workspacePath);
+    return apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers/${encodeURIComponent(serverName)}/diagnose?${params.toString()}`);
+  },
   deleteMcpServer: (provider = 'claude', serverName, scope = 'user', workspacePath = '') => {
     const params = new URLSearchParams({ scope });
     if (workspacePath) params.set('workspacePath', workspacePath);
@@ -183,6 +193,12 @@ export const api = {
       method: 'DELETE',
     });
   },
+  agentRepositoryCatalog: () => apiFetch('/api/agent-repository/catalog'),
+  installAgentRepositoryItem: (payload = {}) =>
+    apiFetch('/api/agent-repository/install', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   readFile: (projectName, filePath) =>
     apiFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectName, filePath) =>
@@ -194,6 +210,12 @@ export const api = {
     }),
   getFiles: (projectName, options = {}) =>
     apiFetch(`/api/projects/${projectName}/files`, options),
+  searchFiles: (projectName, query = '', limit = 60, options = {}) => {
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    params.set('limit', String(limit));
+    return apiFetch(`/api/projects/${encodeURIComponent(projectName)}/files/search?${params.toString()}`, options);
+  },
 
   // File operations
   createFile: (projectName, { path, type, name }) =>

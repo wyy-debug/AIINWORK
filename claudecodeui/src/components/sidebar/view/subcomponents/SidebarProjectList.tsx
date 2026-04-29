@@ -40,6 +40,7 @@ export type SidebarProjectListProps = {
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
   onDispatchWorktree: (project: Project) => void;
+  onShowWorktreeTasks: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -53,6 +54,8 @@ export type SidebarProjectListProps = {
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onTogglePinSession: (session: SessionWithProvider) => void;
+  onToggleArchiveSession: (session: SessionWithProvider) => void;
   t: TFunction;
 };
 
@@ -85,6 +88,7 @@ export default function SidebarProjectList({
   onSaveProjectName,
   onDeleteProject,
   onDispatchWorktree,
+  onShowWorktreeTasks,
   onSessionSelect,
   onDeleteSession,
   onLoadMoreSessions,
@@ -93,6 +97,8 @@ export default function SidebarProjectList({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
+  onTogglePinSession,
+  onToggleArchiveSession,
   t,
 }: SidebarProjectListProps) {
   const state = (
@@ -148,6 +154,7 @@ export default function SidebarProjectList({
               onSaveProjectName={onSaveProjectName}
               onDeleteProject={onDeleteProject}
               onDispatchWorktree={onDispatchWorktree}
+              onShowWorktreeTasks={onShowWorktreeTasks}
               onSessionSelect={onSessionSelect}
               onDeleteSession={onDeleteSession}
               onLoadMoreSessions={onLoadMoreSessions}
@@ -156,6 +163,8 @@ export default function SidebarProjectList({
               onStartEditingSession={onStartEditingSession}
               onCancelEditingSession={onCancelEditingSession}
               onSaveEditingSession={onSaveEditingSession}
+              onTogglePinSession={onTogglePinSession}
+              onToggleArchiveSession={onToggleArchiveSession}
               t={t}
             />
           ))}

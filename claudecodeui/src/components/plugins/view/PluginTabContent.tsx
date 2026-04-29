@@ -61,7 +61,7 @@ export default function PluginTabContent({
     contextRef.current = ctx;
 
     for (const cb of contextCallbacksRef.current) {
-      try { cb(ctx); } catch { /* plugin error â€?ignore */ }
+      try { cb(ctx); } catch { /* plugin error; ignore */ }
     }
   }, [isDarkMode, selectedProject, selectedSession]);
 

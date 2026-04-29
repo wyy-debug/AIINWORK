@@ -8,10 +8,12 @@ import {
   Download,
   ExternalLink,
   Heart,
+  AlertTriangle,
   Loader2,
   Plus,
   RefreshCw,
   Search,
+  Server,
   Settings2,
   Trash2,
   Upload,
@@ -22,7 +24,7 @@ import { cn } from '../../../../../../../lib/utils';
 import { api, apiFetch } from '../../../../../../../utils/api';
 import type { SettingsProject } from '../../../../../types/types';
 
-type RepositoryKind = 'agent-template' | 'skill';
+type RepositoryKind = 'agent-template' | 'skill' | 'mcp-server';
 type InstallScope = 'user' | 'project';
 
 type AppOption = {
@@ -65,6 +67,8 @@ type RepositoryItem = {
   supportedApps?: AppOption[];
   appSlots?: AppSlot[];
   capabilities?: string[];
+  dependencies?: AgentDependencies;
+  mcp?: RepositoryMcpDefinition | null;
   likes: number;
   liked: boolean;
   downloads: number;
@@ -74,6 +78,76 @@ type RepositoryItem = {
   contentUrl?: string | null;
   sourceUrl?: string | null;
   updatedAt?: string | null;
+};
+
+type RepositoryDependency = {
+  kind: 'skill' | 'mcp-server';
+  name: string;
+  id?: string;
+  itemId?: string;
+  repoId?: string;
+  optional?: boolean;
+  configuration?: Record<string, unknown>;
+};
+
+type AgentDependencies = {
+  skills?: RepositoryDependency[];
+  mcpServers?: RepositoryDependency[];
+};
+
+type McpSetupField = {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'path' | 'path-list' | 'number' | 'select' | 'boolean';
+  target: 'env' | 'arg' | 'args' | 'cwd' | 'url' | 'header' | 'tool-argument' | 'metadata';
+  required?: boolean;
+  placeholder?: string;
+  description?: string;
+  defaultValue?: string;
+  options?: string[];
+};
+
+type RepositoryMcpDefinition = {
+  serverName?: string;
+  transport?: 'stdio' | 'http' | 'sse';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  setupFields?: McpSetupField[];
+  runtimeFields?: McpSetupField[];
+  tools?: Array<{ name: string; description?: string }>;
+};
+
+type InstalledMcpServer = {
+  name: string;
+  scope: 'user' | 'project' | 'local';
+  workspacePath?: string;
+  transport?: string;
+};
+
+type McpDiagnosticCheck = {
+  id: string;
+  status: 'pass' | 'warn' | 'fail';
+  message: string;
+  detail?: string;
+};
+
+type McpDiagnostics = {
+  status: 'ok' | 'warning' | 'error';
+  checkedAt: string;
+  installDir?: string;
+  requiredFields?: Array<{
+    key: string;
+    label: string;
+    type?: string;
+    target?: string;
+    required?: boolean;
+    configured: boolean;
+  }>;
+  checks: McpDiagnosticCheck[];
 };
 
 type InstalledSkill = {
@@ -110,6 +184,8 @@ type UploadForm = {
   icon: string;
   supportedApps: string;
   capabilities: string;
+  skillDependencies: string;
+  mcpDependencies: string;
   content: string;
   packageFiles: UploadPackageFile[];
   overwrite: boolean;
@@ -125,6 +201,8 @@ const EMPTY_UPLOAD_FORM: UploadForm = {
   icon: '',
   supportedApps: '',
   capabilities: '',
+  skillDependencies: '',
+  mcpDependencies: '',
   content: '',
   packageFiles: [],
   overwrite: false,
@@ -155,6 +233,18 @@ function parseAppOptions(value: string): AppOption[] {
     id: label.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || label,
     label,
   }));
+}
+
+function parseDependencies(value: string, kind: 'skill' | 'mcp-server'): RepositoryDependency[] {
+  return parseTags(value).map((name) => ({ kind, name }));
+}
+
+function dependencyName(dependency: RepositoryDependency) {
+  return dependency.name || dependency.itemId || dependency.id || 'dependency';
+}
+
+function dependencyChipLabel(dependency: RepositoryDependency) {
+  return `${dependency.kind === 'mcp-server' ? 'MCP' : 'Skill'}: ${dependencyName(dependency)}`;
 }
 
 function getFileRelativePath(file: File) {
@@ -211,6 +301,9 @@ async function readPackageFile(file: File, relativePath: string): Promise<Upload
 async function readError(response: Response, fallback: string) {
   try {
     const data = await response.json();
+    if (data?.code === 'INSTALL_TARGET_EXISTS') {
+      return data.details || '安装目标已经存在。请点击“更新”，或勾选“Overwrite existing installed files”后重试。';
+    }
     return data.details || data.error || fallback;
   } catch {
     return fallback;
@@ -218,13 +311,19 @@ async function readError(response: Response, fallback: string) {
 }
 
 function kindLabel(kind: RepositoryKind) {
-  return kind === 'skill' ? 'Skill' : 'Agent';
+  if (kind === 'skill') return 'Skill';
+  if (kind === 'mcp-server') return 'MCP';
+  return 'Agent';
 }
 
 function kindAccent(kind: RepositoryKind) {
-  return kind === 'skill'
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
-    : 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300';
+  if (kind === 'skill') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300';
+  }
+  if (kind === 'mcp-server') {
+    return 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-300';
+  }
+  return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300';
 }
 
 function templateKey(item: RepositoryItem) {
@@ -248,6 +347,18 @@ function itemNameCandidates(item: RepositoryItem) {
   return new Set([item.name, item.title, item.id]
     .map(normalizeInstallName)
     .filter(Boolean));
+}
+
+function getMcpServerName(item: RepositoryItem) {
+  return normalizeInstallName(item.mcp?.serverName || item.name || item.id || item.title);
+}
+
+function getMcpSetupFields(item: RepositoryItem) {
+  return item.mcp?.setupFields || [];
+}
+
+function getMcpRuntimeFields(item: RepositoryItem) {
+  return item.mcp?.runtimeFields || [];
 }
 
 function formatAppLabel(app: AppOption | string) {
@@ -275,6 +386,53 @@ function toAgentId(item: RepositoryItem) {
     .slice(0, 80) || `agent-${Date.now()}`;
 }
 
+function dependencySkillNames(item: RepositoryItem, installResult?: { dependencies?: Array<{ kind?: string; name?: string; title?: string }> }) {
+  const names = new Set<string>();
+  for (const dependency of item.dependencies?.skills || []) {
+    names.add(dependencyName(dependency));
+  }
+  for (const dependency of installResult?.dependencies || []) {
+    if (dependency.kind === 'skill' && dependency.name) {
+      names.add(dependency.name);
+    }
+  }
+  return Array.from(names).filter(Boolean);
+}
+
+function dependencyMcpBindings(_item: RepositoryItem, installResult?: { dependencies?: Array<{ kind?: string; name?: string; status?: string; mcpServer?: { name?: string } }> }) {
+  const names = new Set<string>();
+  for (const dependency of installResult?.dependencies || []) {
+    if (
+      dependency.kind === 'mcp-server'
+      && !['needs-configuration', 'missing-optional', 'failed-optional'].includes(String(dependency.status || ''))
+    ) {
+      names.add(dependency.mcpServer?.name || dependency.name || '');
+    }
+  }
+  return Array.from(names)
+    .filter(Boolean)
+    .map((name) => ({
+      slot: `mcp-${toAgentId({ name, id: name, title: name, kind: 'agent-template', tags: [], likes: 0, liked: false, downloads: 0, repoId: '', repoName: '', repoWritable: false })}`,
+      app: `MCP: ${name}`,
+      status: 'optional' as const,
+    }));
+}
+
+function dependencyStatusSummary(installResult?: { dependencies?: Array<{ kind?: string; name?: string; status?: string }> }) {
+  const dependencies = installResult?.dependencies || [];
+  if (dependencies.length === 0) return '';
+  const skillInstalled = dependencies.filter((dependency) => dependency.kind === 'skill' && ['installed', 'already-installed'].includes(String(dependency.status || ''))).length;
+  const mcpConfigured = dependencies.filter((dependency) => dependency.kind === 'mcp-server' && ['installed', 'already-installed'].includes(String(dependency.status || ''))).length;
+  const mcpMissingConfig = dependencies.filter((dependency) => dependency.kind === 'mcp-server' && dependency.status === 'needs-configuration').length;
+  const failed = dependencies.filter((dependency) => String(dependency.status || '').includes('failed')).length;
+  return [
+    skillInstalled > 0 ? `${skillInstalled} Skill 已安装` : '',
+    mcpConfigured > 0 ? `${mcpConfigured} MCP 已配置` : '',
+    mcpMissingConfig > 0 ? `${mcpMissingConfig} MCP 缺配置` : '',
+    failed > 0 ? `${failed} 依赖失败` : '',
+  ].filter(Boolean).join('，');
+}
+
 function getTemplateSlots(item: RepositoryItem): AppSlot[] {
   if (item.appSlots && item.appSlots.length > 0) {
     return item.appSlots;
@@ -300,9 +458,17 @@ type ItemCardProps = {
   onInstall: (item: RepositoryItem) => void;
   onUpdate: (item: RepositoryItem) => void;
   onUninstall: (item: RepositoryItem) => void;
+  onDiagnose?: (item: RepositoryItem) => void;
+  diagnostics?: McpDiagnostics;
 };
 
-function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninstall }: ItemCardProps) {
+function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninstall, onDiagnose, diagnostics }: ItemCardProps) {
+  const diagnosticStatusClass = diagnostics?.status === 'ok'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+    : diagnostics?.status === 'warning'
+      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'
+      : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300';
+
   return (
     <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex items-start justify-between gap-3">
@@ -351,6 +517,45 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
               ))}
             </div>
           )}
+          {item.kind === 'mcp-server' && (
+            <div className="mt-2 flex flex-wrap gap-1 text-xs text-muted-foreground">
+              {item.mcp?.transport && (
+                <span className="rounded bg-muted px-1.5 py-0.5">{item.mcp.transport}</span>
+              )}
+              {getMcpSetupFields(item).length > 0 && (
+                <span className="rounded bg-muted px-1.5 py-0.5">{getMcpSetupFields(item).length} config</span>
+              )}
+              {(item.mcp?.tools || []).slice(0, 3).map((tool) => (
+                <span key={tool.name} className="rounded bg-muted px-1.5 py-0.5">{tool.name}</span>
+              ))}
+            </div>
+          )}
+          {diagnostics && (
+            <div className="mt-3 rounded-lg border border-border bg-muted/25 p-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={cn('rounded border px-1.5 py-0.5 font-medium', diagnosticStatusClass)}>
+                  {diagnostics.status === 'ok' ? '可调用' : diagnostics.status === 'warning' ? '需确认' : '不可用'}
+                </span>
+                <span className="text-muted-foreground">检测时间 {new Date(diagnostics.checkedAt).toLocaleString()}</span>
+              </div>
+              <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+                {diagnostics.checks.map((check) => (
+                  <div key={check.id} className="flex gap-1.5">
+                    <span className={cn(
+                      'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
+                      check.status === 'pass' && 'bg-emerald-500',
+                      check.status === 'warn' && 'bg-amber-500',
+                      check.status === 'fail' && 'bg-red-500',
+                    )} />
+                    <span className="min-w-0">
+                      {check.message}
+                      {check.detail && <span className="ml-1 break-all opacity-80">{check.detail}</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1">
@@ -371,6 +576,17 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
           </button>
           {installed ? (
             <>
+              {item.kind === 'mcp-server' && onDiagnose && (
+                <button
+                  type="button"
+                  onClick={() => onDiagnose(item)}
+                  disabled={busy}
+                  className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
+                >
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  检测
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onUpdate(item)}
@@ -398,7 +614,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
               className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              Pull
+              {item.kind === 'mcp-server' ? 'Pull & Configure' : 'Pull'}
             </button>
           )}
         </div>
@@ -503,6 +719,22 @@ function TemplateGallery({
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+
+              {((selectedTemplate.dependencies?.skills || []).length > 0 || (selectedTemplate.dependencies?.mcpServers || []).length > 0) && (
+                <div className="mt-6">
+                  <h4 className="text-sm font-medium text-foreground">Dependencies</h4>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {[...(selectedTemplate.dependencies?.skills || []), ...(selectedTemplate.dependencies?.mcpServers || [])].map((dependency) => (
+                      <span
+                        key={`${dependency.kind}:${dependency.repoId || selectedTemplate.repoId}:${dependencyName(dependency)}`}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-sm text-foreground"
+                      >
+                        {dependencyChipLabel(dependency)}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -623,6 +855,160 @@ function AgentSetupDialog({ item, values, busy, onChange, onClose, onCreate }: A
   );
 }
 
+type McpSetupDialogProps = {
+  item: RepositoryItem;
+  values: Record<string, string>;
+  busy: boolean;
+  action: 'install' | 'update';
+  error?: string | null;
+  onChange: (key: string, value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+};
+
+function McpSetupDialog({ item, values, busy, action, error, onChange, onClose, onSave }: McpSetupDialogProps) {
+  const setupFields = getMcpSetupFields(item);
+  const runtimeFields = getMcpRuntimeFields(item);
+  const tools = item.mcp?.tools || [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[88vh] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-300">
+                <Server className="h-5 w-5" />
+              </span>
+              <div className="min-w-0">
+                <h3 className="truncate text-lg font-semibold text-foreground">{item.title}</h3>
+                <p className="text-xs text-muted-foreground">
+                  MCP server: {item.mcp?.serverName || item.name}
+                </p>
+              </div>
+            </div>
+            {item.description && (
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">{item.description}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-5">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+            Pull 会把 MCP 包下载安装到本机，然后写入 MTL-Code/Claude Code 的 MCP 配置。
+            工具列表由后端运行时发现；这里先配置启动参数和必填输入。
+          </div>
+
+          <div className="mt-5 grid gap-4">
+            {setupFields.length === 0 ? (
+              <div className="rounded-lg border border-border bg-background p-3 text-sm text-muted-foreground">
+                这个 MCP 不需要额外启动配置。
+              </div>
+            ) : (
+              setupFields.map((field) => (
+                <label key={field.key} className="grid gap-2">
+                  <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    {field.label || field.key}
+                    {field.required && <span className="text-red-500">*</span>}
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                      {field.target}
+                    </span>
+                  </span>
+                  {field.type === 'select' ? (
+                    <select
+                      value={values[field.key] ?? field.defaultValue ?? ''}
+                      onChange={(event) => onChange(field.key, event.target.value)}
+                      className="h-10 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                    >
+                      <option value="">{field.placeholder || 'Select value'}</option>
+                      {(field.options || []).map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={values[field.key] ?? field.defaultValue ?? ''}
+                      onChange={(event) => onChange(field.key, event.target.value)}
+                      placeholder={field.placeholder || field.key}
+                      type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+                      className="h-10 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                    />
+                  )}
+                  {field.description && (
+                    <span className="text-xs leading-5 text-muted-foreground">{field.description}</span>
+                  )}
+                </label>
+              ))
+            )}
+          </div>
+
+          {runtimeFields.length > 0 && (
+            <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+              <div className="font-medium">运行时输入</div>
+              <div className="mt-2 grid gap-1">
+                {runtimeFields.map((field) => (
+                  <div key={field.key}>
+                    <span className="font-mono">{field.key}</span>
+                    {field.required && <span> 必填</span>}
+                    {field.description && <span>：{field.description}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tools.length > 0 && (
+            <div className="mt-5">
+              <h4 className="text-sm font-medium text-foreground">包含工具</h4>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {tools.slice(0, 16).map((tool) => (
+                  <span key={tool.name} className="rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground">
+                    {tool.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-5 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div className="min-w-0 break-words">{error}</div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-border p-5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 items-center justify-center rounded-full border border-border px-4 text-sm text-foreground transition-colors hover:bg-muted"
+          >
+            Back
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={busy}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-foreground px-5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {action === 'update' ? '更新 MCP' : '安装并配置 MCP'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type RepositoryContentProps = {
   projects: SettingsProject[];
 };
@@ -631,6 +1017,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const [repositories, setRepositories] = useState<RepositorySource[]>([]);
   const [items, setItems] = useState<RepositoryItem[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
+  const [installedMcpServers, setInstalledMcpServers] = useState<InstalledMcpServer[]>([]);
   const [errors, setErrors] = useState<CatalogResponse['errors']>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -640,6 +1027,8 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const [search, setSearch] = useState('');
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoUrl, setNewRepoUrl] = useState('');
+  const [uploadRepoId, setUploadRepoId] = useState('');
+  const [uploadAdminToken, setUploadAdminToken] = useState('');
   const [installScope, setInstallScope] = useState<InstallScope>('user');
   const [projectPath, setProjectPath] = useState('');
   const [overwriteInstall, setOverwriteInstall] = useState(false);
@@ -647,6 +1036,10 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string | null>(null);
   const [setupItem, setSetupItem] = useState<RepositoryItem | null>(null);
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
+  const [mcpSetupItem, setMcpSetupItem] = useState<RepositoryItem | null>(null);
+  const [mcpSetupValues, setMcpSetupValues] = useState<Record<string, string>>({});
+  const [mcpSetupAction, setMcpSetupAction] = useState<'install' | 'update'>('install');
+  const [mcpDiagnostics, setMcpDiagnostics] = useState<Record<string, McpDiagnostics>>({});
   const selectedProjectPath = installScope === 'project' ? projectPath : '';
 
   const loadCatalog = useCallback(async () => {
@@ -689,6 +1082,28 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     void loadInstalledSkills();
   }, [loadInstalledSkills]);
 
+  const loadInstalledMcpServers = useCallback(async () => {
+    try {
+      if (installScope === 'project' && !selectedProjectPath) {
+        setInstalledMcpServers([]);
+        return;
+      }
+      const scope = installScope === 'project' ? 'project' : 'user';
+      const response = await api.mcpServers('claude', scope, selectedProjectPath);
+      if (!response.ok) {
+        throw new Error(await readError(response, 'Failed to load MCP servers'));
+      }
+      const data = await response.json();
+      setInstalledMcpServers(Array.isArray(data.data?.servers) ? data.data.servers : []);
+    } catch {
+      setInstalledMcpServers([]);
+    }
+  }, [installScope, selectedProjectPath]);
+
+  useEffect(() => {
+    void loadInstalledMcpServers();
+  }, [loadInstalledMcpServers]);
+
   useEffect(() => {
     if (installScope === 'project' && !projectPath && projects[0]) {
       setProjectPath(projects[0].fullPath || projects[0].path || '');
@@ -701,6 +1116,11 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       if (kindFilter !== 'all' && item.kind !== kindFilter) return false;
       if (!query) return true;
       const appLabels = (item.supportedApps || []).map((app) => app.label);
+      const mcpTools = (item.mcp?.tools || []).map((tool) => tool.name);
+      const mcpFields = [
+        ...(item.mcp?.setupFields || []).map((field) => field.label || field.key),
+        ...(item.mcp?.runtimeFields || []).map((field) => field.label || field.key),
+      ];
       const haystack = [
         item.title,
         item.name,
@@ -710,6 +1130,9 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         ...item.tags,
         ...appLabels,
         ...(item.capabilities || []),
+        item.mcp?.serverName,
+        ...mcpTools,
+        ...mcpFields,
       ].join(' ').toLowerCase();
       return haystack.includes(query);
     });
@@ -721,6 +1144,10 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   );
   const skillItems = useMemo(
     () => filteredItems.filter((item) => item.kind === 'skill'),
+    [filteredItems],
+  );
+  const mcpItems = useMemo(
+    () => filteredItems.filter((item) => item.kind === 'mcp-server'),
     [filteredItems],
   );
 
@@ -746,6 +1173,41 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     return Array.from(candidates).some((name) => installedSkillNames.has(name));
   }, [installedSkillNames]);
 
+  const installedMcpServerNames = useMemo(() => (
+    new Set(installedMcpServers.map((server) => normalizeInstallName(server.name)).filter(Boolean))
+  ), [installedMcpServers]);
+
+  const isMcpInstalled = useCallback((item: RepositoryItem) => {
+    if (item.kind !== 'mcp-server') return false;
+    return installedMcpServerNames.has(getMcpServerName(item));
+  }, [installedMcpServerNames]);
+
+  const diagnoseMcpItem = useCallback(async (item: RepositoryItem) => {
+    if (item.kind !== 'mcp-server') return;
+    const serverName = getMcpServerName(item);
+    const scope = installScope === 'project' ? 'project' : 'user';
+    const key = templateKey(item);
+    setBusyKey(`diagnose:${item.repoId}:${item.id}`);
+    setActionError(null);
+    setMessage(null);
+    try {
+      const response = await api.diagnoseMcpServer('claude', serverName, scope, selectedProjectPath);
+      if (!response.ok) {
+        throw new Error(await readError(response, 'Failed to diagnose MCP server'));
+      }
+      const data = await response.json();
+      setMcpDiagnostics((prev) => ({
+        ...prev,
+        [key]: data.data as McpDiagnostics,
+      }));
+      setMessage(`MCP "${serverName}" 检测完成：${data.data?.status || 'unknown'}`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to diagnose MCP server');
+    } finally {
+      setBusyKey(null);
+    }
+  }, [installScope, selectedProjectPath]);
+
   useEffect(() => {
     if (agentTemplates.length === 0) {
       setSelectedTemplateKey(null);
@@ -761,11 +1223,22 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     return agentTemplates.find((item) => templateKey(item) === selectedTemplateKey) || agentTemplates[0] || null;
   }, [agentTemplates, selectedTemplateKey]);
 
-  const localRepo = repositories.find((repo) => repo.id === 'local');
+  const remoteUploadRepositories = useMemo(
+    () => repositories.filter((repo) => repo.type !== 'local' && repo.enabled && repo.url),
+    [repositories],
+  );
   const itemCounts = useMemo(() => ({
     agents: items.filter((item) => item.kind === 'agent-template').length,
     skills: items.filter((item) => item.kind === 'skill').length,
+    mcps: items.filter((item) => item.kind === 'mcp-server').length,
   }), [items]);
+
+  useEffect(() => {
+    if (uploadRepoId && remoteUploadRepositories.some((repo) => repo.id === uploadRepoId)) {
+      return;
+    }
+    setUploadRepoId(remoteUploadRepositories[0]?.id || '');
+  }, [remoteUploadRepositories, uploadRepoId]);
 
   const addRepository = async () => {
     setBusyKey('add-repo');
@@ -860,7 +1333,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
 
   const installItem = async (
     item: RepositoryItem,
-    configuration?: { appBindings?: Record<string, string> },
+    configuration?: { appBindings?: Record<string, string>; mcpValues?: Record<string, string> },
     options?: { overwrite?: boolean; action?: 'install' | 'update' },
   ) => {
     const action = options?.action || 'install';
@@ -884,11 +1357,19 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         throw new Error(await readError(response, 'Failed to install item'));
       }
       const data = await response.json();
-      setMessage(`${kindLabel(item.kind)} ${action === 'update' ? 'updated' : 'installed'} to ${data.installPath}`);
+      const actionText = action === 'update' ? '已更新' : '已安装';
+      const targetText = installScope === 'project' ? '项目范围' : '用户范围';
+      const installPath = typeof data.installPath === 'string' && data.installPath.trim()
+        ? `：${data.installPath.trim()}`
+        : '';
+      setMessage(`${kindLabel(item.kind)}「${item.title || item.name}」${actionText}到${targetText}${installPath}`);
       setSetupItem(null);
       setSetupValues({});
+      setMcpSetupItem(null);
+      setMcpSetupValues({});
       await loadCatalog();
       await loadInstalledSkills();
+      await loadInstalledMcpServers();
       return data;
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to install item');
@@ -919,6 +1400,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       const data = await response.json();
       setMessage(`${kindLabel(item.kind)} uninstalled from ${data.installPath}`);
       await loadInstalledSkills();
+      await loadInstalledMcpServers();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to uninstall item');
     } finally {
@@ -934,6 +1416,31 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     }
     setSetupItem(item);
     setSetupValues(nextValues);
+  };
+
+  const openMcpSetup = (item: RepositoryItem, action: 'install' | 'update' = 'install') => {
+    const nextValues: Record<string, string> = {};
+    for (const field of getMcpSetupFields(item)) {
+      nextValues[field.key] = field.defaultValue || '';
+    }
+    setActionError(null);
+    setMcpSetupItem(item);
+    setMcpSetupValues(nextValues);
+    setMcpSetupAction(action);
+  };
+
+  const saveConfiguredMcp = async () => {
+    if (!mcpSetupItem) return;
+    const result = await installItem(
+      mcpSetupItem,
+      { mcpValues: mcpSetupValues },
+      { overwrite: mcpSetupAction === 'update' ? true : overwriteInstall, action: mcpSetupAction },
+    );
+    if (result?.success) {
+      setMcpSetupItem(null);
+      setMcpSetupValues({});
+      await diagnoseMcpItem(mcpSetupItem);
+    }
   };
 
   const createConfiguredAgent = async () => {
@@ -952,6 +1459,14 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       app,
       status: 'optional' as const,
     }));
+    const mcpDependencyBindings = dependencyMcpBindings(setupItem, installResult);
+    const mergedBindings = [...selectedBindings];
+    for (const binding of mcpDependencyBindings) {
+      if (!mergedBindings.some((candidate) => candidate.app === binding.app)) {
+        mergedBindings.push(binding);
+      }
+    }
+    const installedSkillDependencies = dependencySkillNames(setupItem, installResult);
     const response = await api.createAgent({
       id: toAgentId(setupItem),
       name: setupItem.title || setupItem.name,
@@ -961,8 +1476,8 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       scope: installScope === 'project' ? 'project' : 'global',
       repository: `${setupItem.repoId}/${setupItem.id}`,
       systemPrompt: prompt || setupItem.description || '',
-      appBindings: selectedBindings,
-      skills: setupItem.capabilities || [],
+      appBindings: mergedBindings,
+      skills: installedSkillDependencies,
       tools: [],
       guardrails: [],
       triggerRules: {
@@ -976,7 +1491,12 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       setActionError(data?.error || 'Template installed, but Agent creation failed');
       return;
     }
-    setMessage(`Agent "${data.agent?.name || setupItem.title}" created and enabled.`);
+    const dependencyCount = installResult.dependencies?.length || 0;
+    const dependencySummary = dependencyStatusSummary(installResult);
+    setMessage(
+      `Agent "${data.agent?.name || setupItem.title}" created and enabled. Dependencies processed: ${dependencyCount}`
+      + (dependencySummary ? ` (${dependencySummary}).` : '.'),
+    );
   };
 
   const uploadItem = async () => {
@@ -984,21 +1504,30 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     setActionError(null);
     setMessage(null);
     try {
-      const response = await apiFetch('/api/agent-repository/upload', {
+      const response = await apiFetch('/api/agent-repository/remote-upload', {
         method: 'POST',
         body: JSON.stringify({
+          repoId: uploadRepoId,
+          adminToken: uploadAdminToken,
           ...uploadForm,
           packageFiles: uploadForm.kind === 'skill' ? uploadForm.packageFiles : [],
           tags: parseTags(uploadForm.tags),
           supportedApps: parseAppOptions(uploadForm.supportedApps),
           capabilities: parseTags(uploadForm.capabilities),
+          dependencies: uploadForm.kind === 'agent-template'
+            ? {
+                skills: parseDependencies(uploadForm.skillDependencies, 'skill'),
+                mcpServers: parseDependencies(uploadForm.mcpDependencies, 'mcp-server'),
+              }
+            : undefined,
         }),
       });
       if (!response.ok) {
         throw new Error(await readError(response, 'Failed to upload item'));
       }
       setUploadForm((prev) => ({ ...EMPTY_UPLOAD_FORM, kind: prev.kind }));
-      setMessage('Uploaded to the local repository.');
+      const repository = remoteUploadRepositories.find((repo) => repo.id === uploadRepoId);
+      setMessage(`Uploaded to ${repository?.name || 'remote Hub'}.`);
       await loadCatalog();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to upload item');
@@ -1061,9 +1590,33 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   };
 
   const uploadHasContent = Boolean(uploadForm.content.trim() || (uploadForm.kind === 'skill' && uploadForm.packageFiles.length > 0));
+  const inlineActionError = Boolean(actionError && (setupItem || mcpSetupItem));
+  const showRepositoryNotice = Boolean(message || (!inlineActionError && actionError) || errors.length > 0);
 
   return (
     <div className="space-y-4">
+      {message && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 right-4 z-[80] flex w-[calc(100vw-32px)] max-w-md items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 shadow-2xl ring-1 ring-emerald-900/5 dark:border-emerald-900/60 dark:bg-emerald-950 dark:text-emerald-200 sm:w-auto"
+        >
+          <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">操作成功</div>
+            <div className="mt-0.5 break-all text-xs leading-5 opacity-90">{message}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMessage(null)}
+            className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-emerald-700 transition-colors hover:bg-emerald-100 dark:text-emerald-200 dark:hover:bg-emerald-900/60"
+            title="关闭提示"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-start gap-3">
@@ -1074,7 +1627,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                 <span className="rounded bg-muted px-2 py-1">{repositories.length} repositories</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.agents} agents</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.skills} skills</span>
-                {localRepo && <span className="rounded bg-muted px-2 py-1">Local repo ready</span>}
+                <span className="rounded bg-muted px-2 py-1">{itemCounts.mcps} MCP</span>
               </div>
             </div>
             <button
@@ -1132,10 +1685,10 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         </div>
       </div>
 
-      {(message || actionError || errors.length > 0) && (
+      {showRepositoryNotice && (
         <div className={cn(
           'rounded border px-3 py-2 text-sm',
-          actionError || errors.length > 0
+          (!inlineActionError && actionError) || errors.length > 0
             ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
             : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
         )}>
@@ -1145,7 +1698,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               <span className="break-all">{message}</span>
             </div>
           )}
-          {actionError && <div>{actionError}</div>}
+          {!inlineActionError && actionError && <div>{actionError}</div>}
           {errors.map((error) => (
             <div key={`${error.repoId}:${error.error}`}>
               {error.repoName}: {error.error}
@@ -1158,10 +1711,10 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         <div className="flex items-start gap-3">
           <Database className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">Agent/Skill Hub</h3>
+            <h3 className="text-sm font-semibold text-foreground">Agent/Skill/MCP Hub</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              The shared remote repository server now runs as a standalone Agent/Skill Hub.
-              Start that service separately, then add its catalog URL below. No remote Hub is configured by default.
+              The shared remote repository server runs as a standalone Hub.
+              It can publish Agent templates, Skills, and MCP server packages with setup fields such as root paths.
             </p>
           </div>
         </div>
@@ -1246,7 +1799,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               />
             </div>
             <div className="inline-flex h-9 overflow-hidden rounded border border-border">
-              {(['all', 'agent-template', 'skill'] as const).map((kind) => (
+              {(['all', 'agent-template', 'skill', 'mcp-server'] as const).map((kind) => (
                 <button
                   key={kind}
                   type="button"
@@ -1269,7 +1822,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             </div>
           ) : (
             <div className="space-y-4">
-              {kindFilter !== 'skill' && (
+              {(kindFilter === 'all' || kindFilter === 'agent-template') && (
                 <TemplateGallery
                   templates={agentTemplates}
                   selectedTemplate={selectedTemplate}
@@ -1281,7 +1834,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                 />
               )}
 
-              {kindFilter !== 'agent-template' && (
+              {(kindFilter === 'all' || kindFilter === 'skill') && (
                 <div className="space-y-2">
                   {skillItems.length > 0 && (
                     <h3 className="text-sm font-semibold text-foreground">Skills</h3>
@@ -1312,6 +1865,41 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   )}
                 </div>
               )}
+
+              {(kindFilter === 'all' || kindFilter === 'mcp-server') && (
+                <div className="space-y-2">
+                  {mcpItems.length > 0 && (
+                    <h3 className="text-sm font-semibold text-foreground">MCP Servers</h3>
+                  )}
+                  {mcpItems.map((item) => {
+                    const installed = isMcpInstalled(item);
+                    const busy = busyKey === `like:${item.repoId}:${item.id}`
+                      || busyKey === `install:${item.repoId}:${item.id}`
+                      || busyKey === `update:${item.repoId}:${item.id}`
+                      || busyKey === `uninstall:${item.repoId}:${item.id}`
+                      || busyKey === `diagnose:${item.repoId}:${item.id}`;
+                    return (
+                      <ItemCard
+                        key={`${item.repoId}:${item.id}`}
+                        item={item}
+                        busy={busy}
+                        installed={installed}
+                        diagnostics={mcpDiagnostics[templateKey(item)]}
+                        onLike={(nextItem) => void likeItem(nextItem)}
+                        onInstall={(nextItem) => openMcpSetup(nextItem, 'install')}
+                        onUpdate={(nextItem) => openMcpSetup(nextItem, 'update')}
+                        onUninstall={(nextItem) => void uninstallItem(nextItem)}
+                        onDiagnose={(nextItem) => void diagnoseMcpItem(nextItem)}
+                      />
+                    );
+                  })}
+                  {mcpItems.length === 0 && kindFilter === 'mcp-server' && (
+                    <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
+                      No MCP servers found.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1319,7 +1907,36 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-2">
             <Upload className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">Upload</h3>
+            <h3 className="text-sm font-semibold text-foreground">Upload to Hub</h3>
+          </div>
+
+          <div className="mt-3 grid gap-2">
+            <select
+              value={uploadRepoId}
+              onChange={(event) => setUploadRepoId(event.target.value)}
+              className="h-9 rounded border border-border bg-background px-2 text-sm text-foreground"
+              disabled={remoteUploadRepositories.length === 0}
+            >
+              {remoteUploadRepositories.length === 0 ? (
+                <option value="">Add a remote Hub first</option>
+              ) : (
+                remoteUploadRepositories.map((repo) => (
+                  <option key={repo.id} value={repo.id}>
+                    {repo.name}
+                  </option>
+                ))
+              )}
+            </select>
+            <input
+              value={uploadAdminToken}
+              onChange={(event) => setUploadAdminToken(event.target.value)}
+              placeholder="Hub admin token"
+              type="password"
+              className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+            />
+            <p className="text-xs leading-5 text-muted-foreground">
+              Upload uses the selected remote Hub admin API. Local repository upload is hidden and disabled.
+            </p>
           </div>
 
           <div className="mt-3 inline-flex h-9 overflow-hidden rounded border border-border">
@@ -1390,6 +2007,18 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   placeholder="Summarize tasks, draft updates"
                   className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
                 />
+                <input
+                  value={uploadForm.skillDependencies}
+                  onChange={(event) => setUploadForm((prev) => ({ ...prev, skillDependencies: event.target.value }))}
+                  placeholder="Required Skills: code-review-security, unity-memory-profiler-code-analysis"
+                  className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                />
+                <input
+                  value={uploadForm.mcpDependencies}
+                  onChange={(event) => setUploadForm((prev) => ({ ...prev, mcpDependencies: event.target.value }))}
+                  placeholder="Required MCP servers: ainwork-code-search, soc-redmine"
+                  className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                />
               </>
             )}
             <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded border border-border text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
@@ -1429,16 +2058,16 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                 onChange={(event) => setUploadForm((prev) => ({ ...prev, overwrite: event.target.checked }))}
                 className="h-3.5 w-3.5"
               />
-              Overwrite existing item in local repository
+              Overwrite existing item in remote Hub
             </label>
             <button
               type="button"
               onClick={() => void uploadItem()}
-              disabled={!uploadForm.name.trim() || !uploadHasContent || busyKey === 'upload'}
+              disabled={!uploadRepoId || !uploadAdminToken.trim() || !uploadForm.name.trim() || !uploadHasContent || busyKey === 'upload'}
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {busyKey === 'upload' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              Upload to local repository
+              Upload to remote Hub
             </button>
           </div>
         </div>
@@ -1455,6 +2084,21 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             setSetupValues({});
           }}
           onCreate={() => void createConfiguredAgent()}
+        />
+      )}
+      {mcpSetupItem && (
+        <McpSetupDialog
+          item={mcpSetupItem}
+          values={mcpSetupValues}
+          busy={busyKey === `${mcpSetupAction}:${mcpSetupItem.repoId}:${mcpSetupItem.id}`}
+          action={mcpSetupAction}
+          error={actionError}
+          onChange={(key, value) => setMcpSetupValues((prev) => ({ ...prev, [key]: value }))}
+          onClose={() => {
+            setMcpSetupItem(null);
+            setMcpSetupValues({});
+          }}
+          onSave={() => void saveConfiguredMcp()}
         />
       )}
     </div>

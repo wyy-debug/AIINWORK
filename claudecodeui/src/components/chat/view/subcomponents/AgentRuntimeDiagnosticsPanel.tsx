@@ -78,6 +78,71 @@ function StringBadges({ values, emptyText = EMPTY_TEXT, tone = 'neutral' }: {
   );
 }
 
+function SkillDetails({ details }: { details?: AgentRuntimeDiagnostics['skillDetails'] }) {
+  if (!details || details.length === 0) {
+    return <span className="text-muted-foreground">{EMPTY_TEXT}</span>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {details.map((detail) => {
+        const statusText = detail.callable ? '已可调用' : detail.exists ? '已安装' : '不可用';
+        const statusClass = detail.callable
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+          : detail.exists
+            ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'
+            : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300';
+        return (
+          <div key={`${detail.name}:${detail.path || 'missing'}`} className="rounded-lg border border-border bg-card/70 p-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold text-foreground" title={detail.label || detail.name}>
+                  {detail.label || detail.name}
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={detail.path || 'SKILL.md 未找到'}>
+                  {detail.path || 'SKILL.md 未找到'}
+                </div>
+              </div>
+              <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${statusClass}`}>
+                {statusText}
+              </span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+              <span>{detail.provider || 'unknown'} / {detail.scope || 'unknown'}</span>
+              <span>prompt {formatNumber(detail.promptLength)}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type PermissionSourceMap = NonNullable<NonNullable<AgentRuntimeDiagnostics['permissions']>['sources']>;
+
+function PermissionSources({ sources }: { sources?: PermissionSourceMap }) {
+  if (!sources || Object.keys(sources).length === 0) {
+    return <span className="text-muted-foreground">{EMPTY_TEXT}</span>;
+  }
+
+  return (
+    <div className="grid gap-2 lg:grid-cols-3">
+      {(['global', 'project', 'session'] as const).map((key) => {
+        const value = sources[key];
+        if (!value || Object.keys(value).length === 0) return null;
+        return (
+          <div key={key} className="rounded-lg border border-border bg-card/70 p-2">
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{key}</div>
+            <pre className="max-h-24 overflow-auto whitespace-pre-wrap text-[11px] leading-4 text-foreground">
+              {JSON.stringify(value, null, 2)}
+            </pre>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
@@ -175,6 +240,14 @@ export default function AgentRuntimeDiagnosticsPanel({
                   <div className="mb-1 text-[11px] font-medium text-muted-foreground">effectiveSkills</div>
                   <StringBadges values={diagnostics?.effectiveSkills} tone="success" />
                 </div>
+                <div>
+                  <div className="mb-1 text-[11px] font-medium text-muted-foreground">skillDetails</div>
+                  <SkillDetails details={diagnostics?.skillDetails} />
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] font-medium text-muted-foreground">skillPromptLength</div>
+                  <div className="text-sm text-foreground">{formatNumber(diagnostics?.skillPromptLength)}</div>
+                </div>
               </div>
             </section>
           </div>
@@ -205,6 +278,16 @@ export default function AgentRuntimeDiagnosticsPanel({
                 </div>
                 <StringBadges values={permissions?.disallowedTools} tone="danger" />
               </div>
+            </div>
+            {permissions?.conflicts && permissions.conflicts.length > 0 && (
+              <div className="mt-3">
+                <div className="mb-1 text-[11px] font-medium text-muted-foreground">权限冲突</div>
+                <StringBadges values={permissions.conflicts} tone="warning" />
+              </div>
+            )}
+            <div className="mt-3">
+              <div className="mb-1 text-[11px] font-medium text-muted-foreground">权限来源</div>
+              <PermissionSources sources={permissions?.sources} />
             </div>
           </section>
         </div>

@@ -1,0 +1,3 @@
+display_name: MTL-Code Capability Builder
+short_description: Create Agent/MCP/Skill packages for MTL-Code.
+default_prompt: Use $mtl-code-capability-builder to design, generate, validate, and prepare MTL-Code Agent, MCP, or Skill packages for Hub publication.

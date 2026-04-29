@@ -6,13 +6,14 @@ import PermissionContext from '../../../contexts/PermissionContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
 import type { AgentRuntimeDiagnostics, ChatInterfaceProps, Provider  } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
-import type { AgentAppBinding, AgentConfig, InstalledSkill } from '../../../types/agent';
+import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../types/agent';
 import { api } from '../../../utils/api';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { getClaudeSettings } from '../utils/chatStorage';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -28,6 +29,8 @@ type ConversationAgentChoiceState = 'pending' | 'default' | 'agent';
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
+
+const INTERACTIVE_PERMISSION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 
 function normalizeAgentAppBindings(value: unknown): AgentAppBinding[] {
   if (!Array.isArray(value)) return [];
@@ -56,6 +59,15 @@ function normalizeSkillNames(value: unknown): string[] {
       return true;
     })
     .slice(0, 60);
+}
+
+async function readResponseError(response: Response, fallback: string) {
+  try {
+    const data = await response.json();
+    return data?.details || data?.error || data?.message || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function shouldConfigureAgent(agent: AgentConfig | null) {
@@ -113,6 +125,10 @@ function ChatInterface({
   const lastQuickStartAgentRequestRef = useRef(0);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
+  const [repositorySkills, setRepositorySkills] = useState<RepositorySkillItem[]>([]);
+  const [repositorySkillsLoading, setRepositorySkillsLoading] = useState(false);
+  const [repositorySkillsError, setRepositorySkillsError] = useState<string | null>(null);
+  const [installingRepositorySkillKey, setInstallingRepositorySkillKey] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
   const [selectedSessionSkillNames, setSelectedSessionSkillNames] = useState<string[]>([]);
@@ -138,36 +154,100 @@ function ChatInterface({
   const agentBindingEnabled = isConversationSpace || isWorktreeProject;
   const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
 
-  useEffect(() => {
-    if (!selectedProject) {
+  const loadInstalledSkills = useCallback(async () => {
+    if (!selectedProject && !isConversationSpace) {
       setInstalledSkills([]);
+      return;
+    }
+
+    try {
+      const response = await api.installedAgentSkills(workspacePath);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to load installed skills');
+      }
+      setInstalledSkills(Array.isArray(data?.skills) ? data.skills : []);
+    } catch (error) {
+      console.warn('Failed to load installed skills:', error);
+      setInstalledSkills([]);
+    }
+  }, [isConversationSpace, selectedProject, workspacePath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadInstalledSkills().catch((error) => {
+      if (!cancelled) {
+        console.warn('Failed to load installed skills:', error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadInstalledSkills]);
+
+  useEffect(() => {
+    if (!selectedProject && !isConversationSpace) {
+      setRepositorySkills([]);
+      setRepositorySkillsLoading(false);
+      setRepositorySkillsError(null);
       return undefined;
     }
 
     let cancelled = false;
-    const loadInstalledSkills = async () => {
+    const loadRepositorySkills = async () => {
+      setRepositorySkillsLoading(true);
+      setRepositorySkillsError(null);
       try {
-        const response = await api.installedAgentSkills(workspacePath);
-        const data = await response.json();
+        const response = await api.agentRepositoryCatalog();
         if (!response.ok) {
-          throw new Error(data?.error || 'Failed to load installed skills');
+          throw new Error(await readResponseError(response, 'Failed to load Hub skills'));
         }
+        const data = await response.json();
+        const skills = Array.isArray(data?.items)
+          ? data.items
+            .filter((item: any) => item?.kind === 'skill' && item?.repoId && item?.id && item?.name)
+            .map((item: any): RepositorySkillItem => ({
+              id: String(item.id),
+              repoId: String(item.repoId),
+              repoName: typeof item.repoName === 'string' ? item.repoName : '',
+              name: String(item.name),
+              title: String(item.title || item.name),
+              description: typeof item.description === 'string' ? item.description : '',
+              author: typeof item.author === 'string' ? item.author : '',
+              version: typeof item.version === 'string' ? item.version : '',
+              tags: Array.isArray(item.tags) ? item.tags.filter((tag: unknown) => typeof tag === 'string') : [],
+              downloads: Number(item.downloads || 0),
+              likes: Number(item.likes || 0),
+              sourceUrl: typeof item.sourceUrl === 'string' ? item.sourceUrl : null,
+            }))
+          : [];
         if (!cancelled) {
-          setInstalledSkills(Array.isArray(data?.skills) ? data.skills : []);
+          setRepositorySkills(skills);
+          const catalogErrors = Array.isArray(data?.errors) ? data.errors : [];
+          setRepositorySkillsError(
+            catalogErrors.length > 0
+              ? catalogErrors.map((entry: any) => `${entry.repoName || entry.repoId}: ${entry.error}`).join('; ')
+              : null,
+          );
         }
       } catch (error) {
-        console.warn('Failed to load installed skills:', error);
+        console.warn('Failed to load Hub skills:', error);
         if (!cancelled) {
-          setInstalledSkills([]);
+          setRepositorySkills([]);
+          setRepositorySkillsError(error instanceof Error ? error.message : 'Failed to load Hub skills');
+        }
+      } finally {
+        if (!cancelled) {
+          setRepositorySkillsLoading(false);
         }
       }
     };
 
-    void loadInstalledSkills();
+    void loadRepositorySkills();
     return () => {
       cancelled = true;
     };
-  }, [selectedProject, workspacePath]);
+  }, [isConversationSpace, selectedProject]);
 
   useEffect(() => {
     if (!agentBindingEnabled || !selectedProject) {
@@ -603,6 +683,46 @@ function ChatInterface({
     }
   }, [agentBindingEnabled]);
 
+  const addSessionSkill = useCallback((skillName: string) => {
+    const normalized = skillName.trim();
+    if (!normalized) return;
+    const updateSkills = (previous: string[]) => {
+      const exists = previous.some((name) => name.toLowerCase() === normalized.toLowerCase());
+      return exists ? previous : [...previous, normalized].slice(0, 60);
+    };
+    if (agentBindingEnabled) {
+      setSelectedSessionSkillNames(updateSkills);
+    } else {
+      setSelectedProjectSkillNames(updateSkills);
+    }
+  }, [agentBindingEnabled]);
+
+  const installRepositorySkill = useCallback(async (skill: RepositorySkillItem) => {
+    const key = `${skill.repoId}:${skill.id}`;
+    setInstallingRepositorySkillKey(key);
+    try {
+      const response = await api.installAgentRepositoryItem({
+        repoId: skill.repoId,
+        itemId: skill.id,
+        target: 'user',
+        overwrite: false,
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, 'Failed to install Hub Skill'));
+      }
+      await response.json().catch(() => null);
+      await loadInstalledSkills();
+      addSessionSkill(skill.name);
+      return { success: true, skillName: skill.name };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to install Hub Skill';
+      console.warn('Failed to install Hub Skill:', error);
+      return { success: false, error: message };
+    } finally {
+      setInstallingRepositorySkillKey('');
+    }
+  }, [addSessionSkill, loadInstalledSkills]);
+
   const activeSkillNames = agentBindingEnabled ? selectedSessionSkillNames : selectedProjectSkillNames;
 
   useEffect(() => {
@@ -691,6 +811,9 @@ function ChatInterface({
     handleToggleCommandMenu,
     showFileDropdown,
     filteredFiles,
+    fileMentionQuery,
+    isLoadingFileMentions,
+    fileMentionError,
     selectedFileIndex,
     renderInputWithMentions,
     selectFile,
@@ -850,6 +973,30 @@ function ChatInterface({
     };
   }, [resetStreamingState]);
 
+  useEffect(() => {
+    if (provider !== 'claude' || pendingPermissionRequests.length === 0) {
+      return;
+    }
+
+    const settings = getClaudeSettings();
+    const shouldAutoAllow = settings.skipPermissions || settings.permissionMode === 'bypassPermissions';
+    if (!shouldAutoAllow) {
+      return;
+    }
+
+    const autoAllowRequestIds = pendingPermissionRequests
+      .filter((request) => !INTERACTIVE_PERMISSION_TOOLS.has(request.toolName))
+      .map((request) => request.requestId);
+    if (autoAllowRequestIds.length === 0) {
+      return;
+    }
+
+    handlePermissionDecision(autoAllowRequestIds, {
+      allow: true,
+      message: 'Allowed automatically by global permission settings',
+    });
+  }, [handlePermissionDecision, pendingPermissionRequests, provider]);
+
   const permissionContextValue = useMemo(() => ({
     pendingPermissionRequests,
     handlePermissionDecision,
@@ -946,6 +1093,11 @@ function ChatInterface({
           selectedAgentAppBindings={agentBindingEnabled ? selectedAgentAppBindings : []}
           onSelectedAgentIdChange={selectAgentForConversation}
           installedSkills={installedSkills}
+          repositorySkills={repositorySkills}
+          repositorySkillsLoading={repositorySkillsLoading}
+          repositorySkillsError={repositorySkillsError}
+          installingRepositorySkillKey={installingRepositorySkillKey}
+          onInstallRepositorySkill={installRepositorySkill}
           selectedSkillNames={activeSkillNames}
           onToggleSkillName={toggleSessionSkill}
           onClearSkillNames={() => {
@@ -977,6 +1129,9 @@ function ChatInterface({
           imageErrors={imageErrors}
           showFileDropdown={showFileDropdown}
           filteredFiles={filteredFiles}
+          fileMentionQuery={fileMentionQuery}
+          isLoadingFileMentions={isLoadingFileMentions}
+          fileMentionError={fileMentionError}
           selectedFileIndex={selectedFileIndex}
           onSelectFile={selectFile}
           filteredCommands={filteredCommands}

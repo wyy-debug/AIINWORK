@@ -30,6 +30,7 @@
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "client": "vite",
     "build": "npm run build:client && npm run build:server",
+    "check:mojibake": "node scripts/check-mojibake.mjs",
     "icons:app": "node scripts/generate-app-icons.mjs",
     "package:preview-win": "node scripts/package-preview-win.mjs",
     "package:electron-win": "node scripts/package-electron-win.mjs",
@@ -178,6 +179,7 @@
     "directories": {
       "output": "../workspace/vendor/electron-dist"
     },
+    "afterPack": "scripts/patch-electron-win-icon.cjs",
     "files": [
       "electron/**",
       "dist/**",

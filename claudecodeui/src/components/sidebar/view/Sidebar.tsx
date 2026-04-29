@@ -15,6 +15,7 @@ import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
 import WorktreeDispatchModal from './subcomponents/WorktreeDispatchModal';
+import WorktreeTasksModal from './subcomponents/WorktreeTasksModal';
 
 type TaskMasterSidebarContext = {
   setCurrentProject: (project: Project) => void;
@@ -58,6 +59,7 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const [worktreeDispatchProject, setWorktreeDispatchProject] = useState<Project | null>(null);
+  const [worktreeTasksProject, setWorktreeTasksProject] = useState<Project | null>(null);
   const {
     isSidebarCollapsed,
     expandedProjects,
@@ -98,6 +100,8 @@ function Sidebar({
     handleProjectSelect,
     refreshProjects,
     updateSessionSummary,
+    togglePinSession,
+    toggleArchiveSession,
     collapseSidebar: handleCollapseSidebar,
     expandSidebar: handleExpandSidebar,
     setShowNewProject,
@@ -171,6 +175,27 @@ function Sidebar({
     });
   };
 
+  const handleOpenWorktree = (worktree: NonNullable<Project['worktree']>, openSession = false) => {
+    setWorktreeTasksProject(null);
+    const targetProject = projects.find((project) => project.name === worktree.projectName) || {
+      name: worktree.projectName || worktree.id,
+      displayName: worktree.displayName || worktree.projectName || worktree.id,
+      fullPath: worktree.worktreePath,
+      path: worktree.worktreePath,
+      worktree,
+    };
+    onProjectSelect(targetProject);
+    if (openSession && worktree.sessionId) {
+      onSessionSelect({
+        id: worktree.sessionId,
+        title: worktree.displayName || worktree.taskPrompt || worktree.id,
+        summary: worktree.displayName || worktree.taskPrompt || worktree.id,
+        __provider: worktree.provider || 'claude',
+        __projectName: targetProject.name,
+      });
+    }
+  };
+
   const projectListProps: SidebarProjectListProps = {
     projects,
     filteredProjects,
@@ -202,6 +227,7 @@ function Sidebar({
     },
     onDeleteProject: requestProjectDelete,
     onDispatchWorktree: setWorktreeDispatchProject,
+    onShowWorktreeTasks: setWorktreeTasksProject,
     onSessionSelect: handleSessionClick,
     onDeleteSession: showDeleteSessionConfirmation,
     onLoadMoreSessions: (project) => {
@@ -220,6 +246,8 @@ function Sidebar({
     onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => {
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
+    onTogglePinSession: togglePinSession,
+    onToggleArchiveSession: toggleArchiveSession,
     t,
   };
 
@@ -278,6 +306,27 @@ function Sidebar({
             conversationSessions={conversationSessions}
             selectedConversationSession={selectedConversationSession}
             onConversationSessionSelect={onConversationSessionSelect}
+            onRenameConversationSession={(session, currentName) => {
+              const nextName = window.prompt('重命名会话', currentName);
+              if (!nextName || !nextName.trim()) return;
+              void updateSessionSummary(
+                conversationProject?.name || '',
+                session.id,
+                nextName.trim(),
+                session.__provider,
+              );
+            }}
+            onDeleteConversationSession={(session, sessionTitle) => {
+              showDeleteSessionConfirmation(
+                conversationProject?.name || '',
+                session.id,
+                sessionTitle,
+                session.__provider,
+                true,
+              );
+            }}
+            onTogglePinConversationSession={togglePinSession}
+            onToggleArchiveConversationSession={toggleArchiveSession}
             conversationResults={conversationResults}
             isSearching={isSearching}
             searchProgress={searchProgress}
@@ -328,6 +377,15 @@ function Sidebar({
           project={worktreeDispatchProject}
           onClose={() => setWorktreeDispatchProject(null)}
           onCreated={handleWorktreeCreated}
+        />
+      )}
+
+      {worktreeTasksProject && (
+        <WorktreeTasksModal
+          project={worktreeTasksProject}
+          onClose={() => setWorktreeTasksProject(null)}
+          onOpenWorktree={handleOpenWorktree}
+          onRefreshProjects={onRefresh}
         />
       )}
     </>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type React from 'react';
 import type { TFunction } from 'i18next';
+
 import { api } from '../../../utils/api';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type {
@@ -288,21 +288,6 @@ export function useSidebarController({
     };
   }, [searchFilter, searchMode]);
 
-  const handleTouchClick = useCallback(
-    (callback: () => void) =>
-      (event: React.TouchEvent<HTMLElement>) => {
-        const target = event.target as HTMLElement;
-        if (target.closest('.overflow-y-auto') || target.closest('[data-scroll-container]')) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        callback();
-      },
-    [],
-  );
-
   const toggleProject = useCallback((projectName: string) => {
     setExpandedProjects((prev) => {
       const next = new Set<string>();
@@ -409,8 +394,9 @@ export function useSidebarController({
       sessionId: string,
       sessionTitle: string,
       provider: SessionDeleteConfirmation['provider'] = 'claude',
+      isConversation = false,
     ) => {
-      setSessionDeleteConfirmation({ projectName, sessionId, sessionTitle, provider });
+      setSessionDeleteConfirmation({ projectName, sessionId, sessionTitle, provider, isConversation });
     },
     [],
   );
@@ -420,12 +406,15 @@ export function useSidebarController({
       return;
     }
 
-    const { projectName, sessionId, provider } = sessionDeleteConfirmation;
+    const { projectName, sessionId, provider, isConversation } = sessionDeleteConfirmation;
     setSessionDeleteConfirmation(null);
+    onSessionDelete?.(sessionId);
 
     try {
       let response;
-      if (provider === 'codex') {
+      if (isConversation && provider === 'claude') {
+        response = await api.deleteConversationSession(sessionId);
+      } else if (provider === 'codex') {
         response = await api.deleteCodexSession(sessionId);
       } else if (provider === 'gemini') {
         response = await api.deleteGeminiSession(sessionId);
@@ -433,21 +422,21 @@ export function useSidebarController({
         response = await api.deleteSession(projectName, sessionId);
       }
 
-      if (response.ok) {
-        onSessionDelete?.(sessionId);
-      } else {
+      if (!response.ok) {
         const errorText = await response.text();
         console.error('[Sidebar] Failed to delete session:', {
           status: response.status,
           error: errorText,
         });
         alert(t('messages.deleteSessionFailed'));
+        await onRefresh();
       }
     } catch (error) {
       console.error('[Sidebar] Error deleting session:', error);
       alert(t('messages.deleteSessionError'));
+      await onRefresh();
     }
-  }, [onSessionDelete, sessionDeleteConfirmation, t]);
+  }, [onRefresh, onSessionDelete, sessionDeleteConfirmation, t]);
 
   const requestProjectDelete = useCallback(
     (project: Project) => {
@@ -578,6 +567,36 @@ export function useSidebarController({
     [onRefresh, t],
   );
 
+  const updateSessionMetadata = useCallback(
+    async (sessionId: string, provider: LLMProvider, metadata: { pinned?: boolean; archived?: boolean }) => {
+      try {
+        const response = await api.updateSessionMetadata(sessionId, metadata, provider);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        await onRefresh();
+      } catch (error) {
+        console.error('[Sidebar] Error updating session metadata:', error);
+        alert('更新会话状态失败');
+      }
+    },
+    [onRefresh],
+  );
+
+  const togglePinSession = useCallback(
+    (session: ProjectSession & { __provider?: LLMProvider }) => {
+      void updateSessionMetadata(session.id, session.__provider || 'claude', { pinned: !session.isPinned });
+    },
+    [updateSessionMetadata],
+  );
+
+  const toggleArchiveSession = useCallback(
+    (session: ProjectSession & { __provider?: LLMProvider }) => {
+      void updateSessionMetadata(session.id, session.__provider || 'claude', { archived: !session.isArchived });
+    },
+    [updateSessionMetadata],
+  );
+
   const collapseSidebar = useCallback(() => {
     setSidebarVisible(false);
   }, [setSidebarVisible]);
@@ -623,6 +642,8 @@ export function useSidebarController({
     handleProjectSelect,
     refreshProjects,
     updateSessionSummary,
+    togglePinSession,
+    toggleArchiveSession,
     collapseSidebar,
     expandSidebar,
     setShowNewProject,

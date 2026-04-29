@@ -158,6 +158,13 @@ MCP closure updates:
 4. Agent Builder can unbind an MCP entry from the Agent without deleting the provider config, or delete the provider MCP server with `DELETE /api/providers/:provider/mcp/servers/:name`.
 5. The MCP app binding remains a reference (`MCP: <serverName>`). Runtime execution is still provided by the provider's native MCP config.
 
+MCP diagnostics updates:
+
+1. Repository MCP cards can call `GET /api/providers/:provider/mcp/servers/:name/diagnose?scope=user|project&workspacePath=...`.
+2. Diagnostics checks whether the package directory exists, npm dependencies are present, provider config was written, required setup fields are configured, and the stdio command can launch.
+3. Password/token fields are reported only as `configured` or `missing`; secret values are never returned.
+4. Manifest-declared tools are shown as a hint, but live tool discovery still belongs to the MTL-Code runtime after the conversation starts.
+
 ## Plugin 流程
 
 1. `PluginsProvider` 加载 `/api/plugins`。
@@ -245,6 +252,22 @@ Project/conversation separation:
 10. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
 11. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
 
+## Worktree Dispatch Management
+
+1. Parent projects can create managed worktrees through `POST /api/projects/:projectName/worktrees`.
+2. Managed worktrees are created with `git worktree add --detach`, registered as separate projects, and optionally linked to a session.
+3. Parent projects can list their tasks through `GET /api/projects/:projectName/worktrees`.
+4. The Worktree task list shows status, task title, base ref/commit, branch state, session binding, path, and creation time.
+5. Users can continue opening a worktree project, enter its bound session, create a branch, or delete/archived a clean managed worktree.
+6. Dirty worktrees are protected by the existing backend `git status --porcelain` deletion check.
+
+## Session Management Metadata
+
+1. Session rename still writes to `session_names.custom_name`.
+2. `PATCH /api/sessions/:sessionId/metadata` updates lightweight UI metadata such as pinned and archived state.
+3. Session lists receive `isPinned`, `pinnedAt`, `isArchived`, and `archivedAt` through `applyCustomSessionNames`.
+4. Pinned sessions sort first, archived sessions sort last and remain visible with a dimmed style so recovery stays obvious.
+
 Channel status:
 
 1. The Agent Builder channel cards are currently configuration placeholders only.
@@ -290,6 +313,14 @@ Project session discovery invariant:
 2. `findProjectDir()` must return the concrete encoded project directory, not the parent `projects` root.
 3. `getSessions()` reads JSONL files from that concrete directory and converts entries with `sessionId` into sidebar sessions.
 4. A project showing chat messages in the main panel but `0` sidebar sessions usually means discovery is pointed at the wrong folder level or the native JSONL parser no longer matches the persisted message shape.
+
+Context compaction visibility:
+
+1. MTL-Code / Claude Code owns actual context compaction. The UI does not summarize chat history itself.
+2. Claude JSONL `system` entries with `subtype=compact_boundary` or `subtype=microcompact_boundary` are normalized as `context_compaction` messages.
+3. When a `compact_boundary` is followed by an `isCompactSummary` transcript-only user entry, `ClaudeSessionsProvider.fetchHistory()` attaches that summary to the same normalized compaction event and skips the synthetic user entry.
+4. Realtime compaction events can still render without a summary first; if the runtime later streams an orphan compact summary, it renders as a separate summary card rather than a normal user message.
+5. The chat message renderer displays a centered compaction boundary card with trigger, pre-compact tokens, saved tokens, affected tool count, and an expandable summary section when available.
 
 ## TaskMaster / PRD 流程
 
