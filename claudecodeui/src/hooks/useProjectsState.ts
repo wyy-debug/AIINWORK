@@ -182,7 +182,14 @@ export function useProjectsState({
         setIsLoadingProjects(true);
       }
       const response = await api.projects();
-      const projectData = (await response.json()) as Project[];
+      const projectData = await response.json();
+      if (!response.ok || !Array.isArray(projectData)) {
+        throw new Error(
+          typeof projectData?.error === 'string'
+            ? projectData.error
+            : `Failed to load projects: HTTP ${response.status}`,
+        );
+      }
 
       setProjects((prevProjects) => {
         if (prevProjects.length === 0) {

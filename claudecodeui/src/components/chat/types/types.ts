@@ -133,8 +133,25 @@ export interface AgentRuntimeDiagnostics {
   effectiveSkills?: string[];
   skillDetails?: AgentRuntimeSkillDetail[];
   skillPromptLength?: number;
+  ragExcerptCount?: number;
+  ragPromptLength?: number;
+  ragExcerpts?: Array<{
+    label?: string;
+    sourceName?: string;
+    relativePath?: string;
+    score?: number;
+    chars?: number;
+  }>;
+  mcpDiagnosticsSummary?: Array<{
+    slot?: string;
+    serverName?: string;
+    status?: string;
+    runtimeToolsStatus?: string;
+    message?: string;
+  }>;
   appendSystemPromptLength?: number;
   model?: string;
+  modelProfileId?: string;
   contextWindowTokens?: number | null;
   projectPath?: string;
   sessionId?: string | null;

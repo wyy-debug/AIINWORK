@@ -139,6 +139,20 @@ type McpDiagnostics = {
   status: 'ok' | 'warning' | 'error';
   checkedAt: string;
   installDir?: string;
+  configWritten?: boolean;
+  packageInstalled?: boolean;
+  dependenciesInstalled?: boolean;
+  launchable?: {
+    status: 'pass' | 'warn' | 'fail';
+    message: string;
+    detail?: string;
+  } | null;
+  runtimeToolsStatus?: {
+    status: 'pass' | 'warn' | 'fail';
+    tools?: string[];
+    message: string;
+  };
+  safeMessages?: McpDiagnosticCheck[];
   requiredFields?: Array<{
     key: string;
     label: string;
@@ -538,8 +552,62 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                 </span>
                 <span className="text-muted-foreground">检测时间 {new Date(diagnostics.checkedAt).toLocaleString()}</span>
               </div>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                <span className={cn(
+                  'rounded border px-1.5 py-0.5',
+                  diagnostics.configWritten ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+                )}>
+                  配置 {diagnostics.configWritten ? '已写入' : '缺失'}
+                </span>
+                <span className={cn(
+                  'rounded border px-1.5 py-0.5',
+                  diagnostics.packageInstalled ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+                )}>
+                  包 {diagnostics.packageInstalled ? '已安装' : '缺失'}
+                </span>
+                <span className={cn(
+                  'rounded border px-1.5 py-0.5',
+                  diagnostics.dependenciesInstalled !== false ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+                )}>
+                  依赖 {diagnostics.dependenciesInstalled === false ? '缺失' : '已满足'}
+                </span>
+                {diagnostics.launchable && (
+                  <span className={cn(
+                    'rounded border px-1.5 py-0.5',
+                    diagnostics.launchable.status === 'pass'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                      : diagnostics.launchable.status === 'warn'
+                        ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'
+                        : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+                  )}>
+                    启动 {diagnostics.launchable.status === 'pass' ? '成功' : diagnostics.launchable.status === 'warn' ? '需确认' : '失败'}
+                  </span>
+                )}
+                {diagnostics.runtimeToolsStatus && (
+                  <span className="rounded border border-border bg-background px-1.5 py-0.5 text-muted-foreground">
+                    工具 {diagnostics.runtimeToolsStatus.tools?.length ? `${diagnostics.runtimeToolsStatus.tools.length} declared` : '运行时发现'}
+                  </span>
+                )}
+              </div>
+              {diagnostics.requiredFields && diagnostics.requiredFields.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                  {diagnostics.requiredFields.map((field) => (
+                    <span
+                      key={`${field.target}:${field.key}`}
+                      className={cn(
+                        'rounded border px-1.5 py-0.5',
+                        field.configured
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
+                          : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+                      )}
+                    >
+                      {field.label || field.key}: {field.configured ? 'configured' : 'missing'}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="mt-1 space-y-1 text-xs text-muted-foreground">
-                {diagnostics.checks.map((check) => (
+                {(diagnostics.safeMessages || diagnostics.checks).map((check) => (
                   <div key={check.id} className="flex gap-1.5">
                     <span className={cn(
                       'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',

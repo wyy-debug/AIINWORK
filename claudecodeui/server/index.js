@@ -2039,6 +2039,24 @@ function createRuntimeDiagnosticsPayload(data) {
     };
 }
 
+function summarizeMcpBindings(bindings = []) {
+    if (!Array.isArray(bindings)) {
+        return [];
+    }
+    return bindings
+        .filter((binding) => String(binding?.app || '').startsWith('MCP: '))
+        .map((binding) => {
+            const serverName = String(binding.app || '').replace(/^MCP:\s*/, '').trim();
+            return {
+                slot: binding.slot || '',
+                serverName,
+                status: binding.status || 'optional',
+                runtimeToolsStatus: 'discovered-after-session-start',
+                message: 'Configuration is bound; MTL-Code runtime discovers MCP tools when the session starts.',
+            };
+        });
+}
+
 function emitRuntimeDiagnostics(writer, data) {
     const payload = createRuntimeDiagnosticsPayload(data);
     if (!payload) {
@@ -2200,6 +2218,10 @@ async function applyAgentRuntimeToChatCommand(data) {
                 effectiveSkills: sessionSkills,
                 skillDetails: skillReferences.details,
                 skillPromptLength: skillReferences.promptLength,
+                ragExcerptCount: 0,
+                ragPromptLength: 0,
+                ragExcerpts: [],
+                mcpDiagnosticsSummary: [],
                 appendSystemPromptLength: appendSystemPrompt.length,
                 contextWindowTokens: data?.options?.contextWindowTokens || null,
                 model: data?.options?.model || '',
@@ -2253,10 +2275,14 @@ async function applyAgentRuntimeToChatCommand(data) {
             agentName: runtime.agent.name,
             appBindings: runtime.agent.appBindings,
             mcpBindings: runtime.agent.appBindings.filter((binding) => String(binding?.app || '').startsWith('MCP: ')),
+            mcpDiagnosticsSummary: summarizeMcpBindings(runtime.agent.appBindings),
             sessionSkills,
             effectiveSkills: runtime.agent.skills,
             skillDetails: skillReferences.details,
             skillPromptLength: skillReferences.promptLength,
+            ragExcerptCount: runtime.knowledgeDiagnostics?.ragExcerptCount || 0,
+            ragPromptLength: runtime.knowledgeDiagnostics?.ragPromptLength || 0,
+            ragExcerpts: runtime.knowledgeDiagnostics?.ragExcerpts || [],
             appendSystemPromptLength: runtime.appendSystemPrompt.length,
             contextWindowTokens: runtime.contextWindowTokens,
             model: runtime.model || data?.options?.model || '',

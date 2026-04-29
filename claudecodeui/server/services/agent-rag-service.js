@@ -459,12 +459,12 @@ function scoreChunk(chunk, terms, queryEmbedding, fallbackIndex) {
   return keywordScore + vectorScore;
 }
 
-export async function buildAgentKnowledgePrompt(agent, query = '', options = {}) {
+export async function buildAgentKnowledgeContext(agent, query = '', options = {}) {
   const sources = Array.isArray(agent?.knowledgeSources)
     ? agent.knowledgeSources.filter((source) => source.status === 'indexed')
     : [];
   if (!agent?.id || sources.length === 0) {
-    return '';
+    return { prompt: '', excerptCount: 0, promptLength: 0, excerpts: [] };
   }
 
   const manifests = await Promise.all(sources.map((source) => readSourceManifest(agent.id, source)));
@@ -473,7 +473,7 @@ export async function buildAgentKnowledgePrompt(agent, query = '', options = {})
     .flatMap((manifest) => manifest.chunks || []);
 
   if (chunks.length === 0) {
-    return '';
+    return { prompt: '', excerptCount: 0, promptLength: 0, excerpts: [] };
   }
 
   const terms = tokenizeQuery(query);
@@ -488,7 +488,7 @@ export async function buildAgentKnowledgePrompt(agent, query = '', options = {})
     .slice(0, options.maxChunks || MAX_PROMPT_CHUNKS);
 
   if (ranked.length === 0) {
-    return '';
+    return { prompt: '', excerptCount: 0, promptLength: 0, excerpts: [] };
   }
 
   const lines = [
@@ -498,6 +498,7 @@ export async function buildAgentKnowledgePrompt(agent, query = '', options = {})
   ];
   let charBudget = options.maxChars || MAX_PROMPT_CHARS;
 
+  const excerpts = [];
   ranked.forEach((entry, index) => {
     if (charBudget <= 0) return;
     const { chunk } = entry;
@@ -505,8 +506,25 @@ export async function buildAgentKnowledgePrompt(agent, query = '', options = {})
     const text = chunk.text.slice(0, Math.max(0, charBudget - header.length));
     if (!text.trim()) return;
     lines.push(header, text);
+    excerpts.push({
+      label: `K${index + 1}`,
+      sourceName: chunk.sourceName,
+      relativePath: chunk.relativePath,
+      score: Number(entry.score.toFixed(4)),
+      chars: text.length,
+    });
     charBudget -= header.length + text.length;
   });
 
-  return lines.join('\n');
+  const prompt = lines.join('\n');
+  return {
+    prompt,
+    excerptCount: excerpts.length,
+    promptLength: prompt.length,
+    excerpts,
+  };
+}
+
+export async function buildAgentKnowledgePrompt(agent, query = '', options = {}) {
+  return (await buildAgentKnowledgeContext(agent, query, options)).prompt;
 }

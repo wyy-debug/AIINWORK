@@ -2,7 +2,7 @@ import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
 
-import { buildAgentKnowledgePrompt } from './agent-rag-service.js';
+import { buildAgentKnowledgeContext } from './agent-rag-service.js';
 import { listInstalledSkills } from './agent-skill-service.js';
 
 const UI_DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
@@ -453,7 +453,7 @@ export async function deleteAgentConfig(agentId) {
   return removed;
 }
 
-export async function buildAgentSystemPrompt(agent, options = {}) {
+async function buildAgentSystemPromptResult(agent, options = {}) {
   const lines = [
     `You are running with the selected MTL-Code Agent profile: ${agent.name} (${agent.id}).`,
     '',
@@ -487,9 +487,9 @@ export async function buildAgentSystemPrompt(agent, options = {}) {
     );
   }
 
-  const knowledgePrompt = await buildAgentKnowledgePrompt(agent, options.query || '');
-  if (knowledgePrompt) {
-    lines.push('', knowledgePrompt);
+  const knowledgeContext = await buildAgentKnowledgeContext(agent, options.query || '');
+  if (knowledgeContext.prompt) {
+    lines.push('', knowledgeContext.prompt);
   }
 
   if (agent.memory?.enabled) {
@@ -510,7 +510,18 @@ export async function buildAgentSystemPrompt(agent, options = {}) {
     'Preserve the default MTL-Code coding, safety, workspace, and tool-use behavior. This Agent profile narrows intent and context; it does not grant extra permissions by itself.',
   );
 
-  return lines.filter((line) => line !== undefined && line !== null).join('\n');
+  return {
+    prompt: lines.filter((line) => line !== undefined && line !== null).join('\n'),
+    knowledgeDiagnostics: {
+      ragExcerptCount: knowledgeContext.excerptCount,
+      ragPromptLength: knowledgeContext.promptLength,
+      ragExcerpts: knowledgeContext.excerpts,
+    },
+  };
+}
+
+export async function buildAgentSystemPrompt(agent, options = {}) {
+  return (await buildAgentSystemPromptResult(agent, options)).prompt;
 }
 
 export async function resolveSkillReferences(skillNames = [], options = {}) {
@@ -590,9 +601,12 @@ export async function resolveAgentRuntime(agentId, options = {}) {
   const runtimeSettings = await readMtlCodeRuntimeSettings();
   const model = runtimeSettings.model || undefined;
 
+  const systemPromptResult = await buildAgentSystemPromptResult(runtimeAgent, options);
+
   return {
     agent: runtimeAgent,
-    appendSystemPrompt: await buildAgentSystemPrompt(runtimeAgent, options),
+    appendSystemPrompt: systemPromptResult.prompt,
+    knowledgeDiagnostics: systemPromptResult.knowledgeDiagnostics,
     model,
     contextWindowTokens: runtimeSettings.contextWindowTokens,
   };

@@ -34,6 +34,7 @@
     "icons:app": "node scripts/generate-app-icons.mjs",
     "package:preview-win": "node scripts/package-preview-win.mjs",
     "package:electron-win": "node scripts/package-electron-win.mjs",
+    "smoke:ui": "node scripts/smoke-ui.mjs",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
     "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",

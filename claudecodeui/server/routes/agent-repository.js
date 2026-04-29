@@ -1651,9 +1651,17 @@ router.post('/remote-upload', async (req, res) => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      const authDetails = response.status === 401 || response.status === 403
+        ? `Remote Hub "${source.name}" rejected the upload token for ${source.url}. Check the Hub JSON config adminToken/submitToken and enter the matching token in Repository upload settings.`
+        : '';
       return res.status(response.status).json({
         error: data.error || 'Failed to upload repository item to remote Hub',
-        details: data.details || data.message || `Remote Hub returned HTTP ${response.status}`,
+        details: data.details || data.message || authDetails || `Remote Hub returned HTTP ${response.status}`,
+        repository: {
+          id: source.id,
+          name: source.name,
+          url: source.url,
+        },
       });
     }
     res.json({ success: true, item: data.item || data.catalogItem || null, repository: source });

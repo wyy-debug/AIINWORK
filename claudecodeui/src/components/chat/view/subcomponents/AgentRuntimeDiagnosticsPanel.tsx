@@ -195,6 +195,7 @@ export default function AgentRuntimeDiagnosticsPanel({
             <Field label="Agent ID" value={formatText(diagnostics?.agentId)} />
             <Field label="Agent 名称" value={formatText(diagnostics?.agentName)} />
             <Field label="模型" value={formatText(diagnostics?.model)} />
+            <Field label="模型 Profile" value={formatText(diagnostics?.modelProfileId)} />
             <Field label="上下文 tokens" value={formatNumber(diagnostics?.contextWindowTokens)} />
             <Field label="Provider" value={formatText(diagnostics?.provider)} />
             <Field label="Session ID" value={formatText(diagnostics?.sessionId)} />
@@ -222,6 +223,17 @@ export default function AgentRuntimeDiagnosticsPanel({
                   <p className="mt-2 text-xs leading-5 text-muted-foreground">
                     MCP 工具列表由 MTL-Code 原生 runtime 在会话启动后发现；这里显示的是已绑定的配置引用。
                   </p>
+                  {Array.isArray(diagnostics?.mcpDiagnosticsSummary) && diagnostics.mcpDiagnosticsSummary.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {diagnostics.mcpDiagnosticsSummary.map((item) => (
+                        <div key={`${item.slot}:${item.serverName}`} className="rounded-md border border-border bg-card/70 px-2 py-1 text-[11px] text-muted-foreground">
+                          <span className="font-medium text-foreground">{item.serverName || 'MCP'}</span>
+                          <span className="ml-1">/ {item.slot || 'slot'}</span>
+                          <span className="ml-1">/ {item.runtimeToolsStatus || 'runtime discovery'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </section>
@@ -251,6 +263,36 @@ export default function AgentRuntimeDiagnosticsPanel({
               </div>
             </section>
           </div>
+
+          <section className="mt-3 rounded-lg border border-border bg-background/60 p-3">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <DatabaseIcon className="h-4 w-4 text-primary" />
+              RAG / 知识源
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Field label="ragExcerptCount" value={formatNumber(diagnostics?.ragExcerptCount)} />
+              <Field label="ragPromptLength" value={formatNumber(diagnostics?.ragPromptLength)} />
+            </div>
+            {Array.isArray(diagnostics?.ragExcerpts) && diagnostics.ragExcerpts.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {diagnostics.ragExcerpts.map((excerpt) => (
+                  <span
+                    key={`${excerpt.label}:${excerpt.sourceName}:${excerpt.relativePath}`}
+                    className="inline-flex max-w-[260px] items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs"
+                    title={`${excerpt.sourceName || ''} / ${excerpt.relativePath || ''}`}
+                  >
+                    <span className="font-medium text-foreground">{excerpt.label || 'K'}</span>
+                    <span className="truncate text-muted-foreground">{excerpt.sourceName || excerpt.relativePath || 'knowledge'}</span>
+                    {typeof excerpt.chars === 'number' && <span className="shrink-0 text-muted-foreground">{excerpt.chars} chars</span>}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                本次没有注入 RAG 摘要，或当前 Agent 没有可用的已索引知识源。
+              </p>
+            )}
+          </section>
 
           <section className="mt-3 rounded-lg border border-border bg-background/60 p-3">
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">

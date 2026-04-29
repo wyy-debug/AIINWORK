@@ -4,6 +4,14 @@ Date: 2026-04-28
 
 Run this checklist before shipping a Windows package after Agent, Skill, MCP, Worktree, permission, or session-list changes.
 
+## Automated Baseline
+
+1. Start a dev or packaged preview target.
+2. Ensure Playwright is available for this checkout, for example `npm install --no-save playwright`.
+3. Run `npm run smoke:ui`.
+4. Use `SMOKE_BASE_URL=http://host:port npm run smoke:ui` when the target is not `http://127.0.0.1:5173`.
+5. The script covers shell load, project/conversation switch, composer input, and model switcher focus recovery.
+
 ## Code UI
 
 1. Launch the packaged app.

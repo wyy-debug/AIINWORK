@@ -187,6 +187,7 @@ Date: 2026-04-28
 - Generic placeholders such as `Custom MCP` or `自定义 MCP` are treated as setup prompts, not callable runtime bindings.
 - The chat composer shows active runtime bindings for standalone conversations: Agent, MCP bindings, and Skills. Skills are marked callable only when discovered in the installed Skill registry.
 - The server emits an `agent_runtime_debug` status event and a matching console log with `agentId`, `appBindings`, `mcpBindings`, `sessionSkills`, `effectiveSkills`, `appendSystemPromptLength`, model, context window, project path, session id, and a permission snapshot.
+- The diagnostics payload also includes `modelProfileId`, Skill path/callable details, MCP binding summaries, RAG excerpt count, and RAG prompt length. Secret values are never included.
 - The frontend does not render `agent_runtime_debug` as a chat message. It updates the composer diagnostics panel only.
 - Missing Skills do not block sending. The UI marks them unavailable, and the backend prompt says they are not installed and must not be relied on.
 

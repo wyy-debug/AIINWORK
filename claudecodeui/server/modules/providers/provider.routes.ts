@@ -592,6 +592,19 @@ const diagnoseProviderMcpServer = async (
     detail: manifestTools.join(', ') || 'runtime discovery',
   });
 
+  const checkById = (id: string) => checks.find((check) => check.id === id);
+  const configWrittenCheck = checkById('config-written');
+  const packageInstalledCheck = checkById('package-installed');
+  const dependenciesInstalledCheck = checkById('dependencies-installed');
+  const launchableCheck = checkById('launchable');
+  const runtimeToolsCheck = checkById('runtime-tools');
+  const safeMessages = checks.map((check) => ({
+    id: check.id,
+    status: check.status,
+    message: check.message,
+    ...(check.detail ? { detail: redactSecrets(String(check.detail), server.env) } : {}),
+  }));
+
   const failed = checks.some((check) => check.status === 'fail');
   const warned = checks.some((check) => check.status === 'warn');
   return {
@@ -601,6 +614,22 @@ const diagnoseProviderMcpServer = async (
     installDir,
     status: failed ? 'error' : warned ? 'warning' : 'ok',
     checkedAt: new Date().toISOString(),
+    configWritten: configWrittenCheck?.status === 'pass',
+    packageInstalled: packageInstalledCheck?.status === 'pass',
+    dependenciesInstalled: dependenciesInstalledCheck?.status === 'pass',
+    launchable: launchableCheck
+      ? {
+          status: launchableCheck.status,
+          message: launchableCheck.message,
+          detail: launchableCheck.detail ? redactSecrets(String(launchableCheck.detail), server.env) : '',
+        }
+      : null,
+    runtimeToolsStatus: {
+      status: runtimeToolsCheck?.status || 'warn',
+      tools: manifestTools,
+      message: runtimeToolsCheck?.message || 'Tool listing is discovered by the MTL-Code runtime after a session starts.',
+    },
+    safeMessages,
     requiredFields,
     checks,
   };
