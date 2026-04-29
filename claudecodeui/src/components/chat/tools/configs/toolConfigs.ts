@@ -553,6 +553,10 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
  * Get configuration for a tool, with fallback to default
  */
 export function getToolConfig(toolName: string): ToolDisplayConfig {
+  if (toolName === 'Agent') {
+    return TOOL_CONFIGS.Task;
+  }
+
   return TOOL_CONFIGS[toolName] || TOOL_CONFIGS.Default;
 }
 

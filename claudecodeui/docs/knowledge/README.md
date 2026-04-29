@@ -17,6 +17,7 @@ This directory is the development entry point for `claudecodeui`, now branded as
 ## Current Notes
 
 - [2026-04-28-mtl-code-user-guide.md](2026-04-28-mtl-code-user-guide.md): user-facing MTL-Code guide covering projects, conversations, model settings, Agent, Skill, MCP, Hub, Worktree, permissions, and caveats.
+- [2026-04-29-mimo-model-profiles.md](2026-04-29-mimo-model-profiles.md): multi-model profile settings and Xiaomi MiMo Anthropic-compatible setup.
 - [2026-04-28-redmine-mcp-agent-setup.md](2026-04-28-redmine-mcp-agent-setup.md): SOC Redmine Agent dependency wiring, MCP env storage, `REDMINE_API_KEY` handling, `ainwork-code-search` root setup, and GitNexus package fallback behavior.
 - [2026-04-27-agent-rag-foundation.md](2026-04-27-agent-rag-foundation.md): Agent Builder knowledge upload, local indexing, and lightweight retrieval injection into Agent runtime prompts.
 - [2026-04-27-session-agent-slots.md](2026-04-27-session-agent-slots.md): per-conversation Agent selection, required slot setup, backend persistence, and project/conversation state separation.

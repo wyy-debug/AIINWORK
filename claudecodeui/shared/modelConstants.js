@@ -8,8 +8,8 @@ export const MTL_CODE_MODEL = { value: "mtlcode", label: "MTLCode" };
 /**
  * MTL-Code Models
  *
- * UI surfaces expose one model entry. The backend skips this sentinel value and
- * lets MTL-Code resolve the concrete model from ~/.mtl-code/settings.json.
+ * Chat surfaces keep one sentinel entry. The settings page now manages multiple
+ * concrete model profiles and writes the active one into ~/.mtl-code/settings.json.
  */
 export const CLAUDE_MODELS = {
   OPTIONS: [MTL_CODE_MODEL],

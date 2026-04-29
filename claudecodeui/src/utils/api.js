@@ -203,6 +203,12 @@ export const api = {
     apiFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
   readFileBlob: (projectName, filePath) =>
     apiFetch(`/api/projects/${projectName}/files/content?path=${encodeURIComponent(filePath)}`),
+  localTools: () => apiFetch('/api/local-tools'),
+  openLocalToolFile: ({ tool = 'vscode', filePath, projectName = '', line = null, column = null }) =>
+    apiFetch('/api/local-tools/open-file', {
+      method: 'POST',
+      body: JSON.stringify({ tool, filePath, projectName, line, column }),
+    }),
   saveFile: (projectName, filePath, content) =>
     apiFetch(`/api/projects/${projectName}/file`, {
       method: 'PUT',

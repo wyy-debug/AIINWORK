@@ -29,6 +29,8 @@ import {
   Loader2Icon,
   DownloadIcon,
   CloudIcon,
+  PaperclipIcon,
+  ShieldIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -44,13 +46,15 @@ import {
 } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../../types/agent';
-import type { AgentRuntimeDiagnostics, PendingPermissionRequest, Provider } from '../../types/types';
+import type { AgentRuntimeDiagnostics, PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 
 import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
+import FileAttachment from './FileAttachment';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
+import RuntimeModelSwitcher from './RuntimeModelSwitcher';
 import TokenUsagePie from './TokenUsagePie';
 
 interface MentionableFile {
@@ -97,19 +101,28 @@ interface ChatComposerProps {
   showRuntimeDiagnostics: boolean;
   agentRuntimeDiagnostics: AgentRuntimeDiagnostics | null;
   tokenBudget: { used?: number; total?: number } | null;
+  permissionMode: PermissionMode | string;
+  onPermissionModeChange: (mode: PermissionMode) => void;
   slashCommandsCount: number;
   onToggleCommandMenu: () => void;
   hasInput: boolean;
   onClearInput: () => void;
   isUserScrolledUp: boolean;
   hasMessages: boolean;
+  hasConversationContext: boolean;
+  selectedModelProfileId?: string;
+  onModelProfileChange?: (profileId: string) => void;
   onScrollToBottom: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
   isDragActive: boolean;
   attachedImages: File[];
   onRemoveImage: (index: number) => void;
+  attachedFiles: File[];
+  onAttachFiles: (files: File[]) => void;
+  onRemoveFile: (index: number) => void;
   uploadingImages: Map<string, number>;
   imageErrors: Map<string, string>;
+  fileAttachmentErrors: Map<string, string>;
   showFileDropdown: boolean;
   filteredFiles: MentionableFile[];
   fileMentionQuery: string;
@@ -172,13 +185,22 @@ export default function ChatComposer({
   onClearInput,
   isUserScrolledUp,
   hasMessages,
+  hasConversationContext,
+  selectedModelProfileId,
+  onModelProfileChange,
   onScrollToBottom,
+  permissionMode,
+  onPermissionModeChange,
   onSubmit,
   isDragActive,
   attachedImages,
   onRemoveImage,
+  attachedFiles,
+  onAttachFiles,
+  onRemoveFile,
   uploadingImages,
   imageErrors,
+  fileAttachmentErrors,
   showFileDropdown,
   filteredFiles,
   fileMentionQuery,
@@ -212,12 +234,21 @@ export default function ChatComposer({
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isAgentMenuOpen, setIsAgentMenuOpen] = useState(false);
+  const [agentMenuPosition, setAgentMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
+  const [isPermissionMenuOpen, setIsPermissionMenuOpen] = useState(false);
+  const [permissionMenuPosition, setPermissionMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
   const [isSkillMenuOpen, setIsSkillMenuOpen] = useState(false);
   const [skillSearch, setSkillSearch] = useState('');
   const [skillMenuNotice, setSkillMenuNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [skillMenuPosition, setSkillMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
+  const agentMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
+  const permissionMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const permissionMenuRef = useRef<HTMLDivElement>(null);
   const skillMenuButtonRef = useRef<HTMLButtonElement>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRect = textareaRef.current?.getBoundingClientRect();
   const commandMenuPosition = {
     top: textareaRect ? Math.max(16, textareaRect.top - 316) : 0,
@@ -302,6 +333,154 @@ export default function ChatComposer({
     };
   });
   const hasRuntimeBindings = Boolean(selectedAgent || selectedMcpBindings.length > 0 || selectedSkillSummaries.length > 0);
+  const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
+  const normalizedPermissionMode: PermissionMode = (
+    permissionMode === 'acceptEdits'
+    || permissionMode === 'bypassPermissions'
+    || permissionMode === 'plan'
+  ) ? permissionMode : 'default';
+  const permissionModeOptions: Array<{
+    id: PermissionMode;
+    label: string;
+    shortLabel: string;
+    description: string;
+    tone: string;
+  }> = [
+    {
+      id: 'default',
+      label: '默认模式',
+      shortLabel: '默认',
+      description: '按需申请工具权限，适合日常对话。',
+      tone: 'text-slate-700 dark:text-slate-200',
+    },
+    {
+      id: 'acceptEdits',
+      label: '自动同意编辑',
+      shortLabel: '编辑',
+      description: '自动允许文件编辑，其他工具仍按设置处理。',
+      tone: 'text-blue-700 dark:text-blue-300',
+    },
+    {
+      id: 'bypassPermissions',
+      label: '全权限',
+      shortLabel: '全权限',
+      description: '跳过权限确认，等同于危险跳过权限。',
+      tone: 'text-amber-700 dark:text-amber-300',
+    },
+    {
+      id: 'plan',
+      label: 'Plan 模式',
+      shortLabel: 'Plan',
+      description: '先生成执行计划，确认后再继续。',
+      tone: 'text-indigo-700 dark:text-indigo-300',
+    },
+  ];
+  const activePermissionMode = permissionModeOptions.find((mode) => mode.id === normalizedPermissionMode) || permissionModeOptions[0];
+  const agentButtonLabel = selectedAgent
+    ? selectedAgent.shortName || selectedAgent.name
+    : '本对话默认';
+
+  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length > 0) {
+      onAttachFiles(files);
+    }
+    event.target.value = '';
+  };
+
+  useEffect(() => {
+    if (!isAgentMenuOpen) return undefined;
+
+    const updatePosition = () => {
+      const buttonRect = agentMenuButtonRef.current?.getBoundingClientRect();
+      if (!buttonRect) return;
+
+      const menuWidth = Math.min(320, window.innerWidth - 16);
+      const left = Math.min(
+        Math.max(8, buttonRect.left),
+        Math.max(8, window.innerWidth - menuWidth - 8),
+      );
+
+      setAgentMenuPosition({
+        left,
+        bottom: window.innerHeight - buttonRect.top + 8,
+      });
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (agentMenuRef.current?.contains(target) || agentMenuButtonRef.current?.contains(target)) {
+        return;
+      }
+      setIsAgentMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsAgentMenuOpen(false);
+      }
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isAgentMenuOpen]);
+
+  useEffect(() => {
+    if (!isPermissionMenuOpen) return undefined;
+
+    const updatePosition = () => {
+      const buttonRect = permissionMenuButtonRef.current?.getBoundingClientRect();
+      if (!buttonRect) return;
+
+      const menuWidth = Math.min(340, window.innerWidth - 16);
+      const left = Math.min(
+        Math.max(8, buttonRect.left),
+        Math.max(8, window.innerWidth - menuWidth - 8),
+      );
+
+      setPermissionMenuPosition({
+        left,
+        bottom: window.innerHeight - buttonRect.top + 8,
+      });
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (permissionMenuRef.current?.contains(target) || permissionMenuButtonRef.current?.contains(target)) {
+        return;
+      }
+      setIsPermissionMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsPermissionMenuOpen(false);
+      }
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isPermissionMenuOpen]);
 
   useEffect(() => {
     if (!isSkillMenuOpen) return undefined;
@@ -527,6 +706,140 @@ export default function ChatComposer({
           </div>
         )}
 
+        {isAgentMenuOpen && (
+          <div
+            ref={agentMenuRef}
+            className="fixed z-[92] flex max-h-[360px] w-[min(320px,calc(100vw-16px))] flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xl ring-1 ring-black/5 backdrop-blur-md"
+            style={{
+              left: agentMenuPosition?.left ?? 8,
+              bottom: agentMenuPosition?.bottom ?? 80,
+            }}
+            role="listbox"
+            aria-label="选择 Agent"
+            onWheel={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-border/50 px-3 py-2.5">
+              <div className="text-sm font-semibold text-foreground">选择 Agent</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">只作用于当前对话；输入 @Agent 可只作用于单条消息。</div>
+            </div>
+            <div className="min-h-0 overflow-y-auto p-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectedAgentIdChange('');
+                  setIsAgentMenuOpen(false);
+                  textareaRef.current?.focus();
+                }}
+                className={cn(
+                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                  !selectedAgentId ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/70',
+                )}
+                role="option"
+                aria-selected={!selectedAgentId}
+              >
+                <span className={cn(
+                  'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border',
+                  !selectedAgentId ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground',
+                )}>
+                  {!selectedAgentId ? <CheckIcon className="h-3.5 w-3.5" /> : <BotIcon className="h-3.5 w-3.5" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">本对话默认</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">不绑定 Agent，使用当前 MTL-Code 模型。</span>
+                </span>
+              </button>
+
+              {agents.map((agent) => {
+                const selected = agent.id === selectedAgentId;
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectedAgentIdChange(agent.id);
+                      setIsAgentMenuOpen(false);
+                      textareaRef.current?.focus();
+                    }}
+                    className={cn(
+                      'mt-1 flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                      selected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/70',
+                    )}
+                    role="option"
+                    aria-selected={selected}
+                  >
+                    <span className={cn(
+                      'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border',
+                      selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground',
+                    )}>
+                      {selected ? <CheckIcon className="h-3.5 w-3.5" /> : <BotIcon className="h-3.5 w-3.5" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{agent.shortName || agent.name}</span>
+                      {agent.description && (
+                        <span className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                          {agent.description}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {isPermissionMenuOpen && (
+          <div
+            ref={permissionMenuRef}
+            className="fixed z-[92] flex max-h-[360px] w-[min(340px,calc(100vw-16px))] flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xl ring-1 ring-black/5 backdrop-blur-md"
+            style={{
+              left: permissionMenuPosition?.left ?? 8,
+              bottom: permissionMenuPosition?.bottom ?? 80,
+            }}
+            role="listbox"
+            aria-label="切换权限模式"
+            onWheel={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-border/50 px-3 py-2.5">
+              <div className="text-sm font-semibold text-foreground">权限 / Plan 模式</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">影响当前会话发送给后端的权限模式。</div>
+            </div>
+            <div className="min-h-0 overflow-y-auto p-1.5">
+              {permissionModeOptions.map((mode) => {
+                const selected = mode.id === normalizedPermissionMode;
+                return (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => {
+                      onPermissionModeChange(mode.id);
+                      setIsPermissionMenuOpen(false);
+                      textareaRef.current?.focus();
+                    }}
+                    className={cn(
+                      'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                      selected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/70',
+                    )}
+                    role="option"
+                    aria-selected={selected}
+                  >
+                    <span className={cn(
+                      'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border',
+                      selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground',
+                    )}>
+                      {selected ? <CheckIcon className="h-3.5 w-3.5" /> : <ShieldIcon className="h-3.5 w-3.5" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className={cn('block truncate text-sm font-semibold', mode.tone)}>{mode.label}</span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{mode.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {isSkillMenuOpen && (
           <div
             ref={skillMenuRef}
@@ -735,12 +1048,12 @@ export default function ChatComposer({
                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                   />
                 </svg>
-                <p className="text-sm font-medium">Drop images here</p>
+                <p className="text-sm font-medium">拖放图片或文件</p>
               </div>
             </div>
           )}
 
-          {attachedImages.length > 0 && (
+          {hasAttachments && (
             <PromptInputHeader>
               <div className="rounded-xl bg-muted/40 p-2">
                 <div className="flex flex-wrap gap-2">
@@ -753,12 +1066,27 @@ export default function ChatComposer({
                       error={imageErrors.get(file.name)}
                     />
                   ))}
+                  {attachedFiles.map((file, index) => (
+                    <FileAttachment
+                      key={`${file.name}-${index}`}
+                      file={file}
+                      onRemove={() => onRemoveFile(index)}
+                      error={fileAttachmentErrors.get(file.name)}
+                    />
+                  ))}
                 </div>
               </div>
             </PromptInputHeader>
           )}
 
-          <input {...getInputProps()} />
+          <input {...getInputProps({ accept: 'image/*' })} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleFileInputChange}
+          />
 
           <PromptInputBody>
             <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">
@@ -791,27 +1119,65 @@ export default function ChatComposer({
               <ImageIcon />
             </PromptInputButton>
 
+            <PromptInputButton
+              tooltip={{ content: '上传文件' }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <PaperclipIcon />
+            </PromptInputButton>
+
+            <RuntimeModelSwitcher
+              variant="toolbar"
+              disabled={isLoading}
+              selectedProfileId={selectedModelProfileId}
+              onProfileChange={onModelProfileChange}
+              onRequestInputFocus={() => textareaRef.current?.focus()}
+              hasConversationContext={hasConversationContext}
+            />
+
             {agents.length > 0 && (
-              <label
-                className="flex h-9 items-center gap-1.5 rounded-lg border border-border/60 bg-muted/35 px-2 text-xs text-muted-foreground transition-colors hover:bg-muted/60"
+              <button
+                ref={agentMenuButtonRef}
+                type="button"
+                onClick={() => setIsAgentMenuOpen((previous) => !previous)}
+                disabled={isLoading}
+                aria-haspopup="listbox"
+                aria-expanded={isAgentMenuOpen}
+                className={cn(
+                  'flex h-9 min-w-[132px] max-w-[190px] items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                  selectedAgentId
+                    ? 'border-primary/25 bg-primary/8 text-primary hover:bg-primary/12'
+                    : 'border-border/60 bg-muted/35 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                )}
                 title="选择当前对话使用的 Agent，也可以在输入框开头使用 @Agent 只作用于当前消息"
               >
                 <BotIcon className="h-3.5 w-3.5 shrink-0" />
-                <select
-                  value={selectedAgentId}
-                  onChange={(event) => onSelectedAgentIdChange(event.target.value)}
-                  disabled={isLoading}
-                  className="max-w-[132px] bg-transparent text-xs font-medium text-foreground outline-none"
-                >
-                  <option value="">本对话默认</option>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.shortName || agent.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <span className="min-w-0 flex-1 truncate text-left font-medium">{agentButtonLabel}</span>
+                <ChevronDownIcon className={cn('h-3.5 w-3.5 shrink-0 transition-transform', isAgentMenuOpen && 'rotate-180')} />
+              </button>
             )}
+
+            <button
+              ref={permissionMenuButtonRef}
+              type="button"
+              onClick={() => setIsPermissionMenuOpen((previous) => !previous)}
+              disabled={isLoading}
+              aria-haspopup="listbox"
+              aria-expanded={isPermissionMenuOpen}
+              className={cn(
+                'flex h-9 min-w-[96px] max-w-[132px] items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                normalizedPermissionMode === 'plan'
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-900/60 dark:bg-indigo-950/30 dark:text-indigo-300'
+                  : normalizedPermissionMode === 'bypassPermissions'
+                    ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'
+                    : 'border-border/60 bg-muted/35 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+              )}
+              title="切换当前对话的权限/Plan 模式"
+            >
+              <ShieldIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-left font-medium">{activePermissionMode.shortLabel}</span>
+              <ChevronDownIcon className={cn('h-3.5 w-3.5 shrink-0 transition-transform', isPermissionMenuOpen && 'rotate-180')} />
+            </button>
 
             {hasSkillChoices && (
               <button
@@ -918,7 +1284,7 @@ export default function ChatComposer({
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
             <PromptInputSubmit
-              disabled={!input.trim() || isLoading}
+              disabled={(!input.trim() && !hasAttachments) || isLoading}
               className="h-10 w-10 sm:h-10 sm:w-10"
               onMouseDown={(event) => {
                 event.preventDefault();

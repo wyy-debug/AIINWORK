@@ -62,11 +62,19 @@ function normalizeSkillNames(value) {
     .slice(0, 30);
 }
 
+function normalizeModelProfileId(value) {
+  return normalizeString(value, '', 160)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function normalizeSessionAgentConfiguration(value) {
   const source = value && typeof value === 'object' ? value : {};
   return {
     appBindings: normalizeAppBindings(source.appBindings),
     skills: normalizeSkillNames(source.skills),
+    modelProfileId: normalizeModelProfileId(source.modelProfileId),
   };
 }
 
@@ -106,7 +114,7 @@ router.put('/:sessionId/agent', async (req, res) => {
     });
 
     if (!agentId) {
-      if (configuration.appBindings.length === 0 && configuration.skills.length === 0) {
+      if (configuration.appBindings.length === 0 && configuration.skills.length === 0 && !configuration.modelProfileId) {
         sessionAgentBindingsDb.deleteAgent(sessionId, provider);
         return res.json({ success: true, sessionId, provider, agentId: '', agent: null, configuration: null });
       }

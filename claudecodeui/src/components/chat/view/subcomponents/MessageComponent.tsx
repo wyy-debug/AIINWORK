@@ -47,6 +47,17 @@ type InteractiveOption = {
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
+function formatFileSize(size?: number) {
+  if (!size || !Number.isFinite(size) || size <= 0) {
+    return '';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const exponent = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const value = size / (1024 ** exponent);
+  return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
+}
+
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
@@ -148,6 +159,29 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     className="h-auto max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
                     onClick={() => window.open(img.data, '_blank')}
                   />
+                ))}
+              </div>
+            )}
+            {message.files && message.files.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1.5">
+                {message.files.map((file, idx) => (
+                  <button
+                    key={`${file.path || file.name}-${idx}`}
+                    type="button"
+                    onClick={() => file.path && onFileOpen?.(file.path)}
+                    className="flex min-w-0 items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-2.5 py-2 text-left text-white transition-colors hover:bg-white/15"
+                    title={file.path || file.name}
+                  >
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-[10px] font-semibold">
+                      FILE
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium">{file.name || file.path}</span>
+                      <span className="block truncate text-[11px] text-blue-100">
+                        {[formatFileSize(file.size), file.mimeType].filter(Boolean).join(' · ') || 'Uploaded file'}
+                      </span>
+                    </span>
+                  </button>
                 ))}
               </div>
             )}

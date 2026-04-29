@@ -1,4 +1,5 @@
-import { Code2, Download, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, X } from 'lucide-react';
+import { Code2, Download, ExternalLink, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, X } from 'lucide-react';
+
 import type { CodeEditorFile } from '../../types/types';
 
 type CodeEditorHeaderProps = {
@@ -9,8 +10,10 @@ type CodeEditorHeaderProps = {
   markdownPreview: boolean;
   saving: boolean;
   saveSuccess: boolean;
+  openingExternal: boolean;
   onToggleMarkdownPreview: () => void;
   onOpenSettings: () => void;
+  onOpenInVSCode: () => void;
   onDownload: () => void;
   onSave: () => void;
   onToggleFullscreen: () => void;
@@ -24,6 +27,8 @@ type CodeEditorHeaderProps = {
     save: string;
     saving: string;
     saved: string;
+    openInVSCode: string;
+    openingInVSCode: string;
     fullscreen: string;
     exitFullscreen: string;
     close: string;
@@ -38,8 +43,10 @@ export default function CodeEditorHeader({
   markdownPreview,
   saving,
   saveSuccess,
+  openingExternal,
   onToggleMarkdownPreview,
   onOpenSettings,
+  onOpenInVSCode,
   onDownload,
   onSave,
   onToggleFullscreen,
@@ -89,6 +96,16 @@ export default function CodeEditorHeader({
           title={labels.settings}
         >
           <SettingsIcon className="h-4 w-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenInVSCode}
+          disabled={openingExternal}
+          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:cursor-wait disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+          title={openingExternal ? labels.openingInVSCode : labels.openInVSCode}
+        >
+          <ExternalLink className="h-4 w-4" />
         </button>
 
         <button

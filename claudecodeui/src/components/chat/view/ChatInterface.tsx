@@ -61,6 +61,13 @@ function normalizeSkillNames(value: unknown): string[] {
     .slice(0, 60);
 }
 
+function normalizeModelProfileId(value: unknown): string {
+  return (typeof value === 'string' ? value.trim() : '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 async function readResponseError(response: Response, fallback: string) {
   try {
     const data = await response.json();
@@ -133,6 +140,8 @@ function ChatInterface({
   const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
   const [selectedSessionSkillNames, setSelectedSessionSkillNames] = useState<string[]>([]);
   const [selectedProjectSkillNames, setSelectedProjectSkillNames] = useState<string[]>([]);
+  const [defaultModelProfileId, setDefaultModelProfileId] = useState('');
+  const [selectedModelProfileId, setSelectedModelProfileId] = useState('');
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
   const [agentRuntimeDiagnostics, setAgentRuntimeDiagnostics] = useState<AgentRuntimeDiagnostics | null>(null);
   const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
@@ -378,6 +387,7 @@ function ChatInterface({
     geminiModel,
     setGeminiModel,
     permissionMode,
+    setPermissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
     cyclePermissionMode,
@@ -441,6 +451,40 @@ function ChatInterface({
   );
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadDefaultModelProfile = async () => {
+      try {
+        const response = await api.get('/settings/mtl-code-model');
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load model profile settings');
+        }
+        const profiles = Array.isArray(data?.config?.profiles) ? data.config.profiles : [];
+        const nextProfileId = normalizeModelProfileId(data?.config?.activeProfileId || profiles[0]?.id || '');
+        if (cancelled) {
+          return;
+        }
+        setDefaultModelProfileId(nextProfileId);
+        if (!activeConversationSessionId) {
+          setSelectedModelProfileId(nextProfileId);
+        } else {
+          setSelectedModelProfileId((previous) => previous || nextProfileId);
+        }
+      } catch (error) {
+        console.warn('Failed to load default model profile:', error);
+      }
+    };
+
+    void loadDefaultModelProfile();
+    window.addEventListener('mtlCodeModelSettingsChanged', loadDefaultModelProfile);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('mtlCodeModelSettingsChanged', loadDefaultModelProfile);
+    };
+  }, [activeConversationSessionId]);
+
+  useEffect(() => {
     const requestId = isConversationSpace ? newConversationRequestId : newProjectSessionRequestId;
     if (!requestId || selectedSession?.id || currentSessionId) {
       return;
@@ -454,6 +498,7 @@ function ChatInterface({
       setSelectedAgentAppBindings(nextAppBindings);
       setSelectedSessionSkillNames(nextSkills);
       setSelectedProjectSkillNames([]);
+      setSelectedModelProfileId(defaultModelProfileId);
       setAgentChoiceState(nextAgentId ? 'agent' : 'default');
       setAgentRuntimeDiagnostics(null);
       return;
@@ -463,12 +508,14 @@ function ChatInterface({
     setSelectedAgentAppBindings([]);
     setSelectedSessionSkillNames([]);
     setSelectedProjectSkillNames([]);
+    setSelectedModelProfileId(defaultModelProfileId);
     setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
     setAgentRuntimeDiagnostics(null);
   }, [
     currentSessionId,
     isConversationSpace,
     isWorktreeProject,
+    defaultModelProfileId,
     newConversationRequestId,
     newProjectSessionRequestId,
     selectedSession?.id,
@@ -501,9 +548,11 @@ function ChatInterface({
     setSelectedAgentAppBindings(nextAppBindings);
     setSelectedSessionSkillNames(nextSkills);
     setSelectedProjectSkillNames([]);
+    setSelectedModelProfileId(defaultModelProfileId);
     setAgentChoiceState(nextAgentId ? 'agent' : 'default');
   }, [
     currentSessionId,
+    defaultModelProfileId,
     isWorktreeProject,
     selectedSession?.id,
     worktreeMeta?.agentId,
@@ -529,20 +578,21 @@ function ChatInterface({
       isTemporarySessionId(previousSessionId)
       && activeConversationSessionId
       && !selectedSession?.id
-      && (selectedAgentId || selectedSessionSkillNames.length > 0)
+      && (selectedAgentId || selectedSessionSkillNames.length > 0 || selectedModelProfileId)
     ) {
       skipNextAgentBindingLoadKeyRef.current = bindingKey;
       agentBindingHydratedKeyRef.current = bindingKey;
-      agentBindingPersistKeyRef.current = `${bindingKey}:${selectedAgentId}:${JSON.stringify({ appBindings: selectedAgentAppBindings, skills: selectedSessionSkillNames })}`;
+      agentBindingPersistKeyRef.current = `${bindingKey}:${selectedAgentId}:${JSON.stringify({ appBindings: selectedAgentAppBindings, skills: selectedSessionSkillNames, modelProfileId: selectedModelProfileId })}`;
       void api.updateSessionAgent(activeConversationSessionId, selectedAgentId, provider, {
         appBindings: selectedAgentAppBindings,
         skills: selectedSessionSkillNames,
+        modelProfileId: selectedModelProfileId,
       }).catch((error) => {
         console.warn('Failed to persist new conversation Agent binding:', error);
         agentBindingPersistKeyRef.current = '';
       });
     }
-  }, [activeConversationSessionId, agentBindingEnabled, currentSessionId, provider, selectedAgentAppBindings, selectedAgentId, selectedSession?.id, selectedSessionSkillNames]);
+  }, [activeConversationSessionId, agentBindingEnabled, currentSessionId, provider, selectedAgentAppBindings, selectedAgentId, selectedModelProfileId, selectedSession?.id, selectedSessionSkillNames]);
 
   useEffect(() => {
     if (!agentBindingEnabled) {
@@ -599,18 +649,21 @@ function ChatInterface({
         const nextAgentId = typeof data?.agentId === 'string' ? data.agentId : '';
         const nextAppBindings = normalizeAgentAppBindings(data?.configuration?.appBindings || data?.agent?.appBindings);
         const nextSkills = normalizeSkillNames(data?.configuration?.skills);
+        const nextModelProfileId = normalizeModelProfileId(data?.configuration?.modelProfileId) || defaultModelProfileId;
         setSelectedAgentId(nextAgentId);
         setSelectedAgentAppBindings(nextAppBindings);
         setSelectedSessionSkillNames(nextSkills);
+        setSelectedModelProfileId(nextModelProfileId);
         setAgentChoiceState(nextAgentId ? 'agent' : 'default');
         agentBindingHydratedKeyRef.current = bindingKey;
-        agentBindingPersistKeyRef.current = `${bindingKey}:${nextAgentId}:${JSON.stringify({ appBindings: nextAppBindings, skills: nextSkills })}`;
+        agentBindingPersistKeyRef.current = `${bindingKey}:${nextAgentId}:${JSON.stringify({ appBindings: nextAppBindings, skills: nextSkills, modelProfileId: nextModelProfileId })}`;
       } catch (error) {
         console.warn('Failed to load conversation Agent binding:', error);
         if (!cancelled && agentBindingLoadKeyRef.current === bindingKey) {
           setSelectedAgentId('');
           setSelectedAgentAppBindings([]);
           setSelectedSessionSkillNames([]);
+          setSelectedModelProfileId(defaultModelProfileId);
           setAgentChoiceState('default');
           agentBindingHydratedKeyRef.current = bindingKey;
           agentBindingPersistKeyRef.current = `${bindingKey}:`;
@@ -622,7 +675,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, agentBindingEnabled, agentChoiceState, currentSessionId, isConversationSpace, isWorktreeProject, provider, quickStartAgentId, quickStartAgentRequestId, selectedAgentId, selectedSession?.id, selectedSessionSkillNames.length]);
+  }, [activeConversationSessionId, agentBindingEnabled, agentChoiceState, currentSessionId, defaultModelProfileId, isConversationSpace, isWorktreeProject, provider, quickStartAgentId, quickStartAgentRequestId, selectedAgentId, selectedSession?.id, selectedSessionSkillNames.length]);
 
   useEffect(() => {
     if (!selectedAgentId) {
@@ -646,18 +699,19 @@ function ChatInterface({
       return;
     }
 
-    const configuration = { appBindings: selectedAgentAppBindings, skills: selectedSessionSkillNames };
+    const configuration = { appBindings: selectedAgentAppBindings, skills: selectedSessionSkillNames, modelProfileId: selectedModelProfileId };
     const bindingKey = `${provider}:${activeConversationSessionId}:${selectedAgentId}:${JSON.stringify(configuration)}`;
     if (agentBindingPersistKeyRef.current === bindingKey) {
       return;
     }
     const hydratedKey = `${provider}:${activeConversationSessionId}`;
-    if (!selectedAgentId && selectedSessionSkillNames.length === 0 && agentBindingHydratedKeyRef.current !== hydratedKey) {
+    const isNewlyCreatedSession = !selectedSession?.id;
+    if (agentBindingHydratedKeyRef.current !== hydratedKey && !isNewlyCreatedSession) {
       return;
     }
     agentBindingPersistKeyRef.current = bindingKey;
 
-    const persistSessionAgent = selectedAgentId || selectedSessionSkillNames.length > 0
+    const persistSessionAgent = selectedAgentId || selectedSessionSkillNames.length > 0 || selectedModelProfileId
       ? api.updateSessionAgent(activeConversationSessionId, selectedAgentId, provider, configuration)
       : api.clearSessionAgent(activeConversationSessionId, provider);
 
@@ -665,7 +719,7 @@ function ChatInterface({
       console.warn('Failed to persist conversation Agent binding:', error);
       agentBindingPersistKeyRef.current = '';
     });
-  }, [activeConversationSessionId, agentBindingEnabled, provider, selectedAgentAppBindings, selectedAgentId, selectedSessionSkillNames]);
+  }, [activeConversationSessionId, agentBindingEnabled, provider, selectedAgentAppBindings, selectedAgentId, selectedModelProfileId, selectedSession?.id, selectedSessionSkillNames]);
 
   const toggleSessionSkill = useCallback((skillName: string) => {
     const normalized = skillName.trim();
@@ -746,15 +800,18 @@ function ChatInterface({
         }
 
         const nextSkills = normalizeSkillNames(data?.configuration?.skills);
+        const nextModelProfileId = normalizeModelProfileId(data?.configuration?.modelProfileId) || defaultModelProfileId;
         setSelectedProjectSkillNames(nextSkills);
+        setSelectedModelProfileId(nextModelProfileId);
         projectSkillBindingHydratedKeyRef.current = bindingKey;
-        projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify(nextSkills)}`;
+        projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills: nextSkills, modelProfileId: nextModelProfileId })}`;
       } catch (error) {
         console.warn('Failed to load project Skill binding:', error);
         if (!cancelled && projectSkillBindingLoadKeyRef.current === bindingKey) {
           setSelectedProjectSkillNames([]);
+          setSelectedModelProfileId(defaultModelProfileId);
           projectSkillBindingHydratedKeyRef.current = bindingKey;
-          projectSkillBindingPersistKeyRef.current = `${bindingKey}:[]`;
+          projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills: [], modelProfileId: defaultModelProfileId })}`;
         }
       }
     };
@@ -763,7 +820,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, projectSkillBindingEnabled, provider]);
+  }, [activeConversationSessionId, defaultModelProfileId, projectSkillBindingEnabled, provider]);
 
   useEffect(() => {
     if (!projectSkillBindingEnabled || !activeConversationSessionId) {
@@ -771,20 +828,22 @@ function ChatInterface({
     }
 
     const hydratedKey = `${provider}:${activeConversationSessionId}:project-skills`;
-    if (selectedProjectSkillNames.length === 0 && projectSkillBindingHydratedKeyRef.current !== hydratedKey) {
+    const isNewlyCreatedSession = !selectedSession?.id;
+    if (projectSkillBindingHydratedKeyRef.current !== hydratedKey && !isNewlyCreatedSession) {
       return;
     }
 
-    const persistKey = `${hydratedKey}:${JSON.stringify(selectedProjectSkillNames)}`;
+    const persistKey = `${hydratedKey}:${JSON.stringify({ skills: selectedProjectSkillNames, modelProfileId: selectedModelProfileId })}`;
     if (projectSkillBindingPersistKeyRef.current === persistKey) {
       return;
     }
     projectSkillBindingPersistKeyRef.current = persistKey;
 
-    const persistProjectSkills = selectedProjectSkillNames.length > 0
+    const persistProjectSkills = selectedProjectSkillNames.length > 0 || selectedModelProfileId
       ? api.updateSessionAgent(activeConversationSessionId, '', provider, {
         appBindings: [],
         skills: selectedProjectSkillNames,
+        modelProfileId: selectedModelProfileId,
       })
       : api.clearSessionAgent(activeConversationSessionId, provider);
 
@@ -792,7 +851,7 @@ function ChatInterface({
       console.warn('Failed to persist project Skill binding:', error);
       projectSkillBindingPersistKeyRef.current = '';
     });
-  }, [activeConversationSessionId, projectSkillBindingEnabled, provider, selectedProjectSkillNames]);
+  }, [activeConversationSessionId, projectSkillBindingEnabled, provider, selectedModelProfileId, selectedProjectSkillNames, selectedSession?.id]);
 
   const {
     input,
@@ -819,8 +878,12 @@ function ChatInterface({
     selectFile,
     attachedImages,
     setAttachedImages,
+    attachedFiles,
+    setAttachedFiles,
     uploadingImages,
     imageErrors,
+    fileAttachmentErrors,
+    handleAttachmentFiles,
     getRootProps,
     getInputProps,
     isDragActive,
@@ -853,7 +916,8 @@ function ChatInterface({
     selectedAgentId: agentBindingEnabled ? selectedAgentId : '',
     selectedAgentAppBindings: agentBindingEnabled ? selectedAgentAppBindings : [],
     selectedSkillNames: activeSkillNames,
-    allowSessionAgentBinding: agentBindingEnabled || activeSkillNames.length > 0,
+    modelProfileId: selectedModelProfileId,
+    allowSessionAgentBinding: agentBindingEnabled || activeSkillNames.length > 0 || Boolean(selectedModelProfileId),
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -1078,6 +1142,8 @@ function ChatInterface({
           agentChoiceState={agentChoiceState}
           onUseDefaultAgent={useDefaultConversationAgent}
           onSelectConversationAgent={selectAgentForConversation}
+          selectedModelProfileId={selectedModelProfileId}
+          onModelProfileChange={setSelectedModelProfileId}
         />
 
         <ChatComposer
@@ -1110,12 +1176,17 @@ function ChatInterface({
           showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0}
           agentRuntimeDiagnostics={agentRuntimeDiagnostics}
           tokenBudget={tokenBudget}
+          permissionMode={permissionMode}
+          onPermissionModeChange={setPermissionMode}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
           hasInput={Boolean(input.trim())}
           onClearInput={handleClearInput}
           isUserScrolledUp={isUserScrolledUp}
           hasMessages={chatMessages.length > 0}
+          hasConversationContext={Boolean(selectedSession?.id || currentSessionId || chatMessages.length > 0)}
+          selectedModelProfileId={selectedModelProfileId}
+          onModelProfileChange={setSelectedModelProfileId}
           onScrollToBottom={scrollToBottomAndReset}
           onSubmit={handleSubmit}
           isDragActive={isDragActive}
@@ -1125,8 +1196,16 @@ function ChatInterface({
               previous.filter((_, currentIndex) => currentIndex !== index),
             )
           }
+          attachedFiles={attachedFiles}
+          onAttachFiles={handleAttachmentFiles}
+          onRemoveFile={(index) =>
+            setAttachedFiles((previous) =>
+              previous.filter((_, currentIndex) => currentIndex !== index),
+            )
+          }
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
+          fileAttachmentErrors={fileAttachmentErrors}
           showFileDropdown={showFileDropdown}
           filteredFiles={filteredFiles}
           fileMentionQuery={fileMentionQuery}

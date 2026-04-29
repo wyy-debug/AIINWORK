@@ -10,18 +10,21 @@ import type {
   TouchEvent,
 } from 'react';
 import { useDropzone } from 'react-dropzone';
+
 import { apiFetch } from '../../../utils/api';
 import { thinkingModes } from '../constants/thinkingModes';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type {
   ChatMessage,
+  ChatUploadedFile,
   PendingPermissionRequest,
   PermissionMode,
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { AgentAppBinding, AgentConfig } from '../../../types/agent';
 import { escapeRegExp } from '../utils/chatFormatting';
+
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 
@@ -46,6 +49,7 @@ interface UseChatComposerStateArgs {
   selectedAgentId?: string;
   selectedAgentAppBindings?: AgentAppBinding[];
   selectedSkillNames?: string[];
+  modelProfileId?: string;
   allowSessionAgentBinding?: boolean;
   isLoading: boolean;
   canAbortSession: boolean;
@@ -92,6 +96,11 @@ const isTemporarySessionId = (sessionId: string | null | undefined) =>
 
 const createClientUserMessageId = () =>
   `client_user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const MAX_CHAT_IMAGES = 5;
+const MAX_CHAT_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_CHAT_FILES = 10;
+const MAX_CHAT_FILE_BYTES = 25 * 1024 * 1024;
 
 const getNotificationSessionSummary = (
   selectedSession: ProjectSession | null,
@@ -169,6 +178,7 @@ export function useChatComposerState({
   selectedAgentId = '',
   selectedAgentAppBindings = [],
   selectedSkillNames = [],
+  modelProfileId = '',
   allowSessionAgentBinding = false,
   isLoading,
   canAbortSession,
@@ -198,8 +208,10 @@ export function useChatComposerState({
     return '';
   });
   const [attachedImages, setAttachedImages] = useState<File[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [uploadingImages, setUploadingImages] = useState<Map<string, number>>(new Map());
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
+  const [fileAttachmentErrors, setFileAttachmentErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
 
@@ -461,7 +473,7 @@ export function useChatComposerState({
           return false;
         }
 
-        if (!file.size || file.size > 5 * 1024 * 1024) {
+        if (!file.size || file.size > MAX_CHAT_IMAGE_BYTES) {
           const fileName = file.name || 'Unknown file';
           setImageErrors((previous) => {
             const next = new Map(previous);
@@ -479,9 +491,45 @@ export function useChatComposerState({
     });
 
     if (validFiles.length > 0) {
-      setAttachedImages((previous) => [...previous, ...validFiles].slice(0, 5));
+      setAttachedImages((previous) => [...previous, ...validFiles].slice(0, MAX_CHAT_IMAGES));
     }
   }, []);
+
+  const handleAttachmentFiles = useCallback((files: File[]) => {
+    const imageFiles: File[] = [];
+    const documentFiles: File[] = [];
+
+    files.forEach((file) => {
+      if (!file || typeof file !== 'object') {
+        return;
+      }
+
+      if (file.type?.startsWith('image/')) {
+        imageFiles.push(file);
+        return;
+      }
+
+      const fileName = file.name || 'Unknown file';
+      if (!file.size || file.size > MAX_CHAT_FILE_BYTES) {
+        setFileAttachmentErrors((previous) => {
+          const next = new Map(previous);
+          next.set(fileName, 'File too large (max 25MB)');
+          return next;
+        });
+        return;
+      }
+
+      documentFiles.push(file);
+    });
+
+    if (imageFiles.length > 0) {
+      handleImageFiles(imageFiles);
+    }
+
+    if (documentFiles.length > 0) {
+      setAttachedFiles((previous) => [...previous, ...documentFiles].slice(0, MAX_CHAT_FILES));
+    }
+  }, [handleImageFiles]);
 
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -499,22 +547,16 @@ export function useChatComposerState({
 
       if (items.length === 0 && event.clipboardData.files.length > 0) {
         const files = Array.from(event.clipboardData.files);
-        const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-        if (imageFiles.length > 0) {
-          handleImageFiles(imageFiles);
-        }
+        handleAttachmentFiles(files);
       }
     },
-    [handleImageFiles],
+    [handleAttachmentFiles, handleImageFiles],
   );
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'],
-    },
-    maxSize: 5 * 1024 * 1024,
-    maxFiles: 5,
-    onDrop: handleImageFiles,
+    maxSize: MAX_CHAT_FILE_BYTES,
+    maxFiles: MAX_CHAT_FILES,
+    onDrop: handleAttachmentFiles,
     noClick: true,
     noKeyboard: true,
   });
@@ -525,7 +567,8 @@ export function useChatComposerState({
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || isLoading || !selectedProject) {
+      const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
+      if ((!currentInput.trim() && !hasAttachments) || isLoading || !selectedProject) {
         return;
       }
 
@@ -540,8 +583,10 @@ export function useChatComposerState({
           setInput('');
           inputValueRef.current = '';
           setAttachedImages([]);
+          setAttachedFiles([]);
           setUploadingImages(new Map());
           setImageErrors(new Map());
+          setFileAttachmentErrors(new Map());
           resetCommandMenuState();
           setIsTextareaExpanded(false);
           if (textareaRef.current) {
@@ -568,6 +613,9 @@ export function useChatComposerState({
         .filter(Boolean)
         .slice(0, 60);
       let messageContent = agentInvocation.content;
+      if (!messageContent.trim() && hasAttachments) {
+        messageContent = '请查看我上传的附件。';
+      }
       const selectedThinkingMode = thinkingModes.find((mode: { id: string; prefix?: string }) => mode.id === thinkingMode);
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
         messageContent = `${selectedThinkingMode.prefix}: ${messageContent}`;
@@ -606,6 +654,46 @@ export function useChatComposerState({
         }
       }
 
+      let uploadedFiles: ChatUploadedFile[] = [];
+      if (attachedFiles.length > 0) {
+        const formData = new FormData();
+        attachedFiles.forEach((file) => {
+          formData.append('files', file);
+        });
+
+        try {
+          const response = await apiFetch(`/api/projects/${selectedProject.name}/upload-files`, {
+            method: 'POST',
+            headers: {},
+            body: formData,
+          });
+
+          if (!response.ok) {
+            let errorMessage = 'Failed to upload files';
+            try {
+              const errorPayload = await response.json();
+              errorMessage = errorPayload?.error || errorMessage;
+            } catch {
+              // Keep fallback error text.
+            }
+            throw new Error(errorMessage);
+          }
+
+          const result = await response.json();
+          uploadedFiles = Array.isArray(result.files) ? result.files : [];
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          console.error('File upload failed:', error);
+          addMessage({
+            type: 'error',
+            content: `Failed to upload files: ${message}`,
+            timestamp: new Date(),
+          });
+          submitLockRef.current = false;
+          return;
+        }
+      }
+
       const storedCursorSessionId =
         provider === 'cursor' ? sessionStorage.getItem('cursorSessionId') : null;
       const effectiveSessionId = currentSessionId || selectedSession?.id || storedCursorSessionId;
@@ -617,8 +705,9 @@ export function useChatComposerState({
       const userMessage: ChatMessage = {
         id: clientMessageId,
         type: 'user',
-        content: currentInput,
+        content: currentInput.trim() ? currentInput : messageContent,
         images: uploadedImages as any,
+        files: uploadedFiles,
         timestamp: new Date(),
         agentId: activeAgent?.id,
         agentName: activeAgent?.name,
@@ -694,6 +783,7 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: cursorModel,
+            modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionSkills: activeSkillNames,
@@ -701,6 +791,7 @@ export function useChatComposerState({
             skipPermissions: skipToolPermissions,
             sessionSummary,
             toolsSettings,
+            files: uploadedFiles,
             clientMessageId,
           },
         });
@@ -715,12 +806,14 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: codexModel,
+            modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
+            files: uploadedFiles,
             clientMessageId,
           },
         });
@@ -735,6 +828,7 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: geminiModel,
+            modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionSkills: activeSkillNames,
@@ -743,6 +837,7 @@ export function useChatComposerState({
             permissionMode,
             skipPermissions: skipToolPermissions,
             toolsSettings,
+            files: uploadedFiles,
             clientMessageId,
           },
         });
@@ -759,12 +854,14 @@ export function useChatComposerState({
             permissionMode,
             skipPermissions: skipToolPermissions,
             model: claudeModel,
+            modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
             images: uploadedImages,
+            files: uploadedFiles,
             clientMessageId,
           },
         });
@@ -774,8 +871,10 @@ export function useChatComposerState({
       inputValueRef.current = '';
       resetCommandMenuState();
       setAttachedImages([]);
+      setAttachedFiles([]);
       setUploadingImages(new Map());
       setImageErrors(new Map());
+      setFileAttachmentErrors(new Map());
       setIsTextareaExpanded(false);
       setThinkingMode('none');
 
@@ -789,6 +888,7 @@ export function useChatComposerState({
       agents,
       selectedSession,
       attachedImages,
+      attachedFiles,
       claudeModel,
       codexModel,
       currentSessionId,
@@ -807,6 +907,7 @@ export function useChatComposerState({
       selectedAgentId,
       selectedAgentAppBindings,
       selectedSkillNames,
+      modelProfileId,
       allowSessionAgentBinding,
       sendMessage,
       setCanAbortSession,
@@ -844,7 +945,7 @@ export function useChatComposerState({
       inputValueRef.current = next;
       return next;
     });
-  }, [selectedProject?.name]);
+  }, [selectedProject]);
 
   useEffect(() => {
     if (!selectedProject) {
@@ -1084,8 +1185,12 @@ export function useChatComposerState({
     selectFile,
     attachedImages,
     setAttachedImages,
+    attachedFiles,
+    setAttachedFiles,
     uploadingImages,
     imageErrors,
+    fileAttachmentErrors,
+    handleAttachmentFiles,
     getRootProps,
     getInputProps,
     isDragActive,

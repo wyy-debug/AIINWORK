@@ -1,10 +1,32 @@
-import { useEffect, useState } from 'react';
-import { Bot, Gauge, KeyRound, Rocket, Save, Server } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Bot,
+  CheckCircle2,
+  Gauge,
+  KeyRound,
+  Plus,
+  Rocket,
+  Save,
+  Server,
+  Trash2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../../../../../shared/view/ui';
 import { apiFetch } from '../../../../../../../utils/api';
 import SettingsToggle from '../../../../SettingsToggle';
+
+type ModelProfile = {
+  id: string;
+  name: string;
+  provider: 'anthropic';
+  apiKey: string;
+  apiKeyConfigured: boolean;
+  baseUrl: string;
+  model: string;
+  contextWindowTokens: number;
+  bareMode: boolean;
+};
 
 type AnthropicModelConfig = {
   apiKey: string;
@@ -13,8 +35,22 @@ type AnthropicModelConfig = {
   model: string;
 };
 
+type ModelPreset = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  contextWindowTokens: number;
+};
+
 type MtlCodeModelConfig = {
   provider: 'anthropic';
+  activeProfileId: string;
+  profiles: ModelProfile[];
+  presets?: {
+    mimo?: ModelPreset[];
+    mimoTokenPlanBaseUrl?: string;
+  };
   anthropic: AnthropicModelConfig;
   runtime: {
     bareMode: boolean;
@@ -24,43 +60,108 @@ type MtlCodeModelConfig = {
 };
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
+const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic';
 
-const createEmptyConfig = (): MtlCodeModelConfig => ({
+const makeId = (prefix = 'model') => (
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+);
+
+const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
+  id: patch.id || makeId(),
+  name: patch.name ?? 'Custom model',
   provider: 'anthropic',
-  anthropic: {
-    apiKey: '',
-    apiKeyConfigured: false,
-    baseUrl: '',
-    model: '',
-  },
-  runtime: {
-    bareMode: true,
-    contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
-  },
+  apiKey: '',
+  apiKeyConfigured: Boolean(patch.apiKeyConfigured),
+  baseUrl: patch.baseUrl || '',
+  model: patch.model || '',
+  contextWindowTokens: patch.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
+  bareMode: patch.bareMode !== false,
 });
+
+const createEmptyConfig = (): MtlCodeModelConfig => {
+  const defaultProfile = createProfile({
+    id: 'default',
+    name: 'Default model',
+  });
+
+  return {
+    provider: 'anthropic',
+    activeProfileId: defaultProfile.id,
+    profiles: [defaultProfile],
+    presets: {
+      mimo: [],
+      mimoTokenPlanBaseUrl: MIMO_TOKEN_PLAN_BASE_URL,
+    },
+    anthropic: {
+      apiKey: '',
+      apiKeyConfigured: false,
+      baseUrl: '',
+      model: '',
+    },
+    runtime: {
+      bareMode: true,
+      contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+    },
+  };
+};
+
+const toProfile = (value: unknown, index: number): ModelProfile | null => {
+  const data = value as Partial<ModelProfile> | undefined;
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const contextWindowTokens = Number(data.contextWindowTokens);
+  return createProfile({
+    id: typeof data.id === 'string' && data.id ? data.id : makeId(`model-${index + 1}`),
+    name: typeof data.name === 'string' && data.name ? data.name : data.model || `Model ${index + 1}`,
+    apiKeyConfigured: Boolean(data.apiKeyConfigured),
+    baseUrl: typeof data.baseUrl === 'string' ? data.baseUrl : '',
+    model: typeof data.model === 'string' ? data.model : '',
+    contextWindowTokens:
+      Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
+        ? contextWindowTokens
+        : DEFAULT_CONTEXT_WINDOW_TOKENS,
+    bareMode: data.bareMode !== false,
+  });
+};
 
 const toConfig = (value: unknown): MtlCodeModelConfig => {
   const data = value as Partial<MtlCodeModelConfig> | undefined;
   const fallback = createEmptyConfig();
-  const contextWindowTokens = data?.runtime?.contextWindowTokens;
+  const profiles = Array.isArray(data?.profiles)
+    ? data.profiles.map(toProfile).filter((profile): profile is ModelProfile => Boolean(profile))
+    : [];
+  const activeProfile = profiles.find((profile) => profile.id === data?.activeProfileId)
+    || profiles[0]
+    || createProfile({
+      id: 'default',
+      name: data?.anthropic?.model || 'Default model',
+      apiKeyConfigured: Boolean(data?.anthropic?.apiKeyConfigured),
+      baseUrl: data?.anthropic?.baseUrl || '',
+      model: data?.anthropic?.model || '',
+      contextWindowTokens: data?.runtime?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
+      bareMode: data?.runtime?.bareMode !== false,
+    });
 
   return {
     provider: 'anthropic',
+    activeProfileId: activeProfile.id,
     configPath: typeof data?.configPath === 'string' ? data.configPath : undefined,
+    profiles: profiles.length > 0 ? profiles : [activeProfile],
+    presets: {
+      mimo: Array.isArray(data?.presets?.mimo) ? data.presets.mimo : [],
+      mimoTokenPlanBaseUrl: data?.presets?.mimoTokenPlanBaseUrl || MIMO_TOKEN_PLAN_BASE_URL,
+    },
     anthropic: {
       apiKey: '',
-      apiKeyConfigured: Boolean(data?.anthropic?.apiKeyConfigured),
-      baseUrl: data?.anthropic?.baseUrl || fallback.anthropic.baseUrl,
-      model: data?.anthropic?.model || fallback.anthropic.model,
+      apiKeyConfigured: activeProfile.apiKeyConfigured,
+      baseUrl: activeProfile.baseUrl || fallback.anthropic.baseUrl,
+      model: activeProfile.model || fallback.anthropic.model,
     },
     runtime: {
-      bareMode: data?.runtime?.bareMode !== false,
-      contextWindowTokens:
-        typeof contextWindowTokens === 'number' &&
-        Number.isFinite(contextWindowTokens) &&
-        contextWindowTokens > 0
-          ? contextWindowTokens
-          : fallback.runtime.contextWindowTokens,
+      bareMode: activeProfile.bareMode,
+      contextWindowTokens: activeProfile.contextWindowTokens,
     },
   };
 };
@@ -68,6 +169,7 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
 export default function ModelConfigContent() {
   const { t } = useTranslation('settings');
   const [config, setConfig] = useState<MtlCodeModelConfig>(() => createEmptyConfig());
+  const [selectedProfileId, setSelectedProfileId] = useState('default');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [status, setStatus] = useState<'success' | 'error' | null>(null);
@@ -86,8 +188,10 @@ export default function ModelConfigContent() {
         }
 
         const payload = await response.json();
+        const nextConfig = toConfig(payload.config);
         if (!cancelled) {
-          setConfig(toConfig(payload.config));
+          setConfig(nextConfig);
+          setSelectedProfileId(nextConfig.activeProfileId);
         }
       } catch (error) {
         console.error(error);
@@ -108,40 +212,61 @@ export default function ModelConfigContent() {
     };
   }, []);
 
-  const updateAnthropic = (key: keyof AnthropicModelConfig, value: string) => {
+  const selectedProfile = useMemo(
+    () => config.profiles.find((profile) => profile.id === selectedProfileId)
+      || config.profiles[0]
+      || createProfile(),
+    [config.profiles, selectedProfileId],
+  );
+
+  const updateProfile = (profileId: string, patch: Partial<ModelProfile>) => {
     setConfig((current) => ({
       ...current,
-      anthropic: {
-        ...current.anthropic,
-        [key]: value,
-      },
+      profiles: current.profiles.map((profile) => (
+        profile.id === profileId ? { ...profile, ...patch } : profile
+      )),
     }));
     setStatus(null);
   };
 
-  const updateBareMode = (bareMode: boolean) => {
+  const addProfile = (profile: Partial<ModelProfile>) => {
+    const nextProfile = createProfile(profile);
     setConfig((current) => ({
       ...current,
-      runtime: {
-        ...current.runtime,
-        bareMode,
-      },
+      profiles: [...current.profiles, nextProfile],
     }));
+    setSelectedProfileId(nextProfile.id);
     setStatus(null);
   };
 
-  const updateContextWindowTokens = (value: string) => {
-    const contextWindowTokens = Number.parseInt(value, 10);
+  const removeProfile = (profileId: string) => {
+    setConfig((current) => {
+      if (current.profiles.length <= 1) {
+        return current;
+      }
+
+      const nextProfiles = current.profiles.filter((profile) => profile.id !== profileId);
+      const nextActiveProfileId = current.activeProfileId === profileId
+        ? nextProfiles[0]?.id || ''
+        : current.activeProfileId;
+      setSelectedProfileId((previous) => (
+        previous === profileId ? nextActiveProfileId : previous
+      ));
+      return {
+        ...current,
+        activeProfileId: nextActiveProfileId,
+        profiles: nextProfiles,
+      };
+    });
+    setStatus(null);
+  };
+
+  const activateProfile = (profileId: string) => {
     setConfig((current) => ({
       ...current,
-      runtime: {
-        ...current.runtime,
-        contextWindowTokens:
-          Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
-            ? contextWindowTokens
-            : DEFAULT_CONTEXT_WINDOW_TOKENS,
-      },
+      activeProfileId: profileId,
     }));
+    setSelectedProfileId(profileId);
     setStatus(null);
   };
 
@@ -150,18 +275,37 @@ export default function ModelConfigContent() {
     setStatus(null);
 
     try {
+      const activeProfile = config.profiles.find((profile) => profile.id === config.activeProfileId)
+        || config.profiles[0];
+      const payload = {
+        provider: 'anthropic',
+        activeProfileId: activeProfile?.id || selectedProfile.id,
+        profiles: config.profiles,
+        anthropic: {
+          apiKey: activeProfile?.apiKey || '',
+          baseUrl: activeProfile?.baseUrl || '',
+          model: activeProfile?.model || '',
+        },
+        runtime: {
+          bareMode: activeProfile?.bareMode !== false,
+          contextWindowTokens: activeProfile?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
+        },
+      };
       const response = await apiFetch('/api/settings/mtl-code-model', {
         method: 'PUT',
-        body: JSON.stringify(config),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
         throw new Error('Failed to save MTLCode model config');
       }
 
-      const payload = await response.json();
-      setConfig(toConfig(payload.config));
+      const responsePayload = await response.json();
+      const nextConfig = toConfig(responsePayload.config);
+      setConfig(nextConfig);
+      setSelectedProfileId(nextConfig.activeProfileId);
       setStatus('success');
+      window.dispatchEvent(new Event('mtlCodeModelSettingsChanged'));
     } catch (error) {
       console.error(error);
       setStatus('error');
@@ -176,104 +320,223 @@ export default function ModelConfigContent() {
         <Bot className="h-5 w-5 text-emerald-500" />
         <div>
           <h3 className="text-lg font-medium text-foreground">
-            {t('mtlCodeModel.title', { defaultValue: 'MTLCode Model' })}
+            {t('mtlCodeModel.title', { defaultValue: 'MTLCode Models' })}
           </h3>
           <p className="text-sm text-muted-foreground">
             {t('mtlCodeModel.subtitle', {
-              defaultValue: 'Configure the MTL-Code backend with the Anthropic Messages API format.',
+              defaultValue: 'Manage Anthropic-compatible model profiles and choose the one MTL-Code uses at runtime.',
             })}
           </p>
         </div>
       </div>
 
-      <div className="space-y-4 rounded-lg border border-border bg-card/50 p-4">
-        <div className="grid gap-4 md:grid-cols-2">
-          <label className="space-y-2 md:col-span-2">
-            <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Server className="h-4 w-4" />
-              {t('mtlCodeModel.baseUrl', { defaultValue: 'Base URL' })}
-            </span>
-            <Input
-              value={config.anthropic.baseUrl}
-              onChange={(event) => updateAnthropic('baseUrl', event.target.value)}
-              placeholder="https://api.example.com/anthropic"
+      <div className="grid gap-4 xl:grid-cols-[minmax(240px,300px)_1fr]">
+        <div className="space-y-3 rounded-lg border border-border bg-card/50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium text-foreground">
+              {t('mtlCodeModel.profiles', { defaultValue: 'Model profiles' })}
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
               disabled={isLoading || isSaving}
-            />
-          </label>
+              onClick={() => addProfile({
+                id: makeId('model'),
+                name: '',
+                baseUrl: '',
+                model: '',
+                contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+                bareMode: true,
+              })}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              {t('mtlCodeModel.add', { defaultValue: 'Add' })}
+            </Button>
+          </div>
 
-          <label className="space-y-2">
-            <span className="text-sm font-medium text-foreground">
-              {t('mtlCodeModel.model', { defaultValue: 'Model' })}
-            </span>
-            <Input
-              value={config.anthropic.model}
-              onChange={(event) => updateAnthropic('model', event.target.value)}
-              placeholder="claude-sonnet-4-5-20250929"
-              disabled={isLoading || isSaving}
-            />
-          </label>
+          <div className="space-y-2">
+            {config.profiles.map((profile) => {
+              const isSelected = profile.id === selectedProfile.id;
+              const isActive = profile.id === config.activeProfileId;
+              const profileName = profile.name || t('mtlCodeModel.unnamedProfile', { defaultValue: 'Unnamed model' });
 
-          <label className="space-y-2">
-            <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <KeyRound className="h-4 w-4" />
-              {t('mtlCodeModel.apiKey', { defaultValue: 'API Key / Auth Token' })}
-            </span>
-            <Input
-              type="password"
-              value={config.anthropic.apiKey}
-              onChange={(event) => updateAnthropic('apiKey', event.target.value)}
-              placeholder={
-                config.anthropic.apiKeyConfigured
-                  ? t('mtlCodeModel.apiKeyConfigured', { defaultValue: 'Configured' })
-                  : 'sk-...'
-              }
-              disabled={isLoading || isSaving}
-            />
-          </label>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-card/50 p-4">
-        <label className="space-y-2">
-          <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Gauge className="h-4 w-4" />
-            {t('mtlCodeModel.contextWindowTokens', {
-              defaultValue: 'Context window tokens',
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  onClick={() => setSelectedProfileId(profile.id)}
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                    isSelected
+                      ? 'border-primary/40 bg-primary/5'
+                      : 'border-border bg-background hover:bg-muted/60'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <Server className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-sm font-medium text-foreground">{profileName}</span>
+                        {isActive && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
+                      </div>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {profile.model || t('mtlCodeModel.noModel', { defaultValue: 'No model set' })}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
             })}
-          </span>
-          <Input
-            type="number"
-            min={1}
-            step={1000}
-            value={config.runtime.contextWindowTokens}
-            onChange={(event) => updateContextWindowTokens(event.target.value)}
-            placeholder="200000"
-            disabled={isLoading || isSaving}
-          />
-        </label>
-      </div>
+          </div>
+        </div>
 
-      <div className="rounded-lg border border-border bg-card/50 p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex gap-3">
-            <Rocket className="mt-0.5 h-4 w-4 text-primary" />
+        <div className="space-y-4 rounded-lg border border-border bg-card/50 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="text-sm font-medium text-foreground">
-                {t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
+                {t('mtlCodeModel.profileEditor', { defaultValue: 'Profile editor' })}
               </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {t('mtlCodeModel.bareModeDescription', {
-                  defaultValue: 'Start MTL-Code with --bare for cleaner first-use sessions.',
-                })}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {selectedProfile.id === config.activeProfileId
+                  ? t('mtlCodeModel.activeProfile', { defaultValue: 'This profile is active.' })
+                  : t('mtlCodeModel.inactiveProfile', { defaultValue: 'Save after activating to apply it to the backend.' })}
               </p>
             </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={selectedProfile.id === config.activeProfileId ? 'secondary' : 'outline'}
+                disabled={isLoading || isSaving}
+                onClick={() => activateProfile(selectedProfile.id)}
+              >
+                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                {t('mtlCodeModel.activate', { defaultValue: 'Use this model' })}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isLoading || isSaving || config.profiles.length <= 1}
+                onClick={() => removeProfile(selectedProfile.id)}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                {t('mtlCodeModel.delete', { defaultValue: 'Delete' })}
+              </Button>
+            </div>
           </div>
-          <SettingsToggle
-            checked={config.runtime.bareMode}
-            onChange={updateBareMode}
-            ariaLabel={t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
-            disabled={isLoading || isSaving}
-          />
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-foreground">
+                {t('mtlCodeModel.profileName', { defaultValue: 'Profile name' })}
+              </span>
+              <Input
+                value={selectedProfile.name}
+                onChange={(event) => updateProfile(selectedProfile.id, { name: event.target.value })}
+                placeholder={t('mtlCodeModel.profileNamePlaceholder', { defaultValue: 'My model profile' })}
+                disabled={isLoading || isSaving}
+              />
+            </label>
+
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-foreground">
+                {t('mtlCodeModel.model', { defaultValue: 'Model' })}
+              </span>
+              <Input
+                value={selectedProfile.model}
+                onChange={(event) => updateProfile(selectedProfile.id, { model: event.target.value })}
+                placeholder={t('mtlCodeModel.modelPlaceholder', { defaultValue: 'model-id' })}
+                disabled={isLoading || isSaving}
+              />
+            </label>
+
+            <label className="space-y-2 md:col-span-2">
+              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Server className="h-4 w-4" />
+                {t('mtlCodeModel.baseUrl', { defaultValue: 'Base URL' })}
+              </span>
+              <Input
+                value={selectedProfile.baseUrl}
+                onChange={(event) => updateProfile(selectedProfile.id, { baseUrl: event.target.value })}
+                placeholder="https://api.example.com/anthropic"
+                disabled={isLoading || isSaving}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t('mtlCodeModel.baseUrlHelp', {
+                  defaultValue: 'Use the Anthropic-compatible base URL from your provider.',
+                })}
+              </p>
+            </label>
+
+            <label className="space-y-2">
+              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <KeyRound className="h-4 w-4" />
+                {t('mtlCodeModel.apiKey', { defaultValue: 'API Key / Auth Token' })}
+              </span>
+              <Input
+                type="password"
+                value={selectedProfile.apiKey}
+                onChange={(event) => updateProfile(selectedProfile.id, { apiKey: event.target.value })}
+                placeholder={
+                  selectedProfile.apiKeyConfigured
+                    ? t('mtlCodeModel.apiKeyConfigured', { defaultValue: 'Configured' })
+                    : 'sk-... / tp-...'
+                }
+                disabled={isLoading || isSaving}
+              />
+            </label>
+
+            <label className="space-y-2">
+              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Gauge className="h-4 w-4" />
+                {t('mtlCodeModel.contextWindowTokens', {
+                  defaultValue: 'Context window tokens',
+                })}
+              </span>
+              <Input
+                type="number"
+                min={1}
+                step={1000}
+                value={selectedProfile.contextWindowTokens}
+                onChange={(event) => {
+                  const contextWindowTokens = Number.parseInt(event.target.value, 10);
+                  updateProfile(selectedProfile.id, {
+                    contextWindowTokens:
+                      Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
+                        ? contextWindowTokens
+                        : DEFAULT_CONTEXT_WINDOW_TOKENS,
+                  });
+                }}
+                placeholder="1000000"
+                disabled={isLoading || isSaving}
+              />
+            </label>
+          </div>
+
+          <div className="rounded-lg border border-border bg-background p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex gap-3">
+                <Rocket className="mt-0.5 h-4 w-4 text-primary" />
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    {t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t('mtlCodeModel.bareModeDescription', {
+                      defaultValue: 'Start MTL-Code with --bare for cleaner first-use sessions.',
+                    })}
+                  </p>
+                </div>
+              </div>
+              <SettingsToggle
+                checked={selectedProfile.bareMode}
+                onChange={(bareMode) => updateProfile(selectedProfile.id, { bareMode })}
+                ariaLabel={t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
+                disabled={isLoading || isSaving}
+              />
+            </div>
+          </div>
         </div>
       </div>
 

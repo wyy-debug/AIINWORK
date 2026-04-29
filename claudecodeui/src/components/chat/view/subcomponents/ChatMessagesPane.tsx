@@ -59,6 +59,8 @@ interface ChatMessagesPaneProps {
   agentChoiceState?: 'pending' | 'default' | 'agent';
   onUseDefaultAgent?: () => void;
   onSelectConversationAgent?: (agentId: string) => void;
+  selectedModelProfileId?: string;
+  onModelProfileChange?: (profileId: string) => void;
 }
 
 export default function ChatMessagesPane({
@@ -110,6 +112,8 @@ export default function ChatMessagesPane({
   agentChoiceState,
   onUseDefaultAgent,
   onSelectConversationAgent,
+  selectedModelProfileId,
+  onModelProfileChange,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
@@ -179,6 +183,9 @@ export default function ChatMessagesPane({
           agentChoiceState={agentChoiceState}
           onUseDefaultAgent={onUseDefaultAgent}
           onSelectConversationAgent={onSelectConversationAgent}
+          selectedModelProfileId={selectedModelProfileId}
+          onModelProfileChange={onModelProfileChange}
+          hasConversationContext={Boolean(selectedSession || currentSessionId)}
         />
       ) : (
         <>

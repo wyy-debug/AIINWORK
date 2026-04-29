@@ -847,31 +847,19 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
         const { projectName } = req.params;
         const { filePath } = req.query;
 
-
-        // Security: ensure the requested path is inside the project root
         if (!filePath) {
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-
-        // Handle both absolute and relative paths
-        const resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(projectRoot, filePath);
-        const normalizedRoot = path.resolve(projectRoot) + path.sep;
-        if (!resolved.startsWith(normalizedRoot)) {
-            return res.status(403).json({ error: 'Path must be under project root' });
-        }
+        const { resolved } = await resolveReadableProjectPath(projectName, filePath);
 
         const content = await fsPromises.readFile(resolved, 'utf8');
         res.json({ content, path: resolved });
     } catch (error) {
         console.error('Error reading file:', error);
-        if (error.code === 'ENOENT') {
+        if (error.statusCode) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'File not found' });
         } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
@@ -1046,26 +1034,11 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
         const { projectName } = req.params;
         const { path: filePath } = req.query;
 
-
-        // Security: ensure the requested path is inside the project root
         if (!filePath) {
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-
-        // Match the text reader endpoint so callers can pass either project-relative
-        // or absolute paths without changing how the bytes are served.
-        const resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(projectRoot, filePath);
-        const normalizedRoot = path.resolve(projectRoot) + path.sep;
-        if (!resolved.startsWith(normalizedRoot)) {
-            return res.status(403).json({ error: 'Path must be under project root' });
-        }
+        const { resolved } = await resolveReadableProjectPath(projectName, filePath);
 
         // Check if file exists
         try {
@@ -1092,7 +1065,11 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
     } catch (error) {
         console.error('Error serving binary file:', error);
         if (!res.headersSent) {
-            res.status(500).json({ error: error.message });
+            if (error.statusCode) {
+                res.status(error.statusCode).json({ error: error.message });
+            } else {
+                res.status(500).json({ error: error.message });
+            }
         }
     }
 });
@@ -1113,19 +1090,7 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Content is required' });
         }
 
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-
-        // Handle both absolute and relative paths
-        const resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(projectRoot, filePath);
-        const normalizedRoot = path.resolve(projectRoot) + path.sep;
-        if (!resolved.startsWith(normalizedRoot)) {
-            return res.status(403).json({ error: 'Path must be under project root' });
-        }
+        const { resolved } = await resolveReadableProjectPath(projectName, filePath);
 
         // Write the new content
         await fsPromises.writeFile(resolved, content, 'utf8');
@@ -1137,7 +1102,9 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
         });
     } catch (error) {
         console.error('Error saving file:', error);
-        if (error.code === 'ENOENT') {
+        if (error.statusCode) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'File or directory not found' });
         } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
@@ -1191,11 +1158,81 @@ function validatePathInProject(projectRoot, targetPath) {
     const resolved = path.isAbsolute(targetPath)
         ? path.resolve(targetPath)
         : path.resolve(projectRoot, targetPath);
-    const normalizedRoot = path.resolve(projectRoot) + path.sep;
-    if (!resolved.startsWith(normalizedRoot)) {
+    if (!isPathInsideRoot(projectRoot, resolved)) {
         return { valid: false, error: 'Path must be under project root' };
     }
     return { valid: true, resolved };
+}
+
+function normalizePathForCompare(filePath) {
+    const resolved = path.resolve(filePath);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isPathInsideRoot(projectRoot, targetPath) {
+    const normalizedRoot = normalizePathForCompare(projectRoot);
+    const normalizedTarget = normalizePathForCompare(targetPath);
+    const rootWithSeparator = normalizedRoot.endsWith(path.sep)
+        ? normalizedRoot
+        : `${normalizedRoot}${path.sep}`;
+
+    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(rootWithSeparator);
+}
+
+async function resolvePathInRegisteredProjects(targetPath) {
+    if (!path.isAbsolute(targetPath)) {
+        return null;
+    }
+
+    const resolvedTarget = path.resolve(targetPath);
+    const projects = await getProjects();
+
+    for (const project of projects) {
+        const projectRoot = typeof project.fullPath === 'string'
+            ? project.fullPath
+            : typeof project.path === 'string'
+                ? project.path
+                : '';
+
+        if (!projectRoot) {
+            continue;
+        }
+
+        if (isPathInsideRoot(projectRoot, resolvedTarget)) {
+            return {
+                resolved: resolvedTarget,
+                projectRoot: path.resolve(projectRoot),
+                projectName: project.name,
+                source: 'registered-project',
+            };
+        }
+    }
+
+    return null;
+}
+
+async function resolveReadableProjectPath(projectName, targetPath) {
+    const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
+    if (!projectRoot) {
+        throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+    }
+
+    const validation = validatePathInProject(projectRoot, targetPath);
+    if (validation.valid) {
+        return {
+            resolved: validation.resolved,
+            projectRoot: path.resolve(projectRoot),
+            projectName,
+            source: 'current-project',
+        };
+    }
+
+    const registeredProjectPath = await resolvePathInRegisteredProjects(targetPath);
+    if (registeredProjectPath) {
+        return registeredProjectPath;
+    }
+
+    throw Object.assign(new Error(validation.error || 'Path must be under project root'), { statusCode: 403 });
 }
 
 /**
@@ -1223,6 +1260,219 @@ function validateFilename(name) {
     }
     return { valid: true };
 }
+
+function createVersionProbe(command, args = ['--version']) {
+    return new Promise((resolve) => {
+        let settled = false;
+        let timeout;
+        let stdout = '';
+        let stderr = '';
+        const child = spawn(command, args, {
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        const finish = (result) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            resolve({
+                ...result,
+                stdout: stdout.trim(),
+                stderr: stderr.trim(),
+            });
+        };
+
+        timeout = setTimeout(() => {
+            child.kill();
+            finish({ ok: false, error: 'Probe timed out' });
+        }, 3000);
+
+        child.stdout?.on('data', (chunk) => {
+            stdout += chunk.toString();
+        });
+        child.stderr?.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
+        child.on('error', (error) => {
+            finish({ ok: false, error: error.message });
+        });
+        child.on('close', (code) => {
+            finish({ ok: code === 0, code });
+        });
+    });
+}
+
+function getLocalToolCandidates() {
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const programFiles = process.env.ProgramFiles || '';
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || '';
+
+    const candidates = {
+        vscode: [
+            { command: process.platform === 'win32' ? 'code.cmd' : 'code', label: 'Visual Studio Code', source: 'PATH' },
+            { command: 'code', label: 'Visual Studio Code', source: 'PATH' },
+        ],
+        cursor: [
+            { command: process.platform === 'win32' ? 'cursor.cmd' : 'cursor', label: 'Cursor', source: 'PATH' },
+            { command: 'cursor', label: 'Cursor', source: 'PATH' },
+        ],
+    };
+
+    if (process.platform === 'win32') {
+        candidates.vscode.push(
+            { command: path.join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'), label: 'Visual Studio Code', source: 'LOCALAPPDATA' },
+            { command: path.join(programFiles, 'Microsoft VS Code', 'bin', 'code.cmd'), label: 'Visual Studio Code', source: 'Program Files' },
+            { command: path.join(programFilesX86, 'Microsoft VS Code', 'bin', 'code.cmd'), label: 'Visual Studio Code', source: 'Program Files (x86)' },
+            { command: path.join(localAppData, 'Programs', 'Microsoft VS Code', 'Code.exe'), label: 'Visual Studio Code', source: 'LOCALAPPDATA', fileOnly: true },
+            { command: path.join(programFiles, 'Microsoft VS Code', 'Code.exe'), label: 'Visual Studio Code', source: 'Program Files', fileOnly: true },
+        );
+        candidates.cursor.push(
+            { command: path.join(localAppData, 'Programs', 'Cursor', 'resources', 'app', 'bin', 'cursor.cmd'), label: 'Cursor', source: 'LOCALAPPDATA' },
+            { command: path.join(localAppData, 'Programs', 'Cursor', 'Cursor.exe'), label: 'Cursor', source: 'LOCALAPPDATA', fileOnly: true },
+        );
+    }
+
+    return candidates;
+}
+
+async function diagnoseLocalTool(toolId) {
+    const candidates = getLocalToolCandidates()[toolId] || [];
+
+    for (const candidate of candidates) {
+        if (path.isAbsolute(candidate.command) && !fs.existsSync(candidate.command)) {
+            continue;
+        }
+
+        if (candidate.fileOnly) {
+            return {
+                id: toolId,
+                label: candidate.label,
+                available: true,
+                command: candidate.command,
+                source: candidate.source,
+                version: null,
+            };
+        }
+
+        const probe = await createVersionProbe(candidate.command);
+        if (probe.ok) {
+            return {
+                id: toolId,
+                label: candidate.label,
+                available: true,
+                command: candidate.command,
+                source: candidate.source,
+                version: probe.stdout.split(/\r?\n/)[0] || null,
+            };
+        }
+    }
+
+    return {
+        id: toolId,
+        label: toolId === 'cursor' ? 'Cursor' : 'Visual Studio Code',
+        available: false,
+        command: null,
+        source: null,
+        version: null,
+    };
+}
+
+async function getLocalToolDiagnostics() {
+    const [vscode, cursor] = await Promise.all([
+        diagnoseLocalTool('vscode'),
+        diagnoseLocalTool('cursor'),
+    ]);
+
+    return { tools: [vscode, cursor] };
+}
+
+function buildEditorOpenArgs(resolvedPath, line, column, isDirectory) {
+    if (isDirectory) {
+        return [resolvedPath];
+    }
+
+    const parsedLine = Number.parseInt(String(line || ''), 10);
+    const parsedColumn = Number.parseInt(String(column || ''), 10);
+    const target = Number.isFinite(parsedLine) && parsedLine > 0
+        ? `${resolvedPath}:${parsedLine}:${Number.isFinite(parsedColumn) && parsedColumn > 0 ? parsedColumn : 1}`
+        : resolvedPath;
+
+    return ['-g', target];
+}
+
+app.get('/api/local-tools', authenticateToken, async (req, res) => {
+    try {
+        res.json(await getLocalToolDiagnostics());
+    } catch (error) {
+        console.error('Error diagnosing local tools:', error);
+        res.status(500).json({ error: error.message || 'Failed to diagnose local tools' });
+    }
+});
+
+app.post('/api/local-tools/open-file', authenticateToken, async (req, res) => {
+    try {
+        const {
+            tool = 'vscode',
+            filePath,
+            projectName,
+            line,
+            column,
+        } = req.body || {};
+
+        if (!filePath || typeof filePath !== 'string') {
+            return res.status(400).json({ error: 'filePath is required' });
+        }
+
+        const targetTool = tool === 'cursor' ? 'cursor' : 'vscode';
+        const resolvedInfo = projectName
+            ? await resolveReadableProjectPath(projectName, filePath)
+            : await resolvePathInRegisteredProjects(filePath);
+
+        if (!resolvedInfo) {
+            return res.status(403).json({ error: 'File must be under a registered project root' });
+        }
+
+        const stats = await fsPromises.stat(resolvedInfo.resolved);
+        const diagnostics = await getLocalToolDiagnostics();
+        const selectedTool = diagnostics.tools.find((item) => item.id === targetTool);
+
+        if (!selectedTool?.available || !selectedTool.command) {
+            return res.status(404).json({
+                error: targetTool === 'cursor'
+                    ? 'Cursor is not available on this machine'
+                    : 'Visual Studio Code is not available on this machine',
+                diagnostics,
+            });
+        }
+
+        const args = buildEditorOpenArgs(resolvedInfo.resolved, line, column, stats.isDirectory());
+        const child = spawn(selectedTool.command, args, {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+        });
+        child.unref();
+
+        res.json({
+            success: true,
+            tool: selectedTool,
+            path: resolvedInfo.resolved,
+            projectName: resolvedInfo.projectName,
+        });
+    } catch (error) {
+        console.error('Error opening file in local tool:', error);
+        if (error.statusCode) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'File not found' });
+        } else {
+            res.status(500).json({ error: error.message || 'Failed to open file' });
+        }
+    }
+});
 
 // POST /api/projects/:projectName/files/create - Create new file or directory
 app.post('/api/projects/:projectName/files/create', authenticateToken, async (req, res) => {
@@ -1805,6 +2055,77 @@ function emitRuntimeDiagnostics(writer, data) {
     }));
 }
 
+function normalizeUploadedChatFiles(files) {
+    if (!Array.isArray(files)) {
+        return [];
+    }
+
+    return files
+        .map((file) => {
+            const item = file && typeof file === 'object' ? file : {};
+            const name = typeof item.name === 'string' ? item.name.trim() : '';
+            const filePath = typeof item.path === 'string' ? item.path.trim() : '';
+            if (!filePath) {
+                return null;
+            }
+            return {
+                name: name || path.basename(filePath),
+                path: filePath,
+                size: Number.isFinite(Number(item.size)) ? Number(item.size) : undefined,
+                mimeType: typeof item.mimeType === 'string' ? item.mimeType : undefined,
+            };
+        })
+        .filter(Boolean)
+        .slice(0, 10);
+}
+
+function formatUploadedChatFilesNote(files) {
+    if (!files.length) {
+        return '';
+    }
+
+    const lines = files.map((file, index) => {
+        const detail = file.mimeType ? ` (${file.mimeType})` : '';
+        return `${index + 1}. ${file.name}${detail}: ${file.path}`;
+    });
+
+    return [
+        '[Uploaded files provided at the following local paths.]',
+        'Use the normal file tools to inspect these files when they are relevant to the user request.',
+        ...lines,
+    ].join('\n');
+}
+
+function applyUploadedFilesToChatCommand(data) {
+    const files = normalizeUploadedChatFiles(data?.options?.files);
+    if (files.length === 0) {
+        return data;
+    }
+
+    const note = formatUploadedChatFilesNote(files);
+    const command = typeof data.command === 'string' ? data.command : '';
+    const nextCommand = command.trim()
+        ? `${command}\n\n${note}`
+        : `请查看我上传的附件。\n\n${note}`;
+
+    return {
+        ...data,
+        command: nextCommand,
+        options: {
+            ...(data.options || {}),
+            files,
+        },
+    };
+}
+
+function normalizeModelProfileId(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
     const concreteSessionId = getConcreteCommandSessionId(data);
@@ -1812,23 +2133,43 @@ async function applyAgentRuntimeToChatCommand(data) {
     const storedBinding = allowSessionAgentBinding && concreteSessionId
         ? sessionAgentBindingsDb.getBinding(concreteSessionId, provider)
         : null;
+    const optionModelProfileId = normalizeModelProfileId(data?.options?.modelProfileId);
     const optionConfiguration = (
         Array.isArray(data?.options?.agentAppBindings)
         || Array.isArray(data?.options?.sessionSkills)
+        || optionModelProfileId
     )
         ? {
             ...(Array.isArray(data?.options?.agentAppBindings) ? { appBindings: data.options.agentAppBindings } : {}),
             ...(Array.isArray(data?.options?.sessionSkills) ? { skills: data.options.sessionSkills } : {}),
+            ...(optionModelProfileId ? { modelProfileId: optionModelProfileId } : {}),
         }
         : null;
     const sessionConfiguration = optionConfiguration || storedBinding?.configuration || null;
+    const sessionModelProfileId = normalizeModelProfileId(
+        optionModelProfileId || sessionConfiguration?.modelProfileId || ''
+    );
     const agentId = data?.options?.agentId || (allowSessionAgentBinding ? storedBinding?.agentId : '') || '';
     const sessionSkills = Array.isArray(sessionConfiguration?.skills)
         ? sessionConfiguration.skills.filter((skill) => typeof skill === 'string' && skill.trim()).slice(0, 60)
         : [];
     if (!agentId) {
         if (sessionSkills.length === 0) {
-            return data;
+            if (sessionModelProfileId && allowSessionAgentBinding && concreteSessionId) {
+                sessionAgentBindingsDb.setAgent(concreteSessionId, provider, '', {
+                    ...(sessionConfiguration || {}),
+                    modelProfileId: sessionModelProfileId,
+                });
+            }
+            return sessionModelProfileId
+                ? {
+                    ...data,
+                    options: {
+                        ...(data.options || {}),
+                        modelProfileId: sessionModelProfileId,
+                    },
+                }
+                : data;
         }
 
         const skillReferences = await resolveSkillReferences(sessionSkills, {
@@ -1846,6 +2187,7 @@ async function applyAgentRuntimeToChatCommand(data) {
 
         const options = {
             ...(data.options || {}),
+            modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
             sessionSkills,
             runtimeDiagnostics: {
                 type: 'skills',
@@ -1861,6 +2203,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                 appendSystemPromptLength: appendSystemPrompt.length,
                 contextWindowTokens: data?.options?.contextWindowTokens || null,
                 model: data?.options?.model || '',
+                modelProfileId: sessionModelProfileId || '',
             },
         };
 
@@ -1896,6 +2239,7 @@ async function applyAgentRuntimeToChatCommand(data) {
 
     const options = {
         ...(data.options || {}),
+        modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
         agentId: runtime.agent.id,
         agentRuntime: {
             id: runtime.agent.id,
@@ -1916,6 +2260,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             appendSystemPromptLength: runtime.appendSystemPrompt.length,
             contextWindowTokens: runtime.contextWindowTokens,
             model: runtime.model || data?.options?.model || '',
+            modelProfileId: sessionModelProfileId || '',
         },
         contextWindowTokens: runtime.contextWindowTokens,
     };
@@ -1952,7 +2297,7 @@ function handleChatConnection(ws, request) {
             const data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
-                const commandData = await applyAgentRuntimeToChatCommand(data);
+                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
@@ -1961,7 +2306,7 @@ function handleChatConnection(ws, request) {
                 // Use Claude Agents SDK
                 await queryClaudeSDK(commandData.command, commandData.options, writer);
             } else if (data.type === 'cursor-command') {
-                const commandData = await applyAgentRuntimeToChatCommand(data);
+                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
@@ -1969,7 +2314,7 @@ function handleChatConnection(ws, request) {
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await spawnCursor(commandData.command, commandData.options, writer);
             } else if (data.type === 'codex-command') {
-                const commandData = await applyAgentRuntimeToChatCommand(data);
+                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
@@ -1977,7 +2322,7 @@ function handleChatConnection(ws, request) {
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await queryCodex(commandData.command, commandData.options, writer);
             } else if (data.type === 'gemini-command') {
-                const commandData = await applyAgentRuntimeToChatCommand(data);
+                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
@@ -2532,6 +2877,106 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
         });
     } catch (error) {
         console.error('Error in image upload endpoint:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Chat file upload endpoint. Files are stored inside the project so the backend
+// runtime can read them with normal file tools during the next message.
+app.post('/api/projects/:projectName/upload-files', authenticateToken, async (req, res) => {
+    let uploadedTempFiles = [];
+    try {
+        const multer = (await import('multer')).default;
+        const uploadTempRoot = path.join(os.tmpdir(), 'mtl-code-ui-file-uploads', String(req.user.id));
+        await fsPromises.mkdir(uploadTempRoot, { recursive: true });
+
+        const storage = multer.diskStorage({
+            destination: (request, file, cb) => {
+                cb(null, uploadTempRoot);
+            },
+            filename: (request, file, cb) => {
+                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+                cb(null, `chat-upload-${uniqueSuffix}`);
+            }
+        });
+
+        const upload = multer({
+            storage,
+            limits: {
+                fileSize: 25 * 1024 * 1024,
+                files: 10
+            }
+        });
+
+        upload.array('files', 10)(req, res, async (err) => {
+            uploadedTempFiles = Array.isArray(req.files) ? req.files : [];
+            if (err) {
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(400).json({ error: 'File too large. Maximum size is 25MB.' });
+                }
+                if (err.code === 'LIMIT_FILE_COUNT') {
+                    return res.status(400).json({ error: 'Too many files. Maximum is 10 files.' });
+                }
+                return res.status(400).json({ error: err.message || 'Failed to upload files' });
+            }
+
+            if (uploadedTempFiles.length === 0) {
+                return res.status(400).json({ error: 'No files provided' });
+            }
+
+            try {
+                const projectRoot = await extractProjectDirectory(req.params.projectName).catch(() => null);
+                if (!projectRoot) {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+
+                const batchId = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
+                const targetDir = path.join(projectRoot, '.tmp', 'chat-uploads', batchId);
+                const validation = validatePathInProject(projectRoot, targetDir);
+                if (!validation.valid) {
+                    return res.status(403).json({ error: validation.error });
+                }
+
+                await fsPromises.mkdir(validation.resolved, { recursive: true });
+
+                const savedFiles = [];
+                for (const file of uploadedTempFiles) {
+                    const originalBaseName = path.basename(String(file.originalname || 'uploaded-file'));
+                    const safeName = (originalBaseName || 'uploaded-file')
+                        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+                        .replace(/^\.+$/, 'uploaded-file')
+                        .trim() || 'uploaded-file';
+                    const destinationPath = path.join(validation.resolved, safeName);
+                    const destinationValidation = validatePathInProject(projectRoot, destinationPath);
+                    if (!destinationValidation.valid) {
+                        await fsPromises.unlink(file.path).catch(() => {});
+                        continue;
+                    }
+
+                    await fsPromises.copyFile(file.path, destinationValidation.resolved);
+                    await fsPromises.unlink(file.path).catch(() => {});
+                    savedFiles.push({
+                        name: safeName,
+                        path: destinationValidation.resolved,
+                        size: file.size,
+                        mimeType: file.mimetype || 'application/octet-stream'
+                    });
+                }
+
+                res.json({
+                    success: true,
+                    files: savedFiles,
+                    message: `Uploaded ${savedFiles.length} file(s) successfully`
+                });
+            } catch (error) {
+                console.error('Error processing chat file upload:', error);
+                await Promise.all(uploadedTempFiles.map((file) => fsPromises.unlink(file.path).catch(() => {})));
+                res.status(500).json({ error: error.message || 'Failed to process files' });
+            }
+        });
+    } catch (error) {
+        console.error('Error in file upload endpoint:', error);
+        await Promise.all(uploadedTempFiles.map((file) => fsPromises.unlink(file.path).catch(() => {})));
         res.status(500).json({ error: 'Internal server error' });
     }
 });

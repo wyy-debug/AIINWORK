@@ -1,6 +1,8 @@
-import express from 'express';
 import os from 'os';
 import path from 'path';
+
+import express from 'express';
+
 import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb } from '../database/db.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
@@ -10,6 +12,7 @@ import {
   readOptionalString,
   writeJsonConfig,
 } from '../shared/utils.js';
+import { canonicalizeAnthropicModel } from '../services/mtl-code-model-service.js';
 
 const router = express.Router();
 const ANTHROPIC_ENV_KEYS = {
@@ -30,6 +33,47 @@ const MTL_CODE_ENV_KEYS = {
   legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
 };
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
+const MIMO_PAYG_ANTHROPIC_BASE_URL = 'https://api.xiaomimimo.com/anthropic';
+const MIMO_TOKEN_PLAN_ANTHROPIC_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic';
+const MODEL_PROFILES_KEY = 'mtlCodeModelProfiles';
+const ACTIVE_MODEL_PROFILE_KEY = 'activeMtlCodeModelProfileId';
+const MIMO_MODEL_CONTEXT_WINDOWS = {
+  'mimo-v2.5-pro': 1_000_000,
+  'mimo-v2.5': 1_000_000,
+  'mimo-v2-pro': 1_000_000,
+  'mimo-v2-omni': 256_000,
+  'mimo-v2-flash': 256_000,
+};
+const MIMO_MODEL_PRESETS = [
+  {
+    id: 'mimo-v25-pro',
+    name: 'MiMo V2.5 Pro',
+    baseUrl: MIMO_PAYG_ANTHROPIC_BASE_URL,
+    model: 'mimo-v2.5-pro',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    id: 'mimo-v25',
+    name: 'MiMo V2.5',
+    baseUrl: MIMO_PAYG_ANTHROPIC_BASE_URL,
+    model: 'mimo-v2.5',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    id: 'mimo-v2-pro',
+    name: 'MiMo V2 Pro',
+    baseUrl: MIMO_PAYG_ANTHROPIC_BASE_URL,
+    model: 'mimo-v2-pro',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    id: 'mimo-v2-flash',
+    name: 'MiMo V2 Flash',
+    baseUrl: MIMO_PAYG_ANTHROPIC_BASE_URL,
+    model: 'mimo-v2-flash',
+    contextWindowTokens: 256_000,
+  },
+];
 const OPENAI_ENV_KEYS = {
   apiKey: 'OPENAI_API_KEY',
   baseUrl: 'OPENAI_BASE_URL',
@@ -82,41 +126,144 @@ const readBooleanEnvDefaultTrue = (env, key) => {
   return value !== '0' && value !== 'false' && value !== 'off';
 };
 
-const toMtlCodeModelConfig = (settings, filePath) => {
-  const env = readObjectRecord(settings.env) ?? {};
+const createStableId = (prefix = 'model') => (
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+);
+
+const normalizeProfileId = (value, fallbackPrefix = 'model') => {
+  const normalized = (readOptionalString(value) || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || createStableId(fallbackPrefix);
+};
+
+const isMimoAnthropicRuntime = (baseUrl, model) => {
+  const normalizedBaseUrl = (readOptionalString(baseUrl) || '').toLowerCase();
+  const normalizedModel = (readOptionalString(model) || '').toLowerCase();
+  return normalizedBaseUrl.includes('xiaomimimo.com') || normalizedModel.startsWith('mimo-');
+};
+
+const getMimoContextWindow = (model) => (
+  MIMO_MODEL_CONTEXT_WINDOWS[(readOptionalString(model) || '').toLowerCase()] || null
+);
+
+const resolveProfileContextWindow = (profile, env) => {
+  const explicit = Number.parseInt(String(profile?.contextWindowTokens ?? ''), 10);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
+
+  const modelDefault = getMimoContextWindow(profile?.model);
+  if (modelDefault) {
+    return modelDefault;
+  }
+
+  return readPositiveIntegerEnv(env, MTL_CODE_ENV_KEYS.maxContextTokens)
+    || readPositiveIntegerEnv(env, MTL_CODE_ENV_KEYS.uiContextWindow)
+    || DEFAULT_CONTEXT_WINDOW_TOKENS;
+};
+
+const sanitizeModelProfile = (profile, env = {}) => ({
+  id: profile.id,
+  name: profile.name,
+  provider: 'anthropic',
+  baseUrl: profile.baseUrl || '',
+  model: profile.model || '',
+  apiKey: '',
+  apiKeyConfigured: Boolean(profile.authToken),
+  contextWindowTokens: resolveProfileContextWindow(profile, env),
+  bareMode: profile.bareMode !== false,
+});
+
+const createProfileFromEnv = (settings, env) => {
   const modelType = readOptionalString(settings.modelType);
   const preferLegacyOpenAI = modelType === 'openai';
   const anthropicBaseUrl = readStringEnv(env, ANTHROPIC_ENV_KEYS.baseUrl);
-  const anthropicModel = readStringEnv(env, ANTHROPIC_ENV_KEYS.model);
-  const anthropicApiKeyConfigured = Boolean(readStringEnv(env, ANTHROPIC_ENV_KEYS.authToken));
+  const anthropicModel = canonicalizeAnthropicModel(readStringEnv(env, ANTHROPIC_ENV_KEYS.model));
+  const anthropicAuthToken = readStringEnv(env, ANTHROPIC_ENV_KEYS.authToken);
   const legacyOpenAIBaseUrl = readStringEnv(env, OPENAI_ENV_KEYS.baseUrl);
-  const legacyOpenAIModel = readStringEnv(env, OPENAI_ENV_KEYS.model);
-  const legacyOpenAIApiKeyConfigured = Boolean(readStringEnv(env, OPENAI_ENV_KEYS.apiKey));
+  const legacyOpenAIModel = canonicalizeAnthropicModel(readStringEnv(env, OPENAI_ENV_KEYS.model));
+  const legacyOpenAIKey = readStringEnv(env, OPENAI_ENV_KEYS.apiKey);
   const baseUrl = preferLegacyOpenAI
     ? legacyOpenAIBaseUrl || anthropicBaseUrl
     : anthropicBaseUrl || legacyOpenAIBaseUrl;
   const model = preferLegacyOpenAI
-    ? legacyOpenAIModel || readOptionalString(settings.model) || anthropicModel || ''
-    : anthropicModel || readOptionalString(settings.model) || legacyOpenAIModel || '';
-  const apiKeyConfigured = preferLegacyOpenAI
-    ? legacyOpenAIApiKeyConfigured || anthropicApiKeyConfigured
-    : anthropicApiKeyConfigured || legacyOpenAIApiKeyConfigured;
-  const contextWindowTokens = readPositiveIntegerEnv(env, MTL_CODE_ENV_KEYS.maxContextTokens)
-    || readPositiveIntegerEnv(env, MTL_CODE_ENV_KEYS.uiContextWindow)
-    || DEFAULT_CONTEXT_WINDOW_TOKENS;
+    ? legacyOpenAIModel || canonicalizeAnthropicModel(settings.model) || anthropicModel || ''
+    : anthropicModel || canonicalizeAnthropicModel(settings.model) || legacyOpenAIModel || '';
+  const authToken = preferLegacyOpenAI
+    ? legacyOpenAIKey || anthropicAuthToken
+    : anthropicAuthToken || legacyOpenAIKey;
+
+  return {
+    id: 'default',
+    name: model ? `Default (${model})` : 'Default model',
+    provider: 'anthropic',
+    baseUrl,
+    model,
+    authToken,
+    contextWindowTokens: resolveProfileContextWindow({ model }, env),
+    bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.uiBareMode),
+  };
+};
+
+const readStoredModelProfiles = (settings, env) => {
+  const rawProfiles = Array.isArray(settings?.[MODEL_PROFILES_KEY])
+    ? settings[MODEL_PROFILES_KEY]
+    : [];
+  const profiles = rawProfiles
+    .map((entry, index) => {
+      const profile = readObjectRecord(entry);
+      if (!profile) return null;
+      const model = canonicalizeAnthropicModel(profile.model);
+      const baseUrl = readOptionalString(profile.baseUrl);
+      const name = readOptionalString(profile.name) || model || `Model ${index + 1}`;
+      const id = normalizeProfileId(profile.id || name || `model-${index + 1}`);
+      return {
+        id,
+        name,
+        provider: 'anthropic',
+        baseUrl,
+        model,
+        authToken: readOptionalString(profile.authToken),
+        contextWindowTokens: resolveProfileContextWindow(profile, env),
+        bareMode: profile.bareMode !== false,
+      };
+    })
+    .filter(Boolean);
+
+  return profiles.length > 0 ? profiles : [createProfileFromEnv(settings, env)];
+};
+
+const resolveActiveModelProfile = (settings, profiles) => {
+  const activeId = normalizeProfileId(settings?.[ACTIVE_MODEL_PROFILE_KEY] || '', 'active');
+  return profiles.find((profile) => profile.id === activeId) || profiles[0];
+};
+
+const toMtlCodeModelConfig = (settings, filePath) => {
+  const env = readObjectRecord(settings.env) ?? {};
+  const profiles = readStoredModelProfiles(settings, env);
+  const activeProfile = resolveActiveModelProfile(settings, profiles);
+  const activeContextWindowTokens = resolveProfileContextWindow(activeProfile, env);
 
   return {
     provider: 'anthropic',
     configPath: filePath,
+    activeProfileId: activeProfile.id,
+    profiles: profiles.map((profile) => sanitizeModelProfile(profile, env)),
+    presets: {
+      mimo: MIMO_MODEL_PRESETS,
+      mimoTokenPlanBaseUrl: MIMO_TOKEN_PLAN_ANTHROPIC_BASE_URL,
+    },
     anthropic: {
       apiKey: '',
-      apiKeyConfigured,
-      baseUrl,
-      model,
+      apiKeyConfigured: Boolean(activeProfile.authToken),
+      baseUrl: activeProfile.baseUrl,
+      model: activeProfile.model,
     },
     runtime: {
-      bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.uiBareMode),
-      contextWindowTokens,
+      bareMode: activeProfile.bareMode !== false,
+      contextWindowTokens: activeContextWindowTokens,
     },
   };
 };
@@ -143,13 +290,54 @@ const normalizeModelConfigInput = (body) => {
     ?? {};
   const runtime = readObjectRecord(payload.runtime) ?? {};
   const contextWindowTokens = Number.parseInt(String(runtime.contextWindowTokens ?? ''), 10);
+  const rawProfiles = Array.isArray(payload.profiles) ? payload.profiles : [];
+  const profiles = rawProfiles
+    .map((entry, index) => {
+      const profile = readObjectRecord(entry);
+      if (!profile) return null;
+      const model = toStringEnv(canonicalizeAnthropicModel(profile.model));
+      const baseUrl = toStringEnv(profile.baseUrl);
+      const name = readOptionalString(profile.name) || model || `Model ${index + 1}`;
+      const id = normalizeProfileId(profile.id || name || `model-${index + 1}`);
+      const profileContextWindowTokens = Number.parseInt(String(profile.contextWindowTokens ?? ''), 10);
+      return {
+        id,
+        name,
+        provider: 'anthropic',
+        apiKey: toStringEnv(profile.apiKey),
+        baseUrl,
+        model,
+        contextWindowTokens: Number.isFinite(profileContextWindowTokens) && profileContextWindowTokens > 0
+          ? profileContextWindowTokens
+          : undefined,
+        bareMode: profile.bareMode !== false,
+      };
+    })
+    .filter(Boolean);
+
+  if (profiles.length === 0) {
+    profiles.push({
+      id: 'default',
+      name: canonicalizeAnthropicModel(anthropic.model) || 'Default model',
+      provider: 'anthropic',
+      apiKey: toStringEnv(anthropic.apiKey),
+      baseUrl: toStringEnv(anthropic.baseUrl),
+      model: toStringEnv(canonicalizeAnthropicModel(anthropic.model)),
+      contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
+        ? contextWindowTokens
+        : undefined,
+      bareMode: runtime.bareMode !== false,
+    });
+  }
 
   return {
     provider: 'anthropic',
+    activeProfileId: normalizeProfileId(payload.activeProfileId || profiles[0]?.id || 'default'),
+    profiles,
     anthropic: {
       apiKey: toStringEnv(anthropic.apiKey),
       baseUrl: toStringEnv(anthropic.baseUrl),
-      model: toStringEnv(anthropic.model),
+      model: toStringEnv(canonicalizeAnthropicModel(anthropic.model)),
     },
     runtime: {
       bareMode: runtime.bareMode !== false,
@@ -167,13 +355,13 @@ const clearOpenAIEnv = (env) => {
 };
 
 const isDeepSeekAnthropicRuntime = (baseUrl, model) => {
-  const normalizedBaseUrl = readOptionalString(baseUrl).toLowerCase();
-  const normalizedModel = readOptionalString(model).toLowerCase();
+  const normalizedBaseUrl = (readOptionalString(baseUrl) || '').toLowerCase();
+  const normalizedModel = (readOptionalString(model) || '').toLowerCase();
   return normalizedBaseUrl.includes('api.deepseek.com') || normalizedModel.includes('deepseek');
 };
 
 const applyDeepSeekAnthropicDefaults = (env, model) => {
-  const configuredModel = readOptionalString(model) || 'deepseek-v4-pro';
+  const configuredModel = canonicalizeAnthropicModel(model) || 'deepseek-v4-pro';
   const smallModel = configuredModel.toLowerCase().includes('deepseek-v4-pro')
     ? 'deepseek-v4-flash'
     : configuredModel;
@@ -185,6 +373,102 @@ const applyDeepSeekAnthropicDefaults = (env, model) => {
   env[MTL_CODE_ENV_KEYS.legacySubagentModel] = env[MTL_CODE_ENV_KEYS.legacySubagentModel] || env[MTL_CODE_ENV_KEYS.subagentModel];
   env[MTL_CODE_ENV_KEYS.effortLevel] = env[MTL_CODE_ENV_KEYS.effortLevel] || env[MTL_CODE_ENV_KEYS.legacyEffortLevel] || 'high';
   env[MTL_CODE_ENV_KEYS.legacyEffortLevel] = env[MTL_CODE_ENV_KEYS.legacyEffortLevel] || env[MTL_CODE_ENV_KEYS.effortLevel];
+};
+
+const applyMimoAnthropicDefaults = (env, model) => {
+  const configuredModel = canonicalizeAnthropicModel(model) || 'mimo-v2.5-pro';
+
+  env[ANTHROPIC_ENV_KEYS.defaultSonnetModel] = configuredModel;
+  env[ANTHROPIC_ENV_KEYS.defaultOpusModel] = configuredModel;
+  env[ANTHROPIC_ENV_KEYS.defaultHaikuModel] = configuredModel;
+  env[MTL_CODE_ENV_KEYS.subagentModel] = env[MTL_CODE_ENV_KEYS.subagentModel] || env[MTL_CODE_ENV_KEYS.legacySubagentModel] || configuredModel;
+  env[MTL_CODE_ENV_KEYS.legacySubagentModel] = env[MTL_CODE_ENV_KEYS.legacySubagentModel] || env[MTL_CODE_ENV_KEYS.subagentModel];
+  delete env[MTL_CODE_ENV_KEYS.effortLevel];
+  delete env[MTL_CODE_ENV_KEYS.legacyEffortLevel];
+};
+
+const mergeAndStoreModelProfiles = (settings, env, input) => {
+  const existingProfiles = readStoredModelProfiles(settings, env);
+  const existingById = new Map(existingProfiles.map((profile) => [profile.id, profile]));
+  const uniqueProfiles = [];
+  const seenIds = new Set();
+
+  for (const incoming of input.profiles) {
+    let id = incoming.id;
+    while (seenIds.has(id)) {
+      id = createStableId('model');
+    }
+    seenIds.add(id);
+
+    const existing = existingById.get(incoming.id) || existingById.get(id);
+    const authToken = incoming.apiKey || existing?.authToken || '';
+    const model = canonicalizeAnthropicModel(incoming.model) || '';
+    const profile = {
+      id,
+      name: incoming.name || model || `Model ${uniqueProfiles.length + 1}`,
+      provider: 'anthropic',
+      baseUrl: incoming.baseUrl || '',
+      model,
+      authToken,
+      contextWindowTokens: incoming.contextWindowTokens
+        || getMimoContextWindow(model)
+        || existing?.contextWindowTokens
+        || DEFAULT_CONTEXT_WINDOW_TOKENS,
+      bareMode: incoming.bareMode !== false,
+    };
+    uniqueProfiles.push(profile);
+  }
+
+  const activeProfile = uniqueProfiles.find((profile) => profile.id === input.activeProfileId)
+    || uniqueProfiles[0]
+    || createProfileFromEnv(settings, env);
+
+  settings[MODEL_PROFILES_KEY] = uniqueProfiles.map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    provider: profile.provider,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    authToken: profile.authToken,
+    contextWindowTokens: profile.contextWindowTokens,
+    bareMode: profile.bareMode,
+  }));
+  settings[ACTIVE_MODEL_PROFILE_KEY] = activeProfile.id;
+
+  return activeProfile;
+};
+
+const applyActiveProfileToEnv = (settings, env, profile) => {
+  settings.modelType = 'anthropic';
+
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.baseUrl, profile.baseUrl);
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, profile.model);
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultHaikuModel, profile.model);
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultSonnetModel, profile.model);
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultOpusModel, profile.model);
+  env[MTL_CODE_ENV_KEYS.uiBareMode] = profile.bareMode !== false ? '1' : '0';
+
+  const contextWindowTokens = resolveProfileContextWindow(profile, env);
+  env[MTL_CODE_ENV_KEYS.maxContextTokens] = String(contextWindowTokens);
+  env[MTL_CODE_ENV_KEYS.uiContextWindow] = String(contextWindowTokens);
+
+  if (profile.authToken) {
+    env[ANTHROPIC_ENV_KEYS.authToken] = profile.authToken;
+  } else {
+    delete env[ANTHROPIC_ENV_KEYS.authToken];
+  }
+
+  if (isDeepSeekAnthropicRuntime(profile.baseUrl, profile.model)) {
+    applyDeepSeekAnthropicDefaults(env, profile.model);
+  } else if (isMimoAnthropicRuntime(profile.baseUrl, profile.model)) {
+    applyMimoAnthropicDefaults(env, profile.model);
+  }
+
+  if (profile.model) {
+    settings.model = profile.model;
+  } else {
+    delete settings.model;
+  }
 };
 
 // ===============================
@@ -477,36 +761,9 @@ router.put('/mtl-code-model', async (req, res) => {
     const { filePath, settings } = await readMtlCodeSettings();
     const input = normalizeModelConfigInput(req.body);
     const env = readObjectRecord(settings.env) ?? {};
-    const previousModelType = readOptionalString(settings.modelType);
 
-    settings.modelType = 'anthropic';
-
-    const legacyOpenAIKey = readStringEnv(env, OPENAI_ENV_KEYS.apiKey);
-    setOptionalEnv(env, ANTHROPIC_ENV_KEYS.baseUrl, input.anthropic.baseUrl);
-    setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, input.anthropic.model);
-    setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultHaikuModel, input.anthropic.model);
-    setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultSonnetModel, input.anthropic.model);
-    setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultOpusModel, input.anthropic.model);
-    env[MTL_CODE_ENV_KEYS.uiBareMode] = input.runtime.bareMode ? '1' : '0';
-    const contextWindowTokens = input.runtime.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS;
-    env[MTL_CODE_ENV_KEYS.maxContextTokens] = String(contextWindowTokens);
-    env[MTL_CODE_ENV_KEYS.uiContextWindow] = String(contextWindowTokens);
-    if (isDeepSeekAnthropicRuntime(input.anthropic.baseUrl, input.anthropic.model)) {
-      applyDeepSeekAnthropicDefaults(env, input.anthropic.model);
-    }
-
-    if (input.anthropic.apiKey) {
-      env[ANTHROPIC_ENV_KEYS.authToken] = input.anthropic.apiKey;
-    } else if ((previousModelType === 'openai' || !env[ANTHROPIC_ENV_KEYS.authToken]) && legacyOpenAIKey) {
-      env[ANTHROPIC_ENV_KEYS.authToken] = legacyOpenAIKey;
-    }
-
-    if (input.anthropic.model) {
-      settings.model = input.anthropic.model;
-    } else {
-      delete settings.model;
-    }
-
+    const activeProfile = mergeAndStoreModelProfiles(settings, env, input);
+    applyActiveProfileToEnv(settings, env, activeProfile);
     clearOpenAIEnv(env);
     settings.env = env;
     await writeJsonConfig(filePath, settings);

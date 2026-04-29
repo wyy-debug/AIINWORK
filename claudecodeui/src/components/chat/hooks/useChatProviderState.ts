@@ -120,6 +120,12 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     );
   }, [selectedSession?.id]);
 
+  const updatePermissionMode = useCallback((nextMode: PermissionMode) => {
+    const normalizedMode = toPermissionMode(nextMode);
+    setPermissionMode(normalizedMode);
+    writeStoredPermissionMode(normalizedMode);
+  }, []);
+
   const cyclePermissionMode = useCallback(() => {
     const modes: PermissionMode[] =
       provider === 'codex'
@@ -129,9 +135,8 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     const currentIndex = modes.indexOf(permissionMode);
     const nextIndex = (currentIndex + 1) % modes.length;
     const nextMode = modes[nextIndex];
-    setPermissionMode(nextMode);
-    writeStoredPermissionMode(nextMode);
-  }, [permissionMode, provider]);
+    updatePermissionMode(nextMode);
+  }, [permissionMode, provider, updatePermissionMode]);
 
   return {
     provider,
@@ -145,7 +150,7 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     geminiModel,
     setGeminiModel,
     permissionMode,
-    setPermissionMode,
+    setPermissionMode: updatePermissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
     cyclePermissionMode,

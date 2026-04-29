@@ -20,6 +20,10 @@ import { fileURLToPath } from 'url';
 import { MTL_CODE_MODEL } from '../shared/modelConstants.js';
 
 import {
+  canonicalizeAnthropicModel,
+  resolveMtlCodeModelRuntime,
+} from './services/mtl-code-model-service.js';
+import {
   createNotificationEvent,
   notifyRunFailed,
   notifyRunStopped,
@@ -412,7 +416,7 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 
   const allowedTools = [...(settings.allowedTools || [])];
   if (permissionMode === 'plan') {
-    const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
+    const planModeTools = ['Read', 'Agent', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
     for (const tool of planModeTools) {
       if (!allowedTools.includes(tool)) {
         allowedTools.push(tool);
@@ -432,8 +436,9 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 
   // Let MTL-Code resolve the concrete runtime model from ~/.mtl-code/settings.json
   // and OPENAI_* env vars unless the UI sends an explicit non-sentinel model.
-  if (options.model && options.model !== MTL_CODE_MODEL.value) {
-    args.push('--model', options.model);
+  const optionModel = canonicalizeAnthropicModel(options.model);
+  if (optionModel && optionModel !== MTL_CODE_MODEL.value) {
+    args.push('--model', optionModel);
   }
 
   return args;
@@ -466,6 +471,12 @@ function isDeepSeekAnthropicRuntime(env) {
   return baseUrl.includes('api.deepseek.com') || model.includes('deepseek');
 }
 
+function isMimoAnthropicRuntime(env) {
+  const baseUrl = String(env.ANTHROPIC_BASE_URL || '').toLowerCase();
+  const model = String(env.ANTHROPIC_MODEL || '').toLowerCase();
+  return baseUrl.includes('xiaomimimo.com') || model.startsWith('mimo-');
+}
+
 function resolveConfiguredContextWindow(env, overrideTokens = null) {
   const parsedOverride = parseInt(String(overrideTokens || ''), 10);
   if (Number.isFinite(parsedOverride) && parsedOverride > 0) {
@@ -477,19 +488,39 @@ function resolveConfiguredContextWindow(env, overrideTokens = null) {
 
 async function buildMtlCodeSpawnEnv(options = {}) {
   const settingsEnv = await readMtlCodeSettingsEnv();
+  const modelRuntime = await resolveMtlCodeModelRuntime(options.modelProfileId).catch((error) => {
+    console.warn('[MTL-Code] Failed to resolve session model profile:', error?.message || error);
+    return null;
+  });
   const spawnEnv = {
     ...process.env,
     ...settingsEnv,
+    ...(modelRuntime?.env || {}),
     MTLCODE: '1'
   };
-  const configuredContextWindow = resolveConfiguredContextWindow(spawnEnv, options.contextWindowTokens);
+  for (const key of [
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'MTL_CODE_SUBAGENT_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL',
+  ]) {
+    if (spawnEnv[key]) {
+      spawnEnv[key] = canonicalizeAnthropicModel(spawnEnv[key]);
+    }
+  }
+  const configuredContextWindow = resolveConfiguredContextWindow(
+    spawnEnv,
+    options.contextWindowTokens || modelRuntime?.contextWindowTokens,
+  );
   if (configuredContextWindow) {
     spawnEnv.MTL_CODE_MAX_CONTEXT_TOKENS = configuredContextWindow;
     spawnEnv.CONTEXT_WINDOW = configuredContextWindow;
   }
 
   if (isDeepSeekAnthropicRuntime(spawnEnv)) {
-    const configuredModel = spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || '';
+    const configuredModel = canonicalizeAnthropicModel(spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || '');
     const smallModel = spawnEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL
       || (String(configuredModel).toLowerCase().includes('deepseek-v4-pro')
         ? 'deepseek-v4-flash'
@@ -501,6 +532,16 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL = spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || spawnEnv.MTL_CODE_SUBAGENT_MODEL;
     spawnEnv.MTL_CODE_EFFORT_LEVEL = effortLevel;
     spawnEnv.CLAUDE_CODE_EFFORT_LEVEL = spawnEnv.CLAUDE_CODE_EFFORT_LEVEL || effortLevel;
+  } else if (isMimoAnthropicRuntime(spawnEnv)) {
+    const configuredModel = canonicalizeAnthropicModel(spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || 'mimo-v2.5-pro');
+
+    spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL = spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || configuredModel;
+    spawnEnv.ANTHROPIC_DEFAULT_OPUS_MODEL = spawnEnv.ANTHROPIC_DEFAULT_OPUS_MODEL || configuredModel;
+    spawnEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL = spawnEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL || configuredModel;
+    spawnEnv.MTL_CODE_SUBAGENT_MODEL = spawnEnv.MTL_CODE_SUBAGENT_MODEL || spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || configuredModel;
+    spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL = spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || spawnEnv.MTL_CODE_SUBAGENT_MODEL;
+    delete spawnEnv.MTL_CODE_EFFORT_LEVEL;
+    delete spawnEnv.CLAUDE_CODE_EFFORT_LEVEL;
   }
 
   return spawnEnv;

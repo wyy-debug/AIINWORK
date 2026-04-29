@@ -1,8 +1,10 @@
 import { EditorView } from '@codemirror/view';
 import { unifiedMergeView } from '@codemirror/merge';
 import type { Extension } from '@codemirror/state';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { api } from '../../../utils/api';
 import { useCodeEditorDocument } from '../hooks/useCodeEditorDocument';
 import { useCodeEditorSettings } from '../hooks/useCodeEditorSettings';
 import { useEditorKeyboardShortcuts } from '../hooks/useEditorKeyboardShortcuts';
@@ -10,6 +12,7 @@ import type { CodeEditorFile } from '../types/types';
 import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageExtensions } from '../utils/editorExtensions';
 import { getEditorStyles } from '../utils/editorStyles';
 import { createEditorToolbarPanelExtension } from '../utils/editorToolbarPanel';
+
 import CodeEditorFooter from './subcomponents/CodeEditorFooter';
 import CodeEditorHeader from './subcomponents/CodeEditorHeader';
 import CodeEditorLoadingState from './subcomponents/CodeEditorLoadingState';
@@ -39,6 +42,8 @@ export default function CodeEditor({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
   const [markdownPreview, setMarkdownPreview] = useState(false);
+  const [externalOpenError, setExternalOpenError] = useState<string | null>(null);
+  const [openingExternal, setOpeningExternal] = useState(false);
 
   const {
     isDarkMode,
@@ -150,6 +155,29 @@ export default function CodeEditor({
     dependency: content,
   });
 
+  const handleOpenInVSCode = useCallback(async () => {
+    setExternalOpenError(null);
+    setOpeningExternal(true);
+
+    try {
+      const response = await api.openLocalToolFile({
+        tool: 'vscode',
+        filePath: file.path,
+        projectName: file.projectName || '',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || `Failed to open in VS Code: ${response.status}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setExternalOpenError(message);
+    } finally {
+      setOpeningExternal(false);
+    }
+  }, [file.path, file.projectName]);
+
   if (loading) {
     return (
       <CodeEditorLoadingState
@@ -198,8 +226,10 @@ export default function CodeEditor({
             markdownPreview={markdownPreview}
             saving={saving}
             saveSuccess={saveSuccess}
+            openingExternal={openingExternal}
             onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
             onOpenSettings={() => window.openSettings?.('appearance')}
+            onOpenInVSCode={handleOpenInVSCode}
             onDownload={handleDownload}
             onSave={handleSave}
             onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
@@ -213,6 +243,8 @@ export default function CodeEditor({
               save: t('actions.save'),
               saving: t('actions.saving'),
               saved: t('actions.saved'),
+              openInVSCode: t('actions.openInVSCode', 'Open in VS Code'),
+              openingInVSCode: t('actions.openingInVSCode', 'Opening in VS Code...'),
               fullscreen: t('actions.fullscreen'),
               exitFullscreen: t('actions.exitFullscreen'),
               close: t('actions.close'),
@@ -222,6 +254,12 @@ export default function CodeEditor({
           {saveError && (
             <div className="border-b border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
               {saveError}
+            </div>
+          )}
+
+          {externalOpenError && (
+            <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+              {externalOpenError}
             </div>
           )}
 

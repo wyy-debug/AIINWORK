@@ -4,10 +4,10 @@ import { Bot } from "lucide-react";
 
 import { CLAUDE_MODELS } from "../../../../../shared/modelConstants";
 import type { ProjectSession, LLMProvider } from "../../../../types/app";
-import { Card } from "../../../../shared/view/ui";
 import type { AgentConfig } from "../../../../types/agent";
-import SessionProviderLogo from "../../../llm-logo-provider/SessionProviderLogo";
 import { NextTaskBanner } from "../../../task-master";
+
+import RuntimeModelSwitcher from "./RuntimeModelSwitcher";
 
 type ProviderSelectionEmptyStateProps = {
   selectedSession: ProjectSession | null;
@@ -33,15 +33,17 @@ type ProviderSelectionEmptyStateProps = {
   agentChoiceState?: "pending" | "default" | "agent";
   onUseDefaultAgent?: () => void;
   onSelectConversationAgent?: (agentId: string) => void;
+  hasConversationContext?: boolean;
+  selectedModelProfileId?: string;
+  onModelProfileChange?: (profileId: string) => void;
 };
 
 const MTL_CODE_PROVIDER: LLMProvider = "claude";
-const MTL_CODE_MODEL_LABEL = CLAUDE_MODELS.OPTIONS[0]?.label || "MTLCode";
-
 export default function ProviderSelectionEmptyState({
   selectedSession,
   currentSessionId,
   setProvider,
+  textareaRef,
   setClaudeModel,
   tasksEnabled,
   isTaskMasterInstalled,
@@ -52,6 +54,9 @@ export default function ProviderSelectionEmptyState({
   agentChoiceState = "default",
   onUseDefaultAgent,
   onSelectConversationAgent,
+  hasConversationContext,
+  selectedModelProfileId,
+  onModelProfileChange,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
   const [draftAgentId, setDraftAgentId] = useState("");
@@ -100,30 +105,13 @@ export default function ProviderSelectionEmptyState({
             </p>
           </div>
 
-          <Card className="mx-auto max-w-xs border-border/60">
-            <div className="flex items-center gap-2 p-3">
-              <SessionProviderLogo
-                provider={MTL_CODE_PROVIDER}
-                className="h-5 w-5 shrink-0"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1">
-                  <span className="text-xs font-semibold text-foreground">
-                    MTL-Code
-                  </span>
-                  <span className="text-xs text-muted-foreground">/</span>
-                  <span className="truncate text-xs text-foreground">
-                    {MTL_CODE_MODEL_LABEL}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  {t("providerSelection.singleModel", {
-                    defaultValue: "Single MTLCode model",
-                  })}
-                </p>
-              </div>
-            </div>
-          </Card>
+          <RuntimeModelSwitcher
+            variant="empty"
+            selectedProfileId={selectedModelProfileId}
+            onProfileChange={onModelProfileChange}
+            onRequestInputFocus={() => textareaRef.current?.focus()}
+            hasConversationContext={hasConversationContext}
+          />
 
           {selectedAgentName && (
             <div className="mx-auto mt-3 flex max-w-xs items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-left">
@@ -210,6 +198,16 @@ export default function ProviderSelectionEmptyState({
           <p className="text-sm leading-relaxed text-muted-foreground">
             {t("session.continue.description")}
           </p>
+
+          <div className="mt-5">
+            <RuntimeModelSwitcher
+              variant="empty"
+              selectedProfileId={selectedModelProfileId}
+              onProfileChange={onModelProfileChange}
+              onRequestInputFocus={() => textareaRef.current?.focus()}
+              hasConversationContext={hasConversationContext}
+            />
+          </div>
 
           {tasksEnabled && isTaskMasterInstalled && (
             <div className="mt-5">
