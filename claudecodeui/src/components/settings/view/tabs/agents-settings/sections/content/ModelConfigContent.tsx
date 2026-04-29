@@ -43,6 +43,17 @@ type ModelPreset = {
   contextWindowTokens: number;
 };
 
+type OpenMythosEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+type OpenMythosRuntimeConfig = {
+  enabled: boolean;
+  adaptiveEffort: boolean;
+  taskCard: boolean;
+  routingHints: boolean;
+  minEffort: OpenMythosEffort;
+  maxEffort: OpenMythosEffort;
+};
+
 type MtlCodeModelConfig = {
   provider: 'anthropic';
   activeProfileId: string;
@@ -56,11 +67,21 @@ type MtlCodeModelConfig = {
     bareMode: boolean;
     contextWindowTokens: number;
   };
+  openMythosRuntime: OpenMythosRuntimeConfig;
   configPath?: string;
 };
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic';
+const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
+const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
+  enabled: true,
+  adaptiveEffort: true,
+  taskCard: true,
+  routingHints: true,
+  minEffort: 'low',
+  maxEffort: 'xhigh',
+};
 
 const makeId = (prefix = 'model') => (
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -77,6 +98,38 @@ const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   contextWindowTokens: patch.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
   bareMode: patch.bareMode !== false,
 });
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+const normalizeBoolean = (value: unknown, fallback: boolean): boolean => (
+  typeof value === 'boolean' ? value : fallback
+);
+
+const normalizeEffort = (value: unknown, fallback: OpenMythosEffort): OpenMythosEffort => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return OPENMYTHOS_EFFORT_LEVELS.includes(normalized as OpenMythosEffort)
+    ? (normalized as OpenMythosEffort)
+    : fallback;
+};
+
+const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => {
+  const data = isObjectRecord(value) ? value : {};
+  const minEffort = normalizeEffort(data.minEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort);
+  const maxEffort = normalizeEffort(data.maxEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.maxEffort);
+  const minIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(minEffort);
+  const maxIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(maxEffort);
+
+  return {
+    enabled: normalizeBoolean(data.enabled, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.enabled),
+    adaptiveEffort: normalizeBoolean(data.adaptiveEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.adaptiveEffort),
+    taskCard: normalizeBoolean(data.taskCard, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.taskCard),
+    routingHints: normalizeBoolean(data.routingHints, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.routingHints),
+    minEffort: minIndex <= maxIndex ? minEffort : maxEffort,
+    maxEffort: minIndex <= maxIndex ? maxEffort : minEffort,
+  };
+};
 
 const createEmptyConfig = (): MtlCodeModelConfig => {
   const defaultProfile = createProfile({
@@ -102,6 +155,7 @@ const createEmptyConfig = (): MtlCodeModelConfig => {
       bareMode: true,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
+    openMythosRuntime: DEFAULT_OPENMYTHOS_RUNTIME_CONFIG,
   };
 };
 
@@ -163,7 +217,24 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
       bareMode: activeProfile.bareMode,
       contextWindowTokens: activeProfile.contextWindowTokens,
     },
+    openMythosRuntime: normalizeOpenMythosRuntime(data?.openMythosRuntime),
   };
+};
+
+const readResponseError = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const payload = await response.json();
+    if (payload && typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error;
+    }
+    if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
+    }
+  } catch {
+    // The server may return an empty body for transport-level failures.
+  }
+
+  return fallback;
 };
 
 export default function ModelConfigContent() {
@@ -173,6 +244,7 @@ export default function ModelConfigContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [status, setStatus] = useState<'success' | 'error' | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -180,11 +252,12 @@ export default function ModelConfigContent() {
     const loadConfig = async () => {
       setIsLoading(true);
       setStatus(null);
+      setErrorMessage('');
 
       try {
         const response = await apiFetch('/api/settings/mtl-code-model');
         if (!response.ok) {
-          throw new Error('Failed to load MTLCode model config');
+          throw new Error(await readResponseError(response, 'Failed to load MTLCode model config'));
         }
 
         const payload = await response.json();
@@ -197,6 +270,7 @@ export default function ModelConfigContent() {
         console.error(error);
         if (!cancelled) {
           setStatus('error');
+          setErrorMessage(error instanceof Error ? error.message : 'Failed to load MTLCode model config');
         }
       } finally {
         if (!cancelled) {
@@ -227,6 +301,7 @@ export default function ModelConfigContent() {
       )),
     }));
     setStatus(null);
+    setErrorMessage('');
   };
 
   const addProfile = (profile: Partial<ModelProfile>) => {
@@ -237,6 +312,7 @@ export default function ModelConfigContent() {
     }));
     setSelectedProfileId(nextProfile.id);
     setStatus(null);
+    setErrorMessage('');
   };
 
   const removeProfile = (profileId: string) => {
@@ -259,6 +335,7 @@ export default function ModelConfigContent() {
       };
     });
     setStatus(null);
+    setErrorMessage('');
   };
 
   const activateProfile = (profileId: string) => {
@@ -268,11 +345,13 @@ export default function ModelConfigContent() {
     }));
     setSelectedProfileId(profileId);
     setStatus(null);
+    setErrorMessage('');
   };
 
   const handleSave = async () => {
     setIsSaving(true);
     setStatus(null);
+    setErrorMessage('');
 
     try {
       const activeProfile = config.profiles.find((profile) => profile.id === config.activeProfileId)
@@ -290,6 +369,7 @@ export default function ModelConfigContent() {
           bareMode: activeProfile?.bareMode !== false,
           contextWindowTokens: activeProfile?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
         },
+        openMythosRuntime: config.openMythosRuntime,
       };
       const response = await apiFetch('/api/settings/mtl-code-model', {
         method: 'PUT',
@@ -297,7 +377,7 @@ export default function ModelConfigContent() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to save MTLCode model config');
+        throw new Error(await readResponseError(response, 'Failed to save MTLCode model config'));
       }
 
       const responsePayload = await response.json();
@@ -309,6 +389,7 @@ export default function ModelConfigContent() {
     } catch (error) {
       console.error(error);
       setStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save MTLCode model config');
     } finally {
       setIsSaving(false);
     }
@@ -549,7 +630,7 @@ export default function ModelConfigContent() {
           )}
           {status === 'error' && (
             <span className="text-red-600 dark:text-red-400">
-              {t('mtlCodeModel.saveFailed', { defaultValue: 'Could not save model settings.' })}
+              {errorMessage || t('mtlCodeModel.saveFailed', { defaultValue: 'Could not save model settings.' })}
             </span>
           )}
           {config.configPath && status === null && (

@@ -88,7 +88,7 @@ function normalizeOpenMythosBoolean(value, fallback) {
 }
 
 function normalizeOpenMythosEffort(value, fallback) {
-  const normalized = readOptionalString(value).toLowerCase();
+  const normalized = (readOptionalString(value) || '').toLowerCase();
   return OPENMYTHOS_EFFORT_LEVELS.includes(normalized) ? normalized : fallback;
 }
 
