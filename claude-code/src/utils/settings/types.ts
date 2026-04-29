@@ -333,6 +333,17 @@ export const SettingsSchema = lazySchema(() =>
       env: EnvironmentVariablesSchema()
         .optional()
         .describe('Environment variables to set for MTL-Code sessions'),
+      openMythosRuntime: z
+        .object({
+          enabled: z.boolean().optional().describe('Enable OpenMythos runtime reminders and adaptive effort.'),
+          adaptiveEffort: z.boolean().optional().describe('Allow OpenMythos to choose effort when no explicit effort is set.'),
+          taskCard: z.boolean().optional().describe('Attach the hidden frozen task card reminder.'),
+          routingHints: z.boolean().optional().describe('Include skill and subagent routing hints in the task card.'),
+          minEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+          maxEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+        })
+        .optional()
+        .describe('OpenMythos-inspired runtime controls for MTL-Code sessions'),
       // Attribution for commits and PRs
       attribution: z
         .object({

@@ -59,6 +59,10 @@ import {
   replaceUltraplanKeyword,
 } from '../ultraplan/keyword.js'
 import { processTextPrompt } from './processTextPrompt.js'
+import {
+  buildOpenMythosRuntimeCard,
+  shouldApplyAdaptiveEffort,
+} from '../openmythosRuntime.js'
 export type ProcessUserInputContext = ToolUseContext & LocalJSXCommandContext
 
 export type ProcessUserInputBaseResult = {
@@ -577,16 +581,28 @@ async function processUserInputBase(
   }
 
   // Regular user prompt
+  const adaptiveCard =
+    mode === 'prompt'
+      ? buildOpenMythosRuntimeCard(inputString, permissionMode)
+      : null
+  const textPromptResult = processTextPrompt(
+    normalizedInput,
+    imageContentBlocks,
+    imagePasteIds,
+    attachmentMessages,
+    uuid,
+    permissionMode,
+    isMeta,
+  )
+  const adaptiveEffort =
+    adaptiveCard && shouldApplyAdaptiveEffort(context.getAppState().effortValue)
+      ? adaptiveCard.effort
+      : undefined
+
   return addImageMetadataMessage(
-    processTextPrompt(
-      normalizedInput,
-      imageContentBlocks,
-      imagePasteIds,
-      attachmentMessages,
-      uuid,
-      permissionMode,
-      isMeta,
-    ),
+    adaptiveEffort === undefined
+      ? textPromptResult
+      : { ...textPromptResult, effort: adaptiveEffort },
     imageMetadataTexts,
   )
 }

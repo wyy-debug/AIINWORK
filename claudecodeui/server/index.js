@@ -57,6 +57,7 @@ import userRoutes from './routes/user.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
+import { readResolvedOpenMythosRuntimeConfig } from './services/mtl-code-model-service.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { c } from './utils/colors.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
@@ -2146,6 +2147,12 @@ function normalizeModelProfileId(value) {
 
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
+    const openMythosRuntime = provider === 'claude'
+        ? await readResolvedOpenMythosRuntimeConfig().catch((error) => {
+            console.warn('[OpenMythos Runtime] Failed to read settings:', error?.message || error);
+            return null;
+        })
+        : null;
     const concreteSessionId = getConcreteCommandSessionId(data);
     const allowSessionAgentBinding = data?.options?.allowSessionAgentBinding === true;
     const storedBinding = allowSessionAgentBinding && concreteSessionId
@@ -2179,15 +2186,37 @@ async function applyAgentRuntimeToChatCommand(data) {
                     modelProfileId: sessionModelProfileId,
                 });
             }
-            return sessionModelProfileId
-                ? {
-                    ...data,
-                    options: {
-                        ...(data.options || {}),
-                        modelProfileId: sessionModelProfileId,
+            if (provider !== 'claude' && !sessionModelProfileId) {
+                return data;
+            }
+            return {
+                ...data,
+                options: {
+                    ...(data.options || {}),
+                    ...(sessionModelProfileId ? { modelProfileId: sessionModelProfileId } : {}),
+                    runtimeDiagnostics: {
+                        type: 'runtime',
+                        allowSessionAgentBinding,
+                        agentId: '',
+                        agentName: '',
+                        appBindings: [],
+                        mcpBindings: [],
+                        sessionSkills: [],
+                        effectiveSkills: [],
+                        skillDetails: [],
+                        skillPromptLength: 0,
+                        ragExcerptCount: 0,
+                        ragPromptLength: 0,
+                        ragExcerpts: [],
+                        mcpDiagnosticsSummary: [],
+                        appendSystemPromptLength: 0,
+                        contextWindowTokens: data?.options?.contextWindowTokens || null,
+                        model: data?.options?.model || '',
+                        modelProfileId: sessionModelProfileId || '',
+                        openMythosRuntime,
                     },
-                }
-                : data;
+                },
+            };
         }
 
         const skillReferences = await resolveSkillReferences(sessionSkills, {
@@ -2226,6 +2255,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                 contextWindowTokens: data?.options?.contextWindowTokens || null,
                 model: data?.options?.model || '',
                 modelProfileId: sessionModelProfileId || '',
+                openMythosRuntime,
             },
         };
 
@@ -2287,6 +2317,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             contextWindowTokens: runtime.contextWindowTokens,
             model: runtime.model || data?.options?.model || '',
             modelProfileId: sessionModelProfileId || '',
+            openMythosRuntime,
         },
         contextWindowTokens: runtime.contextWindowTokens,
     };

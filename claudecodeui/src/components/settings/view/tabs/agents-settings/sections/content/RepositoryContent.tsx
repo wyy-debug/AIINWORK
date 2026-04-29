@@ -1685,7 +1685,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-start gap-3">
             <Database className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
@@ -1854,8 +1854,8 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_0.85fr]">
-        <div className="space-y-3">
+      <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(380px,440px)]">
+        <div className="min-w-0 space-y-3">
           <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 md:flex-row md:items-center">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1972,7 +1972,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           )}
         </div>
 
-        <div className="rounded-lg border border-border bg-card p-4">
+        <div className="min-w-0 rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-2">
             <Upload className="h-4 w-4 text-primary" />
             <h3 className="text-sm font-semibold text-foreground">Upload to Hub</h3>

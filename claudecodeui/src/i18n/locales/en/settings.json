@@ -2,9 +2,81 @@
   "title": "Settings",
   "tabs": {
     "account": "Account",
+    "model": "Model",
+    "runtime": "Runtime",
     "permissions": "Permissions",
     "mcpServers": "MCP Servers",
+    "repository": "Repository",
     "appearance": "Appearance"
+  },
+  "openMythosRuntime": {
+    "title": "OpenMythos Runtime",
+    "subtitle": "Tune adaptive effort, frozen task cards, and skill routing hints for MTL-Code sessions.",
+    "enabled": "OpenMythos Runtime",
+    "enabledDescription": "Attach runtime guidance to each turn and allow adaptive effort decisions.",
+    "adaptiveEffort": "Adaptive effort",
+    "adaptiveEffortDescription": "Select low to xhigh effort from task complexity when no explicit effort is set.",
+    "taskCard": "Frozen task card",
+    "taskCardDescription": "Carry goal, constraints, and acceptance criteria as a hidden reminder.",
+    "routingHints": "Skill routing hints",
+    "routingHintsDescription": "Suggest the smallest useful skill or subagent route for risky work.",
+    "effortBounds": "Effort bounds",
+    "minEffort": "Minimum effort",
+    "maxEffort": "Maximum effort",
+    "preview": "Runtime preview",
+    "previewPrompt": "Preview prompt",
+    "frozenGoal": "Frozen goal",
+    "previewEffort": "Effort",
+    "loopBudget": "Loop budget",
+    "why": "Why",
+    "constraintsLabel": "Constraints",
+    "acceptanceLabel": "Acceptance",
+    "routesLabel": "Routes",
+    "emptyPreview": "Enter a prompt to preview the runtime card.",
+    "disabledPreview": "Runtime is disabled.",
+    "saved": "Runtime settings saved.",
+    "loadFailed": "Could not load runtime settings.",
+    "saveFailed": "Could not save runtime settings.",
+    "saving": "Saving",
+    "save": "Save runtime",
+    "disabledValue": "disabled",
+    "defaultPreviewPrompt": "Implement an auth database migration with rollback tests and CI verification",
+    "effort": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "XHigh"
+    },
+    "reasons": {
+      "security": "security or privacy sensitive work",
+      "deployment": "deployment, data, or CI risk",
+      "performance": "performance or concurrency-sensitive work",
+      "architecture": "broad architectural change",
+      "implementation": "implementation requested",
+      "verification": "verification requested",
+      "git": "git workflow requested",
+      "small": "small or conversational task"
+    },
+    "constraints": {
+      "keepGoal": "Keep the current user goal visible before each major action.",
+      "noRevert": "Do not revert unrelated user changes.",
+      "safeChange": "Before editing, identify the smallest safe change and the verification path."
+    },
+    "acceptance": {
+      "answer": "Answer the user request directly.",
+      "changed": "State what changed or what was found.",
+      "tests": "Report tests or checks run, or explain why they were not run."
+    },
+    "routes": {
+      "security": "Use a security-focused skill or reviewer before reporting completion.",
+      "verification": "Use a verification pass for migration, rollout, or CI-sensitive changes.",
+      "performance": "Route to a performance, async, or profiling skill when available.",
+      "architecture": "Use Explore/Plan agents for broad codebase research before edits.",
+      "test": "Run focused tests or a verification agent after edits.",
+      "git": "Preserve existing worktree changes and report git state explicitly.",
+      "local": "Handle locally; avoid spawning agents unless a specific side task appears.",
+      "routed": "Use skill/subagent routing only for distinct work that can run in parallel or protect main context."
+    }
   },
   "account": {
     "title": "Account",

@@ -20,7 +20,9 @@ import { fileURLToPath } from 'url';
 import { MTL_CODE_MODEL } from '../shared/modelConstants.js';
 
 import {
+  applyOpenMythosRuntimeToEnv,
   canonicalizeAnthropicModel,
+  readOpenMythosRuntimeConfig,
   resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
 import {
@@ -453,13 +455,20 @@ async function readMtlCodeSettingsEnv() {
     const settingsPath = path.join(getMtlCodeConfigDir(), 'settings.json');
     const settings = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
     if (!settings || typeof settings.env !== 'object' || Array.isArray(settings.env)) {
-      return {};
+      const runtimeEnv = {};
+      applyOpenMythosRuntimeToEnv(
+        runtimeEnv,
+        readOpenMythosRuntimeConfig(settings || {}, runtimeEnv),
+      );
+      return runtimeEnv;
     }
 
-    return Object.fromEntries(
+    const env = Object.fromEntries(
       Object.entries(settings.env)
         .filter(([, value]) => typeof value === 'string' && value.length > 0)
     );
+    applyOpenMythosRuntimeToEnv(env, readOpenMythosRuntimeConfig(settings, env));
+    return env;
   } catch {
     return {};
   }

@@ -2,6 +2,7 @@ import type { AgentCategoryContentSectionProps } from '../types';
 import { McpServers } from '../../../../../mcp';
 
 import ModelConfigContent from './content/ModelConfigContent';
+import OpenMythosRuntimeContent from './content/OpenMythosRuntimeContent';
 import PermissionsContent from './content/PermissionsContent';
 import RepositoryContent from './content/RepositoryContent';
 
@@ -17,9 +18,13 @@ export default function AgentCategoryContentSection({
   projects,
 }: AgentCategoryContentSectionProps) {
   return (
-    <div className="flex-1 overflow-y-auto p-3 md:p-4">
+    <div className="min-w-0 flex-1 overflow-y-auto p-3 md:p-4 xl:p-5">
       {selectedCategory === 'model' && selectedAgent === 'claude' && (
         <ModelConfigContent />
+      )}
+
+      {selectedCategory === 'runtime' && selectedAgent === 'claude' && (
+        <OpenMythosRuntimeContent />
       )}
 
       {selectedCategory === 'permissions' && selectedAgent === 'claude' && (

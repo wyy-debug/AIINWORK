@@ -121,6 +121,15 @@ export interface AgentRuntimeSkillDetail {
   promptLength: number;
 }
 
+export interface OpenMythosRuntimeDiagnostics {
+  enabled: boolean;
+  adaptiveEffort: boolean;
+  taskCard: boolean;
+  routingHints: boolean;
+  minEffort: string;
+  maxEffort: string;
+}
+
 export interface AgentRuntimeDiagnostics {
   type?: 'agent' | 'skills' | string;
   provider?: string;
@@ -152,6 +161,7 @@ export interface AgentRuntimeDiagnostics {
   appendSystemPromptLength?: number;
   model?: string;
   modelProfileId?: string;
+  openMythosRuntime?: OpenMythosRuntimeDiagnostics | null;
   contextWindowTokens?: number | null;
   projectPath?: string;
   sessionId?: string | null;

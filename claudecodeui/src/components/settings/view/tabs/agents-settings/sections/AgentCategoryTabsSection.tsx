@@ -1,9 +1,8 @@
 import { useTranslation } from 'react-i18next';
-import { cn } from '../../../../../../lib/utils';
-import type { AgentCategory } from '../../../../types/types';
-import type { AgentCategoryTabsSectionProps } from '../types';
 
-const AGENT_CATEGORIES: AgentCategory[] = ['model', 'permissions', 'mcp', 'repository'];
+import { cn } from '../../../../../../lib/utils';
+import { AGENT_CATEGORIES } from '../../../../constants/constants';
+import type { AgentCategoryTabsSectionProps } from '../types';
 
 export default function AgentCategoryTabsSection({
   selectedCategory,
@@ -28,6 +27,7 @@ export default function AgentCategoryTabsSection({
             )}
           >
             {category === 'model' && t('tabs.model', { defaultValue: 'Model' })}
+            {category === 'runtime' && t('tabs.runtime', { defaultValue: 'Runtime' })}
             {category === 'permissions' && t('tabs.permissions')}
             {category === 'mcp' && t('tabs.mcpServers')}
             {category === 'repository' && t('tabs.repository', { defaultValue: 'Repository' })}

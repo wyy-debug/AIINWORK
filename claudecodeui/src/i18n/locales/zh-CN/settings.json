@@ -2,9 +2,81 @@
   "title": "设置",
   "tabs": {
     "account": "账户",
+    "model": "模型",
+    "runtime": "运行时",
     "permissions": "权限",
     "mcpServers": "MCP 服务器",
+    "repository": "仓库",
     "appearance": "外观"
+  },
+  "openMythosRuntime": {
+    "title": "OpenMythos 运行时",
+    "subtitle": "配置 MTL-Code 会话的自适应 effort、冻结任务卡和 Skill 路由提示。",
+    "enabled": "OpenMythos 运行时",
+    "enabledDescription": "为每轮任务注入运行时引导，并允许按任务复杂度自动选择 effort。",
+    "adaptiveEffort": "自适应 effort",
+    "adaptiveEffortDescription": "当没有显式指定 effort 时，根据任务复杂度在低到极深之间自动选择。",
+    "taskCard": "冻结任务卡",
+    "taskCardDescription": "将目标、约束和验收标准作为隐藏提醒随每轮任务携带。",
+    "routingHints": "Skill 路由提示",
+    "routingHintsDescription": "为高风险任务建议最小必要的 skill 或 subagent 路由。",
+    "effortBounds": "Effort 范围",
+    "minEffort": "最低 effort",
+    "maxEffort": "最高 effort",
+    "preview": "运行时预览",
+    "previewPrompt": "预览提示词",
+    "frozenGoal": "冻结目标",
+    "previewEffort": "Effort",
+    "loopBudget": "循环预算",
+    "why": "原因",
+    "constraintsLabel": "约束",
+    "acceptanceLabel": "验收标准",
+    "routesLabel": "路由建议",
+    "emptyPreview": "输入提示词后可预览运行时任务卡。",
+    "disabledPreview": "运行时已关闭。",
+    "saved": "运行时设置已保存。",
+    "loadFailed": "无法加载运行时设置。",
+    "saveFailed": "无法保存运行时设置。",
+    "saving": "保存中",
+    "save": "保存运行时",
+    "disabledValue": "已关闭",
+    "defaultPreviewPrompt": "实现一个认证相关的数据库迁移，并补充回滚测试和 CI 验证",
+    "effort": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "极深"
+    },
+    "reasons": {
+      "security": "涉及安全或隐私敏感工作",
+      "deployment": "涉及部署、数据或 CI 风险",
+      "performance": "涉及性能或并发敏感工作",
+      "architecture": "涉及较大范围架构调整",
+      "implementation": "用户要求实现或修改",
+      "verification": "用户要求测试或验证",
+      "git": "涉及 Git 工作流",
+      "small": "小型或对话类任务"
+    },
+    "constraints": {
+      "keepGoal": "每个关键动作前保持当前用户目标可见。",
+      "noRevert": "不要回滚无关的用户改动。",
+      "safeChange": "编辑前先识别最小可行改动和验证路径。"
+    },
+    "acceptance": {
+      "answer": "直接回应用户请求。",
+      "changed": "说明改了什么或发现了什么。",
+      "tests": "报告已运行的测试或检查；未运行时说明原因。"
+    },
+    "routes": {
+      "security": "完成前使用安全相关 skill 或 reviewer 进行检查。",
+      "verification": "对迁移、发布或 CI 敏感改动增加验证步骤。",
+      "performance": "可用时路由到性能、异步或分析相关 skill。",
+      "architecture": "大范围代码研究先使用 Explore/Plan agent。",
+      "test": "编辑后运行聚焦测试，必要时使用验证 agent。",
+      "git": "保留现有工作区改动，并明确报告 Git 状态。",
+      "local": "本地处理；除非出现明确的并行子任务，否则不启动 agent。",
+      "routed": "仅在能并行推进或保护主上下文时使用 skill/subagent 路由。"
+    }
   },
   "account": {
     "title": "账户",

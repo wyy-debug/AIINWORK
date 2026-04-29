@@ -22,7 +22,7 @@ export default function AgentsSettingsTab({
   const [selectedCategory, setSelectedCategory] = useState<AgentCategory>('model');
 
   return (
-    <div className="-mx-4 -mb-4 -mt-2 flex min-h-[300px] flex-col overflow-hidden md:-mx-6 md:-mb-6 md:-mt-2 md:min-h-[500px]">
+    <div className="-mx-4 -mb-4 -mt-2 flex min-h-[300px] flex-col overflow-hidden md:-mx-5 md:-mb-5 md:-mt-2 md:min-h-[500px] xl:-mx-6 xl:-mb-6">
       <AgentSelectorSection
         agents={['claude']}
         selectedAgent={selectedAgent}

@@ -1,6 +1,6 @@
 # MTL-Code UI Five-Layer Knowledge Architecture
 
-Updated: 2026-04-27
+Updated: 2026-04-29
 
 This directory is the development entry point for `claudecodeui`, now branded as MTL-Code UI. Use it to answer five practical questions before changing code: what domain concept is involved, which system boundary owns it, which module should change, which runtime flow is affected, and how to verify the result.
 
@@ -17,6 +17,7 @@ This directory is the development entry point for `claudecodeui`, now branded as
 ## Current Notes
 
 - [2026-04-28-mtl-code-user-guide.md](2026-04-28-mtl-code-user-guide.md): user-facing MTL-Code guide covering projects, conversations, model settings, Agent, Skill, MCP, Hub, Worktree, permissions, and caveats.
+- [2026-04-29-openmythos-runtime.md](2026-04-29-openmythos-runtime.md): OpenMythos-inspired runtime controls, saved settings shape, launch environment mapping, diagnostics, and verification steps.
 - [2026-04-29-mimo-model-profiles.md](2026-04-29-mimo-model-profiles.md): multi-model profile settings and Xiaomi MiMo Anthropic-compatible setup.
 - [2026-04-28-redmine-mcp-agent-setup.md](2026-04-28-redmine-mcp-agent-setup.md): SOC Redmine Agent dependency wiring, MCP env storage, `REDMINE_API_KEY` handling, `ainwork-code-search` root setup, and GitNexus package fallback behavior.
 - [2026-04-27-agent-rag-foundation.md](2026-04-27-agent-rag-foundation.md): Agent Builder knowledge upload, local indexing, and lightweight retrieval injection into Agent runtime prompts.

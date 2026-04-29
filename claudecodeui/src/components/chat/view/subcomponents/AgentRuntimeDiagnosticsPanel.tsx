@@ -1,8 +1,10 @@
 import {
   BotIcon,
+  BrainCircuitIcon,
   BracesIcon,
   CheckCircle2Icon,
   DatabaseIcon,
+  GaugeIcon,
   ShieldCheckIcon,
   SparklesIcon,
   WrenchIcon,
@@ -28,6 +30,10 @@ function formatNumber(value: unknown) {
 
 function formatText(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : EMPTY_TEXT;
+}
+
+function formatBoolean(value: unknown) {
+  return typeof value === 'boolean' ? String(value) : EMPTY_TEXT;
 }
 
 function BindingBadges({ bindings }: { bindings?: AgentAppBinding[] }) {
@@ -159,6 +165,7 @@ export default function AgentRuntimeDiagnosticsPanel({
   onClose,
 }: AgentRuntimeDiagnosticsPanelProps) {
   const permissions = diagnostics?.permissions;
+  const openMythosRuntime = diagnostics?.openMythosRuntime;
   const hasDiagnostics = Boolean(diagnostics);
 
   return (
@@ -202,6 +209,35 @@ export default function AgentRuntimeDiagnosticsPanel({
             <Field label="Project Path" value={formatText(diagnostics?.projectPath)} />
             <Field label="追加 Prompt 长度" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
           </div>
+
+          <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <BrainCircuitIcon className="h-4 w-4 text-primary" />
+              OpenMythos Runtime
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Field label="enabled" value={formatBoolean(openMythosRuntime?.enabled)} />
+              <Field label="adaptiveEffort" value={formatBoolean(openMythosRuntime?.adaptiveEffort)} />
+              <Field label="taskCard" value={formatBoolean(openMythosRuntime?.taskCard)} />
+              <Field label="routingHints" value={formatBoolean(openMythosRuntime?.routingHints)} />
+              <Field label="minEffort" value={formatText(openMythosRuntime?.minEffort)} />
+              <Field label="maxEffort" value={formatText(openMythosRuntime?.maxEffort)} />
+              <Field label="effortRange" value={`${formatText(openMythosRuntime?.minEffort)} -> ${formatText(openMythosRuntime?.maxEffort)}`} />
+              <Field label="source" value={openMythosRuntime ? 'settings/env' : EMPTY_TEXT} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+                <GaugeIcon className="h-3 w-3 text-primary" />
+                adaptive effort {openMythosRuntime?.adaptiveEffort ? 'on' : 'off'}
+              </span>
+              <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+                task card {openMythosRuntime?.taskCard ? 'on' : 'off'}
+              </span>
+              <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+                routing hints {openMythosRuntime?.routingHints ? 'on' : 'off'}
+              </span>
+            </div>
+          </section>
 
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <section className="rounded-lg border border-border bg-background/60 p-3">

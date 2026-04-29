@@ -12,7 +12,13 @@ import {
   readOptionalString,
   writeJsonConfig,
 } from '../shared/utils.js';
-import { canonicalizeAnthropicModel } from '../services/mtl-code-model-service.js';
+import {
+  OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  applyOpenMythosRuntimeToEnv,
+  canonicalizeAnthropicModel,
+  normalizeOpenMythosRuntimeConfig,
+  readOpenMythosRuntimeConfig,
+} from '../services/mtl-code-model-service.js';
 
 const router = express.Router();
 const ANTHROPIC_ENV_KEYS = {
@@ -265,6 +271,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
       bareMode: activeProfile.bareMode !== false,
       contextWindowTokens: activeContextWindowTokens,
     },
+    openMythosRuntime: readOpenMythosRuntimeConfig(settings, env),
   };
 };
 
@@ -764,6 +771,12 @@ router.put('/mtl-code-model', async (req, res) => {
 
     const activeProfile = mergeAndStoreModelProfiles(settings, env, input);
     applyActiveProfileToEnv(settings, env, activeProfile);
+    const openMythosRuntime = normalizeOpenMythosRuntimeConfig(
+      readObjectRecord(req.body?.openMythosRuntime),
+      readOpenMythosRuntimeConfig(settings, env),
+    );
+    settings[OPENMYTHOS_RUNTIME_SETTINGS_KEY] = openMythosRuntime;
+    applyOpenMythosRuntimeToEnv(env, openMythosRuntime);
     clearOpenAIEnv(env);
     settings.env = env;
     await writeJsonConfig(filePath, settings);

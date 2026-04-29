@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
@@ -35,8 +36,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
   }
 
   return (
-    <div className="modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-background/80 backdrop-blur-sm md:p-4">
-      <div className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[90vh] md:max-w-6xl md:rounded-xl">
+    <div className="modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-background/80 backdrop-blur-sm md:p-3 xl:p-5">
+      <div className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[94vh] md:w-[96vw] md:max-w-[1720px] md:rounded-xl 2xl:h-[calc(100vh-48px)]">
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-3 md:px-5">
           <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
@@ -60,8 +61,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
           <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} />
 
           {/* Content */}
-          <main className="flex-1 overflow-y-auto">
-            <div key={activeTab} className="settings-content-enter space-y-6 p-4 pb-safe-area-inset-bottom md:space-y-8 md:p-6">
+          <main className="min-w-0 flex-1 overflow-y-auto">
+            <div key={activeTab} className="settings-content-enter space-y-6 p-4 pb-safe-area-inset-bottom md:space-y-8 md:p-5 xl:p-6">
               {activeTab === 'appearance' && (
                 <AppearanceSettingsTab
                   projectSortOrder={projectSortOrder}

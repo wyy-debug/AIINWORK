@@ -209,6 +209,11 @@ const sessionTranscriptModule = feature('KAIROS')
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { hasUltrathinkKeyword, isUltrathinkEnabled } from './thinking.js'
 import {
+  buildOpenMythosRuntimeCard,
+  shouldAttachOpenMythosRuntimeCard,
+  type OpenMythosRuntimeCard,
+} from './openmythosRuntime.js'
+import {
   tokenCountFromLastAPIResponse,
   tokenCountWithEstimation,
 } from './tokens.js'
@@ -699,6 +704,10 @@ export type Attachment =
       level: 'high'
     }
   | {
+      type: 'openmythos_runtime'
+      card: OpenMythosRuntimeCard
+    }
+  | {
       type: 'deferred_tools_delta'
       addedNames: string[]
       addedLines: string[]
@@ -853,6 +862,9 @@ export async function getAttachments(
     ),
     maybe('ultrathink_effort', () =>
       Promise.resolve(getUltrathinkEffortAttachment(input)),
+    ),
+    maybe('openmythos_runtime', () =>
+      Promise.resolve(getOpenMythosRuntimeAttachment(input, toolUseContext)),
     ),
     maybe('deferred_tools_delta', () =>
       Promise.resolve(
@@ -1470,6 +1482,21 @@ function getUltrathinkEffortAttachment(input: string | null): Attachment[] {
   }
   logEvent('tengu_ultrathink', {})
   return [{ type: 'ultrathink_effort', level: 'high' }]
+}
+
+function getOpenMythosRuntimeAttachment(
+  input: string | null,
+  toolUseContext: ToolUseContext,
+): Attachment[] {
+  if (!shouldAttachOpenMythosRuntimeCard()) {
+    return []
+  }
+
+  const card = buildOpenMythosRuntimeCard(
+    input,
+    toolUseContext.getAppState().toolPermissionContext.mode,
+  )
+  return card ? [{ type: 'openmythos_runtime', card }] : []
 }
 
 // Exported for compact.ts — the gate must be identical at both call sites.
