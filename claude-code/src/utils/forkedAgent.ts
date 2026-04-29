@@ -460,7 +460,9 @@ export function createSubagentContext(
     fileReadingLimits: parentContext.fileReadingLimits,
     userModified: parentContext.userModified,
     criticalSystemReminder_EXPERIMENTAL:
-      overrides?.criticalSystemReminder_EXPERIMENTAL,
+      overrides?.criticalSystemReminder_EXPERIMENTAL ??
+      parentContext.criticalSystemReminder_EXPERIMENTAL,
+    openMythosRuntimeState: parentContext.openMythosRuntimeState,
     requireCanUseTool: overrides?.requireCanUseTool,
   }
 }

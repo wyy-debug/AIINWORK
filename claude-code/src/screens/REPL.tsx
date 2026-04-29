@@ -396,6 +396,11 @@ import { handleSpeculationAccept, type ActiveSpeculationState } from '../service
 import { IdeOnboardingDialog } from '../components/IdeOnboardingDialog.js';
 import { EffortCallout, shouldShowEffortCallout } from '../components/EffortCallout.js';
 import type { EffortValue } from '../utils/effort.js';
+import {
+  createOpenMythosRuntimeState,
+  shouldEnforceOpenMythosLoopBudget,
+  type OpenMythosRuntimeCard,
+} from '../utils/openmythosRuntime.js';
 import { RemoteCallout } from '../components/RemoteCallout.js';
 /* eslint-disable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 const AntModelSwitchCallout =
@@ -3177,6 +3182,7 @@ export function REPL({
       additionalAllowedTools: string[],
       mainLoopModelParam: string,
       effort?: EffortValue,
+      openMythosRuntimeCard?: OpenMythosRuntimeCard | null,
     ) => {
       // Prepare IDE integration for new prompt. Read mcpClients fresh from
       // store — useManageMCPConnections may have populated it since the
@@ -3285,6 +3291,12 @@ export function REPL({
         abortController,
         mainLoopModelParam,
       );
+      const openMythosRuntimeState = openMythosRuntimeCard
+        ? createOpenMythosRuntimeState(openMythosRuntimeCard)
+        : undefined;
+      if (openMythosRuntimeState) {
+        toolUseContext.openMythosRuntimeState = openMythosRuntimeState;
+      }
       // getToolUseContext reads tools/mcpClients fresh from store.getState()
       // (via computeTools/mergeClients). Use those rather than the closure-
       // captured `tools`/`mcpClients` — useManageMCPConnections may have
@@ -3347,6 +3359,10 @@ export function REPL({
       resetTurnToolDuration();
       resetTurnClassifierDuration();
 
+      const effectiveMaxTurns = shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)
+        ? openMythosRuntimeState?.card.loopBudget
+        : undefined;
+
       for await (const event of query({
         messages: messagesIncludingNewMessages,
         systemPrompt,
@@ -3355,6 +3371,7 @@ export function REPL({
         canUseTool,
         toolUseContext,
         querySource: getQuerySourceForREPL(),
+        maxTurns: effectiveMaxTurns,
       })) {
         onQueryEvent(event);
       }
@@ -3461,6 +3478,7 @@ export function REPL({
       onBeforeQueryCallback?: (input: string, newMessages: MessageType[]) => Promise<boolean>,
       input?: string,
       effort?: EffortValue,
+      openMythosRuntimeCard?: OpenMythosRuntimeCard | null,
     ): Promise<void> => {
       // If this is a teammate, mark them as active when starting a turn
       if (isAgentSwarmsEnabled()) {
@@ -3538,6 +3556,7 @@ export function REPL({
             additionalAllowedTools,
             mainLoopModelParam,
             effort,
+            openMythosRuntimeCard,
           );
         } catch (error) {
           if (feature('UDS_INBOX')) {

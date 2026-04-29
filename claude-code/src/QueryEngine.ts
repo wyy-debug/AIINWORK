@@ -71,6 +71,10 @@ import {
   type ProcessUserInputContext,
   processUserInput,
 } from './utils/processUserInput/processUserInput.js'
+import {
+  createOpenMythosRuntimeState,
+  shouldEnforceOpenMythosLoopBudget,
+} from './utils/openmythosRuntime.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
 import {
@@ -419,6 +423,7 @@ export class QueryEngine {
       shouldQuery,
       allowedTools,
       model: modelFromUserInput,
+      openMythosRuntimeCard,
       resultText,
     } = await processUserInput({
       input: prompt,
@@ -494,6 +499,9 @@ export class QueryEngine {
     }))
 
     const mainLoopModel = modelFromUserInput ?? initialMainLoopModel
+    const openMythosRuntimeState = openMythosRuntimeCard
+      ? createOpenMythosRuntimeState(openMythosRuntimeCard)
+      : undefined
 
     // Recreate after processing the prompt to pick up updated messages and
     // model (from slash commands).
@@ -532,6 +540,7 @@ export class QueryEngine {
       updateFileHistoryState: processUserInputContext.updateFileHistoryState,
       updateAttributionState: processUserInputContext.updateAttributionState,
       setSDKStatus,
+      openMythosRuntimeState,
     }
 
     headlessProfilerCheckpoint('before_skills_plugins')
@@ -683,6 +692,12 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
+    const effectiveMaxTurns =
+      maxTurns ??
+      (shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)
+        ? openMythosRuntimeState?.card.loopBudget
+        : undefined)
+
     for await (const message of query({
       messages,
       systemPrompt,
@@ -692,7 +707,7 @@ export class QueryEngine {
       toolUseContext: processUserInputContext,
       fallbackModel,
       querySource: 'sdk',
-      maxTurns,
+      maxTurns: effectiveMaxTurns,
       taskBudget,
     })) {
       // Record assistant, user, and compact boundary messages

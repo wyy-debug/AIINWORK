@@ -17,12 +17,18 @@ import { apiFetch } from '../../../../../../../utils/api';
 import SettingsToggle from '../../../../SettingsToggle';
 
 type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
+type LoopControl = 'advisory' | 'enforced';
 
 type OpenMythosRuntimeConfig = {
   enabled: boolean;
   adaptiveEffort: boolean;
   taskCard: boolean;
   routingHints: boolean;
+  loopControl: LoopControl;
+  stableReinjection: boolean;
+  phaseAdapter: boolean;
+  expertRouting: boolean;
+  contextCacheDiagnostics: boolean;
   minEffort: EffortLevel;
   maxEffort: EffortLevel;
 };
@@ -72,10 +78,13 @@ type PreviewCard = {
   goal: string;
   effort: EffortLevel;
   loopBudget: number;
+  riskScore: number;
   reasons: string[];
   constraints: string[];
   acceptance: string[];
   routes: string[];
+  phasePlan: string[];
+  expertRoutes: string[];
 };
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const satisfies readonly EffortLevel[];
@@ -86,6 +95,11 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   adaptiveEffort: true,
   taskCard: true,
   routingHints: true,
+  loopControl: 'enforced',
+  stableReinjection: true,
+  phaseAdapter: true,
+  expertRouting: true,
+  contextCacheDiagnostics: true,
   minEffort: 'low',
   maxEffort: 'xhigh',
 };
@@ -150,6 +164,17 @@ const IMPLEMENTATION_SIGNALS: Signal[] = [
   },
 ];
 
+const FRONTEND_SIGNALS: Signal[] = [
+  {
+    pattern: /\b(ui|frontend|react|css|layout|responsive|accessibility|visual|figma)\b/i,
+    reasonKey: 'reasons.frontend',
+    reasonDefault: 'frontend or visual quality work',
+    weight: 2,
+    routeKey: 'routes.frontend',
+    routeDefault: 'Use frontend/design guidance and verify the rendered UI when available.',
+  },
+];
+
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 );
@@ -163,6 +188,10 @@ const normalizeEffort = (value: unknown, fallback: EffortLevel): EffortLevel => 
 
 const normalizeBoolean = (value: unknown, fallback: boolean): boolean => (
   typeof value === 'boolean' ? value : fallback
+);
+
+const normalizeLoopControl = (value: unknown, fallback: LoopControl): LoopControl => (
+  value === 'advisory' || value === 'enforced' ? value : fallback
 );
 
 const normalizeBounds = (
@@ -186,6 +215,11 @@ const normalizeRuntimeConfig = (value: unknown): OpenMythosRuntimeConfig => {
     adaptiveEffort: normalizeBoolean(data.adaptiveEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.adaptiveEffort),
     taskCard: normalizeBoolean(data.taskCard, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.taskCard),
     routingHints: normalizeBoolean(data.routingHints, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.routingHints),
+    loopControl: normalizeLoopControl(data.loopControl, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.loopControl),
+    stableReinjection: normalizeBoolean(data.stableReinjection, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.stableReinjection),
+    phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
+    expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
+    contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
     minEffort,
     maxEffort,
   };
@@ -304,7 +338,7 @@ const buildPreviewCard = (
   }
 
   const normalized = input.replace(/\s+/g, ' ').trim();
-  const signals = [...HIGH_RISK_SIGNALS, ...IMPLEMENTATION_SIGNALS].filter((signal) => (
+  const signals = [...HIGH_RISK_SIGNALS, ...IMPLEMENTATION_SIGNALS, ...FRONTEND_SIGNALS].filter((signal) => (
     signal.pattern.test(normalized)
   ));
   const score = signals.reduce((sum, signal) => sum + signal.weight, 0)
@@ -318,6 +352,13 @@ const buildPreviewCard = (
         : 'low';
   const effort = clampEffort(inferredEffort, runtimeConfig.minEffort, runtimeConfig.maxEffort);
   const loopBudget = effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
+  const phasePlan = runtimeConfig.phaseAdapter
+    ? effort === 'low'
+      ? ['orient', 'finalize']
+      : effort === 'medium'
+        ? ['orient', 'plan', 'implement', 'finalize']
+        : ['orient', 'plan', 'implement', 'verify', 'finalize']
+    : ['implement', 'finalize'];
   const reasons = unique(signals.map((signal) => (
     translate(signal.reasonKey, signal.reasonDefault)
   ))).slice(0, 4);
@@ -329,6 +370,7 @@ const buildPreviewCard = (
     goal: truncate(normalized, 260),
     effort,
     loopBudget,
+    riskScore: score,
     reasons,
     constraints: [
       translate('constraints.keepGoal', 'Keep the current user goal visible before each major action.'),
@@ -353,6 +395,14 @@ const buildPreviewCard = (
           ? translate('routes.local', 'Handle locally; avoid spawning agents unless a specific side task appears.')
           : translate('routes.routed', 'Use skill/subagent routing only for distinct work that can run in parallel or protect main context.'),
       ]).slice(0, 4)
+      : [],
+    phasePlan,
+    expertRoutes: runtimeConfig.expertRouting
+      ? unique([
+        ...signals.map((signal) => signal.routeDefault ? translate(signal.routeKey || signal.reasonKey, signal.routeDefault) : null)
+          .filter((route): route is string => Boolean(route)),
+        effort === 'low' ? translate('experts.local', 'Local execution') : null,
+      ].filter((route): route is string => Boolean(route))).slice(0, 5)
       : [],
   };
 };
@@ -429,6 +479,46 @@ function EffortSegmentedControl({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function LoopControlSegmentedControl({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: LoopControl;
+  disabled?: boolean;
+  onChange: (value: LoopControl) => void;
+}) {
+  const options: Array<{ value: LoopControl; label: string; description: string }> = [
+    { value: 'enforced', label: 'Enforced', description: 'Map loop budget to maxTurns' },
+    { value: 'advisory', label: 'Advisory', description: 'Prompt guidance only' },
+  ];
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              'rounded-lg border p-3 text-left transition-colors',
+              active
+                ? 'border-primary bg-primary/10 text-foreground'
+                : 'border-border bg-background text-muted-foreground hover:text-foreground',
+              disabled && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            <div className="text-sm font-medium">{option.label}</div>
+            <div className="mt-1 text-xs leading-4">{option.description}</div>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -638,6 +728,50 @@ export default function OpenMythosRuntimeContent() {
               onChange={(routingHints) => updateRuntimeConfig({ routingHints })}
             />
 
+            <RuntimeToggleRow
+              icon={ShieldCheck}
+              title={t('openMythosRuntime.stableReinjection', { defaultValue: 'Stable reinjection' })}
+              description={t('openMythosRuntime.stableReinjectionDescription', {
+                defaultValue: 'Reinject the frozen goal, constraints, and acceptance criteria after tool results and into subagents.',
+              })}
+              checked={runtimeConfig.stableReinjection}
+              disabled={disabled || !runtimeConfig.enabled}
+              onChange={(stableReinjection) => updateRuntimeConfig({ stableReinjection })}
+            />
+
+            <RuntimeToggleRow
+              icon={BrainCircuit}
+              title={t('openMythosRuntime.phaseAdapter', { defaultValue: 'Phase adapter' })}
+              description={t('openMythosRuntime.phaseAdapterDescription', {
+                defaultValue: 'Use orient, plan, implement, verify, and finalize phases; early phases are read-only.',
+              })}
+              checked={runtimeConfig.phaseAdapter}
+              disabled={disabled || !runtimeConfig.enabled}
+              onChange={(phaseAdapter) => updateRuntimeConfig({ phaseAdapter })}
+            />
+
+            <RuntimeToggleRow
+              icon={Route}
+              title={t('openMythosRuntime.expertRouting', { defaultValue: 'Expert routing' })}
+              description={t('openMythosRuntime.expertRoutingDescription', {
+                defaultValue: 'Deterministically suggest security, verification, performance, architecture, or frontend experts.',
+              })}
+              checked={runtimeConfig.expertRouting}
+              disabled={disabled || !runtimeConfig.enabled}
+              onChange={(expertRouting) => updateRuntimeConfig({ expertRouting })}
+            />
+
+            <RuntimeToggleRow
+              icon={Gauge}
+              title={t('openMythosRuntime.contextCacheDiagnostics', { defaultValue: 'Context cache diagnostics' })}
+              description={t('openMythosRuntime.contextCacheDiagnosticsDescription', {
+                defaultValue: 'Show compact, RAG, and tool-summary ledger data in diagnostics without pretending to be KV cache.',
+              })}
+              checked={runtimeConfig.contextCacheDiagnostics}
+              disabled={disabled || !runtimeConfig.enabled}
+              onChange={(contextCacheDiagnostics) => updateRuntimeConfig({ contextCacheDiagnostics })}
+            />
+
             <div className="space-y-4 rounded-lg border border-border bg-background p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <ShieldCheck className="h-4 w-4 text-primary" />
@@ -656,6 +790,18 @@ export default function OpenMythosRuntimeContent() {
                 disabled={disabled || !runtimeConfig.enabled}
                 onChange={handleMaxEffortChange}
                 formatEffortLevel={formatEffortLevel}
+              />
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border bg-background p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Gauge className="h-4 w-4 text-primary" />
+                {t('openMythosRuntime.loopControl', { defaultValue: 'Loop control' })}
+              </div>
+              <LoopControlSegmentedControl
+                value={runtimeConfig.loopControl}
+                disabled={disabled || !runtimeConfig.enabled}
+                onChange={(loopControl) => updateRuntimeConfig({ loopControl })}
               />
             </div>
           </div>
@@ -695,7 +841,20 @@ export default function OpenMythosRuntimeContent() {
                   </div>
                   <div className="mt-1 text-sm font-semibold text-foreground">{previewCard.loopBudget}</div>
                 </div>
+                <div className="rounded-lg border border-border bg-background p-3">
+                  <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                    {t('openMythosRuntime.riskScore', { defaultValue: 'Risk score' })}
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">{previewCard.riskScore}</div>
+                </div>
+                <div className="rounded-lg border border-border bg-background p-3">
+                  <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                    {t('openMythosRuntime.loopControl', { defaultValue: 'Loop control' })}
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">{runtimeConfig.loopControl}</div>
+                </div>
               </div>
+              <PreviewList label={t('openMythosRuntime.phasePlan', { defaultValue: 'Phase plan' })} values={[previewCard.phasePlan.join(' -> ')]} />
               <PreviewList label={t('openMythosRuntime.why', { defaultValue: 'Why' })} values={previewCard.reasons} />
               {runtimeConfig.taskCard && (
                 <>
@@ -707,6 +866,12 @@ export default function OpenMythosRuntimeContent() {
                 label={t('openMythosRuntime.routesLabel', { defaultValue: 'Routes' })}
                 values={previewCard.routes.length > 0
                   ? previewCard.routes
+                  : [t('openMythosRuntime.disabledValue', { defaultValue: 'disabled' })]}
+              />
+              <PreviewList
+                label={t('openMythosRuntime.expertRoutesLabel', { defaultValue: 'Expert routes' })}
+                values={previewCard.expertRoutes.length > 0
+                  ? previewCard.expertRoutes
                   : [t('openMythosRuntime.disabledValue', { defaultValue: 'disabled' })]}
               />
             </div>

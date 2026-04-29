@@ -26,6 +26,7 @@ import {
 import { ImageSizeError } from './utils/imageValidation.js'
 import { ImageResizeError } from './utils/imageResizer.js'
 import { findToolByName, type ToolUseContext } from './Tool.js'
+import type { PermissionDecision } from './types/permissions.js'
 import { asSystemPrompt, type SystemPrompt } from './utils/systemPromptType.js'
 import type {
   AssistantMessage,
@@ -113,6 +114,14 @@ import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
 import { createTrace, endTrace, isLangfuseEnabled } from './services/langfuse/index.js'
 import { getAPIProvider } from './utils/model/providers.js'
+import {
+  advanceOpenMythosRuntimeState,
+  formatOpenMythosRuntimeReminder,
+  isOpenMythosReadOnlyPhase,
+  shouldEnforceOpenMythosLoopBudget,
+  type OpenMythosContextCacheDiagnostics,
+  type OpenMythosRuntimeState,
+} from './utils/openmythosRuntime.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -217,6 +226,78 @@ type State = {
   // Why the previous iteration continued. Undefined on first iteration.
   // Lets tests assert recovery paths fired without inspecting message contents.
   transition: Continue | undefined
+}
+
+function createOpenMythosCanUseTool(
+  canUseTool: CanUseToolFn,
+  runtimeState: OpenMythosRuntimeState | undefined,
+): CanUseToolFn {
+  if (!isOpenMythosReadOnlyPhase(runtimeState)) {
+    return canUseTool
+  }
+
+  return async (
+    tool,
+    input,
+    toolUseContext,
+    assistantMessage,
+    toolUseID,
+    forceDecision,
+  ) => {
+    const parsedInput = tool.inputSchema.safeParse(input)
+    if (parsedInput.success && !tool.isReadOnly(parsedInput.data)) {
+      return {
+        behavior: 'deny',
+        message:
+          `OpenMythos ${runtimeState!.phase} phase is read-only. Inspect and plan first, then retry mutating tools in the implement or verify phase.`,
+        decisionReason: {
+          type: 'hook',
+          hookName: 'OpenMythos phase adapter',
+          reason: `${runtimeState!.phase} phase blocks mutating tools`,
+        },
+        toolUseID,
+      } satisfies PermissionDecision
+    }
+
+    return canUseTool(
+      tool,
+      input,
+      toolUseContext,
+      assistantMessage,
+      toolUseID,
+      forceDecision,
+    )
+  }
+}
+
+function buildOpenMythosContextCacheDiagnostics(
+  messages: Message[],
+): OpenMythosContextCacheDiagnostics {
+  let compactBoundaryCount = 0
+  let microcompactBoundaryCount = 0
+  let toolSummaryCount = 0
+  let summaryLength = 0
+
+  for (const message of messages) {
+    if (message.type === 'system' && message.subtype === 'compact_boundary') {
+      compactBoundaryCount++
+      summaryLength += JSON.stringify(message.compactMetadata ?? '').length
+    }
+    if (message.type === 'system' && message.subtype === 'microcompact_boundary') {
+      microcompactBoundaryCount++
+    }
+    if ((message as { type?: string }).type === 'tool_use_summary') {
+      toolSummaryCount++
+      summaryLength += JSON.stringify(message).length
+    }
+  }
+
+  return {
+    compactBoundaryCount,
+    microcompactBoundaryCount,
+    toolSummaryCount,
+    summaryLength,
+  }
 }
 
 export async function* query(
@@ -586,10 +667,44 @@ async function* queryLoop(
     }
 
     //TODO: no need to set toolUseContext.messages during set-up since it is updated here
+    const openMythosContextCache = toolUseContext.openMythosRuntimeState
+      ?.contextCacheDiagnostics
+      ? buildOpenMythosContextCacheDiagnostics(messagesForQuery)
+      : undefined
+    const openMythosRuntimeState = toolUseContext.openMythosRuntimeState
+      ? advanceOpenMythosRuntimeState(
+          toolUseContext.openMythosRuntimeState,
+          turnCount,
+          openMythosContextCache,
+        )
+      : undefined
     toolUseContext = {
       ...toolUseContext,
       messages: messagesForQuery,
+      ...(openMythosRuntimeState
+        ? {
+            openMythosRuntimeState,
+            ...(openMythosRuntimeState.stableReinjection
+              ? {
+                  criticalSystemReminder_EXPERIMENTAL:
+                    formatOpenMythosRuntimeReminder(
+                      openMythosRuntimeState.card,
+                      openMythosRuntimeState,
+                    ),
+                }
+              : {}),
+          }
+        : {}),
     }
+    const activeCanUseTool = createOpenMythosCanUseTool(
+      canUseTool,
+      openMythosRuntimeState,
+    )
+    const effectiveMaxTurns =
+      maxTurns ??
+      (shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)
+        ? openMythosRuntimeState?.card.loopBudget
+        : undefined)
 
     const assistantMessages: AssistantMessage[] = []
     const toolResults: (UserMessage | AttachmentMessage)[] = []
@@ -605,7 +720,7 @@ async function* queryLoop(
     let streamingToolExecutor = useStreamingToolExecution
       ? new StreamingToolExecutor(
           toolUseContext.options.tools,
-          canUseTool,
+          activeCanUseTool,
           toolUseContext,
         )
       : null
@@ -778,7 +893,7 @@ async function* queryLoop(
                 streamingToolExecutor.discard()
                 streamingToolExecutor = new StreamingToolExecutor(
                   toolUseContext.options.tools,
-                  canUseTool,
+                  activeCanUseTool,
                   toolUseContext,
                 )
               }
@@ -960,7 +1075,7 @@ async function* queryLoop(
               streamingToolExecutor.discard()
               streamingToolExecutor = new StreamingToolExecutor(
                 toolUseContext.options.tools,
-                canUseTool,
+                activeCanUseTool,
                 toolUseContext,
               )
             }
@@ -1426,7 +1541,7 @@ async function* queryLoop(
 
     const toolUpdates = streamingToolExecutor
       ? streamingToolExecutor.getRemainingResults()
-      : runTools(toolUseBlocks, assistantMessages, canUseTool, toolUseContext)
+      : runTools(toolUseBlocks, assistantMessages, activeCanUseTool, toolUseContext)
 
     for await (const update of toolUpdates) {
       if (update.message) {
@@ -1552,10 +1667,10 @@ async function* queryLoop(
       }
       // Check maxTurns before returning when aborted
       const nextTurnCountOnAbort = turnCount + 1
-      if (maxTurns && nextTurnCountOnAbort > maxTurns) {
+      if (effectiveMaxTurns && nextTurnCountOnAbort > effectiveMaxTurns) {
         yield createAttachmentMessage({
           type: 'max_turns_reached',
-          maxTurns,
+          maxTurns: effectiveMaxTurns,
           turnCount: nextTurnCountOnAbort,
         })
       }
@@ -1749,10 +1864,10 @@ async function* queryLoop(
     }
 
     // Check if we've reached the max turns limit
-    if (maxTurns && nextTurnCount > maxTurns) {
+    if (effectiveMaxTurns && nextTurnCount > effectiveMaxTurns) {
       yield createAttachmentMessage({
         type: 'max_turns_reached',
-        maxTurns,
+        maxTurns: effectiveMaxTurns,
         turnCount: nextTurnCount,
       })
       return { reason: 'max_turns', turnCount: nextTurnCount }

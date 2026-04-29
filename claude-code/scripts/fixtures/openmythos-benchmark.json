@@ -1,0 +1,18 @@
+[
+  {
+    "name": "small-greeting",
+    "prompt": "你好"
+  },
+  {
+    "name": "security-migration",
+    "prompt": "Implement an auth database migration with rollback tests and CI verification"
+  },
+  {
+    "name": "frontend-review",
+    "prompt": "Fix the React layout bug, verify responsive behavior, and update the UI copy"
+  },
+  {
+    "name": "performance-analysis",
+    "prompt": "Analyze memory and latency regression, run benchmarks, and document the verification path"
+  }
+]

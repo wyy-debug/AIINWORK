@@ -126,8 +126,40 @@ export interface OpenMythosRuntimeDiagnostics {
   adaptiveEffort: boolean;
   taskCard: boolean;
   routingHints: boolean;
+  loopControl?: 'advisory' | 'enforced' | string;
+  stableReinjection?: boolean;
+  phaseAdapter?: boolean;
+  expertRouting?: boolean;
+  contextCacheDiagnostics?: boolean;
   minEffort: string;
   maxEffort: string;
+  runtimeCard?: {
+    goal?: string;
+    effort?: string;
+    loopBudget?: number;
+    riskScore?: number;
+    phase?: string;
+    phasePlan?: string[];
+    remainingBudget?: number;
+    reasons?: string[];
+    constraints?: string[];
+    expertRoutes?: Array<{
+      kind?: string;
+      label?: string;
+      reason?: string;
+      required?: boolean;
+    }>;
+  } | null;
+  contextCache?: {
+    compactBoundaryCount?: number;
+    microcompactBoundaryCount?: number;
+    ragExcerptCount?: number;
+    ragPromptLength?: number;
+    toolSummaryCount?: number;
+    summaryLength?: number;
+    skillPromptLength?: number;
+    appendSystemPromptLength?: number;
+  };
 }
 
 export interface AgentRuntimeDiagnostics {

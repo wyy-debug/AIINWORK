@@ -12,6 +12,7 @@ import type { z } from 'zod/v4'
 import type { Command } from './commands.js'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
 import type { ThinkingConfig } from './utils/thinking.js'
+import type { OpenMythosRuntimeState } from './utils/openmythosRuntime.js'
 
 export type ToolInputJSONSchema = {
   [x: string]: unknown
@@ -275,6 +276,7 @@ export type ToolUseContext = {
   ) => (request: PromptRequest) => Promise<PromptResponse>
   toolUseId?: string
   criticalSystemReminder_EXPERIMENTAL?: string
+  openMythosRuntimeState?: OpenMythosRuntimeState
   /** Langfuse root trace span for this query turn. Passed down to tool execution for observability. */
   langfuseTrace?: LangfuseSpan | null
   /** Langfuse root trace span for the outer/main agent trace. Used when subagents need to nest observations under the parent agent trace. */

@@ -62,6 +62,7 @@ import { processTextPrompt } from './processTextPrompt.js'
 import {
   buildOpenMythosRuntimeCard,
   shouldApplyAdaptiveEffort,
+  type OpenMythosRuntimeCard,
 } from '../openmythosRuntime.js'
 export type ProcessUserInputContext = ToolUseContext & LocalJSXCommandContext
 
@@ -77,6 +78,7 @@ export type ProcessUserInputBaseResult = {
   allowedTools?: string[]
   model?: string
   effort?: EffortValue
+  openMythosRuntimeCard?: OpenMythosRuntimeCard | null
   // Output text for non-interactive mode (e.g., forked commands)
   // When set, this is used as the result in -p mode instead of empty string
   resultText?: string
@@ -601,8 +603,12 @@ async function processUserInputBase(
 
   return addImageMetadataMessage(
     adaptiveEffort === undefined
-      ? textPromptResult
-      : { ...textPromptResult, effort: adaptiveEffort },
+      ? { ...textPromptResult, openMythosRuntimeCard: adaptiveCard }
+      : {
+          ...textPromptResult,
+          effort: adaptiveEffort,
+          openMythosRuntimeCard: adaptiveCard,
+        },
     imageMetadataTexts,
   )
 }

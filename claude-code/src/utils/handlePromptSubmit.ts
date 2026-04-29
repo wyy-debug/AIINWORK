@@ -21,6 +21,7 @@ import { createAbortController } from './abortController.js'
 import type { PastedContent } from './config.js'
 import { logForDebugging } from './debug.js'
 import type { EffortValue } from './effort.js'
+import type { OpenMythosRuntimeCard } from './openmythosRuntime.js'
 import type { FileHistoryState } from './fileHistory.js'
 import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
@@ -75,6 +76,7 @@ type BaseExecutionParams = {
     onBeforeQuery?: (input: string, newMessages: Message[]) => Promise<boolean>,
     input?: string,
     effort?: EffortValue,
+    openMythosRuntimeCard?: OpenMythosRuntimeCard | null,
   ) => Promise<void>
   setAppState: (updater: (prev: AppState) => AppState) => void
   onBeforeQuery?: (input: string, newMessages: Message[]) => Promise<boolean>
@@ -453,6 +455,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
     let allowedTools: string[] | undefined
     let model: string | undefined
     let effort: EffortValue | undefined
+    let openMythosRuntimeCard: OpenMythosRuntimeCard | null | undefined
     let nextInput: string | undefined
     let submitNextInput: boolean | undefined
 
@@ -533,6 +536,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
             allowedTools = result.allowedTools
             model = result.model
             effort = result.effort
+            openMythosRuntimeCard = result.openMythosRuntimeCard
             nextInput = result.nextInput
             submitNextInput = result.submitNextInput
           }
@@ -585,6 +589,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
             shouldCallBeforeQuery ? onBeforeQuery : undefined,
             primaryInput,
             effort,
+            openMythosRuntimeCard,
           )
         } else {
           // Local slash commands that skip messages (e.g., /model, /theme).

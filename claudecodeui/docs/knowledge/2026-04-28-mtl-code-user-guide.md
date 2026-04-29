@@ -1,304 +1,238 @@
 # MTL-Code 使用文档
 
-Date: 2026-04-28
+本文面向日常使用 MTL-Code UI 的用户，说明项目、独立对话、模型、Agent、Skill、MCP、Hub、Worktree、权限、RAG、上下文压缩和 OpenMythos Runtime 的使用方法与注意事项。
 
-本文面向日常使用 MTL-Code UI 的用户，说明怎么创建项目、发起对话、配置模型、使用 Agent / Skill / MCP / Worktree / Hub，以及需要注意的边界。
+## 1. 基本概念
 
-## 1. 启动和基础概念
+- 项目：绑定一个本地工作目录，适合读写代码、运行命令、查看 Git diff。
+- 独立对话：不绑定项目目录，适合问答、规划、资料整理、Agent 工作流。
+- Agent：一组角色、提示词、Skill、MCP 绑定和模型上下文配置。
+- Skill：本地 `SKILL.md` 指令包，通常安装在 `~/.codex/skills` 或 `~/.mtl-code/skills`。
+- MCP：外部工具服务器，运行时由 MTL-Code / Claude Code 发现工具。
+- Hub：独立的 Agent/Skill/MCP 远端仓库服务，Code UI 只消费 catalog 和调用 Hub API。
+- Worktree：从 Git 项目派发出的独立工作树，默认 detached HEAD，主项目保持干净。
 
-MTL-Code UI 是一个桌面端代码 Agent 工具。GUI 负责项目管理、聊天、配置、Agent/Skill 选择和诊断展示；真正执行代码读写、Shell、MCP、上下文压缩的是内置的 MTL-Code / Claude Code 兼容 runtime。
+## 2. 模型配置
 
-常用入口：
+路径：`设置 > 智能体 > MTLCode > Model`
 
-- 左侧 `项目`：面向某个本地代码目录的工作区会话。
-- 左侧 `对话`：独立聊天空间，不默认绑定项目。
-- 主界面 `Agent Builder`：创建、编辑、上传、安装 Agent / Skill。
-- 设置里的 `Agents / MTLCode`：配置模型、API、权限、MCP、Repository。
+可以配置多个模型 Profile，每个 Profile 包含：
 
-核心区别：
+- 名称
+- Base URL
+- Model
+- API Key / Auth Token
+- Context window tokens
+- 是否使用轻量启动
 
-- 项目会话：默认使用 MTL-Code，不自动启用 Agent；可以添加 Skill。
-- 独立对话：新建时可以选择是否使用 Agent。
-- Worktree 会话：从 Git 项目派发出来的独立工作树，可以在派发时绑定 Agent / Skill。
+注意：
 
-## 2. 第一次配置模型
+1. 模型 Profile 在设置页管理。
+2. 对话和项目都可以在 composer 切换模型。
+3. 模型按 session 绑定，A 对话可以用 MiMo，B 对话可以用 DeepSeek。
+4. 对已有上下文的会话切换模型时，可能影响后续回复连续性，UI 会提示。
+5. DeepSeek 1M 上下文需要显式配置 `1000000`，不要只在 Agent GUI 中改显示值。
+6. MiMo 使用 Anthropic-compatible API 时，Model 必须写服务端实际支持的模型 id。
 
-打开设置中的 `Agents > MTLCode`，配置模型运行参数。
+## 3. 项目会话
 
-常见字段：
-
-- API Key：Anthropic-compatible token，例如 DeepSeek / Claude 兼容接口 token。
-- Base URL：Anthropic-compatible endpoint。
-- Model：实际调用的模型名，例如 `deepseek-reasoner`。
-- Context window tokens：模型上下文窗口长度。
-- Temperature：采样温度。
-- Effort：DeepSeek 等模型的推理强度。
-
-注意事项：
-
-1. DeepSeek 1M 上下文必须显式配置为 `1000000`。
-2. 不要依赖 GUI 猜测 provider 默认长度；配置会传给后端环境变量 `MTL_CODE_MAX_CONTEXT_TOKENS` 和 `CONTEXT_WINDOW`。
-3. MTL-Code UI 内部 provider key 仍兼容使用 `claude`，界面显示为 `MTLCode`，这是正常现象。
-4. 如果开启 bare mode，会减少自动项目上下文、hooks、auto-memory 等 runtime 行为，适合想要更干净 prompt 的场景。
-
-## 3. 创建和使用项目
-
-在左侧 `项目` 模式下，点击文件夹/新增项目入口，选择本地代码目录。
-
-项目会话适合：
-
-- 让 MTL-Code 读取、修改项目文件。
-- 运行 Shell、Git、测试、构建。
-- 结合项目文件树、diff、终端结果继续开发。
-
-使用步骤：
-
-1. 选择或新建项目。
-2. 点击 `新建会话`。
-3. 直接输入开发任务，例如“修复这个编译错误”、“分析这个模块”、“新增一个按钮”。
-4. 需要额外 Skill 时，在输入框下方选择 Skill。
-5. 发送后 MTL-Code 会在当前项目路径下执行。
-
-注意事项：
-
-1. 项目会话不显示 Agent 选择，这是设计行为。
-2. 项目会话默认是 MTL-Code 原生代码 Agent，避免 Agent 配置污染普通项目工作。
-3. Skill 可以在项目会话里使用，并会保存到当前会话。
-4. 创建项目时可以选择普通本地目录，但不要选择系统关键目录，例如 Windows 根目录、系统目录、Program Files 等。
-5. 如果项目路径移动或删除，旧会话可能无法正常恢复，需要重新添加项目。
-
-## 4. 使用独立对话
-
-切换到左侧 `对话` 模式后，新建对话会进入独立聊天空间。
-
-独立对话适合：
-
-- 不绑定具体项目的问答。
-- 使用 Agent 处理流程型任务。
-- 讨论方案、写文档、分析需求。
-
-新建对话时会询问是否使用 Agent：
-
-- 选择否：使用默认 MTL-Code 对话。
-- 选择是：选择一个已启用 Agent，并完成需要的槽位配置。
-
-注意事项：
-
-1. 对话空间和项目空间是两套独立列表，不应该混在一起。
-2. 独立对话不默认拥有项目路径；需要代码上下文时，应使用项目会话或 Worktree。
-3. Agent 绑定是按单个对话保存的，不会修改全局 Agent 模板。
-4. 可以在对话中添加 Skill，后续消息会继续带上这些 Skill 上下文。
-
-## 5. 使用 Skill
-
-Skill 是一组本地指令和资料，通常以 `SKILL.md` 为入口，也可以带 `agents/`、`references/`、`scripts/` 等目录。
-
-已安装 Skill 常见位置：
-
-- 用户级：`~/.mtl-code/skills/<skill-name>/SKILL.md`
-- 兼容路径：`~/.claude/skills`、`~/.codex/skills`
-- 项目级：项目内 `.mtl-code/skills`、`.claude/skills`、`.codex/skills`
+项目会话用于真实代码工作。
 
 使用方式：
 
-1. 在项目会话或独立对话输入框下方打开 Skill 选择。
-2. 搜索真实已安装 Skill。
-3. 点击绑定后会显示 Skill chip。
-4. 点击已绑定 chip 可以解绑。
-5. 发送消息时，后端会把 Skill 路径和说明追加到 MTL-Code prompt。
+1. 在左侧选择 `项目`。
+2. 点击文件夹图标新建项目，选择本地目录。
+3. 在项目下新建会话。
+4. 输入任务，必要时绑定 Skill 或切换模型。
 
-状态含义：
+注意：
 
-- 已可调用：本地已安装，后端能找到 `SKILL.md`。
-- 已绑定：当前会话已经选择。
-- 不可用：会话保存了该 Skill 名称，但本地没有找到对应安装。
+1. 项目普通会话默认使用 MTL-Code，不强制显示 Agent 配置。
+2. 项目中可以直接添加 Skill，用于后续对话。
+3. 项目和独立对话是两个空间，不应混用会话列表。
+4. 需要 Agent 参与代码任务时，优先使用 Worktree 派发，或在新建项目会话时显式选择 Agent。
 
-注意事项：
+## 4. 独立对话
 
-1. Skill 不是单独执行引擎，本质是给 MTL-Code 的专业指令和资料。
-2. 缺失 Skill 不会阻止发送，但后端会提示模型不要依赖它。
-3. 上传或安装 Skill 后，如果列表没刷新，点击刷新或重开对应面板。
-4. Skill 名称建议稳定，不要频繁改目录名，否则旧会话绑定会变成不可用。
-
-## 6. 创建和使用 Agent
-
-Agent 是可复用的智能体配置，包含名称、说明、系统提示词、Skill、MCP 绑定、知识源、guardrails、模型参数等。
-
-创建方式：
-
-1. 打开主界面 `Agent Builder`。
-2. 点击新建 Agent。
-3. 填写名称、说明和系统提示词。
-4. 需要能力时添加 Skill。
-5. 需要外部工具时绑定真实 MCP Server。
-6. 保存并启用。
+独立对话适合非项目绑定任务。
 
 使用方式：
 
-- 独立对话：新建对话时选择使用 Agent。
-- Worktree 派发：派发任务时选择 Agent。
-- 项目普通会话：不直接选择 Agent，只使用默认 MTL-Code；可添加 Skill。
+1. 切到左侧 `对话`。
+2. 新建对话。
+3. 根据提示选择是否使用 Agent。
+4. 可以绑定 Skill、MCP、模型 Profile。
 
-注意事项：
+注意：
 
-1. Agent 配置页是模板管理，不是项目启动页。
-2. Agent 的模型和上下文默认应继承 MTL-Code 设置，只有明确需要时才单独覆盖。
-3. Agent 中的应用槽位必须绑定真实可用项，例如 `MCP: <serverName>`。
-4. Google、Notion、Teams、Outlook 等未实现 runtime 的应用不会显示或不可用。
-5. Agent 使用后，可以通过 composer 的诊断面板确认本次实际传给后端的 Agent、Skill、MCP、model、context window 和权限快照。
+1. 独立对话默认没有项目路径。
+2. 需要访问项目文件时，建议回到项目会话或 Worktree。
+3. 选择 Agent 后必须保存到当前 session，诊断面板可确认 `agentId`、`effectiveSkills`、`mcpBindings`。
 
-## 7. 配置 MCP
+## 5. Skill
 
-MCP 用于给 MTL-Code runtime 增加外部工具。
+Skill 是 MTL-Code 追加给模型的本地能力说明，核心入口是 `SKILL.md`。
 
-配置方式：
+使用方式：
 
-1. 打开 `Agent Builder > 浏览应用 > 自定义 MCP`，或设置里的 MCP 配置入口。
-2. 新增 MCP Server。
-3. 选择作用域：用户级或项目级。
-4. 填写 stdio 命令、HTTP/SSE URL、环境变量等。
-5. 点击测试。
-6. 在 Agent 槽位里选择具体的 `MCP: <serverName>`。
+1. 在 composer 点击 `添加 Skill`。
+2. 搜索真实已安装 Skill 或远端 Hub Skill。
+3. 点击安装或绑定。
+4. 已绑定 Skill 会显示为 chip，可点击解绑。
+5. 发送消息后可在诊断面板查看本次传给后端的 Skill、`SKILL.md` 路径、是否存在、注入长度。
 
-注意事项：
+注意：
 
-1. 测试只验证配置、命令或 URL 能否检测，不伪造工具列表。
-2. MCP 工具列表由 MTL-Code runtime 在会话启动后发现。
-3. 项目级 MCP 需要有 workspacePath。
-4. MCP Server 不在线、命令不可执行、环境变量缺失时，Agent 绑定存在但工具不可用。
-5. 使用 MCP 工具时仍可能触发权限确认。
+1. 缺失 Skill 不阻止发送，但 UI 会标记不可用，后端 prompt 会提示不要依赖它。
+2. Hub Pull 后不应继续显示 Pull，已安装内容只显示更新或卸载。
+3. Skill 调用仍通过 prompt + 本地 `SKILL.md` 路径约束完成，没有单独 Skill 执行引擎。
 
-从 Hub 安装 MCP：
+## 6. Agent
 
-1. 打开设置 `Agents > Repository`。
-2. 同步远端 Hub catalog。
-3. 在 `MCP` 分类里点击 `Pull & Configure`。
-4. 按 Hub manifest 填写必需配置，例如 `root`。
-5. 保存后，MTL-Code 会下载安装到本机，并写入 MTL-Code / Claude Code MCP 配置。
+Agent 类似 ChatGPT 自定义智能体：角色、提示词、应用槽位、Skill、MCP、模型配置的组合。
 
-以 `ainwork-code-search-mcp` 为例：
+使用方式：
 
-- `root` 会写入 `AINWORK_DEFAULT_CODE_ROOT`，作为默认代码搜索根目录。
-- `AINWORK_CODE_ROOTS` 是可选白名单；Windows 多路径用分号分隔。
-- 工具调用时仍可传入 `root` 覆盖默认值。
-- 第一次安装可能会执行 `npm install --omit=dev --ignore-scripts` 来安装 MCP 依赖。
+1. 打开 Agent Builder。
+2. 从模板创建或新建 Agent。
+3. 配置指令、Skill、MCP 槽位、模型与上下文。
+4. 独立对话或 Worktree 派发时选择 Agent。
+5. 首条消息后打开诊断面板，确认 Agent/Skill/MCP/model/context window 是否实际传到后端。
 
-## 8. 使用 Agent / Skill Hub
+注意：
 
-Agent/Skill Hub 是独立服务，用于团队共享 Agent 模板、Skill 和 MCP Server。
+1. 项目普通会话默认不显示 Agent 配置，避免项目空间和 Agent 对话空间混用。
+2. Agent 中绑定 MCP 只代表想使用该 MCP；真正工具由 runtime 启动后发现。
+3. 如果 Agent 依赖 MCP token/root，安装后需要执行可用性检测。
 
-启动方式：
+## 7. MCP
 
-```powershell
-cd E:\AIINWORK\agent-skill-hub
-$env:HOST="0.0.0.0"
-$env:PORT="4877"
-$env:HUB_ADMIN_TOKEN="your-token"
-.\dist\agent-skill-hub.exe
+MCP Server 用于扩展工具能力，例如 Redmine、代码搜索、本地服务等。
+
+使用方式：
+
+1. 在 `设置 > 智能体 > MTLCode > MCP 服务器` 配置 MCP。
+2. 从 Hub 安装 MCP 时按 manifest 填写 required setup fields，例如 token、root。
+3. 安装后点击 `检测可用性`。
+4. 在 Agent 槽位中选择真实 `MCP: <serverName>`。
+
+注意：
+
+1. 密钥只显示是否 configured，不在 UI、日志、诊断中明文展示。
+2. `root` 通常是 MCP 默认工作目录或默认代码根；如果工具调用时显式传了 `codeRoot`，以调用参数为准。
+3. 如果提示缺少 `REDMINE_API_KEY`，说明 runtime 启动 MCP 时没有拿到该环境变量或配置字段。
+4. MCP 工具列表不伪造；没有 runtime tool-list API 时，只显示“配置已绑定，工具列表将在会话启动后由 MTL-Code 发现”。
+
+## 8. Agent / Skill / MCP Hub
+
+Hub 是独立服务，不内嵌在 Code UI 中。
+
+启动建议：
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 4877,
+  "dataDir": "D:\\mtl-agent-skill-hub-data",
+  "adminToken": "test1234",
+  "submitToken": "",
+  "name": "Agent/Skill Hub",
+  "description": "Shared Agent templates and Skills.",
+  "publicBasePath": "/agent-repository",
+  "adminBasePath": "/api/admin"
+}
 ```
 
-在 MTL-Code UI 中使用：
+在 Code UI 中使用：
 
-1. 打开设置 `Agents > Repository`。
-2. 添加 Hub 的 catalog URL，例如：
-
-```text
-http://<host>:4877/agent-repository/catalog.json
-```
-
+1. 打开 `设置 > Repository`。
+2. 添加 catalog URL，例如 `http://<host>:4877/agent-repository/catalog.json`。
 3. 同步 Repository。
-4. Pull / 安装 Agent 模板或 Skill。
-5. 已安装内容显示更新或卸载，不应继续显示 Pull。
+4. 搜索并安装 Agent、Skill 或 MCP。
+5. 上传时必须选择远端 Hub，并填写正确 token。
 
-上传到 Hub：
+注意：
 
-1. 在 `Repository` 页选择一个远端 Hub。
-2. 输入该 Hub 的 `adminToken`。
-3. 选择 Agent 或 Skill，加载 markdown 或 Skill 文件夹。
-4. 点击 `Upload to remote Hub`。
+1. 本地兼容 catalog 不作为团队 Hub 上传目标，UI 中不应显示 `Local Remote Repository` 上传入口。
+2. 远端返回 401 时，优先检查请求使用的 Hub、`adminToken`、`submitToken`。
+3. Hub 数据保存在 `dataDir`，如果 dataDir 变了，之前上传的内容看起来就会“消失”。
+4. 局域网访问需要 `host=0.0.0.0`，并确认防火墙放行端口。
 
-注意：本地兼容库不是团队 Hub，不会再显示为 `Local Remote Repository`，上传也不会默认写入本地库。
+## 9. Worktree 派发
 
-注意事项：
+Worktree 用于在 Git 项目中派发隔离任务。
 
-1. Hub 是独立 exe，不内嵌在 Code UI 里。
-2. 局域网访问需要 `HOST=0.0.0.0`，并确认 Windows 防火墙放行端口。
-3. 上传、审核、发布、点赞等多人协作能力由 Hub API 负责。
-4. Code UI 只是消费 catalog 和执行安装。
+默认行为：
 
-## 9. 使用 Worktree 派发任务
-
-Worktree 用于在 Git 项目里把任务派发到独立工作树，主项目保持干净。
+- 根目录：`~/.mtl-code/worktrees`
+- 创建方式：`git worktree add --detach <worktreePath> <baseRef>`
+- 默认 detached HEAD，不自动创建分支。
+- 会话上下文、Agent、Skill、模型绑定保存在 session 与 worktree 元数据中。
 
 使用方式：
 
 1. 在 Git 项目中点击 `派发工作树`。
-2. 填写任务说明。
-3. 选择 base ref。
-4. 可选 Agent、Skill。
-5. 创建后进入新的 worktree 项目会话。
+2. 填写任务说明和 base ref。
+3. 可选择 Agent、Skill、MCP、模型。
+4. 创建后进入新 worktree 项目会话。
+5. 需要保留成果时，手动创建分支。
 
-默认行为：
+注意：
 
-- 创建目录：`~/.mtl-code/worktrees`
-- 创建方式：`git worktree add --detach`
-- 默认 detached HEAD，不自动创建分支。
-- 需要保留结果时，手动点击创建分支。
+1. 非 Git 项目不能派发 Worktree。
+2. 父项目 dirty 时仍基于 HEAD 派发，不复制未提交改动。
+3. 删除 managed worktree 前会检查 dirty；有改动会阻止删除。
+4. v1 不自动 merge、不自动 PR、不自动 handoff。
 
-注意事项：
+## 10. 权限
 
-1. 非 Git 项目不能派发 worktree。
-2. 父项目 dirty 时仍基于 HEAD 派发，不会复制未提交改动。
-3. 删除 managed worktree 前会检查 dirty 状态；有改动时会阻止删除。
-4. Worktree 会话上下文会跟随 session 保存，重新打开可恢复。
-5. v1 不自动 merge、不自动 PR。
+权限设置在项目和独立对话中统一生效。
 
-## 10. 权限和安全
+注意：
 
-MTL-Code 执行 Bash、文件写入、MCP 工具等操作时，可能会请求权限。
+1. `skip permissions` 等价于高风险 bypass，只建议在可信项目和可信命令下使用。
+2. `disallowedTools` 优先级高于 `allowedTools`。
+3. 当前正在运行的请求可能不会立刻读取刚保存的权限，下一轮更稳定。
+4. 如果仍然弹权限，查看诊断面板里的 permissionMode、skipPermissions、allowedTools、disallowedTools 和冲突提示。
+5. MCP 或子进程工具可能需要单独规则匹配。
 
-注意事项：
+## 11. RAG 与上下文压缩
 
-1. 允许规则和具体工具输入有关，不是所有“看起来类似”的命令都会自动通过。
-2. disallowedTools 优先级高于 allowedTools。
-3. 当前运行中的请求可能不会立刻吃到刚刚修改的权限设置，下一轮会话更稳定。
-4. `Allow once` 只对本次请求生效。
-5. `Allow saved` 会保存规则，后续匹配时减少弹窗。
-6. bypass/skip permissions 是高风险模式，只建议在可信项目和可信命令下使用。
+MTL-Code 当前有三类上下文能力：
 
-如果你认为权限已经全开但仍然弹窗，优先检查：
+1. 项目上下文：runtime 通过文件、Git、Shell、工具读取当前项目。
+2. Agent RAG：UI 上传文档并建立轻量索引，运行时注入匹配片段。
+3. 对话压缩：runtime 自动或手动 `/compact` 压缩长历史。
 
-- 当前会话实际的 permissionMode。
-- allowedTools / disallowedTools 是否冲突。
-- 请求工具是否来自 MCP 或子进程。
-- 保存规则是否匹配当前命令输入。
-- 诊断面板里的权限快照。
+注意：
 
-## 11. 上下文、RAG 和压缩
-
-MTL-Code 有三类容易混淆的上下文：
-
-1. 项目上下文
-   由 runtime 通过文件、Git、Shell、工具读取当前项目。
-
-2. Agent RAG
-   由 UI 上传文档并建立轻量索引，运行时把匹配片段追加到 Agent prompt。
-
-3. 对话压缩
-   由 MTL-Code / Claude Code runtime 自动或手动 `/compact` 处理长历史。
-
-注意事项：
-
-1. Claude Code / MTL-Code 没有 GUI 里可单独配置的传统 RAG 知识库；当前 Agent RAG 是 MTL-Code UI 额外提供的知识源层。
-2. 普通代码阅读不需要配置 RAG。
-3. RAG 适合规范、资料、产品文档、长期知识。
+1. Claude Code / MTL-Code 本身没有一个 GUI 中可配置的传统 RAG 知识库。
+2. Agent RAG 是 MTL-Code UI 提供的知识源层。
+3. 普通代码阅读不需要配置 RAG。
 4. 压缩摘要可能丢失细节，复杂任务压缩后建议先让 Agent 复述当前状态。
 
-## 12. 常用命令
+## 12. OpenMythos Runtime
 
-在输入框中输入 `/` 可以查看内置命令。
+OpenMythos Runtime 用于把任务难度、冻结目标、专家路由、阶段策略和上下文账本显式化。
 
-常用命令：
+能力状态：
+
+- 动态思考深度：按任务信号计算 effort 和 loopBudget；`loopControl=enforced` 时映射到 `maxTurns`。
+- 原始任务稳定注入：冻结目标、约束、验收标准会在工具续写和子代理上下文中重注入。
+- 专家路由：确定性提示安全、验证、性能、架构、前端、Git 或本地执行路线。
+- 按阶段适配器：`orient -> plan -> implement -> verify -> finalize`，前两阶段阻止写操作。
+- 压缩型上下文缓存：显示 compact、microcompact、RAG、tool summary 账本；不是 MLA/KV cache。
+- 深度 benchmark：提供离线 benchmark 脚本对比预算、路由、阶段和预估成本。
+
+注意：
+
+1. 这不是隐藏自动派发写文件专家。
+2. 这不是完整 ACT halting 引擎，v1 使用 `maxTurns` 做硬预算。
+3. 诊断面板会显示 runtime card、phase、expert routes 和 context ledger。
+
+## 13. 常用命令
+
+在输入框输入 `/` 可以查看内置命令。
 
 - `/help`：查看帮助。
 - `/clear`：清空当前会话上下文。
@@ -307,33 +241,27 @@ MTL-Code 有三类容易混淆的上下文：
 - `/memory`：查看记忆相关能力。
 - `/compact`：手动压缩长对话。
 
-注意事项：
-
-1. 命令由 MTL-Code runtime 处理，不是所有命令都由 GUI 实现。
-2. 某些命令会写入会话历史或触发 runtime 行为。
-3. 如果命令效果不符合预期，查看聊天中的工具输出和诊断状态。
-
-## 13. 推荐工作流
+## 14. 推荐工作流
 
 普通代码修改：
 
 1. 进入项目。
 2. 新建项目会话。
-3. 必要时选择 Skill。
+3. 必要时绑定 Skill。
 4. 描述任务。
-5. 看 diff、运行测试、继续修正。
+5. 查看 diff、运行测试、继续修正。
 
 复杂专题任务：
 
 1. 安装或选择对应 Skill。
-2. 如果需要专门角色，新建独立对话并选择 Agent。
-3. 如果要动代码，回到项目会话或通过 Worktree 派发。
+2. 需要专门角色时，新建独立对话并选择 Agent。
+3. 需要动代码时，回到项目会话或通过 Worktree 派发。
 
 隔离开发：
 
 1. 在 Git 项目中派发 Worktree。
-2. 选择 Agent / Skill。
-3. 在 worktree 里完成修改。
+2. 选择 Agent / Skill / 模型。
+3. 在 worktree 中完成修改。
 4. 需要保留时创建分支。
 5. 回主项目手动合并或处理。
 
@@ -341,35 +269,5 @@ MTL-Code 有三类容易混淆的上下文：
 
 1. 启动 Agent/Skill Hub。
 2. 团队成员添加 catalog URL。
-3. Pull Agent 模板或 Skill。
+3. Pull Agent 模板、Skill 或 MCP。
 4. 在对话或项目中绑定使用。
-
-## 14. 常见问题
-
-### 为什么项目里看不到 Agent 选择？
-
-项目普通会话默认保持 MTL-Code，不显示 Agent 选择。这是为了避免项目空间和 Agent 对话空间混用。项目里可以绑定 Skill；需要 Agent 时使用独立对话或 Worktree 派发。
-
-### 为什么选择 Agent 后没有生效？
-
-检查是否完成了槽位配置，是否点击启用/保存，以及诊断面板里是否出现 `agentId`、`appBindings`、`effectiveSkills`。
-
-### 为什么 Skill 显示不可用？
-
-本地没有找到对应 `SKILL.md`，或者目录名和会话保存的 Skill 名不一致。重新安装或刷新 Skill 列表。
-
-### 为什么 MCP 绑定了但工具不能用？
-
-绑定只说明 Agent 想使用该 MCP；真正工具由 runtime 启动后发现。检查 MCP Server 是否能启动、URL 是否可访问、环境变量是否完整。
-
-### 为什么 DeepSeek 上下文没有 1M？
-
-需要在 MTLCode 模型设置里显式写 `1000000`。不要只在 Agent GUI 里改一个显示值。
-
-### 为什么会话切换时看起来不对？
-
-确认当前在 `项目` 还是 `对话` 模式。两者是独立空间，项目会话和独立对话不应互相复用。
-
-### 为什么权限全开了还弹窗？
-
-权限规则可能没有匹配当前工具输入，或者 disallowedTools 冲突，或者当前运行进程尚未读取最新设置。看诊断面板里的权限快照。

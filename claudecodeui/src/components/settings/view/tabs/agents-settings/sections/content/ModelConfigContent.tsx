@@ -44,12 +44,18 @@ type ModelPreset = {
 };
 
 type OpenMythosEffort = 'low' | 'medium' | 'high' | 'xhigh';
+type OpenMythosLoopControl = 'advisory' | 'enforced';
 
 type OpenMythosRuntimeConfig = {
   enabled: boolean;
   adaptiveEffort: boolean;
   taskCard: boolean;
   routingHints: boolean;
+  loopControl: OpenMythosLoopControl;
+  stableReinjection: boolean;
+  phaseAdapter: boolean;
+  expertRouting: boolean;
+  contextCacheDiagnostics: boolean;
   minEffort: OpenMythosEffort;
   maxEffort: OpenMythosEffort;
 };
@@ -74,11 +80,17 @@ type MtlCodeModelConfig = {
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic';
 const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
+const OPENMYTHOS_LOOP_CONTROLS = ['advisory', 'enforced'] as const;
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   enabled: true,
   adaptiveEffort: true,
   taskCard: true,
   routingHints: true,
+  loopControl: 'enforced',
+  stableReinjection: true,
+  phaseAdapter: true,
+  expertRouting: true,
+  contextCacheDiagnostics: true,
   minEffort: 'low',
   maxEffort: 'xhigh',
 };
@@ -114,6 +126,13 @@ const normalizeEffort = (value: unknown, fallback: OpenMythosEffort): OpenMythos
     : fallback;
 };
 
+const normalizeLoopControl = (value: unknown, fallback: OpenMythosLoopControl): OpenMythosLoopControl => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return OPENMYTHOS_LOOP_CONTROLS.includes(normalized as OpenMythosLoopControl)
+    ? (normalized as OpenMythosLoopControl)
+    : fallback;
+};
+
 const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => {
   const data = isObjectRecord(value) ? value : {};
   const minEffort = normalizeEffort(data.minEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort);
@@ -126,6 +145,11 @@ const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => 
     adaptiveEffort: normalizeBoolean(data.adaptiveEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.adaptiveEffort),
     taskCard: normalizeBoolean(data.taskCard, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.taskCard),
     routingHints: normalizeBoolean(data.routingHints, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.routingHints),
+    loopControl: normalizeLoopControl(data.loopControl, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.loopControl),
+    stableReinjection: normalizeBoolean(data.stableReinjection, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.stableReinjection),
+    phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
+    expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
+    contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
     minEffort: minIndex <= maxIndex ? minEffort : maxEffort,
     maxEffort: minIndex <= maxIndex ? maxEffort : minEffort,
   };

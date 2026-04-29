@@ -57,7 +57,11 @@ function BindingBadges({ bindings }: { bindings?: AgentAppBinding[] }) {
   );
 }
 
-function StringBadges({ values, emptyText = EMPTY_TEXT, tone = 'neutral' }: {
+function StringBadges({
+  values,
+  emptyText = EMPTY_TEXT,
+  tone = 'neutral',
+}: {
   values?: string[];
   emptyText?: string;
   tone?: 'neutral' | 'success' | 'warning' | 'danger';
@@ -80,6 +84,17 @@ function StringBadges({ values, emptyText = EMPTY_TEXT, tone = 'neutral' }: {
           {value}
         </span>
       ))}
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-sm text-foreground" title={value}>
+        {value}
+      </div>
     </div>
   );
 }
@@ -149,14 +164,82 @@ function PermissionSources({ sources }: { sources?: PermissionSourceMap }) {
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function OpenMythosRuntimeSection({
+  runtime,
+}: {
+  runtime: AgentRuntimeDiagnostics['openMythosRuntime'];
+}) {
+  const card = runtime?.runtimeCard;
+  const contextCache = runtime?.contextCache;
+  const expertRoutes = card?.expertRoutes?.map((route) => (
+    `${route.label || route.kind || 'expert'}${route.required ? ' (required)' : ''}${route.reason ? `: ${route.reason}` : ''}`
+  ));
+
   return (
-    <div className="min-w-0">
-      <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-sm text-foreground" title={value}>
-        {value}
+    <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+        <BrainCircuitIcon className="h-4 w-4 text-primary" />
+        OpenMythos Runtime
       </div>
-    </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="enabled" value={formatBoolean(runtime?.enabled)} />
+        <Field label="adaptiveEffort" value={formatBoolean(runtime?.adaptiveEffort)} />
+        <Field label="taskCard" value={formatBoolean(runtime?.taskCard)} />
+        <Field label="routingHints" value={formatBoolean(runtime?.routingHints)} />
+        <Field label="loopControl" value={formatText(runtime?.loopControl)} />
+        <Field label="stableReinjection" value={formatBoolean(runtime?.stableReinjection)} />
+        <Field label="phaseAdapter" value={formatBoolean(runtime?.phaseAdapter)} />
+        <Field label="expertRouting" value={formatBoolean(runtime?.expertRouting)} />
+        <Field label="contextCacheDiagnostics" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
+        <Field label="minEffort" value={formatText(runtime?.minEffort)} />
+        <Field label="maxEffort" value={formatText(runtime?.maxEffort)} />
+        <Field label="source" value={runtime ? 'settings/env' : EMPTY_TEXT} />
+      </div>
+
+      {card && (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-border bg-card/70 p-3">
+            <div className="text-[11px] font-medium uppercase text-muted-foreground">Runtime card</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <Field label="effort" value={formatText(card.effort)} />
+              <Field label="loopBudget" value={formatNumber(card.loopBudget)} />
+              <Field label="remainingBudget" value={formatNumber(card.remainingBudget)} />
+              <Field label="riskScore" value={formatNumber(card.riskScore)} />
+              <Field label="phase" value={formatText(card.phase)} />
+              <Field label="phasePlan" value={card.phasePlan?.join(' -> ') || EMPTY_TEXT} />
+            </div>
+            <div className="mt-3 text-xs leading-5 text-muted-foreground">
+              {card.goal || EMPTY_TEXT}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-card/70 p-3">
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Experts / Context ledger</div>
+            <StringBadges values={expertRoutes} />
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <Field label="compactBoundary" value={formatNumber(contextCache?.compactBoundaryCount)} />
+              <Field label="microcompact" value={formatNumber(contextCache?.microcompactBoundaryCount)} />
+              <Field label="RAG excerpts" value={formatNumber(contextCache?.ragExcerptCount)} />
+              <Field label="RAG prompt" value={formatNumber(contextCache?.ragPromptLength)} />
+              <Field label="skill prompt" value={formatNumber(contextCache?.skillPromptLength)} />
+              <Field label="append prompt" value={formatNumber(contextCache?.appendSystemPromptLength)} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+          <GaugeIcon className="h-3 w-3 text-primary" />
+          adaptive effort {runtime?.adaptiveEffort ? 'on' : 'off'}
+        </span>
+        <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+          loop {runtime?.loopControl || 'unknown'}
+        </span>
+        <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+          stable reinjection {runtime?.stableReinjection ? 'on' : 'off'}
+        </span>
+      </div>
+    </section>
   );
 }
 
@@ -165,7 +248,6 @@ export default function AgentRuntimeDiagnosticsPanel({
   onClose,
 }: AgentRuntimeDiagnosticsPanelProps) {
   const permissions = diagnostics?.permissions;
-  const openMythosRuntime = diagnostics?.openMythosRuntime;
   const hasDiagnostics = Boolean(diagnostics);
 
   return (
@@ -178,7 +260,7 @@ export default function AgentRuntimeDiagnosticsPanel({
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">Agent 运行诊断</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              只显示最近一次发送给后端的 Agent / Skill / MCP 运行配置。
+              只显示最近一次发送给后端的 Agent / Skill / MCP / OpenMythos 运行配置。
             </p>
           </div>
         </div>
@@ -210,34 +292,7 @@ export default function AgentRuntimeDiagnosticsPanel({
             <Field label="追加 Prompt 长度" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
           </div>
 
-          <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-              <BrainCircuitIcon className="h-4 w-4 text-primary" />
-              OpenMythos Runtime
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="enabled" value={formatBoolean(openMythosRuntime?.enabled)} />
-              <Field label="adaptiveEffort" value={formatBoolean(openMythosRuntime?.adaptiveEffort)} />
-              <Field label="taskCard" value={formatBoolean(openMythosRuntime?.taskCard)} />
-              <Field label="routingHints" value={formatBoolean(openMythosRuntime?.routingHints)} />
-              <Field label="minEffort" value={formatText(openMythosRuntime?.minEffort)} />
-              <Field label="maxEffort" value={formatText(openMythosRuntime?.maxEffort)} />
-              <Field label="effortRange" value={`${formatText(openMythosRuntime?.minEffort)} -> ${formatText(openMythosRuntime?.maxEffort)}`} />
-              <Field label="source" value={openMythosRuntime ? 'settings/env' : EMPTY_TEXT} />
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-                <GaugeIcon className="h-3 w-3 text-primary" />
-                adaptive effort {openMythosRuntime?.adaptiveEffort ? 'on' : 'off'}
-              </span>
-              <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-                task card {openMythosRuntime?.taskCard ? 'on' : 'off'}
-              </span>
-              <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-                routing hints {openMythosRuntime?.routingHints ? 'on' : 'off'}
-              </span>
-            </div>
-          </section>
+          <OpenMythosRuntimeSection runtime={diagnostics?.openMythosRuntime} />
 
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <section className="rounded-lg border border-border bg-background/60 p-3">
@@ -292,10 +347,7 @@ export default function AgentRuntimeDiagnosticsPanel({
                   <div className="mb-1 text-[11px] font-medium text-muted-foreground">skillDetails</div>
                   <SkillDetails details={diagnostics?.skillDetails} />
                 </div>
-                <div>
-                  <div className="mb-1 text-[11px] font-medium text-muted-foreground">skillPromptLength</div>
-                  <div className="text-sm text-foreground">{formatNumber(diagnostics?.skillPromptLength)}</div>
-                </div>
+                <Field label="skillPromptLength" value={formatNumber(diagnostics?.skillPromptLength)} />
               </div>
             </section>
           </div>

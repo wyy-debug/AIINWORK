@@ -7,7 +7,12 @@ Date: 2026-04-29
 - MTL-Code UI exposes an OpenMythos-inspired Runtime settings page under the Agents settings area.
 - Runtime settings are stored in `~/.mtl-code/settings.json` and mirrored into the Claude Code launch environment.
 - Claude Code reads the runtime environment to build a hidden task card, choose adaptive effort, and add optional routing hints.
-- Agent runtime diagnostics now report the resolved OpenMythos runtime configuration for each session.
+- Agent runtime diagnostics now report the resolved OpenMythos runtime configuration, preview card, phase plan, expert routes, and context ledger for each session.
+- `loopBudget` can now be mapped to `maxTurns` when `loopControl` is `enforced`.
+- Stable reinjection carries the frozen task card into follow-up turns and subagent contexts.
+- Phase adapter adds `orient -> plan -> implement -> verify -> finalize` guidance; early `orient` and `plan` phases block mutating tools.
+- Expert routing is deterministic but conservative: it suggests security, verification, performance, architecture, frontend, git, or local routes; v1 does not silently dispatch write-capable experts.
+- Context cache diagnostics are a ledger over compact boundaries, microcompact boundaries, RAG excerpts, and tool summaries. This is not MLA or KV-cache.
 
 ## Settings Shape
 
@@ -20,6 +25,11 @@ The saved settings block uses this shape:
     "adaptiveEffort": true,
     "taskCard": true,
     "routingHints": true,
+    "loopControl": "enforced",
+    "stableReinjection": true,
+    "phaseAdapter": true,
+    "expertRouting": true,
+    "contextCacheDiagnostics": true,
     "minEffort": "low",
     "maxEffort": "xhigh"
   }
@@ -34,6 +44,11 @@ The backend mirrors those values into `settings.env` when the MTL-Code model set
   "MTL_CODE_OPENMYTHOS_ADAPTIVE_EFFORT": "1",
   "MTL_CODE_OPENMYTHOS_TASK_CARD": "1",
   "MTL_CODE_OPENMYTHOS_ROUTING_HINTS": "1",
+  "MTL_CODE_OPENMYTHOS_LOOP_CONTROL": "enforced",
+  "MTL_CODE_OPENMYTHOS_STABLE_REINJECTION": "1",
+  "MTL_CODE_OPENMYTHOS_PHASE_ADAPTER": "1",
+  "MTL_CODE_OPENMYTHOS_EXPERT_ROUTING": "1",
+  "MTL_CODE_OPENMYTHOS_CONTEXT_CACHE_DIAGNOSTICS": "1",
   "MTL_CODE_OPENMYTHOS_MIN_EFFORT": "low",
   "MTL_CODE_OPENMYTHOS_MAX_EFFORT": "xhigh"
 }
@@ -47,6 +62,11 @@ Supported effort values are `low`, `medium`, `high`, and `xhigh`.
 - `adaptiveEffort` lets Claude Code infer effort from task risk and complexity when the user has not already set effort explicitly.
 - `taskCard` controls whether a hidden frozen task card is attached to the request.
 - `routingHints` controls whether the hidden card includes skill/subagent route suggestions.
+- `loopControl` is `enforced` or `advisory`. `enforced` maps `loopBudget` to the existing Claude Code `maxTurns` guard.
+- `stableReinjection` re-adds the frozen goal, constraints, acceptance criteria, phase, expert routes, and context ledger as a critical system reminder after tool results and into subagents.
+- `phaseAdapter` computes the current phase from turn count. `orient` and `plan` are read-only phases; `implement`, `verify`, and `finalize` may use mutating tools when appropriate.
+- `expertRouting` records deterministic suggested experts. It is a route hint and usage-detection surface, not an automatic hidden writer.
+- `contextCacheDiagnostics` exposes compact/RAG/tool-summary ledger details in diagnostics.
 - `minEffort` and `maxEffort` clamp the adaptive effort result.
 - User-selected `/effort`, session effort, and existing explicit effort environment values still take precedence over adaptive effort.
 
@@ -59,6 +79,17 @@ Supported effort values are `low`, `medium`, `high`, and `xhigh`.
 - task card status
 - routing hints status
 - minimum and maximum effort bounds
+- loop control mode
+- stable reinjection, phase adapter, expert routing, and context cache diagnostic toggles
+- runtime card: frozen goal, effort, risk score, loop budget, remaining budget, current phase, phase plan
+- expert routes and context ledger counts
+
+## Implementation Limits
+
+- This is not ACT halting. v1 uses the existing `maxTurns` limit as the hard budget when `loopControl=enforced`.
+- This is not MLA/KV cache. v1 exposes recoverable summaries and ledger counts around compact, microcompact, RAG, and tool summaries.
+- Expert routes do not automatically spawn write-capable subagents. The model is strongly guided to use the right skill/subagent, and diagnostics make the route visible.
+- Phase enforcement is intentionally coarse: early phases block tools whose existing `isReadOnly()` method returns false.
 
 ## Verification
 
@@ -67,6 +98,7 @@ Claude Code checks:
 ```powershell
 cd E:\AIINWORK\claude-code
 bun test src/utils/__tests__/openmythosRuntime.test.ts
+bun run benchmark:openmythos
 bun run typecheck
 ```
 

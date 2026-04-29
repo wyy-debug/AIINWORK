@@ -57,7 +57,7 @@ import userRoutes from './routes/user.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
-import { readResolvedOpenMythosRuntimeConfig } from './services/mtl-code-model-service.js';
+import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig } from './services/mtl-code-model-service.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { c } from './utils/colors.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
@@ -2030,13 +2030,31 @@ function createRuntimeDiagnosticsPayload(data) {
     if (!diagnostics || typeof diagnostics !== 'object') {
         return null;
     }
+    const permissions = createRuntimePermissionSnapshot(data);
+    const openMythosRuntime = diagnostics.openMythosRuntime
+        ? {
+            ...diagnostics.openMythosRuntime,
+            runtimeCard: buildOpenMythosRuntimePreview(
+                data?.command,
+                diagnostics.openMythosRuntime,
+                permissions.permissionMode,
+            ),
+            contextCache: {
+                ragExcerptCount: diagnostics.ragExcerptCount || 0,
+                ragPromptLength: diagnostics.ragPromptLength || 0,
+                skillPromptLength: diagnostics.skillPromptLength || 0,
+                appendSystemPromptLength: diagnostics.appendSystemPromptLength || 0,
+            },
+        }
+        : null;
 
     return {
         ...diagnostics,
+        openMythosRuntime,
         provider: getProviderFromCommandType(data?.type),
         sessionId: data?.options?.sessionId || data?.sessionId || null,
         projectPath: data?.options?.projectPath || data?.options?.cwd || '',
-        permissions: createRuntimePermissionSnapshot(data),
+        permissions,
     };
 }
 
