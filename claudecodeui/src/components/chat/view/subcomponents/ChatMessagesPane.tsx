@@ -195,7 +195,10 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   const shouldRenderDetails = open;
 
   return (
-    <div className="chat-message assistant px-3 [contain-intrinsic-size:1px_180px] [content-visibility:auto] sm:px-0">
+    <div
+      className="chat-message assistant px-3 [contain-intrinsic-size:1px_180px] [content-visibility:auto] sm:px-0"
+      data-message-key={groupKey}
+    >
       <Collapsible open={open} onOpenChange={setOpen} className="not-prose">
         <div className="flex items-center gap-3 py-1">
           <CollapsibleTrigger className="group/process inline-flex min-w-0 items-center gap-2 rounded-full px-1 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
@@ -226,6 +229,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
                 <MessageComponent
                   key={`${groupKey}-${getMessageKey(message)}`}
                   message={message}
+                  messageKey={`${groupKey}-${getMessageKey(message)}`}
                   prevMessage={index > 0 ? messages[index - 1] : null}
                   createDiff={createDiff}
                   onFileOpen={onFileOpen}
@@ -405,7 +409,7 @@ export default function ChatMessagesPane({
       ref={scrollContainerRef}
       onWheel={onWheel}
       onTouchMove={onTouchMove}
-      className="relative flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-0 py-3 sm:space-y-4 sm:p-4"
+      className="relative flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-0 py-3 [overflow-anchor:none] sm:space-y-4 sm:p-4"
     >
       {isLoadingSessionMessages && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
@@ -543,10 +547,12 @@ export default function ChatMessagesPane({
               );
             }
 
+            const messageKey = getMessageKey(item.message);
             return (
               <MessageComponent
-                key={getMessageKey(item.message)}
+                key={messageKey}
                 message={item.message}
+                messageKey={messageKey}
                 prevMessage={item.prevMessage}
                 createDiff={createDiff}
                 onFileOpen={onFileOpen}

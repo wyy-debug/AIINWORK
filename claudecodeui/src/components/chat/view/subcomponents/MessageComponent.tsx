@@ -36,6 +36,7 @@ type MessageComponentProps = {
   showThinking?: boolean;
   selectedProject?: Project | null;
   provider: Provider | string;
+  messageKey?: string;
 };
 
 type InteractiveOption = {
@@ -58,7 +59,7 @@ function formatFileSize(size?: number) {
   return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider, messageKey }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -129,6 +130,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     return (
       <div
         ref={messageRef}
+        data-message-key={messageKey}
         data-message-timestamp={message.timestamp || undefined}
         className={`chat-message system px-3 ${messageVisibilityClass} sm:px-0`}
       >
@@ -140,6 +142,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   return (
     <div
       ref={messageRef}
+      data-message-key={messageKey}
       data-message-timestamp={message.timestamp || undefined}
       className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${messageVisibilityClass} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
