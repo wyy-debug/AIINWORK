@@ -196,7 +196,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
 
   return (
     <div
-      className="chat-message assistant px-3 [contain-intrinsic-size:1px_180px] [content-visibility:auto] sm:px-0"
+      className="chat-message assistant px-3 sm:px-0"
       data-message-key={groupKey}
     >
       <Collapsible open={open} onOpenChange={setOpen} className="not-prose">
@@ -449,25 +449,28 @@ export default function ChatMessagesPane({
         />
       ) : (
         <>
-          {/* Loading indicator for older messages (hide when load-all is active) */}
-          {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
-            <div className="py-3 text-center text-gray-500 dark:text-gray-400">
-              <div className="flex items-center justify-center space-x-2">
-                <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
-                <p className="text-sm">{t('session.loading.olderMessages')}</p>
+          {/* Top pagination status is an overlay, not part of message layout. */}
+          {(isLoadingMoreMessages || hasMoreMessages) && !isLoadingAllMessages && !allMessagesLoaded && (
+            <div
+              className={`pointer-events-none z-30 flex h-0 justify-center overflow-visible ${
+                isLoadingMoreMessages ? 'sticky top-2' : 'absolute left-0 right-0 top-3'
+              }`}
+            >
+              <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur">
+                {isLoadingMoreMessages ? (
+                  <>
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
+                    <span>{t('session.loading.olderMessages')}</span>
+                  </>
+                ) : totalMessages > 0 ? (
+                  <span>
+                    {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
+                    <span>{t('session.messages.scrollToLoad')}</span>
+                  </span>
+                ) : (
+                  <span>{t('session.messages.scrollToLoad')}</span>
+                )}
               </div>
-            </div>
-          )}
-
-          {/* Indicator showing there are more messages to load (hide when all loaded) */}
-          {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && (
-            <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-              {totalMessages > 0 && (
-                <span>
-                  {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
-                  <span className="text-xs">{t('session.messages.scrollToLoad')}</span>
-                </span>
-              )}
             </div>
           )}
 

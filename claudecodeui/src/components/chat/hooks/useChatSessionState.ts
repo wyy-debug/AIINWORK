@@ -156,7 +156,7 @@ export function useChatSessionState({
       top: container.scrollTop,
       anchorKey: anchor?.dataset.messageKey || null,
       anchorOffset: anchor ? anchor.getBoundingClientRect().top - containerRect.top : undefined,
-      attemptsLeft: 4,
+      attemptsLeft: 8,
     };
   }, []);
 
