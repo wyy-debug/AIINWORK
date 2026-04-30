@@ -115,7 +115,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
               </svg>
               <span>View tool history ({childTools.length})</span>
             </CollapsibleTrigger>
-            <CollapsibleContent>
+            <CollapsibleContent lazy>
               <div className="mt-1 space-y-0.5 border-l border-border pl-3">
                 {childTools.map((child, index) => (
                   <div key={child.toolId} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">

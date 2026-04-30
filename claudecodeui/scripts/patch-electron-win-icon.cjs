@@ -137,5 +137,17 @@ module.exports = async function patchElectronWinIcon(context) {
 
   const rcedit = await ensureRcedit(projectDir);
   console.log(`[afterPack] Patching Windows exe icon: ${exePath}`);
-  run(rcedit, [exePath, '--set-icon', iconPath]);
+  try {
+    run(rcedit, [exePath, '--set-icon', iconPath]);
+  } catch (error) {
+    const tempExePath = `${exePath}.rcedit-${process.pid}.tmp.exe`;
+    console.warn(`[afterPack] Direct icon patch failed, retrying through a temporary copy. ${error.message}`);
+    try {
+      fs.copyFileSync(exePath, tempExePath);
+      run(rcedit, [tempExePath, '--set-icon', iconPath]);
+      fs.copyFileSync(tempExePath, exePath);
+    } finally {
+      fs.rmSync(tempExePath, { force: true });
+    }
+  }
 };

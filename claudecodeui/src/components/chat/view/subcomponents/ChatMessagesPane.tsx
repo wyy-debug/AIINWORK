@@ -192,7 +192,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
     ].filter(Boolean);
   }, [messages]);
 
-  const shouldRenderDetails = open || active;
+  const shouldRenderDetails = open;
 
   return (
     <div className="chat-message assistant px-3 [contain-intrinsic-size:1px_180px] [content-visibility:auto] sm:px-0">
@@ -219,7 +219,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
           <div className="h-px min-w-0 flex-1 bg-border/70" />
         </div>
 
-        <CollapsibleContent>
+        <CollapsibleContent lazy>
           {shouldRenderDetails && (
             <div className="mt-1 space-y-3 border-l border-border/70 pl-3">
               {messages.map((message, index) => (
@@ -364,12 +364,11 @@ export default function ChatMessagesPane({
 
       if (traceMessages.length > 0) {
         const firstKey = getMessageKey(traceMessages[0]);
-        const lastKey = getMessageKey(traceMessages[traceMessages.length - 1]);
         items.push({
           type: 'process',
           messages: traceMessages,
           active,
-          key: `process-${segmentStartIndex}-${firstKey}-${lastKey}`,
+          key: `process-${firstKey}`,
         });
       }
 

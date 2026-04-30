@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 
@@ -78,7 +79,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         </CollapsibleTrigger>
       )}
 
-      <CollapsibleContent>
+      <CollapsibleContent lazy>
         <div className="mt-1.5 pl-[18px]">
           {children}
         </div>

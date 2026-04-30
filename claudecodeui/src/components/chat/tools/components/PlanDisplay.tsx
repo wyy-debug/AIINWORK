@@ -76,7 +76,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
         </CardHeader>
 
         {/* Collapsible content */}
-        <CollapsibleContent>
+        <CollapsibleContent lazy>
           <CardContent className="px-4 pb-4 pt-3">
             {content ? (
               <MarkdownContent
@@ -102,7 +102,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
                   </svg>
                   raw params
                 </CollapsibleTrigger>
-                <CollapsibleContent>
+                <CollapsibleContent lazy>
                   <pre className="mt-1 overflow-hidden whitespace-pre-wrap break-words rounded border border-border/40 bg-muted p-2 font-mono text-[11px] text-muted-foreground">
                     {rawContent}
                   </pre>

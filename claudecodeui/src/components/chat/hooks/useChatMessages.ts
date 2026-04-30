@@ -37,6 +37,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           const taskNotifMatch = taskNotifRegex.exec(content);
           if (taskNotifMatch) {
             converted.push({
+              id: `${msg.id}:task-notification`,
               type: 'assistant',
               content: taskNotifMatch[2]?.trim() || 'Background task finished',
               timestamp: msg.timestamp,
@@ -45,6 +46,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             });
           } else {
             converted.push({
+              id: msg.id,
               type: 'user',
               content: unescapeWithMathProtection(decodeHtmlEntities(content)),
               timestamp: msg.timestamp,
@@ -55,6 +57,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           text = unescapeWithMathProtection(text);
           text = formatUsageLimitText(text);
           converted.push({
+            id: msg.id,
             type: 'assistant',
             content: text,
             timestamp: msg.timestamp,
@@ -90,6 +93,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           : null;
 
         converted.push({
+          id: msg.id,
           type: 'assistant',
           content: '',
           timestamp: msg.timestamp,
@@ -113,6 +117,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       case 'thinking':
         if (msg.content?.trim()) {
           converted.push({
+            id: msg.id,
             type: 'assistant',
             content: unescapeWithMathProtection(msg.content),
             timestamp: msg.timestamp,
@@ -123,6 +128,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       case 'error':
         converted.push({
+          id: msg.id,
           type: 'error',
           content: msg.content || 'Unknown error',
           timestamp: msg.timestamp,
@@ -131,6 +137,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       case 'interactive_prompt':
         converted.push({
+          id: msg.id,
           type: 'assistant',
           content: msg.content || '',
           timestamp: msg.timestamp,
@@ -140,6 +147,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       case 'task_notification':
         converted.push({
+          id: msg.id,
           type: 'assistant',
           content: msg.summary || 'Background task update',
           timestamp: msg.timestamp,
@@ -167,6 +175,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       case 'stream_delta':
         if (msg.content) {
           converted.push({
+            id: msg.id,
             type: 'assistant',
             content: msg.content,
             timestamp: msg.timestamp,

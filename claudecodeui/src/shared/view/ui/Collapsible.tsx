@@ -76,8 +76,12 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, React.ButtonHTMLA
 );
 CollapsibleTrigger.displayName = 'CollapsibleTrigger';
 
-const CollapsibleContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, children, ...props }, ref) => {
+interface CollapsibleContentProps extends React.HTMLAttributes<HTMLDivElement> {
+  lazy?: boolean;
+}
+
+const CollapsibleContent = React.forwardRef<HTMLDivElement, CollapsibleContentProps>(
+  ({ className, children, lazy = false, ...props }, ref) => {
     const { open } = useCollapsible();
 
     return (
@@ -92,7 +96,7 @@ const CollapsibleContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes
         {...props}
       >
         <div className="overflow-hidden">
-          {children}
+          {lazy && !open ? null : children}
         </div>
       </div>
     );
