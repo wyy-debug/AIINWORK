@@ -61,9 +61,18 @@ const emptyDir = async (dir) => {
   await mkdir(dir, { recursive: true });
   const entries = await readdir(dir, { withFileTypes: true });
 
-  await Promise.all(entries.map((entry) => (
-    rm(path.join(dir, entry.name), { recursive: true, force: true })
-  )));
+  await Promise.all(entries.map(async (entry) => {
+    const target = path.join(dir, entry.name);
+    try {
+      await rm(target, { recursive: true, force: true });
+    } catch (error) {
+      if (error?.code === 'EBUSY' || error?.code === 'EPERM') {
+        console.warn(`Skipping locked build artifact: ${target}`);
+        return;
+      }
+      throw error;
+    }
+  }));
 };
 
 const copyDir = async (src, dest) => {
