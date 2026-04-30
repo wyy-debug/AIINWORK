@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, GitBranch, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -35,8 +35,8 @@ type SidebarProjectItemProps = {
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
-  onDispatchWorktree: (project: Project) => void;
   onShowWorktreeTasks: (project: Project) => void;
+  onDispatchSessionWorktree: (project: Project, session: SessionWithProvider) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -90,8 +90,8 @@ export default function SidebarProjectItem({
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
-  onDispatchWorktree,
   onShowWorktreeTasks,
+  onDispatchSessionWorktree,
   onSessionSelect,
   onDeleteSession,
   onLoadMoreSessions,
@@ -260,19 +260,6 @@ export default function SidebarProjectItem({
 
                     {canDispatchWorktree && (
                       <button
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-500/10 active:scale-90 dark:border-blue-900/60 dark:bg-blue-950/30"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDispatchWorktree(project);
-                        }}
-                        title="派发工作树"
-                      >
-                        <GitBranch className="h-4 w-4 text-blue-600 dark:text-blue-300" />
-                      </button>
-                    )}
-
-                    {canDispatchWorktree && (
-                      <button
                         className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-500/10 active:scale-90 dark:border-slate-800 dark:bg-slate-900/30"
                         onClick={(event) => {
                           event.stopPropagation();
@@ -433,18 +420,6 @@ export default function SidebarProjectItem({
                 </div>
                 {canDispatchWorktree && (
                   <div
-                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-blue-50 group-hover:opacity-100 dark:hover:bg-blue-950/30"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDispatchWorktree(project);
-                    }}
-                    title="派发工作树"
-                  >
-                    <GitBranch className="h-3 w-3 text-blue-600 dark:text-blue-300" />
-                  </div>
-                )}
-                {canDispatchWorktree && (
-                  <div
                     className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-slate-100 group-hover:opacity-100 dark:hover:bg-slate-900/30"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -483,6 +458,7 @@ export default function SidebarProjectItem({
         onTogglePinSession={onTogglePinSession}
         onToggleArchiveSession={onToggleArchiveSession}
         onOpenConversationGuide={onOpenConversationGuide}
+        onDispatchSessionWorktree={onDispatchSessionWorktree}
         onProjectSelect={onProjectSelect}
         onSessionSelect={onSessionSelect}
         onDeleteSession={onDeleteSession}

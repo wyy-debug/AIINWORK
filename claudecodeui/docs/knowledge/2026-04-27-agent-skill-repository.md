@@ -198,7 +198,7 @@ Date: 2026-04-28
 | 项目会话默认 MTL-Code | 已实现 | 项目聊天不加载 Agent 选择；可在 composer 直接添加 Skill，并以空 Agent 绑定持久化到当前会话。 |
 | 独立对话绑定 Agent | 已实现 | 新建独立对话时选择是否启用 Agent，绑定保存到 `/api/sessions/:sessionId/agent`。 |
 | 对话绑定 Skill | 已实现 | Composer 读取真实已安装 Skill，项目会话和独立对话都支持选择、持久化、chip 解绑和缺失提示。 |
-| Worktree 派发 | 已实现 | Git 项目可创建 managed detached worktree，作为独立项目进入会话并保留 Agent/Skill 绑定关系。 |
+| Worktree 派发 | 已实现 | Git 项目会话可派生 managed detached worktree，作为独立项目进入并继承源会话的 Agent/Skill/MCP/模型绑定关系。 |
 | Agent 运行诊断 | 已实现 | Composer 诊断面板显示最近一次后端收到的 Agent / Skill / MCP / 权限快照。 |
 | MCP 绑定 | 部分实现 | 只绑定真实 `MCP: <serverName>` 配置；工具枚举由 MTL-Code runtime 启动会话后发现。 |
 | Agent RAG | 部分实现 | 上传文件会进入本地轻量索引，运行时按当前问题注入 top excerpts；还不是正式向量库。 |
@@ -238,12 +238,12 @@ Date: 2026-04-28
 4. 如果会话记录里保留了缺失 Skill，它显示“不可用”，但不阻止发送；后端会提示模型不要依赖它。
 5. 项目会话只保存 Skill，不启用 Agent 选择；独立对话可同时保存 Agent、MCP 和 Skill。
 
-派发 Worktree：
+派生 Worktree：
 
-1. 在 Git 项目侧边栏点击“派发工作树”。
-2. 填写任务说明，必要时选择 base ref、Agent 和 Skill。
+1. 在 Git 项目中展开目标会话，并从会话右侧点击“派生到新工作树”。
+2. 确认任务说明和 base ref。
 3. 创建后生成 `~/.mtl-code/worktrees` 下的 detached worktree，并注册为独立项目。
-4. 进入 worktree 会话后，任务说明会预填到输入框；首次发送后会话 ID 和绑定配置写回 worktree 元数据。
+4. 进入 worktree 后会继续使用源会话上下文，以及源会话已经保存的 Agent/Skill/MCP/模型绑定。
 5. Worktree 头部可以手动创建分支；删除 managed worktree 前会检查 dirty 状态，有改动时阻止删除。
 
 上传或安装 Skill：

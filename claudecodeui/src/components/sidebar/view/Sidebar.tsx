@@ -59,7 +59,10 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
-  const [worktreeDispatchProject, setWorktreeDispatchProject] = useState<Project | null>(null);
+  const [worktreeDispatchSource, setWorktreeDispatchSource] = useState<{
+    project: Project;
+    session: SessionWithProvider;
+  } | null>(null);
   const [worktreeTasksProject, setWorktreeTasksProject] = useState<Project | null>(null);
   const [conversationGuideSource, setConversationGuideSource] = useState<{
     project: Project;
@@ -170,11 +173,27 @@ function Sidebar({
     window.location.reload();
   };
 
-  const handleWorktreeCreated = (createdProject: Project, shouldCreateSession: boolean) => {
-    setWorktreeDispatchProject(null);
+  const handleWorktreeCreated = (
+    createdProject: Project,
+    options: {
+      worktree?: NonNullable<Project['worktree']> | null;
+      sourceSession?: SessionWithProvider | null;
+      createNewSession: boolean;
+    },
+  ) => {
+    setWorktreeDispatchSource(null);
     void Promise.resolve(onRefresh()).finally(() => {
       onProjectSelect(createdProject);
-      if (shouldCreateSession) {
+      if (options.sourceSession && options.worktree?.sessionId) {
+        onSessionSelect({
+          ...options.sourceSession,
+          id: options.worktree.sessionId,
+          __provider: options.worktree.provider || options.sourceSession.__provider || 'claude',
+          __projectName: createdProject.name,
+        });
+        return;
+      }
+      if (options.createNewSession) {
         onNewSession(createdProject);
       }
     });
@@ -231,8 +250,8 @@ function Sidebar({
       void saveProjectName(projectName);
     },
     onDeleteProject: requestProjectDelete,
-    onDispatchWorktree: setWorktreeDispatchProject,
     onShowWorktreeTasks: setWorktreeTasksProject,
+    onDispatchSessionWorktree: (project, session) => setWorktreeDispatchSource({ project, session }),
     onSessionSelect: handleSessionClick,
     onDeleteSession: showDeleteSessionConfirmation,
     onLoadMoreSessions: (project) => {
@@ -378,10 +397,11 @@ function Sidebar({
         </>
       )}
 
-      {worktreeDispatchProject && (
+      {worktreeDispatchSource && (
         <WorktreeDispatchModal
-          project={worktreeDispatchProject}
-          onClose={() => setWorktreeDispatchProject(null)}
+          project={worktreeDispatchSource.project}
+          sourceSession={worktreeDispatchSource.session}
+          onClose={() => setWorktreeDispatchSource(null)}
           onCreated={handleWorktreeCreated}
         />
       )}

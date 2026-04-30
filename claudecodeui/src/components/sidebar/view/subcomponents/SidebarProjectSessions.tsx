@@ -24,6 +24,7 @@ type SidebarProjectSessionsProps = {
   onTogglePinSession: (session: SessionWithProvider) => void;
   onToggleArchiveSession: (session: SessionWithProvider) => void;
   onOpenConversationGuide: (project: Project, session: SessionWithProvider) => void;
+  onDispatchSessionWorktree: (project: Project, session: SessionWithProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
@@ -72,6 +73,7 @@ export default function SidebarProjectSessions({
   onTogglePinSession,
   onToggleArchiveSession,
   onOpenConversationGuide,
+  onDispatchSessionWorktree,
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
@@ -134,6 +136,7 @@ export default function SidebarProjectSessions({
             onTogglePinSession={onTogglePinSession}
             onToggleArchiveSession={onToggleArchiveSession}
             onOpenConversationGuide={onOpenConversationGuide}
+            onDispatchSessionWorktree={onDispatchSessionWorktree}
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
             onDeleteSession={onDeleteSession}

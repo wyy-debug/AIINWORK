@@ -30,7 +30,7 @@
 | Plugins | `src/contexts/PluginsContext.tsx`，`src/components/plugins` | 插件列表、install/update/toggle、插件 tab 内容。 |
 | Task planning | `src/components/task-master`，`src/components/prd-editor`，`src/contexts/TaskMasterContext.ts` | TaskMaster panel、PRD 编辑、任务生成。 |
 | Project creation | `src/components/project-creation-wizard` | workspace 创建、GitHub token、clone/create 流程。 |
-| Worktree dispatch | `src/components/sidebar/view/subcomponents/WorktreeDispatchModal.tsx`，`src/components/main-content/view/subcomponents/WorktreeProjectBadge.tsx` | Git worktree 派发入口、Agent/Skill 预绑定、worktree 项目头部状态和分支/删除操作。 |
+| Worktree dispatch | `src/components/sidebar/view/subcomponents/WorktreeDispatchModal.tsx`，`src/components/main-content/view/subcomponents/WorktreeProjectBadge.tsx` | 从项目会话派生 Git worktree、继承会话绑定、worktree 项目头部状态和分支/删除操作。 |
 | Shared UI | `src/shared/view/ui` | 可复用 UI primitives。 |
 | API/types | `src/utils/api.js`，`src/types/app.ts` | HTTP wrapper 和前端 app contracts。 |
 

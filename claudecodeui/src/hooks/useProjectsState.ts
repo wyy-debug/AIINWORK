@@ -459,6 +459,13 @@ export function useProjectsState({
     (project: Project) => {
       const worktreeSession = project.worktree?.sessionId
         ? getProjectSessionsWithProviders(project).find((session) => session.id === project.worktree?.sessionId)
+          || {
+            id: project.worktree.sessionId,
+            title: project.worktree.displayName || project.worktree.taskPrompt || project.worktree.id,
+            summary: project.worktree.displayName || project.worktree.taskPrompt || project.worktree.id,
+            __provider: project.worktree.provider || 'claude',
+            __projectName: project.name,
+          }
         : null;
 
       setWorkspaceMode('projects');

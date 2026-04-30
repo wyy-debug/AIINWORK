@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, Clock, Edit2, MessageSquarePlus, Pin, PinOff, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Clock, Edit2, GitBranch, MessageSquarePlus, Pin, PinOff, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { memo, useMemo } from 'react';
 
@@ -24,6 +24,7 @@ type SidebarSessionItemProps = {
   onTogglePinSession: (session: SessionWithProvider) => void;
   onToggleArchiveSession: (session: SessionWithProvider) => void;
   onOpenConversationGuide: (project: Project, session: SessionWithProvider) => void;
+  onDispatchSessionWorktree: (project: Project, session: SessionWithProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
@@ -49,6 +50,7 @@ function SidebarSessionItem({
   onTogglePinSession,
   onToggleArchiveSession,
   onOpenConversationGuide,
+  onDispatchSessionWorktree,
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
@@ -154,6 +156,16 @@ function SidebarSessionItem({
                   title="引导/追加对话"
                 >
                   <MessageSquarePlus className="h-2.5 w-2.5" />
+                </button>
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDispatchSessionWorktree(project, session);
+                  }}
+                  title="派生到新工作树"
+                >
+                  <GitBranch className="h-2.5 w-2.5" />
                 </button>
                 <button
                   className="flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
@@ -284,6 +296,16 @@ function SidebarSessionItem({
                   title="引导/追加对话"
                 >
                   <MessageSquarePlus className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                </button>
+                <button
+                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDispatchSessionWorktree(project, session);
+                  }}
+                  title="派生到新工作树"
+                >
+                  <GitBranch className="h-3 w-3 text-gray-600 dark:text-gray-400" />
                 </button>
                 <button
                   className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"

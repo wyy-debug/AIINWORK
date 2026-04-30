@@ -254,12 +254,13 @@ Project/conversation separation:
 
 ## Worktree Dispatch Management
 
-1. Parent projects can create managed worktrees through `POST /api/projects/:projectName/worktrees`.
-2. Managed worktrees are created with `git worktree add --detach`, registered as separate projects, and optionally linked to a session.
-3. Parent projects can list their tasks through `GET /api/projects/:projectName/worktrees`.
-4. The Worktree task list shows status, task title, base ref/commit, branch state, session binding, path, and creation time.
-5. Users can continue opening a worktree project, enter its bound session, create a branch, or delete/archived a clean managed worktree.
-6. Dirty worktrees are protected by the existing backend `git status --porcelain` deletion check.
+1. Users create managed worktrees from a project session item. The project only resolves the Git root and base ref.
+2. The frontend calls `POST /api/projects/:projectName/worktrees` with the source session id and provider.
+3. Managed worktrees are created with `git worktree add --detach`, registered as separate projects, and bound to the derived session.
+4. Parent projects can list their tasks through `GET /api/projects/:projectName/worktrees`; this is a management list, not the primary creation entry.
+5. The Worktree task list shows status, task title, base ref/commit, branch state, session binding, path, and creation time.
+6. Users can continue opening a worktree project, enter its bound session, create a branch, or delete/archive a clean managed worktree.
+7. Dirty worktrees are protected by the existing backend `git status --porcelain` deletion check.
 
 ## Session Management Metadata
 

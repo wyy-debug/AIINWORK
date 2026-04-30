@@ -32,7 +32,7 @@
 3. 在输入框绑定一个已安装 Skill，然后发送消息。
 4. 打开诊断面板，确认 Agent、Skill、MCP、模型、上下文长度和权限快照都可见。
 5. 绑定一个不存在的 Skill，确认 UI 标记不可用，但不阻止发送。
-6. 项目会话默认使用 MTL-Code；只有新建项目会话、独立对话或 Worktree 派发时才显式选择 Agent。
+6. 项目会话默认使用 MTL-Code；独立对话可显式选择 Agent，Worktree 从源会话继承已保存的 Agent/Skill/MCP/模型绑定。
 
 ## MCP / Hub
 
@@ -45,12 +45,12 @@
 
 ## Worktree
 
-1. 打开一个干净的 Git 项目，并派发 managed worktree。
-2. 确认 worktree 作为独立项目出现在项目列表中，并能打开会话。
+1. 打开一个干净的 Git 项目，展开目标会话，并从会话右侧点击“派生到新工作树”。
+2. 确认 worktree 作为独立项目出现在项目列表中，并能打开绑定到源会话上下文的新会话。
 3. 确认 worktree 头部显示父项目、base ref/commit、detached 状态、创建分支、删除入口。
 4. 从 worktree 头部创建分支。
 5. 尝试删除有未提交改动的 worktree，确认删除被阻止。
-6. 从非 Git 项目派发 worktree，应得到清晰错误。
+6. 从非 Git 项目会话派生 worktree，应得到清晰错误。
 7. 打开父项目的工作树任务列表，确认继续打开、进入会话、创建分支、删除动作可见。
 
 ## Permissions

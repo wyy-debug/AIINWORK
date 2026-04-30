@@ -10,7 +10,7 @@
 - Skill：本地 `SKILL.md` 指令包，通常安装在 `~/.codex/skills` 或 `~/.mtl-code/skills`。
 - MCP：外部工具服务器，运行时由 MTL-Code / Claude Code 发现工具。
 - Hub：独立的 Agent/Skill/MCP 远端仓库服务，Code UI 只消费 catalog 和调用 Hub API。
-- Worktree：从 Git 项目派发出的独立工作树，默认 detached HEAD，主项目保持干净。
+- Worktree：从 Git 项目中的某条会话派生出的独立工作树，默认 detached HEAD，主项目保持干净。
 
 ## 2. 模型配置
 
@@ -50,7 +50,7 @@
 1. 项目普通会话默认使用 MTL-Code，不强制显示 Agent 配置。
 2. 项目中可以直接添加 Skill，用于后续对话。
 3. 项目和独立对话是两个空间，不应混用会话列表。
-4. 需要 Agent 参与代码任务时，优先使用 Worktree 派发，或在新建项目会话时显式选择 Agent。
+4. 需要 Agent 参与代码任务时，先在项目会话中保存 Agent/Skill/MCP/模型绑定，再从该会话派生 Worktree。
 
 ## 4. 独立对话
 
@@ -96,7 +96,7 @@ Agent 类似 ChatGPT 自定义智能体：角色、提示词、应用槽位、Sk
 1. 打开 Agent Builder。
 2. 从模板创建或新建 Agent。
 3. 配置指令、Skill、MCP 槽位、模型与上下文。
-4. 独立对话或 Worktree 派发时选择 Agent。
+4. 独立对话中选择 Agent；项目代码任务建议通过会话派生 Worktree 继承已保存的 Agent/Skill/MCP 绑定。
 5. 首条消息后打开诊断面板，确认 Agent/Skill/MCP/model/context window 是否实际传到后端。
 
 注意：
@@ -160,29 +160,30 @@ Hub 是独立服务，不内嵌在 Code UI 中。
 
 ## 9. Worktree 派发
 
-Worktree 用于在 Git 项目中派发隔离任务。
+Worktree 用于从 Git 项目里的某条会话派生隔离任务。项目提供仓库根目录，源会话提供上下文、模型、Agent、Skill 和 MCP 绑定。
 
 默认行为：
 
 - 根目录：`~/.mtl-code/worktrees`
 - 创建方式：`git worktree add --detach <worktreePath> <baseRef>`
 - 默认 detached HEAD，不自动创建分支。
-- 会话上下文、Agent、Skill、模型绑定保存在 session 与 worktree 元数据中。
+- 会话上下文、Agent、Skill、MCP 和模型绑定来自源 session，并保存在派生 session 与 worktree 元数据中。
 
 使用方式：
 
-1. 在 Git 项目中点击 `派发工作树`。
-2. 填写任务说明和 base ref。
-3. 可选择 Agent、Skill、MCP、模型。
-4. 创建后进入新 worktree 项目会话。
+1. 在 Git 项目中展开目标会话。
+2. 在会话右侧点击 `派生到新工作树`。
+3. 确认任务说明和 base ref。
+4. 创建后进入新 worktree，并继续使用源会话的上下文和绑定配置。
 5. 需要保留成果时，手动创建分支。
 
 注意：
 
-1. 非 Git 项目不能派发 Worktree。
+1. 非 Git 项目会话不能派生 Worktree。
 2. 父项目 dirty 时仍基于 HEAD 派发，不复制未提交改动。
 3. 删除 managed worktree 前会检查 dirty；有改动会阻止删除。
 4. v1 不自动 merge、不自动 PR、不自动 handoff。
+5. 项目侧边栏的 `工作树任务` 是管理列表，不是创建入口。
 
 ## 10. 权限
 
@@ -255,11 +256,11 @@ OpenMythos Runtime 用于把任务难度、冻结目标、专家路由、阶段�
 
 1. 安装或选择对应 Skill。
 2. 需要专门角色时，新建独立对话并选择 Agent。
-3. 需要动代码时，回到项目会话或通过 Worktree 派发。
+3. 需要动代码时，回到项目会话或从项目会话派生 Worktree。
 
 隔离开发：
 
-1. 在 Git 项目中派发 Worktree。
+1. 从 Git 项目中的目标会话派生 Worktree。
 2. 选择 Agent / Skill / 模型。
 3. 在 worktree 中完成修改。
 4. 需要保留时创建分支。
