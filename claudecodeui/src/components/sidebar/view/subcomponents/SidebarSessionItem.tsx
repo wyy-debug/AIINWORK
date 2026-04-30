@@ -1,5 +1,6 @@
 import { Archive, ArchiveRestore, Check, Clock, Edit2, MessageSquarePlus, Pin, PinOff, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import { memo, useMemo } from 'react';
 
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -34,7 +35,7 @@ type SidebarSessionItemProps = {
   t: TFunction;
 };
 
-export default function SidebarSessionItem({
+function SidebarSessionItem({
   project,
   session,
   selectedSession,
@@ -53,7 +54,10 @@ export default function SidebarSessionItem({
   onDeleteSession,
   t,
 }: SidebarSessionItemProps) {
-  const sessionView = createSessionViewModel(session, currentTime, t);
+  const sessionView = useMemo(
+    () => createSessionViewModel(session, currentTime, t),
+    [currentTime, session, t],
+  );
   const isSelected = selectedSession?.id === session.id;
   const isPinned = Boolean(session.isPinned);
   const isArchived = Boolean(session.isArchived);
@@ -72,7 +76,7 @@ export default function SidebarSessionItem({
   };
 
   return (
-    <div className="group relative">
+    <div className="group relative [contain-intrinsic-size:1px_48px] [content-visibility:auto]">
       {sessionView.isActive && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <div className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
@@ -310,3 +314,5 @@ export default function SidebarSessionItem({
     </div>
   );
 }
+
+export default memo(SidebarSessionItem);

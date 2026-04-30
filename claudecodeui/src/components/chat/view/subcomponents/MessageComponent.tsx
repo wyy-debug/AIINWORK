@@ -85,6 +85,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
     !message.isThinking;
+  const messageVisibilityClass = '[content-visibility:auto] [contain-intrinsic-size:1px_220px]';
 
 
   useEffect(() => {
@@ -129,7 +130,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       <div
         ref={messageRef}
         data-message-timestamp={message.timestamp || undefined}
-        className="chat-message system px-3 sm:px-0"
+        className={`chat-message system px-3 ${messageVisibilityClass} sm:px-0`}
       >
         <ContextCompactionCard message={message} formattedTime={formattedTime} />
       </div>
@@ -140,7 +141,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
-      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
+      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${messageVisibilityClass} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
       {message.type === 'user' ? (
         /* User message bubble on the right */

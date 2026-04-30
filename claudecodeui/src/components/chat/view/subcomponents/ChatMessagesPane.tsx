@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
@@ -118,7 +118,28 @@ const hasVisibleAssistantText = (message: ChatMessage) =>
   !message.isStreaming &&
   Boolean(String(message.content || '').trim());
 
-function ProcessTraceGroup({
+function areProcessTraceGroupPropsEqual(
+  previous: ProcessTraceGroupProps,
+  next: ProcessTraceGroupProps,
+) {
+  return (
+    previous.messages === next.messages &&
+    previous.active === next.active &&
+    previous.groupKey === next.groupKey &&
+    previous.createDiff === next.createDiff &&
+    previous.onFileOpen === next.onFileOpen &&
+    previous.onShowSettings === next.onShowSettings &&
+    previous.onGrantToolPermission === next.onGrantToolPermission &&
+    previous.autoExpandTools === next.autoExpandTools &&
+    previous.showRawParameters === next.showRawParameters &&
+    previous.showThinking === next.showThinking &&
+    previous.selectedProject === next.selectedProject &&
+    previous.provider === next.provider &&
+    previous.getMessageKey === next.getMessageKey
+  );
+}
+
+const ProcessTraceGroup = memo(function ProcessTraceGroup({
   messages,
   active,
   groupKey,
@@ -174,7 +195,7 @@ function ProcessTraceGroup({
   const shouldRenderDetails = open || active;
 
   return (
-    <div className="chat-message assistant px-3 sm:px-0">
+    <div className="chat-message assistant px-3 [contain-intrinsic-size:1px_180px] [content-visibility:auto] sm:px-0">
       <Collapsible open={open} onOpenChange={setOpen} className="not-prose">
         <div className="flex items-center gap-3 py-1">
           <CollapsibleTrigger className="group/process inline-flex min-w-0 items-center gap-2 rounded-full px-1 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
@@ -223,7 +244,7 @@ function ProcessTraceGroup({
       </Collapsible>
     </div>
   );
-}
+}, areProcessTraceGroupPropsEqual);
 
 export default function ChatMessagesPane({
   scrollContainerRef,

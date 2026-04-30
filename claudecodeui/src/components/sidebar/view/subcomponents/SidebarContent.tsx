@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo } from 'react';
+import { type ReactNode, useDeferredValue, useMemo } from 'react';
 import { Archive, ArchiveRestore, Edit2, MessageSquare, Pin, PinOff, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -128,10 +128,11 @@ export default function SidebarContent({
   projectListProps,
   t,
 }: SidebarContentProps) {
+  const deferredSearchFilter = useDeferredValue(searchFilter);
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
   const conversationItems = useMemo(() => {
-    const normalizedQuery = searchFilter.trim().toLowerCase();
+    const normalizedQuery = deferredSearchFilter.trim().toLowerCase();
     return conversationSessions
       .map((session) => ({
         session,
@@ -154,7 +155,7 @@ export default function SidebarContent({
         }
         return getSessionDate(right.session).getTime() - getSessionDate(left.session).getTime();
       });
-  }, [conversationSessions, projectListProps.currentTime, searchFilter, t]);
+  }, [conversationSessions, deferredSearchFilter, projectListProps.currentTime, t]);
 
   return (
     <div
@@ -235,7 +236,7 @@ export default function SidebarContent({
                     {projectResult.sessions.map((session) => (
                       <button
                         key={`${projectResult.projectName}-${session.sessionId}`}
-                        className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/50"
+                        className="w-full rounded-md px-2 py-2 text-left transition-colors [contain-intrinsic-size:1px_72px] [content-visibility:auto] hover:bg-accent/50"
                         onClick={() => onConversationResultClick(
                           projectResult.projectName,
                           session.sessionId,
@@ -287,7 +288,7 @@ export default function SidebarContent({
               {conversationItems.map(({ session, sessionView }) => (
                 <div
                   key={`${conversationProject?.name || 'conversation'}-${session.__provider}-${session.id}`}
-                  className="group relative"
+                  className="group relative [contain-intrinsic-size:1px_58px] [content-visibility:auto]"
                 >
                   <button
                     type="button"
