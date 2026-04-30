@@ -156,12 +156,22 @@ function ProcessTraceGroup({
     return formatElapsed(end - start);
   }, [active, messages]);
 
-  const toolCount = messages.filter((message) => message.isToolUse).length;
-  const thinkingCount = messages.filter((message) => message.isThinking).length;
-  const summaryParts = [
-    thinkingCount > 0 ? `${thinkingCount} 段思考` : null,
-    toolCount > 0 ? `${toolCount} 个工具` : null,
-  ].filter(Boolean);
+  const summaryParts = useMemo(() => {
+    let toolCount = 0;
+    let thinkingCount = 0;
+
+    for (const message of messages) {
+      if (message.isToolUse) toolCount += 1;
+      if (message.isThinking) thinkingCount += 1;
+    }
+
+    return [
+      thinkingCount > 0 ? `${thinkingCount} 段思考` : null,
+      toolCount > 0 ? `${toolCount} 个工具` : null,
+    ].filter(Boolean);
+  }, [messages]);
+
+  const shouldRenderDetails = open || active;
 
   return (
     <div className="chat-message assistant px-3 sm:px-0">
@@ -189,24 +199,26 @@ function ProcessTraceGroup({
         </div>
 
         <CollapsibleContent>
-          <div className="mt-1 space-y-3 border-l border-border/70 pl-3">
-            {messages.map((message, index) => (
-              <MessageComponent
-                key={`${groupKey}-${getMessageKey(message)}`}
-                message={message}
-                prevMessage={index > 0 ? messages[index - 1] : null}
-                createDiff={createDiff}
-                onFileOpen={onFileOpen}
-                onShowSettings={onShowSettings}
-                onGrantToolPermission={onGrantToolPermission}
-                autoExpandTools={Boolean(autoExpandTools && active)}
-                showRawParameters={showRawParameters}
-                showThinking={showThinking}
-                selectedProject={selectedProject}
-                provider={provider}
-              />
-            ))}
-          </div>
+          {shouldRenderDetails && (
+            <div className="mt-1 space-y-3 border-l border-border/70 pl-3">
+              {messages.map((message, index) => (
+                <MessageComponent
+                  key={`${groupKey}-${getMessageKey(message)}`}
+                  message={message}
+                  prevMessage={index > 0 ? messages[index - 1] : null}
+                  createDiff={createDiff}
+                  onFileOpen={onFileOpen}
+                  onShowSettings={onShowSettings}
+                  onGrantToolPermission={onGrantToolPermission}
+                  autoExpandTools={Boolean(autoExpandTools && active)}
+                  showRawParameters={showRawParameters}
+                  showThinking={showThinking}
+                  selectedProject={selectedProject}
+                  provider={provider}
+                />
+              ))}
+            </div>
+          )}
         </CollapsibleContent>
       </Collapsible>
     </div>
