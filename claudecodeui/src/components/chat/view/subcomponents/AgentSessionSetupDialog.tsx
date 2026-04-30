@@ -145,7 +145,7 @@ export default function AgentSessionSetupDialog({
           api.mcpServers('claude', 'user').then(async (response) => {
             const data = await response.json();
             if (!response.ok || data?.success === false) {
-              throw new Error(data?.error?.message || data?.error || data?.details || 'Failed to load user MCP servers');
+              throw new Error(data?.error?.message || data?.error || data?.details || '无法加载用户范围 MCP Server');
             }
             return readMcpServersFromResponse(data).map((server) => createMcpServerOption(server, 'user'));
           }),
@@ -155,7 +155,7 @@ export default function AgentSessionSetupDialog({
           requests.push(api.mcpServers('claude', 'project', workspacePath).then(async (response) => {
             const data = await response.json();
             if (!response.ok || data?.success === false) {
-              throw new Error(data?.error?.message || data?.error || data?.details || 'Failed to load project MCP servers');
+              throw new Error(data?.error?.message || data?.error || data?.details || '无法加载项目范围 MCP Server');
             }
             return readMcpServersFromResponse(data).map((server) => createMcpServerOption(server, 'project'));
           }));
@@ -175,7 +175,7 @@ export default function AgentSessionSetupDialog({
       } catch (error) {
         if (cancelled) return;
         setMcpOptions([]);
-        setMcpOptionsError(error instanceof Error ? error.message : 'Failed to load MCP servers');
+        setMcpOptionsError(error instanceof Error ? error.message : '无法加载 MCP Server');
       } finally {
         if (!cancelled) setIsLoadingMcpOptions(false);
       }
@@ -255,12 +255,12 @@ export default function AgentSessionSetupDialog({
           <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
             <p>
               {isLoadingMcpOptions
-                ? 'Loading configured MCP servers...'
+                ? '正在加载已配置的 MCP Server...'
                 : mcpOptionsError
                   ? mcpOptionsError
                   : mcpOptions.length === 0
-                    ? 'No configured MCP server was found. Add one in Agent Builder > Browse App > Custom MCP first.'
-                    : 'MCP slots use configured MCP servers from your provider settings.'}
+                    ? '未找到已配置的 MCP Server。请先在 Agent Builder > 浏览应用 > 自定义 MCP 中新增。'
+                    : 'MCP 槽位会使用 Provider 设置中已配置的 MCP Server。'}
             </p>
             <p className="mt-1">
               工具列表会在会话启动后由 MTL-Code 原生 runtime 发现；这里绑定的是具体 MCP Server 配置。

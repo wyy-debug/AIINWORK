@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import { cn } from '../../../../lib/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
@@ -23,6 +24,14 @@ const ACTION_KEYS = [
   'claudeStatus.actions.reasoning',
 ];
 const DEFAULT_ACTION_WORDS = ['Thinking', 'Processing', 'Analyzing', 'Working', 'Computing', 'Reasoning'];
+const STATUS_ACTION_KEY_BY_TEXT: Record<string, string> = {
+  thinking: 'claudeStatus.actions.thinking',
+  processing: 'claudeStatus.actions.processing',
+  analyzing: 'claudeStatus.actions.analyzing',
+  working: 'claudeStatus.actions.working',
+  computing: 'claudeStatus.actions.computing',
+  reasoning: 'claudeStatus.actions.reasoning',
+};
 
 const PROVIDER_LABEL_KEYS: Record<string, string> = {
   claude: 'messageTypes.claude',
@@ -69,9 +78,14 @@ export default function ClaudeStatus({
   if (!isLoading && !status) return null;
 
   const actionWords = ACTION_KEYS.map((key, i) => t(key, { defaultValue: DEFAULT_ACTION_WORDS[i] }));
-  const statusText = (status?.text || actionWords[Math.floor(elapsedTime / 3) % actionWords.length]).replace(/[.]+$/, '');
+  const rawStatusText = (status?.text || actionWords[Math.floor(elapsedTime / 3) % actionWords.length]).replace(/[.]+$/, '');
+  const normalizedStatusText = rawStatusText.trim().toLowerCase();
+  const statusText = STATUS_ACTION_KEY_BY_TEXT[normalizedStatusText]
+    ? t(STATUS_ACTION_KEY_BY_TEXT[normalizedStatusText], { defaultValue: rawStatusText })
+    : rawStatusText;
 
   const providerLabel = t(PROVIDER_LABEL_KEYS[provider] || 'claudeStatus.providers.assistant', { defaultValue: 'Assistant' });
+  const stopLabel = t('claudeStatus.controls.stop', { defaultValue: '停止' });
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 mb-3 w-full duration-500">
@@ -115,7 +129,7 @@ export default function ClaudeStatus({
                 <svg className="h-3 w-3 fill-current" viewBox="0 0 24 24">
                   <path d="M6 6h12v12H6z" />
                 </svg>
-                <span className="hidden sm:inline">STOP</span>
+                <span className="hidden sm:inline">{stopLabel}</span>
                 <kbd className="hidden rounded bg-black/10 px-1 text-[9px] group-hover:bg-white/20 sm:block">
                   ESC
                 </kbd>

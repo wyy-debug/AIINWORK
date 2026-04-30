@@ -214,29 +214,30 @@
   },
   "claudeStatus": {
     "actions": {
-      "thinking": "Thinking",
-      "processing": "Processing",
-      "analyzing": "Analyzing",
-      "working": "Working",
-      "computing": "Computing",
-      "reasoning": "Reasoning"
+      "thinking": "思考中",
+      "processing": "处理中",
+      "analyzing": "分析中",
+      "working": "工作中",
+      "computing": "计算中",
+      "reasoning": "推理中"
     },
     "state": {
-      "live": "Live",
-      "paused": "Paused"
+      "live": "运行中",
+      "paused": "已暂停"
     },
     "elapsed": {
       "seconds": "{{count}}s",
       "minutesSeconds": "{{minutes}}m {{seconds}}s",
-      "label": "{{time}} elapsed",
-      "startingNow": "Starting now"
+      "label": "已运行 {{time}}",
+      "startingNow": "刚开始"
     },
     "controls": {
-      "stopGeneration": "Stop Generation",
-      "pressEscToStop": "Press Esc anytime to stop"
+      "stop": "停止",
+      "stopGeneration": "停止生成",
+      "pressEscToStop": "随时按 Esc 停止"
     },
     "providers": {
-      "assistant": "Assistant"
+      "assistant": "助手"
     }
   },
   "projectSelection": {

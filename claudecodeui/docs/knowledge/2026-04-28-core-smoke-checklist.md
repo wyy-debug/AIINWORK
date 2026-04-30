@@ -1,56 +1,60 @@
-# MTL-Code Core Smoke Checklist
+# MTL-Code 核心冒烟清单
 
-Date: 2026-04-28
+日期：2026-04-28
 
-Run this checklist before shipping a Windows package after Agent, Skill, MCP, Worktree, permission, or session-list changes.
+当 Agent、Skill、MCP、Hub、Worktree、权限、会话列表或打包流程有改动时，发布 Windows 包前至少跑一遍这份清单。
 
-## Automated Baseline
+## 自动化基线
 
-1. Start a dev or packaged preview target.
-2. Ensure Playwright is available for this checkout, for example `npm install --no-save playwright`.
-3. Run `npm run smoke:ui`.
-4. Use `SMOKE_BASE_URL=http://host:port npm run smoke:ui` when the target is not `http://127.0.0.1:5173`.
-5. The script covers shell load, project/conversation switch, composer input, and model switcher focus recovery.
+1. 启动开发服务或已打包的预览目标。
+2. 确认当前 checkout 可用 Playwright，例如执行 `npm install --no-save playwright`。
+3. 执行 `npm run smoke:ui`。
+4. 如果目标不是 `http://127.0.0.1:5173`，使用 `SMOKE_BASE_URL=http://host:port npm run smoke:ui`。
+5. 脚本至少覆盖：主界面加载、项目/对话切换、输入框可输入、模型切换弹窗关闭后焦点恢复。
 
 ## Code UI
 
-1. Launch the packaged app.
-2. Confirm the desktop/start/taskbar icon is the blue MTL-Code icon.
-3. Confirm the sidebar can switch between `项目` and `对话` without flashing into the wrong space.
-4. Create or open a project outside `C:\Users\yckui`; it should not be blocked unless it is a system-critical path.
-5. In a project session, confirm Agent controls are hidden and Skill controls are visible.
-6. Type `@` in a project session and confirm the project file picker opens and inserts the selected file mention.
-7. Delete a session and confirm it disappears immediately; refresh should not bring it back.
-8. Rename, pin, archive, and restore a session; pinned sessions should sort first and archived sessions should remain recoverable.
+1. 启动已打包应用。
+2. 确认安装图标、桌面图标、启动/任务栏图标都是蓝色 MTL-Code 图标。
+3. 确认侧边栏在 `项目` 和 `对话` 之间切换时，不会闪到错误空间。
+4. 创建或打开 `C:\Users\yckui` 之外的项目；除系统关键路径外不应被阻止。
+5. 项目会话中不显示 Agent 配置控件，但可以显示 Skill 控件。
+6. 项目会话中输入 `@`，确认文件选择器弹出，并能插入选中的文件 mention。
+7. 删除会话后应立即从 UI 消失，刷新后不应恢复。
+8. 重命名、置顶、归档、恢复会话；置顶会话应排在前面，归档会话应可恢复。
+9. 上滑加载历史消息时只显示顶部悬浮加载状态，当前阅读位置不应闪回。
+10. 已折叠的思考过程和工具调用默认不渲染明细，展开后再加载明细。
 
 ## Agent / Skill
 
-1. Open an independent conversation and choose to use an Agent.
-2. Complete any required slots and start the conversation.
-3. Bind an installed Skill from the composer, then send a message.
-4. Open diagnostics and confirm Agent, Skill, MCP, model, context window, and permission snapshots are visible.
-5. Bind a missing Skill name and confirm it is marked unavailable but does not block sending.
+1. 打开独立对话，并选择使用 Agent。
+2. 填完必要槽位后启动对话。
+3. 在输入框绑定一个已安装 Skill，然后发送消息。
+4. 打开诊断面板，确认 Agent、Skill、MCP、模型、上下文长度和权限快照都可见。
+5. 绑定一个不存在的 Skill，确认 UI 标记不可用，但不阻止发送。
+6. 项目会话默认使用 MTL-Code；只有新建项目会话、独立对话或 Worktree 派发时才显式选择 Agent。
 
 ## MCP / Hub
 
-1. Add a remote Hub catalog URL and sync it.
-2. Search Hub Skills from the composer Skill menu and install one directly.
+1. 添加远端 Hub catalog URL 并同步。
+2. 在输入框的 Skill 菜单中搜索远端 Hub Skill，并直接安装。
 3. 从仓库安装 `soc-redmine` 或 `ainwork-code-search` MCP。
-4. Run MCP diagnostics; missing required values should be reported without showing secrets.
-5. Configure required fields such as `REDMINE_API_KEY` or `root`, save, then rerun diagnostics.
+4. 运行 MCP 可用性检测；缺少必填项时应显示字段缺失，但不能显示 secret 明文。
+5. 配置 `REDMINE_API_KEY`、`root` 等必填字段，保存后重新检测。
+6. 远端 Hub 返回 401 时，应明确说明当前请求的 Hub、缺少的是 admin token 还是 submit token。
 
 ## Worktree
 
-1. Open a clean Git project and dispatch a managed worktree.
-2. Confirm the worktree appears as a separate project and opens a session.
-3. Confirm the worktree header shows parent project, base ref/commit, detached state, create branch, and delete.
-4. Create a branch from the worktree header.
-5. Try deleting a dirty worktree and confirm deletion is blocked.
-6. Try dispatching from a non-Git project and confirm the UI or API gives a clear error.
-7. Open the parent project's Worktree task list and confirm continue-open, open-session, create-branch, and delete actions are visible.
+1. 打开一个干净的 Git 项目，并派发 managed worktree。
+2. 确认 worktree 作为独立项目出现在项目列表中，并能打开会话。
+3. 确认 worktree 头部显示父项目、base ref/commit、detached 状态、创建分支、删除入口。
+4. 从 worktree 头部创建分支。
+5. 尝试删除有未提交改动的 worktree，确认删除被阻止。
+6. 从非 Git 项目派发 worktree，应得到清晰错误。
+7. 打开父项目的工作树任务列表，确认继续打开、进入会话、创建分支、删除动作可见。
 
 ## Permissions
 
-1. Enable bypass permissions in settings.
-2. Send a command that would normally request tool permission.
-3. If a permission request still appears, open diagnostics and confirm the effective mode, skip flag, allowed tools, disallowed tools, and conflicts.
+1. 在设置中启用权限绕过。
+2. 发送一个正常情况下会申请权限的命令。
+3. 如果仍然弹出权限申请，打开诊断面板，确认最终权限模式、skip 标记、allowed tools、disallowed tools 和冲突来源。
