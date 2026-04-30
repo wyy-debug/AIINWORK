@@ -84,7 +84,7 @@ Skill 是 MTL-Code 追加给模型的本地能力说明，核心入口是 `SKILL
 注意：
 
 1. 缺失 Skill 不阻止发送，但 UI 会标记不可用，后端 prompt 会提示不要依赖它。
-2. Hub Pull 后不应继续显示 Pull，已安装内容只显示更新或卸载。
+2. Hub 安装后不应继续显示“安装”，已安装内容只显示更新或卸载。
 3. Skill 调用仍通过 prompt + 本地 `SKILL.md` 路径约束完成，没有单独 Skill 执行引擎。
 
 ## 6. Agent
@@ -269,5 +269,5 @@ OpenMythos Runtime 用于把任务难度、冻结目标、专家路由、阶段�
 
 1. 启动 Agent/Skill Hub。
 2. 团队成员添加 catalog URL。
-3. Pull Agent 模板、Skill 或 MCP。
+3. 安装 Agent 模板、Skill 或 MCP。
 4. 在对话或项目中绑定使用。

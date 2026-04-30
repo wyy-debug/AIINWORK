@@ -487,25 +487,25 @@ function LoopControlSegmentedControl({
   value,
   disabled,
   onChange,
+  formatLoopControl,
 }: {
   value: LoopControl;
   disabled?: boolean;
   onChange: (value: LoopControl) => void;
+  formatLoopControl: (value: LoopControl) => { label: string; description: string };
 }) {
-  const options: Array<{ value: LoopControl; label: string; description: string }> = [
-    { value: 'enforced', label: 'Enforced', description: 'Map loop budget to maxTurns' },
-    { value: 'advisory', label: 'Advisory', description: 'Prompt guidance only' },
-  ];
+  const options: LoopControl[] = ['enforced', 'advisory'];
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {options.map((option) => {
-        const active = option.value === value;
+        const optionText = formatLoopControl(option);
+        const active = option === value;
         return (
           <button
-            key={option.value}
+            key={option}
             type="button"
             disabled={disabled}
-            onClick={() => onChange(option.value)}
+            onClick={() => onChange(option)}
             className={cn(
               'rounded-lg border p-3 text-left transition-colors',
               active
@@ -514,8 +514,8 @@ function LoopControlSegmentedControl({
               disabled && 'cursor-not-allowed opacity-50',
             )}
           >
-            <div className="text-sm font-medium">{option.label}</div>
-            <div className="mt-1 text-xs leading-4">{option.description}</div>
+            <div className="text-sm font-medium">{optionText.label}</div>
+            <div className="mt-1 text-xs leading-4">{optionText.description}</div>
           </button>
         );
       })}
@@ -543,6 +543,21 @@ export default function OpenMythosRuntimeContent() {
   const formatEffortLevel = (level: EffortLevel) => (
     t(`openMythosRuntime.effort.${level}`, { defaultValue: level })
   );
+  const formatLoopControl = (loopControl: LoopControl) => ({
+    label: t(`openMythosRuntime.loopControlOptions.${loopControl}.label`, {
+      defaultValue: loopControl === 'enforced' ? '强制' : '建议',
+    }),
+    description: t(`openMythosRuntime.loopControlOptions.${loopControl}.description`, {
+      defaultValue: loopControl === 'enforced'
+        ? '将循环预算映射到最大轮次'
+        : '仅作为提示约束',
+    }),
+  });
+  const formatPhasePlan = (phases: string[]) => (
+    phases.map((phase) => (
+      t(`openMythosRuntime.phases.${phase}`, { defaultValue: phase })
+    )).join(' → ')
+  );
   const [config, setConfig] = useState<MtlCodeModelConfig>(() => createEmptyConfig());
   const [runtimeConfig, setRuntimeConfig] = useState<OpenMythosRuntimeConfig>(DEFAULT_OPENMYTHOS_RUNTIME_CONFIG);
   const [previewPrompt, setPreviewPrompt] = useState(() => (
@@ -562,7 +577,7 @@ export default function OpenMythosRuntimeContent() {
       try {
         const response = await apiFetch('/api/settings/mtl-code-model');
         if (!response.ok) {
-          throw new Error('Failed to load MTLCode runtime config');
+          throw new Error('加载 MTLCode 运行时配置失败');
         }
         const payload = await response.json();
         const nextConfig = toConfig(payload.config);
@@ -646,7 +661,7 @@ export default function OpenMythosRuntimeContent() {
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error('Failed to save MTLCode runtime config');
+        throw new Error('保存 MTLCode 运行时配置失败');
       }
 
       const responsePayload = await response.json();
@@ -671,11 +686,11 @@ export default function OpenMythosRuntimeContent() {
         <BrainCircuit className="h-5 w-5 text-violet-500" />
         <div>
           <h3 className="text-lg font-medium text-foreground">
-            {t('openMythosRuntime.title', { defaultValue: 'OpenMythos Runtime' })}
+            {t('openMythosRuntime.title', { defaultValue: 'OpenMythos 运行时' })}
           </h3>
           <p className="text-sm text-muted-foreground">
             {t('openMythosRuntime.subtitle', {
-              defaultValue: 'Tune adaptive effort, frozen task cards, and skill routing hints for MTL-Code sessions.',
+              defaultValue: '配置 MTL-Code 会话的自适应推理强度、冻结任务卡和技能路由提示。',
             })}
           </p>
         </div>
@@ -685,9 +700,9 @@ export default function OpenMythosRuntimeContent() {
         <div className="space-y-4">
           <RuntimeToggleRow
             icon={BrainCircuit}
-            title={t('openMythosRuntime.enabled', { defaultValue: 'OpenMythos Runtime' })}
+            title={t('openMythosRuntime.enabled', { defaultValue: 'OpenMythos 运行时' })}
             description={t('openMythosRuntime.enabledDescription', {
-              defaultValue: 'Attach runtime guidance to each turn and allow adaptive effort decisions.',
+              defaultValue: '为每轮任务注入运行时引导，并允许按任务复杂度自动选择推理强度。',
             })}
             checked={runtimeConfig.enabled}
             disabled={disabled}
@@ -697,9 +712,9 @@ export default function OpenMythosRuntimeContent() {
           <div className={cn('grid gap-4 md:grid-cols-2', !runtimeConfig.enabled && 'opacity-60')}>
             <RuntimeToggleRow
               icon={Gauge}
-              title={t('openMythosRuntime.adaptiveEffort', { defaultValue: 'Adaptive effort' })}
+              title={t('openMythosRuntime.adaptiveEffort', { defaultValue: '自适应推理强度' })}
               description={t('openMythosRuntime.adaptiveEffortDescription', {
-                defaultValue: 'Select low to xhigh effort from task complexity when no explicit effort is set.',
+                defaultValue: '未显式指定推理强度时，根据任务复杂度在低到极深之间自动选择。',
               })}
               checked={runtimeConfig.adaptiveEffort}
               disabled={disabled || !runtimeConfig.enabled}
@@ -708,9 +723,9 @@ export default function OpenMythosRuntimeContent() {
 
             <RuntimeToggleRow
               icon={Snowflake}
-              title={t('openMythosRuntime.taskCard', { defaultValue: 'Frozen task card' })}
+              title={t('openMythosRuntime.taskCard', { defaultValue: '冻结任务卡' })}
               description={t('openMythosRuntime.taskCardDescription', {
-                defaultValue: 'Carry goal, constraints, and acceptance criteria as a hidden reminder.',
+                defaultValue: '将目标、约束和验收标准作为隐藏提醒随每轮任务携带。',
               })}
               checked={runtimeConfig.taskCard}
               disabled={disabled || !runtimeConfig.enabled}
@@ -719,9 +734,9 @@ export default function OpenMythosRuntimeContent() {
 
             <RuntimeToggleRow
               icon={Route}
-              title={t('openMythosRuntime.routingHints', { defaultValue: 'Skill routing hints' })}
+              title={t('openMythosRuntime.routingHints', { defaultValue: '技能路由提示' })}
               description={t('openMythosRuntime.routingHintsDescription', {
-                defaultValue: 'Suggest the smallest useful skill or subagent route for risky work.',
+                defaultValue: '为高风险任务建议最小必要的技能或子代理路由。',
               })}
               checked={runtimeConfig.routingHints}
               disabled={disabled || !runtimeConfig.enabled}
@@ -730,9 +745,9 @@ export default function OpenMythosRuntimeContent() {
 
             <RuntimeToggleRow
               icon={ShieldCheck}
-              title={t('openMythosRuntime.stableReinjection', { defaultValue: 'Stable reinjection' })}
+              title={t('openMythosRuntime.stableReinjection', { defaultValue: '稳定重注入' })}
               description={t('openMythosRuntime.stableReinjectionDescription', {
-                defaultValue: 'Reinject the frozen goal, constraints, and acceptance criteria after tool results and into subagents.',
+                defaultValue: '在工具结果和子代理上下文后重新注入冻结目标、约束和验收标准。',
               })}
               checked={runtimeConfig.stableReinjection}
               disabled={disabled || !runtimeConfig.enabled}
@@ -741,9 +756,9 @@ export default function OpenMythosRuntimeContent() {
 
             <RuntimeToggleRow
               icon={BrainCircuit}
-              title={t('openMythosRuntime.phaseAdapter', { defaultValue: 'Phase adapter' })}
+              title={t('openMythosRuntime.phaseAdapter', { defaultValue: '阶段适配器' })}
               description={t('openMythosRuntime.phaseAdapterDescription', {
-                defaultValue: 'Use orient, plan, implement, verify, and finalize phases; early phases are read-only.',
+                defaultValue: '使用定位、计划、实现、验证和收尾阶段；早期阶段保持只读。',
               })}
               checked={runtimeConfig.phaseAdapter}
               disabled={disabled || !runtimeConfig.enabled}
@@ -752,9 +767,9 @@ export default function OpenMythosRuntimeContent() {
 
             <RuntimeToggleRow
               icon={Route}
-              title={t('openMythosRuntime.expertRouting', { defaultValue: 'Expert routing' })}
+              title={t('openMythosRuntime.expertRouting', { defaultValue: '专家路由' })}
               description={t('openMythosRuntime.expertRoutingDescription', {
-                defaultValue: 'Deterministically suggest security, verification, performance, architecture, or frontend experts.',
+                defaultValue: '按任务信号确定性建议安全、验证、性能、架构或前端专家。',
               })}
               checked={runtimeConfig.expertRouting}
               disabled={disabled || !runtimeConfig.enabled}
@@ -763,9 +778,9 @@ export default function OpenMythosRuntimeContent() {
 
             <RuntimeToggleRow
               icon={Gauge}
-              title={t('openMythosRuntime.contextCacheDiagnostics', { defaultValue: 'Context cache diagnostics' })}
+              title={t('openMythosRuntime.contextCacheDiagnostics', { defaultValue: '上下文缓存诊断' })}
               description={t('openMythosRuntime.contextCacheDiagnosticsDescription', {
-                defaultValue: 'Show compact, RAG, and tool-summary ledger data in diagnostics without pretending to be KV cache.',
+                defaultValue: '在诊断中显示压缩、检索增强和工具摘要账本；不伪装成 KV 缓存。',
               })}
               checked={runtimeConfig.contextCacheDiagnostics}
               disabled={disabled || !runtimeConfig.enabled}
@@ -775,17 +790,17 @@ export default function OpenMythosRuntimeContent() {
             <div className="space-y-4 rounded-lg border border-border bg-background p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <ShieldCheck className="h-4 w-4 text-primary" />
-                {t('openMythosRuntime.effortBounds', { defaultValue: 'Effort bounds' })}
+                {t('openMythosRuntime.effortBounds', { defaultValue: '推理强度范围' })}
               </div>
               <EffortSegmentedControl
-                label={t('openMythosRuntime.minEffort', { defaultValue: 'Minimum effort' })}
+                label={t('openMythosRuntime.minEffort', { defaultValue: '最低推理强度' })}
                 value={runtimeConfig.minEffort}
                 disabled={disabled || !runtimeConfig.enabled}
                 onChange={handleMinEffortChange}
                 formatEffortLevel={formatEffortLevel}
               />
               <EffortSegmentedControl
-                label={t('openMythosRuntime.maxEffort', { defaultValue: 'Maximum effort' })}
+                label={t('openMythosRuntime.maxEffort', { defaultValue: '最高推理强度' })}
                 value={runtimeConfig.maxEffort}
                 disabled={disabled || !runtimeConfig.enabled}
                 onChange={handleMaxEffortChange}
@@ -796,12 +811,13 @@ export default function OpenMythosRuntimeContent() {
             <div className="space-y-3 rounded-lg border border-border bg-background p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <Gauge className="h-4 w-4 text-primary" />
-                {t('openMythosRuntime.loopControl', { defaultValue: 'Loop control' })}
+                {t('openMythosRuntime.loopControl', { defaultValue: '循环控制' })}
               </div>
               <LoopControlSegmentedControl
                 value={runtimeConfig.loopControl}
                 disabled={disabled || !runtimeConfig.enabled}
                 onChange={(loopControl) => updateRuntimeConfig({ loopControl })}
+                formatLoopControl={formatLoopControl}
               />
             </div>
           </div>
@@ -810,7 +826,7 @@ export default function OpenMythosRuntimeContent() {
         <aside className="space-y-3 rounded-lg border border-border bg-card/50 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            {t('openMythosRuntime.preview', { defaultValue: 'Runtime preview' })}
+            {t('openMythosRuntime.preview', { defaultValue: '运行时预览' })}
           </div>
           <textarea
             value={previewPrompt}
@@ -818,68 +834,68 @@ export default function OpenMythosRuntimeContent() {
             disabled={disabled}
             rows={4}
             className="min-h-28 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-5 text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={t('openMythosRuntime.previewPrompt', { defaultValue: 'Preview prompt' })}
+            aria-label={t('openMythosRuntime.previewPrompt', { defaultValue: '预览提示词' })}
           />
           {previewCard ? (
             <div className="space-y-3">
               <div className="rounded-lg border border-border bg-background p-3">
                 <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                  {t('openMythosRuntime.frozenGoal', { defaultValue: 'Frozen goal' })}
+                  {t('openMythosRuntime.frozenGoal', { defaultValue: '冻结目标' })}
                 </div>
                 <div className="mt-1 text-sm leading-5 text-foreground">{previewCard.goal}</div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-lg border border-border bg-background p-3">
                   <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.previewEffort', { defaultValue: 'Effort' })}
+                    {t('openMythosRuntime.previewEffort', { defaultValue: '推理强度' })}
                   </div>
                   <div className="mt-1 text-sm font-semibold text-foreground">{formatEffortLevel(previewCard.effort)}</div>
                 </div>
                 <div className="rounded-lg border border-border bg-background p-3">
                   <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.loopBudget', { defaultValue: 'Loop budget' })}
+                    {t('openMythosRuntime.loopBudget', { defaultValue: '循环预算' })}
                   </div>
                   <div className="mt-1 text-sm font-semibold text-foreground">{previewCard.loopBudget}</div>
                 </div>
                 <div className="rounded-lg border border-border bg-background p-3">
                   <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.riskScore', { defaultValue: 'Risk score' })}
+                    {t('openMythosRuntime.riskScore', { defaultValue: '风险分' })}
                   </div>
                   <div className="mt-1 text-sm font-semibold text-foreground">{previewCard.riskScore}</div>
                 </div>
                 <div className="rounded-lg border border-border bg-background p-3">
                   <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.loopControl', { defaultValue: 'Loop control' })}
+                    {t('openMythosRuntime.loopControl', { defaultValue: '循环控制' })}
                   </div>
-                  <div className="mt-1 text-sm font-semibold text-foreground">{runtimeConfig.loopControl}</div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">{formatLoopControl(runtimeConfig.loopControl).label}</div>
                 </div>
               </div>
-              <PreviewList label={t('openMythosRuntime.phasePlan', { defaultValue: 'Phase plan' })} values={[previewCard.phasePlan.join(' -> ')]} />
-              <PreviewList label={t('openMythosRuntime.why', { defaultValue: 'Why' })} values={previewCard.reasons} />
+              <PreviewList label={t('openMythosRuntime.phasePlan', { defaultValue: '阶段计划' })} values={[formatPhasePlan(previewCard.phasePlan)]} />
+              <PreviewList label={t('openMythosRuntime.why', { defaultValue: '原因' })} values={previewCard.reasons} />
               {runtimeConfig.taskCard && (
                 <>
-                  <PreviewList label={t('openMythosRuntime.constraintsLabel', { defaultValue: 'Constraints' })} values={previewCard.constraints} />
-                  <PreviewList label={t('openMythosRuntime.acceptanceLabel', { defaultValue: 'Acceptance' })} values={previewCard.acceptance} />
+                  <PreviewList label={t('openMythosRuntime.constraintsLabel', { defaultValue: '约束' })} values={previewCard.constraints} />
+                  <PreviewList label={t('openMythosRuntime.acceptanceLabel', { defaultValue: '验收标准' })} values={previewCard.acceptance} />
                 </>
               )}
               <PreviewList
-                label={t('openMythosRuntime.routesLabel', { defaultValue: 'Routes' })}
+                label={t('openMythosRuntime.routesLabel', { defaultValue: '路由建议' })}
                 values={previewCard.routes.length > 0
                   ? previewCard.routes
-                  : [t('openMythosRuntime.disabledValue', { defaultValue: 'disabled' })]}
+                  : [t('openMythosRuntime.disabledValue', { defaultValue: '已关闭' })]}
               />
               <PreviewList
-                label={t('openMythosRuntime.expertRoutesLabel', { defaultValue: 'Expert routes' })}
+                label={t('openMythosRuntime.expertRoutesLabel', { defaultValue: '专家路由' })}
                 values={previewCard.expertRoutes.length > 0
                   ? previewCard.expertRoutes
-                  : [t('openMythosRuntime.disabledValue', { defaultValue: 'disabled' })]}
+                  : [t('openMythosRuntime.disabledValue', { defaultValue: '已关闭' })]}
               />
             </div>
           ) : (
             <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
               {runtimeConfig.enabled
-                ? t('openMythosRuntime.emptyPreview', { defaultValue: 'Enter a prompt to preview the runtime card.' })
-                : t('openMythosRuntime.disabledPreview', { defaultValue: 'Runtime is disabled.' })}
+                ? t('openMythosRuntime.emptyPreview', { defaultValue: '输入提示词以预览运行时卡片。' })
+                : t('openMythosRuntime.disabledPreview', { defaultValue: '运行时已关闭。' })}
             </div>
           )}
         </aside>
@@ -889,17 +905,17 @@ export default function OpenMythosRuntimeContent() {
         <div className="min-h-5 text-sm">
           {status === 'success' && (
             <span className="text-emerald-600 dark:text-emerald-400">
-              {t('openMythosRuntime.saved', { defaultValue: 'Runtime settings saved.' })}
+              {t('openMythosRuntime.saved', { defaultValue: '运行时设置已保存。' })}
             </span>
           )}
           {status === 'load-error' && (
             <span className="text-red-600 dark:text-red-400">
-              {t('openMythosRuntime.loadFailed', { defaultValue: 'Could not load runtime settings.' })}
+              {t('openMythosRuntime.loadFailed', { defaultValue: '无法加载运行时设置。' })}
             </span>
           )}
           {status === 'save-error' && (
             <span className="text-red-600 dark:text-red-400">
-              {t('openMythosRuntime.saveFailed', { defaultValue: 'Could not save runtime settings.' })}
+              {t('openMythosRuntime.saveFailed', { defaultValue: '无法保存运行时设置。' })}
             </span>
           )}
           {config.configPath && status === null && (
@@ -910,8 +926,8 @@ export default function OpenMythosRuntimeContent() {
         <Button onClick={handleSave} disabled={disabled} className="h-10">
           <Save className="mr-2 h-4 w-4" />
           {isSaving
-            ? t('openMythosRuntime.saving', { defaultValue: 'Saving' })
-            : t('openMythosRuntime.save', { defaultValue: 'Save runtime' })}
+            ? t('openMythosRuntime.saving', { defaultValue: '保存中' })
+            : t('openMythosRuntime.save', { defaultValue: '保存运行时' })}
         </Button>
       </div>
     </div>

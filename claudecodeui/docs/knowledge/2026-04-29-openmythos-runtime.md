@@ -1,22 +1,22 @@
-# OpenMythos Runtime Controls
+# OpenMythos 运行时控制
 
-Date: 2026-04-29
+日期：2026-04-29
 
-## What Changed
+## 已实现内容
 
-- MTL-Code UI exposes an OpenMythos-inspired Runtime settings page under the Agents settings area.
-- Runtime settings are stored in `~/.mtl-code/settings.json` and mirrored into the Claude Code launch environment.
-- Claude Code reads the runtime environment to build a hidden task card, choose adaptive effort, and add optional routing hints.
-- Agent runtime diagnostics now report the resolved OpenMythos runtime configuration, preview card, phase plan, expert routes, and context ledger for each session.
-- `loopBudget` can now be mapped to `maxTurns` when `loopControl` is `enforced`.
-- Stable reinjection carries the frozen task card into follow-up turns and subagent contexts.
-- Phase adapter adds `orient -> plan -> implement -> verify -> finalize` guidance; early `orient` and `plan` phases block mutating tools.
-- Expert routing is deterministic but conservative: it suggests security, verification, performance, architecture, frontend, git, or local routes; v1 does not silently dispatch write-capable experts.
-- Context cache diagnostics are a ledger over compact boundaries, microcompact boundaries, RAG excerpts, and tool summaries. This is not MLA or KV-cache.
+- MTL-Code UI 在智能体设置区提供 OpenMythos 运行时设置页。
+- 运行时设置保存到 `~/.mtl-code/settings.json`，并同步到 Claude Code 启动环境。
+- Claude Code 会读取运行时环境，用于构造隐藏任务卡、选择自适应推理强度，并附加路由提示。
+- Agent 运行诊断会显示本会话解析后的 OpenMythos 配置、预览卡片、阶段计划、专家路由和上下文账本。
+- 当 `loopControl` 为 `enforced` 时，`loopBudget` 会映射到现有 `maxTurns`。
+- 稳定重注入会把冻结任务卡带入后续轮次和子代理上下文。
+- 阶段适配器会加入 `orient -> plan -> implement -> verify -> finalize` 指引；早期 `orient` 和 `plan` 阶段会阻止写入类工具。
+- 专家路由是确定性的保守建议：会提示安全、验证、性能、架构、前端、Git 或本地路线；v1 不会静默派发可写专家。
+- 上下文缓存诊断是基于压缩边界、microcompact 边界、RAG 摘要和工具摘要的轻量账本，不是 MLA 或 KV cache。
 
-## Settings Shape
+## 设置结构
 
-The saved settings block uses this shape:
+保存后的配置块形如：
 
 ```json
 {
@@ -36,7 +36,7 @@ The saved settings block uses this shape:
 }
 ```
 
-The backend mirrors those values into `settings.env` when the MTL-Code model settings route saves:
+后端保存 MTL-Code 模型设置时，会把这些值同步到 `settings.env`：
 
 ```json
 {
@@ -54,46 +54,44 @@ The backend mirrors those values into `settings.env` when the MTL-Code model set
 }
 ```
 
-Supported effort values are `low`, `medium`, `high`, and `xhigh`.
+支持的推理强度为 `low`、`medium`、`high`、`xhigh`。
 
-## Runtime Behavior
+## 运行行为
 
-- `enabled` controls whether OpenMythos runtime guidance is attached at all.
-- `adaptiveEffort` lets Claude Code infer effort from task risk and complexity when the user has not already set effort explicitly.
-- `taskCard` controls whether a hidden frozen task card is attached to the request.
-- `routingHints` controls whether the hidden card includes skill/subagent route suggestions.
-- `loopControl` is `enforced` or `advisory`. `enforced` maps `loopBudget` to the existing Claude Code `maxTurns` guard.
-- `stableReinjection` re-adds the frozen goal, constraints, acceptance criteria, phase, expert routes, and context ledger as a critical system reminder after tool results and into subagents.
-- `phaseAdapter` computes the current phase from turn count. `orient` and `plan` are read-only phases; `implement`, `verify`, and `finalize` may use mutating tools when appropriate.
-- `expertRouting` records deterministic suggested experts. It is a route hint and usage-detection surface, not an automatic hidden writer.
-- `contextCacheDiagnostics` exposes compact/RAG/tool-summary ledger details in diagnostics.
-- `minEffort` and `maxEffort` clamp the adaptive effort result.
-- User-selected `/effort`, session effort, and existing explicit effort environment values still take precedence over adaptive effort.
+- `enabled` 控制是否启用 OpenMythos 运行时引导。
+- `adaptiveEffort` 允许 Claude Code 在用户没有显式设置 effort 时，根据任务风险和复杂度推断推理强度。
+- `taskCard` 控制是否附加隐藏的冻结任务卡。
+- `routingHints` 控制隐藏任务卡是否包含 skill/subagent 路由建议。
+- `loopControl` 可选 `enforced` 或 `advisory`。`enforced` 会把 `loopBudget` 映射到 Claude Code 现有的 `maxTurns` 防护。
+- `stableReinjection` 会在工具结果后、子代理上下文中重新注入冻结目标、约束、验收标准、阶段、专家路由和上下文账本。
+- `phaseAdapter` 根据轮次计算当前阶段。`orient` 和 `plan` 是只读阶段；`implement`、`verify`、`finalize` 可在合适时使用写入类工具。
+- `expertRouting` 记录确定性的建议专家路线。它是路由提示和使用检测面，不是隐藏的自动写入执行器。
+- `contextCacheDiagnostics` 在诊断中显示 compact、RAG、工具摘要账本。
+- `minEffort` 和 `maxEffort` 会限制自适应推理强度的范围。
+- 用户显式选择的 `/effort`、会话 effort 和已有环境变量仍优先于自适应结果。
 
-## Diagnostics
+## 诊断面板
 
-`agent_runtime_debug` now includes the resolved OpenMythos runtime block. The frontend diagnostics panel shows:
+`agent_runtime_debug` 会包含解析后的 OpenMythos 运行时块。前端诊断面板显示：
 
-- whether the runtime is enabled
-- adaptive effort status
-- task card status
-- routing hints status
-- minimum and maximum effort bounds
-- loop control mode
-- stable reinjection, phase adapter, expert routing, and context cache diagnostic toggles
-- runtime card: frozen goal, effort, risk score, loop budget, remaining budget, current phase, phase plan
-- expert routes and context ledger counts
+- 运行时是否启用。
+- 自适应推理、冻结任务卡、路由提示状态。
+- 最低和最高推理强度。
+- 循环控制模式。
+- 稳定重注入、阶段适配器、专家路由、上下文缓存诊断开关。
+- 运行时卡片：冻结目标、推理强度、风险分、循环预算、剩余预算、当前阶段、阶段计划。
+- 专家路由和上下文账本计数。
 
-## Implementation Limits
+## 实现边界
 
-- This is not ACT halting. v1 uses the existing `maxTurns` limit as the hard budget when `loopControl=enforced`.
-- This is not MLA/KV cache. v1 exposes recoverable summaries and ledger counts around compact, microcompact, RAG, and tool summaries.
-- Expert routes do not automatically spawn write-capable subagents. The model is strongly guided to use the right skill/subagent, and diagnostics make the route visible.
-- Phase enforcement is intentionally coarse: early phases block tools whose existing `isReadOnly()` method returns false.
+- 这不是 ACT halting。v1 在 `loopControl=enforced` 时使用现有 `maxTurns` 作为硬预算。
+- 这不是 MLA/KV cache。v1 只暴露 compact、microcompact、RAG 和工具摘要周围的可恢复摘要与账本计数。
+- 专家路由不会自动启动可写子代理。模型会被强提示使用合适的 skill/subagent，诊断面板会让路由可见。
+- 阶段强制是粗粒度的：早期阶段会阻止现有 `isReadOnly()` 返回 false 的工具。
 
-## Verification
+## 验证方式
 
-Claude Code checks:
+Claude Code 检查：
 
 ```powershell
 cd E:\AIINWORK\claude-code
@@ -102,18 +100,18 @@ bun run benchmark:openmythos
 bun run typecheck
 ```
 
-MTL-Code UI checks:
+MTL-Code UI 检查：
 
 ```powershell
 cd E:\AIINWORK\claudecodeui
 npm run typecheck
-npm run build
-npm run package:preview-win
+npm run check:mojibake
+npm run package:electron-win
 ```
 
-Manual UI check:
+手动 UI 检查：
 
-1. Open Settings > MTLCode > Runtime.
-2. Confirm the Runtime page uses localized labels.
-3. Toggle each runtime module and save.
-4. Start a new MTL-Code session and confirm diagnostics show the same OpenMythos runtime settings.
+1. 打开设置 > MTLCode > 运行时。
+2. 确认运行时页面文案为中文。
+3. 切换每个运行时模块并保存。
+4. 新建 MTL-Code 会话，确认诊断面板显示相同的 OpenMythos 运行时设置。

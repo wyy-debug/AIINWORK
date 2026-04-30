@@ -18,7 +18,7 @@ export default function AgentCategoryContentSection({
   projects,
 }: AgentCategoryContentSectionProps) {
   return (
-    <div className="min-w-0 flex-1 overflow-y-auto p-3 md:p-4 xl:p-5">
+    <div className="min-w-0 flex-1 overflow-y-auto p-4 md:p-5 xl:p-6">
       {selectedCategory === 'model' && selectedAgent === 'claude' && (
         <ModelConfigContent />
       )}

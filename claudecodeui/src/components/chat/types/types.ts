@@ -108,6 +108,8 @@ export interface AgentRuntimePermissionSnapshot {
     project?: Record<string, unknown>;
   };
   conflicts?: string[];
+  matchedRules?: string[];
+  explanation?: string;
 }
 
 export interface AgentRuntimeSkillDetail {
@@ -119,6 +121,7 @@ export interface AgentRuntimeSkillDetail {
   callable: boolean;
   exists: boolean;
   promptLength: number;
+  unavailableReason?: string;
 }
 
 export interface OpenMythosRuntimeDiagnostics {

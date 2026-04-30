@@ -568,7 +568,74 @@ export function useChatComposerState({
       event.preventDefault();
       const currentInput = inputValueRef.current;
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
-      if ((!currentInput.trim() && !hasAttachments) || isLoading || !selectedProject) {
+      if ((!currentInput.trim() && !hasAttachments) || !selectedProject) {
+        return;
+      }
+
+      if (isLoading) {
+        const guidanceText = currentInput.trim();
+        if (!guidanceText) {
+          return;
+        }
+        if (hasAttachments) {
+          addMessage({
+            type: 'error',
+            content: '运行中引导暂不支持附件，请等当前回复结束后再发送附件。',
+            timestamp: new Date(),
+          });
+          return;
+        }
+        if (provider !== 'claude') {
+          addMessage({
+            type: 'error',
+            content: '当前后端暂不支持运行中引导，请等当前回复结束后再发送。',
+            timestamp: new Date(),
+          });
+          return;
+        }
+
+        const pendingSessionId =
+          typeof window !== 'undefined' ? sessionStorage.getItem('pendingSessionId') : null;
+        const guidanceSessionId = [
+          currentSessionId,
+          pendingViewSessionRef.current?.sessionId || null,
+          pendingSessionId,
+          selectedSession?.id || null,
+        ].find((sessionId) => Boolean(sessionId)) || null;
+
+        if (!guidanceSessionId) {
+          addMessage({
+            type: 'error',
+            content: '当前会话还没有准备好接收引导，请稍后再试。',
+            timestamp: new Date(),
+          });
+          return;
+        }
+
+        const clientMessageId = createClientUserMessageId();
+        addMessage({
+          id: clientMessageId,
+          type: 'user',
+          content: guidanceText,
+          timestamp: new Date(),
+        });
+        sendMessage({
+          type: 'claude-guidance',
+          sessionId: guidanceSessionId,
+          command: guidanceText,
+          clientMessageId,
+        });
+
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.focus();
+        }
+        safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
+        setTimeout(() => scrollToBottom(), 50);
         return;
       }
 
@@ -863,6 +930,7 @@ export function useChatComposerState({
             images: uploadedImages,
             files: uploadedFiles,
             clientMessageId,
+            clientSessionId: sessionToActivate,
           },
         });
       }

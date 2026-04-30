@@ -14,6 +14,7 @@ import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
+import ConversationGuideModal from './subcomponents/ConversationGuideModal';
 import WorktreeDispatchModal from './subcomponents/WorktreeDispatchModal';
 import WorktreeTasksModal from './subcomponents/WorktreeTasksModal';
 
@@ -60,6 +61,10 @@ function Sidebar({
   const { tasksEnabled } = useTasksSettings();
   const [worktreeDispatchProject, setWorktreeDispatchProject] = useState<Project | null>(null);
   const [worktreeTasksProject, setWorktreeTasksProject] = useState<Project | null>(null);
+  const [conversationGuideSource, setConversationGuideSource] = useState<{
+    project: Project;
+    session: SessionWithProvider;
+  } | null>(null);
   const {
     isSidebarCollapsed,
     expandedProjects,
@@ -248,6 +253,7 @@ function Sidebar({
     },
     onTogglePinSession: togglePinSession,
     onToggleArchiveSession: toggleArchiveSession,
+    onOpenConversationGuide: (project, session) => setConversationGuideSource({ project, session }),
     t,
   };
 
@@ -377,6 +383,17 @@ function Sidebar({
           project={worktreeDispatchProject}
           onClose={() => setWorktreeDispatchProject(null)}
           onCreated={handleWorktreeCreated}
+        />
+      )}
+
+      {conversationGuideSource && (
+        <ConversationGuideModal
+          sourceProject={conversationGuideSource.project}
+          sourceSession={conversationGuideSource.session}
+          conversationSessions={conversationSessions}
+          onClose={() => setConversationGuideSource(null)}
+          onStartNewConversation={onNewConversation}
+          onAppendToConversation={onConversationSessionSelect}
         />
       )}
 

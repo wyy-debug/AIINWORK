@@ -17,7 +17,7 @@ import { AppError, createNormalizedMessage } from '@/shared/utils.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
-import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { queryClaudeSDK, abortClaudeSDKSession, sendClaudeSDKGuidance, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
@@ -2000,6 +2000,17 @@ function createRuntimePermissionSnapshot(data) {
         .map((tool) => tool.trim())
         .filter((tool) => tool && allowedSet.has(tool))
         .map((tool) => `${tool} is both allowed and disallowed`);
+    const matchedRules = [
+        ...toolsSettings.allowedTools.map((tool) => `allow:${tool}`),
+        ...toolsSettings.disallowedTools.map((tool) => `deny:${tool}`),
+    ];
+    const explanation = bypassPermissions
+        ? '权限已按当前设置跳过，除非 provider runtime 还有更严格的原生限制。'
+        : permissionMode === 'plan'
+            ? '当前为 Plan 模式，后端不会启用全权限跳过。'
+            : matchedRules.length > 0
+                ? '后端已收到允许/拒绝规则；未命中的工具仍可能触发权限申请。'
+                : '未配置允许规则，工具调用会按 provider 默认权限策略申请确认。';
 
     return {
         permissionMode,
@@ -2022,6 +2033,8 @@ function createRuntimePermissionSnapshot(data) {
             },
         },
         conflicts,
+        matchedRules,
+        explanation,
     };
 }
 
@@ -2380,6 +2393,23 @@ function handleChatConnection(ws, request) {
 
                 // Use Claude Agents SDK
                 await queryClaudeSDK(commandData.command, commandData.options, writer);
+            } else if (data.type === 'claude-guidance') {
+                const result = sendClaudeSDKGuidance(data.sessionId, data.command || data.content || '', data.clientMessageId || null);
+                writer.send({
+                    type: 'guidance-response',
+                    provider: 'claude',
+                    sessionId: data.sessionId || null,
+                    success: result.success,
+                    error: result.error
+                });
+                if (!result.success) {
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: result.error || 'Failed to append guidance to the active session.',
+                        sessionId: data.sessionId || null,
+                        provider: 'claude'
+                    }));
+                }
             } else if (data.type === 'cursor-command') {
                 const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
                 emitRuntimeDiagnostics(writer, commandData);

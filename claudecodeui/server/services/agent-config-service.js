@@ -555,6 +555,9 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
       callable: Boolean(installed?.callable),
       exists: Boolean(installed?.skillPath),
       promptLength: line.length,
+      unavailableReason: installed
+        ? (installed.callable ? '' : 'Skill 已安装，但当前注册表未标记为可调用。')
+        : '未找到已安装的 SKILL.md，后端会提示模型不要依赖该 Skill。',
       line,
     };
   });

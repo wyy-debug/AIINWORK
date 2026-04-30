@@ -11,7 +11,7 @@ export default function AgentCategoryTabsSection({
   const { t } = useTranslation('settings');
 
   return (
-    <div className="flex-shrink-0 border-b border-border">
+    <div className="z-10 flex-shrink-0 border-b border-border bg-background/95 backdrop-blur">
       <div role="tablist" className="flex overflow-x-auto px-2 md:px-4">
         {AGENT_CATEGORIES.map((category) => (
           <button

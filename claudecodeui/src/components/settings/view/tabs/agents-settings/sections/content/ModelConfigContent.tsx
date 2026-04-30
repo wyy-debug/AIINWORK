@@ -281,7 +281,7 @@ export default function ModelConfigContent() {
       try {
         const response = await apiFetch('/api/settings/mtl-code-model');
         if (!response.ok) {
-          throw new Error(await readResponseError(response, 'Failed to load MTLCode model config'));
+          throw new Error(await readResponseError(response, '加载 MTLCode 模型配置失败'));
         }
 
         const payload = await response.json();
@@ -294,7 +294,7 @@ export default function ModelConfigContent() {
         console.error(error);
         if (!cancelled) {
           setStatus('error');
-          setErrorMessage(error instanceof Error ? error.message : 'Failed to load MTLCode model config');
+          setErrorMessage(error instanceof Error ? error.message : '加载 MTLCode 模型配置失败');
         }
       } finally {
         if (!cancelled) {
@@ -401,7 +401,7 @@ export default function ModelConfigContent() {
       });
 
       if (!response.ok) {
-        throw new Error(await readResponseError(response, 'Failed to save MTLCode model config'));
+        throw new Error(await readResponseError(response, '保存 MTLCode 模型配置失败'));
       }
 
       const responsePayload = await response.json();
@@ -413,7 +413,7 @@ export default function ModelConfigContent() {
     } catch (error) {
       console.error(error);
       setStatus('error');
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to save MTLCode model config');
+      setErrorMessage(error instanceof Error ? error.message : '保存 MTLCode 模型配置失败');
     } finally {
       setIsSaving(false);
     }
@@ -425,21 +425,21 @@ export default function ModelConfigContent() {
         <Bot className="h-5 w-5 text-emerald-500" />
         <div>
           <h3 className="text-lg font-medium text-foreground">
-            {t('mtlCodeModel.title', { defaultValue: 'MTLCode Models' })}
+            {t('mtlCodeModel.title', { defaultValue: 'MTLCode 模型' })}
           </h3>
           <p className="text-sm text-muted-foreground">
             {t('mtlCodeModel.subtitle', {
-              defaultValue: 'Manage Anthropic-compatible model profiles and choose the one MTL-Code uses at runtime.',
+              defaultValue: '管理兼容 Anthropic 协议的模型配置，并选择当前运行时使用的模型。',
             })}
           </p>
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(240px,300px)_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(280px,360px)_1fr] 2xl:grid-cols-[minmax(320px,420px)_1fr]">
         <div className="space-y-3 rounded-lg border border-border bg-card/50 p-3">
           <div className="flex items-center justify-between gap-2">
             <div className="text-sm font-medium text-foreground">
-              {t('mtlCodeModel.profiles', { defaultValue: 'Model profiles' })}
+              {t('mtlCodeModel.profiles', { defaultValue: '模型配置' })}
             </div>
             <Button
               type="button"
@@ -456,7 +456,7 @@ export default function ModelConfigContent() {
               })}
             >
               <Plus className="mr-1 h-3.5 w-3.5" />
-              {t('mtlCodeModel.add', { defaultValue: 'Add' })}
+              {t('mtlCodeModel.add', { defaultValue: '添加' })}
             </Button>
           </div>
 
@@ -464,7 +464,7 @@ export default function ModelConfigContent() {
             {config.profiles.map((profile) => {
               const isSelected = profile.id === selectedProfile.id;
               const isActive = profile.id === config.activeProfileId;
-              const profileName = profile.name || t('mtlCodeModel.unnamedProfile', { defaultValue: 'Unnamed model' });
+              const profileName = profile.name || t('mtlCodeModel.unnamedProfile', { defaultValue: '未命名模型' });
 
               return (
                 <button
@@ -485,7 +485,7 @@ export default function ModelConfigContent() {
                         {isActive && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
                       </div>
                       <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {profile.model || t('mtlCodeModel.noModel', { defaultValue: 'No model set' })}
+                        {profile.model || t('mtlCodeModel.noModel', { defaultValue: '未设置模型' })}
                       </div>
                     </div>
                   </div>
@@ -499,12 +499,12 @@ export default function ModelConfigContent() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="text-sm font-medium text-foreground">
-                {t('mtlCodeModel.profileEditor', { defaultValue: 'Profile editor' })}
+                {t('mtlCodeModel.profileEditor', { defaultValue: '配置编辑器' })}
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 {selectedProfile.id === config.activeProfileId
-                  ? t('mtlCodeModel.activeProfile', { defaultValue: 'This profile is active.' })
-                  : t('mtlCodeModel.inactiveProfile', { defaultValue: 'Save after activating to apply it to the backend.' })}
+                  ? t('mtlCodeModel.activeProfile', { defaultValue: '这个配置当前已启用。' })
+                  : t('mtlCodeModel.inactiveProfile', { defaultValue: '启用并保存后才会应用到后端。' })}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -516,7 +516,7 @@ export default function ModelConfigContent() {
                 onClick={() => activateProfile(selectedProfile.id)}
               >
                 <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
-                {t('mtlCodeModel.activate', { defaultValue: 'Use this model' })}
+                {t('mtlCodeModel.activate', { defaultValue: '使用此模型' })}
               </Button>
               <Button
                 type="button"
@@ -526,7 +526,7 @@ export default function ModelConfigContent() {
                 onClick={() => removeProfile(selectedProfile.id)}
               >
                 <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                {t('mtlCodeModel.delete', { defaultValue: 'Delete' })}
+                {t('mtlCodeModel.delete', { defaultValue: '删除' })}
               </Button>
             </div>
           </div>
@@ -534,24 +534,24 @@ export default function ModelConfigContent() {
           <div className="grid gap-4 md:grid-cols-2">
             <label className="space-y-2">
               <span className="text-sm font-medium text-foreground">
-                {t('mtlCodeModel.profileName', { defaultValue: 'Profile name' })}
+                {t('mtlCodeModel.profileName', { defaultValue: '配置名称' })}
               </span>
               <Input
                 value={selectedProfile.name}
                 onChange={(event) => updateProfile(selectedProfile.id, { name: event.target.value })}
-                placeholder={t('mtlCodeModel.profileNamePlaceholder', { defaultValue: 'My model profile' })}
+                placeholder={t('mtlCodeModel.profileNamePlaceholder', { defaultValue: '我的模型配置' })}
                 disabled={isLoading || isSaving}
               />
             </label>
 
             <label className="space-y-2">
               <span className="text-sm font-medium text-foreground">
-                {t('mtlCodeModel.model', { defaultValue: 'Model' })}
+                {t('mtlCodeModel.model', { defaultValue: '模型' })}
               </span>
               <Input
                 value={selectedProfile.model}
                 onChange={(event) => updateProfile(selectedProfile.id, { model: event.target.value })}
-                placeholder={t('mtlCodeModel.modelPlaceholder', { defaultValue: 'model-id' })}
+                placeholder={t('mtlCodeModel.modelPlaceholder', { defaultValue: '模型 ID' })}
                 disabled={isLoading || isSaving}
               />
             </label>
@@ -569,7 +569,7 @@ export default function ModelConfigContent() {
               />
               <p className="text-xs text-muted-foreground">
                 {t('mtlCodeModel.baseUrlHelp', {
-                  defaultValue: 'Use the Anthropic-compatible base URL from your provider.',
+                  defaultValue: '填写供应商提供的 Anthropic 兼容 Base URL。',
                 })}
               </p>
             </label>
@@ -585,7 +585,7 @@ export default function ModelConfigContent() {
                 onChange={(event) => updateProfile(selectedProfile.id, { apiKey: event.target.value })}
                 placeholder={
                   selectedProfile.apiKeyConfigured
-                    ? t('mtlCodeModel.apiKeyConfigured', { defaultValue: 'Configured' })
+                    ? t('mtlCodeModel.apiKeyConfigured', { defaultValue: '已配置' })
                     : 'sk-... / tp-...'
                 }
                 disabled={isLoading || isSaving}
@@ -596,7 +596,7 @@ export default function ModelConfigContent() {
               <span className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <Gauge className="h-4 w-4" />
                 {t('mtlCodeModel.contextWindowTokens', {
-                  defaultValue: 'Context window tokens',
+                  defaultValue: '上下文 tokens',
                 })}
               </span>
               <Input
@@ -625,11 +625,11 @@ export default function ModelConfigContent() {
                 <Rocket className="mt-0.5 h-4 w-4 text-primary" />
                 <div>
                   <div className="text-sm font-medium text-foreground">
-                    {t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
+                    {t('mtlCodeModel.bareMode', { defaultValue: '轻量启动' })}
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {t('mtlCodeModel.bareModeDescription', {
-                      defaultValue: 'Start MTL-Code with --bare for cleaner first-use sessions.',
+                      defaultValue: '使用 --bare 启动 MTL-Code，让新会话更干净。',
                     })}
                   </p>
                 </div>
@@ -637,7 +637,7 @@ export default function ModelConfigContent() {
               <SettingsToggle
                 checked={selectedProfile.bareMode}
                 onChange={(bareMode) => updateProfile(selectedProfile.id, { bareMode })}
-                ariaLabel={t('mtlCodeModel.bareMode', { defaultValue: 'Lightweight startup' })}
+                ariaLabel={t('mtlCodeModel.bareMode', { defaultValue: '轻量启动' })}
                 disabled={isLoading || isSaving}
               />
             </div>
@@ -649,12 +649,12 @@ export default function ModelConfigContent() {
         <div className="min-h-5 text-sm">
           {status === 'success' && (
             <span className="text-emerald-600 dark:text-emerald-400">
-              {t('mtlCodeModel.saved', { defaultValue: 'Saved to MTL-Code settings.' })}
+              {t('mtlCodeModel.saved', { defaultValue: '已保存到 MTL-Code 设置。' })}
             </span>
           )}
           {status === 'error' && (
             <span className="text-red-600 dark:text-red-400">
-              {errorMessage || t('mtlCodeModel.saveFailed', { defaultValue: 'Could not save model settings.' })}
+              {errorMessage || t('mtlCodeModel.saveFailed', { defaultValue: '无法保存模型设置。' })}
             </span>
           )}
           {config.configPath && status === null && (
@@ -665,8 +665,8 @@ export default function ModelConfigContent() {
         <Button onClick={handleSave} disabled={isLoading || isSaving} className="h-10">
           <Save className="mr-2 h-4 w-4" />
           {isSaving
-            ? t('mtlCodeModel.saving', { defaultValue: 'Saving' })
-            : t('mtlCodeModel.save', { defaultValue: 'Save' })}
+            ? t('mtlCodeModel.saving', { defaultValue: '保存中' })
+            : t('mtlCodeModel.save', { defaultValue: '保存' })}
         </Button>
       </div>
     </div>

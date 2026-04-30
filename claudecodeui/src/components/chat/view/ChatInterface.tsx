@@ -14,6 +14,14 @@ import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { getClaudeSettings } from '../utils/chatStorage';
+import {
+  clearStoredConversationDraft,
+  CONVERSATION_DRAFT_EVENT,
+  getConversationDraftFromEvent,
+  readStoredConversationDraft,
+  shouldApplyConversationDraft,
+  type ConversationDraftPayload,
+} from '../utils/conversationDraft';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -126,6 +134,7 @@ function ChatInterface({
   const worktreeDefaultsKeyRef = useRef('');
   const worktreeSessionPersistKeyRef = useRef('');
   const worktreePromptPrefillKeyRef = useRef('');
+  const appliedConversationDraftKeyRef = useRef('');
   const projectSkillBindingLoadKeyRef = useRef('');
   const projectSkillBindingPersistKeyRef = useRef('');
   const projectSkillBindingHydratedKeyRef = useRef('');
@@ -940,6 +949,47 @@ function ChatInterface({
     setPendingPermissionRequests,
   });
 
+  const applyConversationDraft = useCallback(
+    (payload: ConversationDraftPayload | null) => {
+      if (!payload || appliedConversationDraftKeyRef.current === payload.id) {
+        return false;
+      }
+
+      if (!shouldApplyConversationDraft(payload, {
+        isConversationSpace,
+        selectedProject,
+        selectedSession,
+        currentSessionId,
+      })) {
+        return false;
+      }
+
+      setInput((previous) => (
+        payload.mode === 'append' && previous.trim()
+          ? `${previous.trimEnd()}\n\n${payload.text}`
+          : payload.text
+      ));
+      appliedConversationDraftKeyRef.current = payload.id;
+      clearStoredConversationDraft(payload.id);
+      window.setTimeout(() => textareaRef.current?.focus(), 0);
+      return true;
+    },
+    [currentSessionId, isConversationSpace, selectedProject, selectedSession, setInput, textareaRef],
+  );
+
+  useEffect(() => {
+    applyConversationDraft(readStoredConversationDraft());
+  }, [applyConversationDraft]);
+
+  useEffect(() => {
+    const handleConversationDraft = (event: Event) => {
+      applyConversationDraft(getConversationDraftFromEvent(event));
+    };
+
+    window.addEventListener(CONVERSATION_DRAFT_EVENT, handleConversationDraft);
+    return () => window.removeEventListener(CONVERSATION_DRAFT_EVENT, handleConversationDraft);
+  }, [applyConversationDraft]);
+
   useEffect(() => {
     if (!isWorktreeProject || !worktreeMeta?.id || !activeConversationSessionId) {
       return;
@@ -1122,6 +1172,7 @@ function ChatInterface({
           sessionMessagesCount={chatMessages.length}
           visibleMessageCount={visibleMessageCount}
           visibleMessages={visibleMessages}
+          isSessionRunning={isLoading}
           loadEarlierMessages={loadEarlierMessages}
           loadAllMessages={loadAllMessages}
           allMessagesLoaded={allMessagesLoaded}

@@ -9,24 +9,64 @@
     "repository": "仓库",
     "appearance": "外观"
   },
+  "mtlCodeModel": {
+    "title": "MTLCode 模型",
+    "subtitle": "管理兼容 Anthropic 协议的模型配置，并选择当前运行时使用的模型。",
+    "profiles": "模型配置",
+    "add": "添加",
+    "unnamedProfile": "未命名模型",
+    "noModel": "未设置模型",
+    "profileEditor": "配置编辑器",
+    "activeProfile": "这个配置当前已启用。",
+    "inactiveProfile": "启用并保存后才会应用到后端。",
+    "activate": "使用此模型",
+    "delete": "删除",
+    "profileName": "配置名称",
+    "profileNamePlaceholder": "我的模型配置",
+    "model": "模型",
+    "modelPlaceholder": "模型 ID",
+    "baseUrl": "Base URL",
+    "baseUrlHelp": "填写供应商提供的 Anthropic 兼容 Base URL。",
+    "apiKey": "API Key / Auth Token",
+    "apiKeyConfigured": "已配置",
+    "contextWindowTokens": "上下文 tokens",
+    "bareMode": "轻量启动",
+    "bareModeDescription": "使用 --bare 启动 MTL-Code，让新会话更干净。",
+    "saved": "已保存到 MTL-Code 设置。",
+    "saveFailed": "无法保存模型设置。",
+    "saving": "保存中",
+    "save": "保存"
+  },
   "openMythosRuntime": {
     "title": "OpenMythos 运行时",
-    "subtitle": "配置 MTL-Code 会话的自适应 effort、冻结任务卡和 Skill 路由提示。",
+    "subtitle": "配置 MTL-Code 会话的自适应推理强度、冻结任务卡和技能路由提示。",
     "enabled": "OpenMythos 运行时",
-    "enabledDescription": "为每轮任务注入运行时引导，并允许按任务复杂度自动选择 effort。",
-    "adaptiveEffort": "自适应 effort",
-    "adaptiveEffortDescription": "当没有显式指定 effort 时，根据任务复杂度在低到极深之间自动选择。",
+    "enabledDescription": "为每轮任务注入运行时引导，并允许按任务复杂度自动选择推理强度。",
+    "adaptiveEffort": "自适应推理强度",
+    "adaptiveEffortDescription": "未显式指定推理强度时，根据任务复杂度在低到极深之间自动选择。",
     "taskCard": "冻结任务卡",
     "taskCardDescription": "将目标、约束和验收标准作为隐藏提醒随每轮任务携带。",
-    "routingHints": "Skill 路由提示",
-    "routingHintsDescription": "为高风险任务建议最小必要的 skill 或 subagent 路由。",
-    "effortBounds": "Effort 范围",
-    "minEffort": "最低 effort",
-    "maxEffort": "最高 effort",
+    "routingHints": "技能路由提示",
+    "routingHintsDescription": "为高风险任务建议最小必要的技能或子代理路由。",
+    "stableReinjection": "稳定重注入",
+    "stableReinjectionDescription": "在工具结果和子代理上下文后重新注入冻结目标、约束和验收标准。",
+    "phaseAdapter": "阶段适配器",
+    "phaseAdapterDescription": "使用定位、计划、实现、验证和收尾阶段；早期阶段保持只读。",
+    "expertRouting": "专家路由",
+    "expertRoutingDescription": "按任务信号确定性建议安全、验证、性能、架构或前端专家。",
+    "contextCacheDiagnostics": "上下文缓存诊断",
+    "contextCacheDiagnosticsDescription": "在诊断中显示压缩、检索增强和工具摘要账本；不伪装成 KV 缓存。",
+    "effortBounds": "推理强度范围",
+    "minEffort": "最低推理强度",
+    "maxEffort": "最高推理强度",
+    "loopControl": "循环控制",
+    "riskScore": "风险分",
+    "phasePlan": "阶段计划",
+    "expertRoutesLabel": "专家路由",
     "preview": "运行时预览",
     "previewPrompt": "预览提示词",
     "frozenGoal": "冻结目标",
-    "previewEffort": "Effort",
+    "previewEffort": "推理强度",
     "loopBudget": "循环预算",
     "why": "原因",
     "constraintsLabel": "约束",
@@ -47,6 +87,16 @@
       "high": "高",
       "xhigh": "极深"
     },
+    "loopControlOptions": {
+      "enforced": {
+        "label": "强制",
+        "description": "将循环预算映射到最大轮次"
+      },
+      "advisory": {
+        "label": "建议",
+        "description": "仅作为提示约束"
+      }
+    },
     "reasons": {
       "security": "涉及安全或隐私敏感工作",
       "deployment": "涉及部署、数据或 CI 风险",
@@ -55,6 +105,7 @@
       "implementation": "用户要求实现或修改",
       "verification": "用户要求测试或验证",
       "git": "涉及 Git 工作流",
+      "frontend": "涉及前端或视觉质量工作",
       "small": "小型或对话类任务"
     },
     "constraints": {
@@ -74,8 +125,19 @@
       "architecture": "大范围代码研究先使用 Explore/Plan agent。",
       "test": "编辑后运行聚焦测试，必要时使用验证 agent。",
       "git": "保留现有工作区改动，并明确报告 Git 状态。",
+      "frontend": "使用前端或设计指导，并在可用时验证渲染后的界面。",
       "local": "本地处理；除非出现明确的并行子任务，否则不启动 agent。",
       "routed": "仅在能并行推进或保护主上下文时使用 skill/subagent 路由。"
+    },
+    "experts": {
+      "local": "本地执行"
+    },
+    "phases": {
+      "orient": "定位",
+      "plan": "计划",
+      "implement": "实现",
+      "verify": "验证",
+      "finalize": "收尾"
     }
   },
   "account": {

@@ -889,6 +889,10 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
   const createSessionInstance = (mtlCodeChild) => ({
     child: mtlCodeChild,
+    sendGuidance: (content, clientMessageId = null) => writeMtlCodeJson(
+      mtlCodeChild,
+      createMtlCodeUserMessage(content, clientMessageId)
+    ),
     interrupt: async () => {
       mtlCodeChild._mtlCodeAborted = true;
       writeMtlCodeJson(mtlCodeChild, {
@@ -905,13 +909,17 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
   });
 
+  const clientSessionId = typeof options.clientSessionId === 'string' ? options.clientSessionId.trim() : '';
   const ensureSessionRegistered = (messageSessionId) => {
-    if (!messageSessionId || capturedSessionId) {
+    if (!messageSessionId || capturedSessionId === messageSessionId) {
       return;
     }
 
     capturedSessionId = messageSessionId;
     addSession(capturedSessionId, createSessionInstance(child), tempImagePaths, tempDir, ws);
+    if (clientSessionId && clientSessionId !== capturedSessionId) {
+      removeSession(clientSessionId);
+    }
 
     if (ws.setSessionId && typeof ws.setSessionId === 'function') {
       ws.setSessionId(capturedSessionId);
@@ -1075,8 +1083,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       throw lastSpawnError || new Error('No usable MTL-Code backend candidate found');
     }
 
-    if (sessionId) {
-      addSession(capturedSessionId, createSessionInstance(child), tempImagePaths, tempDir, ws);
+    if (sessionId || clientSessionId) {
+      addSession(capturedSessionId || clientSessionId, createSessionInstance(child), tempImagePaths, tempDir, ws);
     }
 
     child.stderr?.on('data', (chunk) => {
@@ -1490,6 +1498,39 @@ async function abortClaudeSDKSession(sessionId) {
 }
 
 /**
+ * Sends an additional user guidance message into an active MTL-Code session.
+ * This is used by the UI while a response is still running.
+ * @param {string} sessionId - Active session identifier or temporary client session id
+ * @param {string} content - Additional user guidance
+ * @param {string|null} clientMessageId - Optional UI message id for dedupe
+ * @returns {{success: boolean, error?: string}}
+ */
+function sendClaudeSDKGuidance(sessionId, content, clientMessageId = null) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const normalizedContent = typeof content === 'string' ? content.trim() : '';
+
+  if (!normalizedSessionId) {
+    return { success: false, error: 'No active session id is available.' };
+  }
+  if (!normalizedContent) {
+    return { success: false, error: 'Guidance content is empty.' };
+  }
+
+  const session = getSession(normalizedSessionId);
+  if (!session || session.status !== 'active') {
+    return { success: false, error: `Session ${normalizedSessionId} is not active.` };
+  }
+  if (typeof session.instance?.sendGuidance !== 'function') {
+    return { success: false, error: 'The active backend does not support runtime guidance.' };
+  }
+
+  const written = session.instance.sendGuidance(normalizedContent, clientMessageId);
+  return written
+    ? { success: true }
+    : { success: false, error: 'The active backend input stream is no longer writable.' };
+}
+
+/**
  * Checks if an SDK session is currently active
  * @param {string} sessionId - Session identifier
  * @returns {boolean} True if session is active
@@ -1548,6 +1589,7 @@ function reconnectSessionWriter(sessionId, newRawWs) {
 export {
   queryClaudeSDK,
   abortClaudeSDKSession,
+  sendClaudeSDKGuidance,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
   resolveToolApproval,

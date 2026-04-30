@@ -9,6 +9,34 @@
     "repository": "Repository",
     "appearance": "Appearance"
   },
+  "mtlCodeModel": {
+    "title": "MTLCode Models",
+    "subtitle": "Manage Anthropic-compatible model profiles and choose the one MTL-Code uses at runtime.",
+    "profiles": "Model profiles",
+    "add": "Add",
+    "unnamedProfile": "Unnamed model",
+    "noModel": "No model set",
+    "profileEditor": "Profile editor",
+    "activeProfile": "This profile is active.",
+    "inactiveProfile": "Save after activating to apply it to the backend.",
+    "activate": "Use this model",
+    "delete": "Delete",
+    "profileName": "Profile name",
+    "profileNamePlaceholder": "My model profile",
+    "model": "Model",
+    "modelPlaceholder": "model-id",
+    "baseUrl": "Base URL",
+    "baseUrlHelp": "Use the Anthropic-compatible base URL from your provider.",
+    "apiKey": "API Key / Auth Token",
+    "apiKeyConfigured": "Configured",
+    "contextWindowTokens": "Context window tokens",
+    "bareMode": "Lightweight startup",
+    "bareModeDescription": "Start MTL-Code with --bare for cleaner first-use sessions.",
+    "saved": "Saved to MTL-Code settings.",
+    "saveFailed": "Could not save model settings.",
+    "saving": "Saving",
+    "save": "Save"
+  },
   "openMythosRuntime": {
     "title": "OpenMythos Runtime",
     "subtitle": "Tune adaptive effort, frozen task cards, and skill routing hints for MTL-Code sessions.",
@@ -20,9 +48,21 @@
     "taskCardDescription": "Carry goal, constraints, and acceptance criteria as a hidden reminder.",
     "routingHints": "Skill routing hints",
     "routingHintsDescription": "Suggest the smallest useful skill or subagent route for risky work.",
+    "stableReinjection": "Stable reinjection",
+    "stableReinjectionDescription": "Reinject the frozen goal, constraints, and acceptance criteria after tool results and into subagents.",
+    "phaseAdapter": "Phase adapter",
+    "phaseAdapterDescription": "Use orient, plan, implement, verify, and finalize phases; early phases are read-only.",
+    "expertRouting": "Expert routing",
+    "expertRoutingDescription": "Deterministically suggest security, verification, performance, architecture, or frontend experts.",
+    "contextCacheDiagnostics": "Context cache diagnostics",
+    "contextCacheDiagnosticsDescription": "Show compact, RAG, and tool-summary ledger data in diagnostics without pretending to be KV cache.",
     "effortBounds": "Effort bounds",
     "minEffort": "Minimum effort",
     "maxEffort": "Maximum effort",
+    "loopControl": "Loop control",
+    "riskScore": "Risk score",
+    "phasePlan": "Phase plan",
+    "expertRoutesLabel": "Expert routes",
     "preview": "Runtime preview",
     "previewPrompt": "Preview prompt",
     "frozenGoal": "Frozen goal",
@@ -47,6 +87,16 @@
       "high": "High",
       "xhigh": "XHigh"
     },
+    "loopControlOptions": {
+      "enforced": {
+        "label": "Enforced",
+        "description": "Map loop budget to maxTurns"
+      },
+      "advisory": {
+        "label": "Advisory",
+        "description": "Prompt guidance only"
+      }
+    },
     "reasons": {
       "security": "security or privacy sensitive work",
       "deployment": "deployment, data, or CI risk",
@@ -55,6 +105,7 @@
       "implementation": "implementation requested",
       "verification": "verification requested",
       "git": "git workflow requested",
+      "frontend": "frontend or visual quality work",
       "small": "small or conversational task"
     },
     "constraints": {
@@ -74,8 +125,19 @@
       "architecture": "Use Explore/Plan agents for broad codebase research before edits.",
       "test": "Run focused tests or a verification agent after edits.",
       "git": "Preserve existing worktree changes and report git state explicitly.",
+      "frontend": "Use frontend/design guidance and verify the rendered UI when available.",
       "local": "Handle locally; avoid spawning agents unless a specific side task appears.",
       "routed": "Use skill/subagent routing only for distinct work that can run in parallel or protect main context."
+    },
+    "experts": {
+      "local": "Local execution"
+    },
+    "phases": {
+      "orient": "Orient",
+      "plan": "Plan",
+      "implement": "Implement",
+      "verify": "Verify",
+      "finalize": "Finalize"
     }
   },
   "account": {

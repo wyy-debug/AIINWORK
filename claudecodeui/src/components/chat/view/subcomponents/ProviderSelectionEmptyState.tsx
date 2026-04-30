@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bot } from "lucide-react";
+import { Bot, Check, ChevronDown } from "lucide-react";
 
 import { CLAUDE_MODELS } from "../../../../../shared/modelConstants";
 import type { ProjectSession, LLMProvider } from "../../../../types/app";
@@ -38,7 +38,95 @@ type ProviderSelectionEmptyStateProps = {
   onModelProfileChange?: (profileId: string) => void;
 };
 
+type AgentChoiceDropdownProps = {
+  agents: AgentConfig[];
+  value: string;
+  onChange: (agentId: string) => void;
+};
+
 const MTL_CODE_PROVIDER: LLMProvider = "claude";
+
+function AgentChoiceDropdown({ agents, value, onChange }: AgentChoiceDropdownProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedAgent = agents.find((agent) => agent.id === value) || agents[0] || null;
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && wrapperRef.current?.contains(target)) {
+        return;
+      }
+      setIsOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={wrapperRef} className="relative mt-3">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 text-left text-xs shadow-sm transition-colors hover:bg-muted/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <Bot className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span className="min-w-0 truncate font-medium text-foreground">
+            {selectedAgent?.shortName || selectedAgent?.name || "选择 Agent"}
+          </span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-56 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl ring-1 ring-black/5">
+          {agents.map((agent) => {
+            const selected = agent.id === value;
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => {
+                  onChange(agent.id);
+                  setIsOpen(false);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
+                  selected
+                    ? "bg-primary text-primary-foreground"
+                    : "text-foreground hover:bg-muted"
+                }`}
+              >
+                <Bot className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {agent.shortName || agent.name}
+                </span>
+                {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProviderSelectionEmptyState({
   selectedSession,
   currentSessionId,
@@ -135,19 +223,11 @@ export default function ProviderSelectionEmptyState({
                 </div>
               </div>
 
-              {enabledAgents.length > 0 && (
-                <select
-                  value={draftAgentId}
-                  onChange={(event) => setDraftAgentId(event.target.value)}
-                  className="mt-3 h-9 w-full rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary"
-                >
-                  {enabledAgents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.shortName || agent.name}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <AgentChoiceDropdown
+                agents={enabledAgents}
+                value={draftAgentId}
+                onChange={setDraftAgentId}
+              />
 
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button

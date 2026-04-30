@@ -111,3 +111,6 @@ claudecodeui/.worktrees/
 claudecodeui/electron-resources/
 claudecodeui/tasks/
 claudecodeui/tasks.json
+
+# Reference-only upstream checkout used for OpenMythos runtime ideas.
+OpenMythos/

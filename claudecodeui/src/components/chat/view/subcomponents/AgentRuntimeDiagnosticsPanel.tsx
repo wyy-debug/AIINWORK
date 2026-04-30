@@ -131,6 +131,7 @@ function SkillDetails({ details }: { details?: AgentRuntimeDiagnostics['skillDet
             <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
               <span>{detail.provider || 'unknown'} / {detail.scope || 'unknown'}</span>
               <span>prompt {formatNumber(detail.promptLength)}</span>
+              {detail.unavailableReason && <span className="text-amber-600 dark:text-amber-300">{detail.unavailableReason}</span>}
             </div>
           </div>
         );
@@ -179,41 +180,41 @@ function OpenMythosRuntimeSection({
     <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
         <BrainCircuitIcon className="h-4 w-4 text-primary" />
-        OpenMythos Runtime
+        OpenMythos 运行时
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="enabled" value={formatBoolean(runtime?.enabled)} />
-        <Field label="adaptiveEffort" value={formatBoolean(runtime?.adaptiveEffort)} />
-        <Field label="taskCard" value={formatBoolean(runtime?.taskCard)} />
-        <Field label="routingHints" value={formatBoolean(runtime?.routingHints)} />
-        <Field label="loopControl" value={formatText(runtime?.loopControl)} />
-        <Field label="stableReinjection" value={formatBoolean(runtime?.stableReinjection)} />
-        <Field label="phaseAdapter" value={formatBoolean(runtime?.phaseAdapter)} />
-        <Field label="expertRouting" value={formatBoolean(runtime?.expertRouting)} />
-        <Field label="contextCacheDiagnostics" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
-        <Field label="minEffort" value={formatText(runtime?.minEffort)} />
-        <Field label="maxEffort" value={formatText(runtime?.maxEffort)} />
-        <Field label="source" value={runtime ? 'settings/env' : EMPTY_TEXT} />
+        <Field label="已启用" value={formatBoolean(runtime?.enabled)} />
+        <Field label="自适应推理" value={formatBoolean(runtime?.adaptiveEffort)} />
+        <Field label="冻结任务卡" value={formatBoolean(runtime?.taskCard)} />
+        <Field label="路由提示" value={formatBoolean(runtime?.routingHints)} />
+        <Field label="循环控制" value={formatText(runtime?.loopControl)} />
+        <Field label="稳定重注入" value={formatBoolean(runtime?.stableReinjection)} />
+        <Field label="阶段适配" value={formatBoolean(runtime?.phaseAdapter)} />
+        <Field label="专家路由" value={formatBoolean(runtime?.expertRouting)} />
+        <Field label="缓存诊断" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
+        <Field label="最低 effort" value={formatText(runtime?.minEffort)} />
+        <Field label="最高 effort" value={formatText(runtime?.maxEffort)} />
+        <Field label="来源" value={runtime ? 'settings/env' : EMPTY_TEXT} />
       </div>
 
       {card && (
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           <div className="rounded-lg border border-border bg-card/70 p-3">
-            <div className="text-[11px] font-medium uppercase text-muted-foreground">Runtime card</div>
+            <div className="text-[11px] font-medium uppercase text-muted-foreground">运行时卡片</div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <Field label="effort" value={formatText(card.effort)} />
               <Field label="loopBudget" value={formatNumber(card.loopBudget)} />
               <Field label="remainingBudget" value={formatNumber(card.remainingBudget)} />
               <Field label="riskScore" value={formatNumber(card.riskScore)} />
               <Field label="phase" value={formatText(card.phase)} />
-              <Field label="phasePlan" value={card.phasePlan?.join(' -> ') || EMPTY_TEXT} />
+              <Field label="phasePlan" value={card.phasePlan?.join(' → ') || EMPTY_TEXT} />
             </div>
             <div className="mt-3 text-xs leading-5 text-muted-foreground">
               {card.goal || EMPTY_TEXT}
             </div>
           </div>
           <div className="rounded-lg border border-border bg-card/70 p-3">
-            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Experts / Context ledger</div>
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">专家 / 上下文账本</div>
             <StringBadges values={expertRoutes} />
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <Field label="compactBoundary" value={formatNumber(contextCache?.compactBoundaryCount)} />
@@ -230,13 +231,13 @@ function OpenMythosRuntimeSection({
       <div className="mt-3 flex flex-wrap gap-1.5">
         <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
           <GaugeIcon className="h-3 w-3 text-primary" />
-          adaptive effort {runtime?.adaptiveEffort ? 'on' : 'off'}
+          自适应推理 {runtime?.adaptiveEffort ? '开启' : '关闭'}
         </span>
         <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          loop {runtime?.loopControl || 'unknown'}
+          循环 {runtime?.loopControl || 'unknown'}
         </span>
         <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          stable reinjection {runtime?.stableReinjection ? 'on' : 'off'}
+          稳定重注入 {runtime?.stableReinjection ? '开启' : '关闭'}
         </span>
       </div>
     </section>
@@ -286,7 +287,7 @@ export default function AgentRuntimeDiagnosticsPanel({
             <Field label="模型" value={formatText(diagnostics?.model)} />
             <Field label="模型 Profile" value={formatText(diagnostics?.modelProfileId)} />
             <Field label="上下文 tokens" value={formatNumber(diagnostics?.contextWindowTokens)} />
-            <Field label="Provider" value={formatText(diagnostics?.provider)} />
+              <Field label="Provider" value={formatText(diagnostics?.provider)} />
             <Field label="Session ID" value={formatText(diagnostics?.sessionId)} />
             <Field label="Project Path" value={formatText(diagnostics?.projectPath)} />
             <Field label="追加 Prompt 长度" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
@@ -347,7 +348,7 @@ export default function AgentRuntimeDiagnosticsPanel({
                   <div className="mb-1 text-[11px] font-medium text-muted-foreground">skillDetails</div>
                   <SkillDetails details={diagnostics?.skillDetails} />
                 </div>
-                <Field label="skillPromptLength" value={formatNumber(diagnostics?.skillPromptLength)} />
+                <Field label="Skill prompt 长度" value={formatNumber(diagnostics?.skillPromptLength)} />
               </div>
             </section>
           </div>
@@ -358,8 +359,8 @@ export default function AgentRuntimeDiagnosticsPanel({
               RAG / 知识源
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="ragExcerptCount" value={formatNumber(diagnostics?.ragExcerptCount)} />
-              <Field label="ragPromptLength" value={formatNumber(diagnostics?.ragPromptLength)} />
+              <Field label="RAG 摘要数" value={formatNumber(diagnostics?.ragExcerptCount)} />
+              <Field label="RAG prompt 长度" value={formatNumber(diagnostics?.ragPromptLength)} />
             </div>
             {Array.isArray(diagnostics?.ragExcerpts) && diagnostics.ragExcerpts.length > 0 ? (
               <div className="mt-3 flex flex-wrap gap-1.5">
@@ -371,7 +372,7 @@ export default function AgentRuntimeDiagnosticsPanel({
                   >
                     <span className="font-medium text-foreground">{excerpt.label || 'K'}</span>
                     <span className="truncate text-muted-foreground">{excerpt.sourceName || excerpt.relativePath || 'knowledge'}</span>
-                    {typeof excerpt.chars === 'number' && <span className="shrink-0 text-muted-foreground">{excerpt.chars} chars</span>}
+                    {typeof excerpt.chars === 'number' && <span className="shrink-0 text-muted-foreground">{excerpt.chars} 字符</span>}
                   </span>
                 ))}
               </div>
@@ -413,6 +414,17 @@ export default function AgentRuntimeDiagnosticsPanel({
               <div className="mt-3">
                 <div className="mb-1 text-[11px] font-medium text-muted-foreground">权限冲突</div>
                 <StringBadges values={permissions.conflicts} tone="warning" />
+              </div>
+            )}
+            {permissions?.matchedRules && permissions.matchedRules.length > 0 && (
+              <div className="mt-3">
+                <div className="mb-1 text-[11px] font-medium text-muted-foreground">命中规则</div>
+                <StringBadges values={permissions.matchedRules} tone="success" />
+              </div>
+            )}
+            {permissions?.explanation && (
+              <div className="mt-3 rounded-lg border border-border bg-card/70 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                {permissions.explanation}
               </div>
             )}
             <div className="mt-3">

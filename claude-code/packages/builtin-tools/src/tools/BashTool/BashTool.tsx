@@ -108,6 +108,8 @@ import {
   stdErrAppendShellResetMessage,
   stripEmptyLines,
 } from './utils.js'
+import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
+import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 
 const EOL = '\n'
 
@@ -182,6 +184,85 @@ const BASH_SILENT_COMMANDS = new Set([
   'unset',
   'wait',
 ])
+
+const SHELL_WRITE_REDIRECT_RE =
+  /(?:^|[^<])(?:>>?|1>>?)\s*(?:"[^"]+"|'[^']+'|\\\S+|[^\s;&|)]+)/
+const SHELL_HEREDOC_RE = /<<-?\s*(?:(['"]?)[A-Za-z0-9_./-]+\1|\\[A-Za-z0-9_./-]+)/
+const FRAGILE_FILE_WRITE_COMMAND_RE = /^(?:cat|echo|printf)\b/
+const TEE_FILE_WRITE_COMMAND_RE = /^tee(?:\s+-a)?\s+(?:"[^"]+"|'[^']+'|\\\S+|[^\s;&|)]+)/
+
+function hasUnclosedShellQuote(command: string): boolean {
+  if (SHELL_HEREDOC_RE.test(command)) {
+    return false
+  }
+
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]
+    if (char === '\\' && !inSingle) {
+      i++
+      continue
+    }
+    if (char === "'" && !inDouble) {
+      inSingle = !inSingle
+    } else if (char === '"' && !inSingle) {
+      inDouble = !inDouble
+    }
+  }
+  return inSingle || inDouble
+}
+
+function isFragileShellFileWrite(command: string): boolean {
+  if (
+    !SHELL_WRITE_REDIRECT_RE.test(command) &&
+    !SHELL_HEREDOC_RE.test(command) &&
+    !/\btee\b/.test(command)
+  ) {
+    return false
+  }
+
+  let parts: string[]
+  try {
+    parts = splitCommandWithOperators(command)
+  } catch {
+    parts = [command]
+  }
+
+  return parts.some(part => {
+    const trimmed = part.trim()
+    if (!trimmed || trimmed === '|' || trimmed === '&&' || trimmed === '||' || trimmed === ';') {
+      return false
+    }
+
+    if (TEE_FILE_WRITE_COMMAND_RE.test(trimmed)) {
+      return true
+    }
+
+    return (
+      FRAGILE_FILE_WRITE_COMMAND_RE.test(trimmed) &&
+      (SHELL_WRITE_REDIRECT_RE.test(trimmed) || SHELL_HEREDOC_RE.test(trimmed))
+    )
+  })
+}
+
+function getShellReliabilityValidationMessage(command: string): string | null {
+  if (hasUnclosedShellQuote(command)) {
+    return [
+      'Blocked malformed Bash command: it contains an unclosed quote and would fail with "unexpected EOF while looking for matching quote".',
+      `If you are writing or editing a file, use ${FILE_WRITE_TOOL_NAME} or ${FILE_EDIT_TOOL_NAME} instead of shell quoting.`,
+    ].join(' ')
+  }
+
+  if (isFragileShellFileWrite(command)) {
+    return [
+      'Blocked fragile Bash file write. Shell redirection, heredoc, echo, printf, cat, and tee based writes are unreliable for arbitrary file content because quotes in the content can break `bash -c`.',
+      `Use ${FILE_WRITE_TOOL_NAME} for new/overwrite operations or ${FILE_EDIT_TOOL_NAME} for existing files.`,
+    ].join(' ')
+  }
+
+  return null
+}
 
 /**
  * Checks if a bash command is a search or read operation.
@@ -736,6 +817,15 @@ export const BashTool = buildTool({
     return `Running ${desc}`
   },
   async validateInput(input: BashToolInput): Promise<ValidationResult> {
+    const reliabilityMessage = getShellReliabilityValidationMessage(input.command)
+    if (reliabilityMessage) {
+      return {
+        result: false,
+        message: reliabilityMessage,
+        errorCode: 2,
+      }
+    }
+
     if (
       feature('MONITOR_TOOL') &&
       !isBackgroundTasksDisabled &&

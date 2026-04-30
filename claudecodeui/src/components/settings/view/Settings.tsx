@@ -7,6 +7,7 @@ import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
+import { cn } from '../../../lib/utils';
 
 function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
@@ -37,7 +38,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
   return (
     <div className="modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-background/80 backdrop-blur-sm md:p-3 xl:p-5">
-      <div className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[94vh] md:w-[96vw] md:max-w-[1720px] md:rounded-xl 2xl:h-[calc(100vh-48px)]">
+      <div className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[96vh] md:w-[98vw] md:max-w-[1840px] md:rounded-xl 2xl:h-[calc(100vh-32px)]">
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-3 md:px-5">
           <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
@@ -50,6 +51,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               size="sm"
               onClick={onClose}
               className="h-10 w-10 touch-manipulation p-0 text-muted-foreground hover:text-foreground active:bg-accent/50"
+              aria-label={t('close', { defaultValue: '关闭设置' })}
             >
               <X className="h-5 w-5" />
             </Button>
@@ -61,8 +63,16 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
           <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} />
 
           {/* Content */}
-          <main className="min-w-0 flex-1 overflow-y-auto">
-            <div key={activeTab} className="settings-content-enter space-y-6 p-4 pb-safe-area-inset-bottom md:space-y-8 md:p-5 xl:p-6">
+          <main className="min-w-0 flex-1 overflow-hidden">
+            <div
+              key={activeTab}
+              className={cn(
+                'settings-content-enter h-full min-h-0',
+                activeTab === 'agents'
+                  ? 'overflow-hidden'
+                  : 'space-y-6 overflow-y-auto p-4 pb-safe-area-inset-bottom md:space-y-8 md:p-5 xl:p-6',
+              )}
+            >
               {activeTab === 'appearance' && (
                 <AppearanceSettingsTab
                   projectSortOrder={projectSortOrder}

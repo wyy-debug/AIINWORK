@@ -557,7 +557,7 @@ export default function ChatComposer({
       )}
 
       {pendingPermissionRequests.length > 0 && (
-        <div className="mx-auto mb-3 max-w-4xl">
+        <div className="mx-auto mb-3 w-full max-w-[1120px]">
           <PermissionRequestsBanner
             pendingPermissionRequests={pendingPermissionRequests}
             handlePermissionDecision={handlePermissionDecision}
@@ -566,7 +566,7 @@ export default function ChatComposer({
         </div>
       )}
 
-      {!hasQuestionPanel && <div className="relative mx-auto max-w-4xl">
+      {!hasQuestionPanel && <div className="relative mx-auto w-full max-w-[1120px]">
         {hasRuntimeBindings && (
           <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card/80 px-3 py-2 text-xs shadow-sm">
             {selectedAgent && (
@@ -1033,7 +1033,7 @@ export default function ChatComposer({
 
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
-          status={isLoading ? 'streaming' : 'ready'}
+          status="ready"
           className={isTextareaExpanded ? 'chat-input-expanded' : ''}
           {...getRootProps()}
         >
@@ -1110,8 +1110,8 @@ export default function ChatComposer({
             />
         </PromptInputBody>
 
-        <PromptInputFooter>
-          <PromptInputTools>
+        <PromptInputFooter className="gap-3">
+          <PromptInputTools className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden pr-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <PromptInputButton
               tooltip={{ content: t('input.attachImages') }}
               onClick={openImagePicker}
@@ -1263,6 +1263,16 @@ export default function ChatComposer({
               )}
             </PromptInputButton>
 
+          </PromptInputTools>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <div
+              className={`hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground/50 transition-opacity duration-200 xl:block ${
+                input.trim() ? 'opacity-0' : 'opacity-100'
+              }`}
+            >
+              {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
+            </div>
             {hasInput && (
               <PromptInputButton
                 tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
@@ -1272,20 +1282,14 @@ export default function ChatComposer({
                 <XIcon />
               </PromptInputButton>
             )}
-
-          </PromptInputTools>
-
-          <div className="flex items-center gap-2">
-            <div
-              className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                input.trim() ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
-            </div>
             <PromptInputSubmit
-              disabled={(!input.trim() && !hasAttachments) || isLoading}
-              className="h-10 w-10 sm:h-10 sm:w-10"
+              disabled={!input.trim() && !hasAttachments}
+              className={cn(
+                'h-11 sm:h-11',
+                isLoading ? 'w-16 px-3 text-sm font-semibold' : 'w-11 sm:w-11',
+              )}
+              title={isLoading ? '追加引导到当前运行中的回复' : '发送'}
+              aria-label={isLoading ? '追加引导到当前运行中的回复' : '发送'}
               onMouseDown={(event) => {
                 event.preventDefault();
                 onSubmit(event as unknown as MouseEvent<HTMLButtonElement>);
@@ -1294,7 +1298,9 @@ export default function ChatComposer({
                 event.preventDefault();
                 onSubmit(event as unknown as TouchEvent<HTMLButtonElement>);
               }}
-            />
+            >
+              {isLoading ? '引导' : undefined}
+            </PromptInputSubmit>
           </div>
         </PromptInputFooter>
       </PromptInput>

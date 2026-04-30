@@ -315,11 +315,18 @@ async function readPackageFile(file: File, relativePath: string): Promise<Upload
 async function readError(response: Response, fallback: string) {
   try {
     const data = await response.json();
+    if (response.status === 401 || response.status === 403) {
+      const detail = data.details || data.error || fallback;
+      return `${detail}。远端 Hub 拒绝了当前请求，请确认所选 Hub 的 adminToken/submitToken 是否正确，并在上传或管理操作中填写对应 token。`;
+    }
     if (data?.code === 'INSTALL_TARGET_EXISTS') {
-      return data.details || '安装目标已经存在。请点击“更新”，或勾选“Overwrite existing installed files”后重试。';
+      return data.details || '安装目标已经存在。请点击“更新”，或勾选“覆盖已安装文件”后重试。';
     }
     return data.details || data.error || fallback;
   } catch {
+    if (response.status === 401 || response.status === 403) {
+      return `${fallback}。远端 Hub 返回 ${response.status}，请确认 adminToken/submitToken 配置是否正确。`;
+    }
     return fallback;
   }
 }
@@ -509,7 +516,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {item.author && <span>{item.author}</span>}
             {item.version && <span>v{item.version}</span>}
-            {item.downloads > 0 && <span>{item.downloads} installs</span>}
+            {item.downloads > 0 && <span>{item.downloads} 次安装</span>}
             {item.sourceUrl && (
               <a
                 href={item.sourceUrl}
@@ -518,7 +525,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                 className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
               >
                 <ExternalLink className="h-3 w-3" />
-                source
+                来源
               </a>
             )}
           </div>
@@ -537,7 +544,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                 <span className="rounded bg-muted px-1.5 py-0.5">{item.mcp.transport}</span>
               )}
               {getMcpSetupFields(item).length > 0 && (
-                <span className="rounded bg-muted px-1.5 py-0.5">{getMcpSetupFields(item).length} config</span>
+                <span className="rounded bg-muted px-1.5 py-0.5">{getMcpSetupFields(item).length} 项配置</span>
               )}
               {(item.mcp?.tools || []).slice(0, 3).map((tool) => (
                 <span key={tool.name} className="rounded bg-muted px-1.5 py-0.5">{tool.name}</span>
@@ -585,7 +592,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                 )}
                 {diagnostics.runtimeToolsStatus && (
                   <span className="rounded border border-border bg-background px-1.5 py-0.5 text-muted-foreground">
-                    工具 {diagnostics.runtimeToolsStatus.tools?.length ? `${diagnostics.runtimeToolsStatus.tools.length} declared` : '运行时发现'}
+                    工具 {diagnostics.runtimeToolsStatus.tools?.length ? `${diagnostics.runtimeToolsStatus.tools.length} 个声明` : '运行时发现'}
                   </span>
                 )}
               </div>
@@ -601,7 +608,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                           : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
                       )}
                     >
-                      {field.label || field.key}: {field.configured ? 'configured' : 'missing'}
+                      {field.label || field.key}: {field.configured ? '已配置' : '缺失'}
                     </span>
                   ))}
                 </div>
@@ -631,7 +638,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
             type="button"
             onClick={() => onLike(item)}
             disabled={busy}
-            title={item.liked ? 'Unlike' : 'Like'}
+            title={item.liked ? '取消点赞' : '点赞'}
             className={cn(
               'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded border px-2 text-xs transition-colors',
               item.liked
@@ -682,7 +689,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
               className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {item.kind === 'mcp-server' ? 'Pull & Configure' : 'Pull'}
+              {item.kind === 'mcp-server' ? '安装并配置' : '安装'}
             </button>
           )}
         </div>
@@ -716,7 +723,7 @@ function TemplateGallery({
         <div className="border-b border-border bg-muted/30 p-3 md:border-b-0 md:border-r">
           <div className="flex items-center gap-2 rounded border border-border bg-background px-2 py-1.5 text-sm text-muted-foreground">
             <Search className="h-4 w-4" />
-            <span>Search templates</span>
+            <span>搜索模板</span>
           </div>
           <div className="mt-2 max-h-[360px] space-y-1 overflow-y-auto pr-1">
             {templates.map((item) => {
@@ -971,7 +978,7 @@ function McpSetupDialog({ item, values, busy, action, error, onChange, onClose, 
 
         <div className="overflow-y-auto p-5">
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-            Pull 会把 MCP 包下载安装到本机，然后写入 MTL-Code/Claude Code 的 MCP 配置。
+            安装会把 MCP 包下载安装到本机，然后写入 MTL-Code/Claude Code 的 MCP 配置。
             工具列表由后端运行时发现；这里先配置启动参数和必填输入。
           </div>
 
@@ -1115,7 +1122,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     try {
       const response = await apiFetch('/api/agent-repository/catalog');
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to load repository catalog'));
+        throw new Error(await readError(response, '加载仓库目录失败'));
       }
       const data = (await response.json()) as CatalogResponse;
       setRepositories(data.repositories || []);
@@ -1123,7 +1130,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       setErrors(data.errors || []);
       setActionError(null);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to load repository catalog');
+      setActionError(error instanceof Error ? error.message : '加载仓库目录失败');
     } finally {
       setLoading(false);
     }
@@ -1137,7 +1144,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     try {
       const response = await api.installedAgentSkills(selectedProjectPath);
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to load installed skills'));
+        throw new Error(await readError(response, '加载已安装 Skill 失败'));
       }
       const data = await response.json();
       setInstalledSkills(Array.isArray(data.skills) ? data.skills : []);
@@ -1159,7 +1166,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       const scope = installScope === 'project' ? 'project' : 'user';
       const response = await api.mcpServers('claude', scope, selectedProjectPath);
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to load MCP servers'));
+        throw new Error(await readError(response, '加载 MCP Server 失败'));
       }
       const data = await response.json();
       setInstalledMcpServers(Array.isArray(data.data?.servers) ? data.data.servers : []);
@@ -1261,16 +1268,16 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     try {
       const response = await api.diagnoseMcpServer('claude', serverName, scope, selectedProjectPath);
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to diagnose MCP server'));
+        throw new Error(await readError(response, '检测 MCP Server 失败'));
       }
       const data = await response.json();
       setMcpDiagnostics((prev) => ({
         ...prev,
         [key]: data.data as McpDiagnostics,
       }));
-      setMessage(`MCP "${serverName}" 检测完成：${data.data?.status || 'unknown'}`);
+      setMessage(`MCP「${serverName}」检测完成：${data.data?.status || 'unknown'}`);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to diagnose MCP server');
+      setActionError(error instanceof Error ? error.message : '检测 MCP Server 失败');
     } finally {
       setBusyKey(null);
     }
@@ -1318,14 +1325,14 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         body: JSON.stringify({ name: newRepoName, url: newRepoUrl }),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to add repository'));
+        throw new Error(await readError(response, '添加仓库失败'));
       }
       setNewRepoName('');
       setNewRepoUrl('');
-      setMessage('Repository added.');
+      setMessage('仓库已添加。');
       await loadCatalog();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to add repository');
+      setActionError(error instanceof Error ? error.message : '添加仓库失败');
     } finally {
       setBusyKey(null);
     }
@@ -1340,12 +1347,12 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         method: 'DELETE',
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to remove repository'));
+        throw new Error(await readError(response, '移除仓库失败'));
       }
-      setMessage('Repository removed.');
+      setMessage('仓库已移除。');
       await loadCatalog();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to remove repository');
+      setActionError(error instanceof Error ? error.message : '移除仓库失败');
     } finally {
       setBusyKey(null);
     }
@@ -1361,11 +1368,11 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         body: JSON.stringify({ enabled: !repo.enabled }),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to update repository'));
+        throw new Error(await readError(response, '更新仓库失败'));
       }
       await loadCatalog();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to update repository');
+      setActionError(error instanceof Error ? error.message : '更新仓库失败');
     } finally {
       setBusyKey(null);
     }
@@ -1382,7 +1389,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         body: JSON.stringify({ liked: !item.liked }),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to update like'));
+        throw new Error(await readError(response, '更新点赞失败'));
       }
       const data = await response.json();
       if (data.item) {
@@ -1393,7 +1400,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         await loadCatalog();
       }
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to update like');
+      setActionError(error instanceof Error ? error.message : '更新点赞失败');
     } finally {
       setBusyKey(null);
     }
@@ -1422,7 +1429,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         }),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to install item'));
+        throw new Error(await readError(response, '安装条目失败'));
       }
       const data = await response.json();
       const actionText = action === 'update' ? '已更新' : '已安装';
@@ -1440,7 +1447,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       await loadInstalledMcpServers();
       return data;
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to install item');
+      setActionError(error instanceof Error ? error.message : '安装条目失败');
       return null;
     } finally {
       setBusyKey(null);
@@ -1463,14 +1470,14 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         }),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to uninstall item'));
+        throw new Error(await readError(response, '卸载条目失败'));
       }
       const data = await response.json();
-      setMessage(`${kindLabel(item.kind)} uninstalled from ${data.installPath}`);
+      setMessage(`${kindLabel(item.kind)} 已从 ${data.installPath} 卸载。`);
       await loadInstalledSkills();
       await loadInstalledMcpServers();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to uninstall item');
+      setActionError(error instanceof Error ? error.message : '卸载条目失败');
     } finally {
       setBusyKey(null);
     }
@@ -1556,14 +1563,15 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     });
     const data = await response.json();
     if (!response.ok || data?.success === false) {
-      setActionError(data?.error || 'Template installed, but Agent creation failed');
+      setActionError(data?.error || '模板已安装，但 Agent 创建失败。');
       return;
     }
     const dependencyCount = installResult.dependencies?.length || 0;
     const dependencySummary = dependencyStatusSummary(installResult);
     setMessage(
-      `Agent "${data.agent?.name || setupItem.title}" created and enabled. Dependencies processed: ${dependencyCount}`
-      + (dependencySummary ? ` (${dependencySummary}).` : '.'),
+      `Agent「${data.agent?.name || setupItem.title}」已创建并启用。依赖处理：${dependencyCount} 项`
+      + (dependencySummary ? `（${dependencySummary}）。` : '。')
+      + ' 如有 MCP 缺配置，请在 MCP 卡片点击“检测”查看缺失字段。',
     );
   };
 
@@ -1591,14 +1599,14 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         }),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, 'Failed to upload item'));
+        throw new Error(await readError(response, '上传条目失败'));
       }
       setUploadForm((prev) => ({ ...EMPTY_UPLOAD_FORM, kind: prev.kind }));
       const repository = remoteUploadRepositories.find((repo) => repo.id === uploadRepoId);
-      setMessage(`Uploaded to ${repository?.name || 'remote Hub'}.`);
+      setMessage(`已上传到 ${repository?.name || '远端 Hub'}。`);
       await loadCatalog();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to upload item');
+      setActionError(error instanceof Error ? error.message : '上传条目失败');
     } finally {
       setBusyKey(null);
     }
@@ -1632,7 +1640,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           return relativePath && !relativePath.endsWith('/') ? [{ file, relativePath }] : [];
         });
       if (!pathPairs.some((entry) => entry.relativePath.toLowerCase() === 'skill.md')) {
-        throw new Error('Skill package must include SKILL.md at the selected folder root');
+        throw new Error('Skill 包必须在所选文件夹根目录包含 SKILL.md');
       }
 
       const packageFiles = await Promise.all(
@@ -1649,9 +1657,9 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         content: skillContent || prev.content,
         packageFiles,
       }));
-      setMessage(`Loaded Skill package with ${packageFiles.length} file(s).`);
+      setMessage(`已加载 Skill 包，共 ${packageFiles.length} 个文件。`);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to load Skill package');
+      setActionError(error instanceof Error ? error.message : '加载 Skill 包失败');
     } finally {
       event.target.value = '';
     }
@@ -1690,11 +1698,11 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           <div className="flex items-start gap-3">
             <Database className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
             <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-semibold text-foreground">Agent Templates</h3>
+              <h3 className="text-sm font-semibold text-foreground">Agent 模板</h3>
               <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                <span className="rounded bg-muted px-2 py-1">{repositories.length} repositories</span>
-                <span className="rounded bg-muted px-2 py-1">{itemCounts.agents} agents</span>
-                <span className="rounded bg-muted px-2 py-1">{itemCounts.skills} skills</span>
+                <span className="rounded bg-muted px-2 py-1">{repositories.length} 个仓库</span>
+                <span className="rounded bg-muted px-2 py-1">{itemCounts.agents} 个 Agent</span>
+                <span className="rounded bg-muted px-2 py-1">{itemCounts.skills} 个 Skill</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.mcps} MCP</span>
               </div>
             </div>
@@ -1705,7 +1713,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               disabled={loading}
             >
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              Sync
+              同步
             </button>
           </div>
         </div>
@@ -1713,7 +1721,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         <div className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold text-foreground">Install Target</h3>
+            <h3 className="text-sm font-semibold text-foreground">安装目标</h3>
           </div>
           <div className="mt-3 grid gap-2">
             <select
@@ -1721,8 +1729,8 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               onChange={(event) => setInstallScope(event.target.value as InstallScope)}
               className="h-9 rounded border border-border bg-background px-2 text-sm text-foreground"
             >
-              <option value="user">User scope (~/.mtl-code)</option>
-              <option value="project" disabled={projects.length === 0}>Project scope (.claude)</option>
+              <option value="user">用户范围 (~/.mtl-code)</option>
+              <option value="project" disabled={projects.length === 0}>项目范围 (.claude)</option>
             </select>
             {installScope === 'project' && (
               <select
@@ -1747,7 +1755,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                 onChange={(event) => setOverwriteInstall(event.target.checked)}
                 className="h-3.5 w-3.5"
               />
-              Overwrite existing installed files
+              覆盖已安装文件
             </label>
           </div>
         </div>
@@ -1781,8 +1789,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">Agent/Skill/MCP Hub</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              The shared remote repository server runs as a standalone Hub.
-              It can publish Agent templates, Skills, and MCP server packages with setup fields such as root paths.
+              远端共享仓库以独立 Hub 服务运行，可以发布 Agent 模板、Skill 和带 root 路径等配置项的 MCP Server 包。
             </p>
           </div>
         </div>
@@ -1795,16 +1802,16 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <input
               value={newRepoUrl}
               onChange={(event) => setNewRepoUrl(event.target.value)}
-              placeholder="Enter catalog URL"
+              placeholder="输入 catalog URL"
               className="mt-1 h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
           </div>
           <div className="w-full md:w-48">
-            <label className="text-xs font-medium text-muted-foreground">Name</label>
+            <label className="text-xs font-medium text-muted-foreground">名称</label>
             <input
               value={newRepoName}
               onChange={(event) => setNewRepoName(event.target.value)}
-              placeholder="Team repository"
+              placeholder="团队仓库"
               className="mt-1 h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
           </div>
@@ -1815,7 +1822,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             className="inline-flex h-9 items-center justify-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
           >
             {busyKey === 'add-repo' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Add
+            添加
           </button>
         </div>
 
@@ -1837,12 +1844,12 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                     onClick={() => void toggleRepository(repo)}
                     className="text-muted-foreground transition-colors hover:text-foreground"
                   >
-                    {repo.enabled ? 'Disable' : 'Enable'}
+                    {repo.enabled ? '停用' : '启用'}
                   </button>
                   <button
                     type="button"
                     onClick={() => void removeRepository(repo.id)}
-                    title="Remove repository"
+                    title="移除仓库"
                     className="text-muted-foreground transition-colors hover:text-red-500"
                   >
                     {busyKey === `remove:${repo.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
@@ -1854,7 +1861,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         </div>
       </div>
 
-      <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(380px,440px)]">
+      <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
         <div className="min-w-0 space-y-3">
           <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 md:flex-row md:items-center">
             <div className="relative min-w-0 flex-1">
@@ -1862,7 +1869,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search templates"
+                placeholder="搜索模板、Skill 或 MCP"
                 className="h-9 w-full rounded border border-border bg-background pl-9 pr-3 text-sm text-foreground outline-none focus:border-primary"
               />
             </div>
@@ -1877,7 +1884,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                     kindFilter === kind ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  {kind === 'all' ? 'All' : kindLabel(kind)}
+                  {kind === 'all' ? '全部' : kindLabel(kind)}
                 </button>
               ))}
             </div>
@@ -1886,7 +1893,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-lg border border-border bg-card py-10 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading repository catalog...
+              正在加载仓库目录...
             </div>
           ) : (
             <div className="space-y-4">
@@ -1928,7 +1935,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   })}
                   {skillItems.length === 0 && kindFilter === 'skill' && (
                     <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
-                      No skills found.
+                      未找到 Skill。
                     </div>
                   )}
                 </div>
@@ -1937,7 +1944,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               {(kindFilter === 'all' || kindFilter === 'mcp-server') && (
                 <div className="space-y-2">
                   {mcpItems.length > 0 && (
-                    <h3 className="text-sm font-semibold text-foreground">MCP Servers</h3>
+                    <h3 className="text-sm font-semibold text-foreground">MCP Server</h3>
                   )}
                   {mcpItems.map((item) => {
                     const installed = isMcpInstalled(item);
@@ -1963,7 +1970,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   })}
                   {mcpItems.length === 0 && kindFilter === 'mcp-server' && (
                     <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
-                      No MCP servers found.
+                      未找到 MCP Server。
                     </div>
                   )}
                 </div>
@@ -1975,7 +1982,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         <div className="min-w-0 rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-2">
             <Upload className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">Upload to Hub</h3>
+            <h3 className="text-sm font-semibold text-foreground">上传到 Hub</h3>
           </div>
 
           <div className="mt-3 grid gap-2">
@@ -1986,7 +1993,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               disabled={remoteUploadRepositories.length === 0}
             >
               {remoteUploadRepositories.length === 0 ? (
-                <option value="">Add a remote Hub first</option>
+                <option value="">请先添加远端 Hub</option>
               ) : (
                 remoteUploadRepositories.map((repo) => (
                   <option key={repo.id} value={repo.id}>
@@ -1998,12 +2005,12 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <input
               value={uploadAdminToken}
               onChange={(event) => setUploadAdminToken(event.target.value)}
-              placeholder="Hub admin token"
+              placeholder="Hub 管理 token"
               type="password"
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
             <p className="text-xs leading-5 text-muted-foreground">
-              Upload uses the selected remote Hub admin API. Local repository upload is hidden and disabled.
+              上传会调用所选远端 Hub 的管理 API；本地仓库上传已隐藏并禁用。
             </p>
           </div>
 
@@ -2033,20 +2040,20 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <input
               value={uploadForm.title}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, title: event.target.value }))}
-              placeholder="Display title"
+              placeholder="显示标题"
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
             <textarea
               value={uploadForm.description}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, description: event.target.value }))}
-              placeholder="Short description"
+              placeholder="简短描述"
               rows={2}
               className="resize-none rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
             />
             <input
               value={uploadForm.author}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, author: event.target.value }))}
-              placeholder="Author"
+              placeholder="作者"
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
             <input
@@ -2072,32 +2079,32 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                 <input
                   value={uploadForm.capabilities}
                   onChange={(event) => setUploadForm((prev) => ({ ...prev, capabilities: event.target.value }))}
-                  placeholder="Summarize tasks, draft updates"
+                  placeholder="总结任务、草拟状态更新"
                   className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
                 />
                 <input
                   value={uploadForm.skillDependencies}
                   onChange={(event) => setUploadForm((prev) => ({ ...prev, skillDependencies: event.target.value }))}
-                  placeholder="Required Skills: code-review-security, unity-memory-profiler-code-analysis"
+                  placeholder="依赖 Skill：code-review-security, unity-memory-profiler-code-analysis"
                   className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
                 />
                 <input
                   value={uploadForm.mcpDependencies}
                   onChange={(event) => setUploadForm((prev) => ({ ...prev, mcpDependencies: event.target.value }))}
-                  placeholder="Required MCP servers: ainwork-code-search, soc-redmine"
+                  placeholder="依赖 MCP Server：ainwork-code-search, soc-redmine"
                   className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
                 />
               </>
             )}
             <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded border border-border text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
               <Upload className="h-4 w-4" />
-              Load markdown file
+              加载 Markdown 文件
               <input type="file" accept=".md,.txt,text/markdown,text/plain" onChange={(event) => void readUploadFile(event)} className="sr-only" />
             </label>
             {uploadForm.kind === 'skill' && (
               <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded border border-border text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
                 <Upload className="h-4 w-4" />
-                Load Skill folder
+                加载 Skill 文件夹
                 <input
                   type="file"
                   multiple
@@ -2109,13 +2116,13 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             )}
             {uploadForm.kind === 'skill' && uploadForm.packageFiles.length > 0 && (
               <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-                Skill package selected: {uploadForm.packageFiles.length} file(s). The full folder will be installed with SKILL.md.
+                已选择 Skill 包：{uploadForm.packageFiles.length} 个文件。完整文件夹会随 SKILL.md 一起安装。
               </div>
             )}
             <textarea
               value={uploadForm.content}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, content: event.target.value, packageFiles: [] }))}
-              placeholder={uploadForm.kind === 'skill' ? 'Paste SKILL.md content, or load a full Skill folder' : 'Paste the agent system prompt'}
+              placeholder={uploadForm.kind === 'skill' ? '粘贴 SKILL.md 内容，或加载完整 Skill 文件夹' : '粘贴 Agent system prompt'}
               rows={10}
               className="min-h-[220px] resize-y rounded border border-border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
             />
@@ -2126,7 +2133,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                 onChange={(event) => setUploadForm((prev) => ({ ...prev, overwrite: event.target.checked }))}
                 className="h-3.5 w-3.5"
               />
-              Overwrite existing item in remote Hub
+              覆盖远端 Hub 中的同名条目
             </label>
             <button
               type="button"
@@ -2135,7 +2142,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {busyKey === 'upload' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              Upload to remote Hub
+              上传到远端 Hub
             </button>
           </div>
         </div>

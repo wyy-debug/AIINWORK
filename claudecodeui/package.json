@@ -1,6 +1,6 @@
 {
   "name": "mtl-code-ui",
-  "version": "1.30.1",
+  "version": "1.30.2",
   "description": "A local-first web UI for the MTL-Code backend",
   "type": "module",
   "main": "dist-server/server/index.js",
@@ -35,6 +35,7 @@
     "package:preview-win": "node scripts/package-preview-win.mjs",
     "package:electron-win": "node scripts/package-electron-win.mjs",
     "smoke:ui": "node scripts/smoke-ui.mjs",
+    "smoke:api": "node scripts/smoke-api.mjs",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
     "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",

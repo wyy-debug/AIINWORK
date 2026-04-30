@@ -15,6 +15,11 @@ type WorktreeTasksModalProps = {
 async function readJsonResponse(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 409 && data?.dirtyStatus) {
+      throw new Error(
+        '工作树存在未提交改动，已阻止删除。请先创建分支保留改动，或进入工作树手动提交、暂存、丢弃后再删除。',
+      );
+    }
     throw new Error(data?.error || data?.details || 'Request failed');
   }
   return data;
@@ -29,6 +34,15 @@ function formatTime(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function statusLabel(value?: string) {
+  if (value === 'created') return '已创建';
+  if (value === 'running') return '运行中';
+  if (value === 'done') return '已完成';
+  if (value === 'failed') return '失败';
+  if (value === 'archived') return '已归档';
+  return value || '未知';
 }
 
 export default function WorktreeTasksModal({
@@ -80,7 +94,7 @@ export default function WorktreeTasksModal({
   };
 
   const deleteWorktree = async (worktree: WorktreeDispatchMeta) => {
-    if (!window.confirm('确定删除这个 managed worktree？如果有未提交改动，后端会阻止删除。')) {
+    if (!window.confirm('确定删除这个 managed worktree？如果有未提交改动，后端会阻止删除；你可以先创建分支保留改动。')) {
       return;
     }
     setBusyId(`delete:${worktree.id}`);
@@ -164,10 +178,10 @@ export default function WorktreeTasksModal({
                             ? 'border-muted bg-muted text-muted-foreground'
                             : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
                         )}>
-                          {worktree.status}
+                          {statusLabel(worktree.status)}
                         </span>
                         <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          detached HEAD
+                          {worktree.branchName ? '已创建分支' : 'detached HEAD'}
                         </span>
                         {worktree.branchName && (
                           <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
@@ -179,10 +193,11 @@ export default function WorktreeTasksModal({
                         {worktree.taskPrompt || '未填写任务说明'}
                       </p>
                       <div className="mt-2 grid gap-1 text-xs text-muted-foreground md:grid-cols-2">
-                        <span>base: {worktree.baseRef || 'HEAD'} / {shortCommit(worktree.baseCommit)}</span>
-                        <span>session: {worktree.sessionId || '未绑定'}</span>
-                        <span className="truncate" title={worktree.worktreePath}>path: {worktree.worktreePath}</span>
-                        <span>created: {formatTime(worktree.createdAt)}</span>
+                        <span>父项目：{worktree.parentProjectName || project.name}</span>
+                        <span>base：{worktree.baseRef || 'HEAD'} / {shortCommit(worktree.baseCommit)}</span>
+                        <span>会话：{worktree.sessionId || '未绑定'}</span>
+                        <span>创建时间：{formatTime(worktree.createdAt)}</span>
+                        <span className="truncate md:col-span-2" title={worktree.worktreePath}>路径：{worktree.worktreePath}</span>
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">

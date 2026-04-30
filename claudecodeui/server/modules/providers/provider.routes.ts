@@ -489,6 +489,12 @@ const diagnoseProviderMcpServer = async (
   const installDir = resolveInstalledMcpDir(server, workspacePath);
   const manifest = await readJsonIfExists(path.join(installDir, 'hub.mcp.json'));
   const packageJson = await readJsonIfExists(path.join(installDir, 'package.json'));
+  const manifestMcp = manifest?.mcp && typeof manifest.mcp === 'object'
+    ? manifest.mcp as Record<string, unknown>
+    : {};
+  const manifestArgs = Array.isArray(manifestMcp.args)
+    ? manifestMcp.args.map((arg) => String(arg))
+    : [];
   const setupFields = normalizeSetupFields(manifest);
   const manifestTools = normalizeManifestTools(manifest);
   const checks: McpDiagnosticCheck[] = [];
@@ -537,7 +543,7 @@ const diagnoseProviderMcpServer = async (
                 : field.target === 'url'
                   ? server.url
                   : field.target === 'arg' || field.target === 'args'
-                    ? server.args?.some((arg) => arg.includes(field.key))
+                    ? (server.args || []).some((arg) => !manifestArgs.includes(String(arg)) || String(arg).includes(field.key))
                     : false,
             );
       return {

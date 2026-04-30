@@ -35,7 +35,7 @@ Run this checklist before shipping a Windows package after Agent, Skill, MCP, Wo
 
 1. Add a remote Hub catalog URL and sync it.
 2. Search Hub Skills from the composer Skill menu and install one directly.
-3. Pull `soc-redmine` or `ainwork-code-search` MCP from Repository.
+3. 从仓库安装 `soc-redmine` 或 `ainwork-code-search` MCP。
 4. Run MCP diagnostics; missing required values should be reported without showing secrets.
 5. Configure required fields such as `REDMINE_API_KEY` or `root`, save, then rerun diagnostics.
 

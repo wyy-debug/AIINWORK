@@ -63,6 +63,21 @@ async function run() {
       '[role="button"]:has-text("Conversations")',
     ], 'conversation tab');
 
+    await clickFirstVisible(page, [
+      'button:has-text("设置")',
+      'button:has-text("Settings")',
+      '[role="button"]:has-text("设置")',
+      '[role="button"]:has-text("Settings")',
+    ], 'settings button');
+    await page.getByText(/设置|Settings/i).first().waitFor({ timeout: 10_000 });
+    await page.getByRole('tab', { name: /模型|Model/i }).first().click({ timeout: 5000 }).catch(() => {});
+    await page.getByRole('tab', { name: /运行时|Runtime/i }).first().click({ timeout: 5000 }).catch(() => {});
+    const closeSettings = page.getByRole('button', { name: /关闭设置|Close settings/i }).first();
+    if (await closeSettings.count().catch(() => 0)) {
+      await closeSettings.click({ timeout: 5000 }).catch(() => {});
+    }
+    logStep('settings modal opens and closes');
+
     const composer = page.locator('textarea, [contenteditable="true"]').first();
     if (await composer.count().catch(() => 0)) {
       await composer.waitFor({ timeout: 10_000 });

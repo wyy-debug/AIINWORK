@@ -181,7 +181,7 @@ https://your-host.example.com/agent-repository/catalog.json
 ```
 
 3. Sync repositories.
-4. Pull Agent templates or Skills from the shared repository.
+4. 从共享仓库安装 Agent 模板或 Skill。
 
 ## Admin UI
 

@@ -250,7 +250,7 @@ Date: 2026-04-28
 
 1. 在 Settings > Agents > Repository 上传 `SKILL.md` 或完整 Skill 文件夹。
 2. 完整包必须在根目录包含 `SKILL.md`，`agents/`、`references/`、`scripts/` 等子目录会保留。
-3. 从远端 catalog Pull 后，已安装项显示更新/卸载，不再显示 Pull。
+3. 从远端 catalog 安装后，已安装项显示更新/卸载，不再显示“安装”。
 
 启动 Hub：
 
