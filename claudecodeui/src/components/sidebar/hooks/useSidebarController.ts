@@ -568,7 +568,7 @@ export function useSidebarController({
   );
 
   const updateSessionMetadata = useCallback(
-    async (sessionId: string, provider: LLMProvider, metadata: { pinned?: boolean; archived?: boolean }) => {
+    async (sessionId: string, provider: LLMProvider, metadata: { pinned?: boolean; archived?: boolean; unread?: boolean }) => {
       try {
         const response = await api.updateSessionMetadata(sessionId, metadata, provider);
         if (!response.ok) {
@@ -593,6 +593,13 @@ export function useSidebarController({
   const toggleArchiveSession = useCallback(
     (session: ProjectSession & { __provider?: LLMProvider }) => {
       void updateSessionMetadata(session.id, session.__provider || 'claude', { archived: !session.isArchived });
+    },
+    [updateSessionMetadata],
+  );
+
+  const toggleUnreadSession = useCallback(
+    (session: ProjectSession & { __provider?: LLMProvider }) => {
+      void updateSessionMetadata(session.id, session.__provider || 'claude', { unread: !session.isUnread });
     },
     [updateSessionMetadata],
   );
@@ -644,6 +651,7 @@ export function useSidebarController({
     updateSessionSummary,
     togglePinSession,
     toggleArchiveSession,
+    toggleUnreadSession,
     collapseSidebar,
     expandSidebar,
     setShowNewProject,

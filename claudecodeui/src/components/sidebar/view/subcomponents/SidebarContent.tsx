@@ -1,4 +1,4 @@
-import { type ReactNode, useDeferredValue, useMemo } from 'react';
+import { type MouseEvent, type ReactNode, useDeferredValue, useMemo, useState } from 'react';
 import { Archive, ArchiveRestore, Edit2, MessageSquare, Pin, PinOff, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -8,11 +8,13 @@ import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { SessionWithProvider } from '../../types/types';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { createSessionViewModel, getSessionDate } from '../../utils/utils';
 
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
+import SessionContextMenu from './SessionContextMenu';
 
 type SearchMode = 'projects' | 'conversations';
 
@@ -66,6 +68,7 @@ type SidebarContentProps = {
   onDeleteConversationSession: (session: SessionWithProvider, sessionTitle: string) => void;
   onTogglePinConversationSession: (session: SessionWithProvider) => void;
   onToggleArchiveConversationSession: (session: SessionWithProvider) => void;
+  onToggleUnreadConversationSession: (session: SessionWithProvider) => void;
   conversationResults: ConversationSearchResults | null;
   isSearching: boolean;
   searchProgress: SearchProgress | null;
@@ -109,6 +112,7 @@ export default function SidebarContent({
   onDeleteConversationSession,
   onTogglePinConversationSession,
   onToggleArchiveConversationSession,
+  onToggleUnreadConversationSession,
   conversationResults,
   isSearching,
   searchProgress,
@@ -129,6 +133,12 @@ export default function SidebarContent({
   t,
 }: SidebarContentProps) {
   const deferredSearchFilter = useDeferredValue(searchFilter);
+  const [conversationContextMenu, setConversationContextMenu] = useState<{
+    session: SessionWithProvider;
+    sessionName: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
   const conversationItems = useMemo(() => {
@@ -156,6 +166,34 @@ export default function SidebarContent({
         return getSessionDate(right.session).getTime() - getSessionDate(left.session).getTime();
       });
   }, [conversationSessions, deferredSearchFilter, projectListProps.currentTime, t]);
+
+  const openConversationContextMenu = (
+    event: MouseEvent,
+    session: SessionWithProvider,
+    sessionName: string,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setConversationContextMenu({
+      session,
+      sessionName,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  };
+
+  const copyConversationDeepLink = (sessionId: string) => {
+    const url = new URL(`/session/${encodeURIComponent(sessionId)}`, window.location.href);
+    void copyTextToClipboard(url.toString());
+  };
+
+  const openConversationMiniWindow = (sessionId: string) => {
+    const url = `/session/${encodeURIComponent(sessionId)}?mini=1`;
+    const popup = window.open(url, `mtl-session-${sessionId}`, 'popup,width=980,height=760');
+    if (popup) {
+      popup.opener = null;
+    }
+  };
 
   return (
     <div
@@ -289,6 +327,7 @@ export default function SidebarContent({
                 <div
                   key={`${conversationProject?.name || 'conversation'}-${session.__provider}-${session.id}`}
                   className="group relative [contain-intrinsic-size:1px_58px] [content-visibility:auto]"
+                  onContextMenu={(event) => openConversationContextMenu(event, session, sessionView.sessionName)}
                 >
                   <button
                     type="button"
@@ -300,7 +339,10 @@ export default function SidebarContent({
                     <div className="flex items-start gap-2">
                       <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <div className="line-clamp-2 break-words text-xs font-medium leading-4 text-foreground">{sessionView.sessionName}</div>
+                        <div className="flex min-w-0 items-start gap-1.5">
+                          {session.isUnread && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
+                          <div className="line-clamp-2 break-words text-xs font-medium leading-4 text-foreground">{sessionView.sessionName}</div>
+                        </div>
                         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                           <span className="truncate">独立对话</span>
                           {sessionView.messageCount > 0 && (
@@ -366,6 +408,23 @@ export default function SidebarContent({
                   )}
                 </div>
               ))}
+              {conversationContextMenu && (
+                <SessionContextMenu
+                  position={{ x: conversationContextMenu.x, y: conversationContextMenu.y }}
+                  isPinned={Boolean(conversationContextMenu.session.isPinned)}
+                  isArchived={Boolean(conversationContextMenu.session.isArchived)}
+                  isUnread={Boolean(conversationContextMenu.session.isUnread)}
+                  onClose={() => setConversationContextMenu(null)}
+                  onRename={() => onRenameConversationSession(conversationContextMenu.session, conversationContextMenu.sessionName)}
+                  onTogglePin={() => onTogglePinConversationSession(conversationContextMenu.session)}
+                  onToggleArchive={() => onToggleArchiveConversationSession(conversationContextMenu.session)}
+                  onToggleUnread={() => onToggleUnreadConversationSession(conversationContextMenu.session)}
+                  onCopySessionId={() => { void copyTextToClipboard(conversationContextMenu.session.id); }}
+                  onCopyDeepLink={() => copyConversationDeepLink(conversationContextMenu.session.id)}
+                  onOpenMiniWindow={() => openConversationMiniWindow(conversationContextMenu.session.id)}
+                  onDelete={() => onDeleteConversationSession(conversationContextMenu.session, conversationContextMenu.sessionName)}
+                />
+              )}
             </div>
           )
         ) : (

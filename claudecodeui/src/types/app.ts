@@ -16,6 +16,8 @@ export interface ProjectSession {
   pinnedAt?: string | null;
   isArchived?: boolean;
   archivedAt?: string | null;
+  isUnread?: boolean;
+  unreadAt?: string | null;
   __provider?: LLMProvider;
   __projectName?: string;
   [key: string]: unknown;

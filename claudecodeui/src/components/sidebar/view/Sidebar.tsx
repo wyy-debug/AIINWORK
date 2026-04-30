@@ -110,6 +110,7 @@ function Sidebar({
     updateSessionSummary,
     togglePinSession,
     toggleArchiveSession,
+    toggleUnreadSession,
     collapseSidebar: handleCollapseSidebar,
     expandSidebar: handleExpandSidebar,
     setShowNewProject,
@@ -272,6 +273,7 @@ function Sidebar({
     },
     onTogglePinSession: togglePinSession,
     onToggleArchiveSession: toggleArchiveSession,
+    onToggleUnreadSession: toggleUnreadSession,
     onOpenConversationGuide: (project, session) => setConversationGuideSource({ project, session }),
     t,
   };
@@ -352,6 +354,7 @@ function Sidebar({
             }}
             onTogglePinConversationSession={togglePinSession}
             onToggleArchiveConversationSession={toggleArchiveSession}
+            onToggleUnreadConversationSession={toggleUnreadSession}
             conversationResults={conversationResults}
             isSearching={isSearching}
             searchProgress={searchProgress}

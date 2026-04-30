@@ -600,13 +600,14 @@ app.patch('/api/sessions/:sessionId/metadata', authenticateToken, async (req, re
         if (!safeSessionId || safeSessionId !== String(sessionId)) {
             return res.status(400).json({ error: 'Invalid sessionId' });
         }
-        const { provider = 'claude', pinned, archived } = req.body || {};
+        const { provider = 'claude', pinned, archived, unread } = req.body || {};
         if (!VALID_PROVIDERS.includes(provider)) {
             return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
         }
         const metadata = {};
         if (typeof pinned === 'boolean') metadata.pinned = pinned;
         if (typeof archived === 'boolean') metadata.archived = archived;
+        if (typeof unread === 'boolean') metadata.unread = unread;
         sessionNamesDb.setMetadata(safeSessionId, provider, metadata);
         res.json({ success: true });
     } catch (error) {
@@ -1471,6 +1472,69 @@ app.post('/api/local-tools/open-file', authenticateToken, async (req, res) => {
             res.status(404).json({ error: 'File not found' });
         } else {
             res.status(500).json({ error: error.message || 'Failed to open file' });
+        }
+    }
+});
+
+app.post('/api/local-tools/open-path', authenticateToken, async (req, res) => {
+    try {
+        const {
+            filePath,
+            projectName,
+        } = req.body || {};
+
+        if (!filePath || typeof filePath !== 'string') {
+            return res.status(400).json({ error: 'filePath is required' });
+        }
+
+        const resolvedInfo = projectName
+            ? await resolveReadableProjectPath(projectName, filePath)
+            : await resolvePathInRegisteredProjects(filePath);
+
+        if (!resolvedInfo) {
+            return res.status(403).json({ error: 'Path must be under a registered project root' });
+        }
+
+        const stats = await fsPromises.stat(resolvedInfo.resolved);
+        const platform = os.platform();
+        let command;
+        let args;
+
+        if (platform === 'win32') {
+            command = 'explorer.exe';
+            args = stats.isDirectory()
+                ? [resolvedInfo.resolved]
+                : [`/select,${resolvedInfo.resolved}`];
+        } else if (platform === 'darwin') {
+            command = 'open';
+            args = stats.isDirectory()
+                ? [resolvedInfo.resolved]
+                : ['-R', resolvedInfo.resolved];
+        } else {
+            command = 'xdg-open';
+            args = [stats.isDirectory() ? resolvedInfo.resolved : path.dirname(resolvedInfo.resolved)];
+        }
+
+        const child = spawn(command, args, {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+        });
+        child.unref();
+
+        res.json({
+            success: true,
+            path: resolvedInfo.resolved,
+            projectName: resolvedInfo.projectName,
+        });
+    } catch (error) {
+        console.error('Error opening local path:', error);
+        if (error.statusCode) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'Path not found' });
+        } else {
+            res.status(500).json({ error: error.message || 'Failed to open path' });
         }
     }
 });

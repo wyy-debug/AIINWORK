@@ -124,6 +124,7 @@ const runMigrations = () => {
     for (const [columnName, columnSql] of [
       ['pinned_at', 'ALTER TABLE session_names ADD COLUMN pinned_at DATETIME'],
       ['archived_at', 'ALTER TABLE session_names ADD COLUMN archived_at DATETIME'],
+      ['unread_at', 'ALTER TABLE session_names ADD COLUMN unread_at DATETIME'],
     ]) {
       if (!sessionNameColumnNames.includes(columnName)) {
         console.log(`Running migration: Adding ${columnName} column to session_names`);
@@ -557,19 +558,20 @@ const sessionNamesDb = {
     if (!sessionIds.length) return new Map();
     const placeholders = sessionIds.map(() => '?').join(',');
     const rows = db.prepare(
-      `SELECT session_id, custom_name, pinned_at, archived_at FROM session_names
+      `SELECT session_id, custom_name, pinned_at, archived_at, unread_at FROM session_names
        WHERE session_id IN (${placeholders}) AND provider = ?`
     ).all(...sessionIds, provider);
     return new Map(rows.map(row => [row.session_id, {
       customName: row.custom_name || '',
       pinnedAt: row.pinned_at || null,
       archivedAt: row.archived_at || null,
+      unreadAt: row.unread_at || null,
     }]));
   },
 
   setMetadata: (sessionId, provider, metadata = {}) => {
     const existing = db.prepare(
-      'SELECT custom_name, pinned_at, archived_at FROM session_names WHERE session_id = ? AND provider = ?'
+      'SELECT custom_name, pinned_at, archived_at, unread_at FROM session_names WHERE session_id = ? AND provider = ?'
     ).get(sessionId, provider) || {};
     const existingName = existing.custom_name || '';
     const nextPinnedAt = Object.prototype.hasOwnProperty.call(metadata, 'pinned')
@@ -578,13 +580,17 @@ const sessionNamesDb = {
     const nextArchivedAt = Object.prototype.hasOwnProperty.call(metadata, 'archived')
       ? metadata.archived ? new Date().toISOString() : null
       : existing.archived_at || null;
+    const nextUnreadAt = Object.prototype.hasOwnProperty.call(metadata, 'unread')
+      ? metadata.unread ? new Date().toISOString() : null
+      : existing.unread_at || null;
     db.prepare(`
-      INSERT INTO session_names (session_id, provider, custom_name, pinned_at, archived_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO session_names (session_id, provider, custom_name, pinned_at, archived_at, unread_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, provider)
       DO UPDATE SET
         pinned_at = excluded.pinned_at,
         archived_at = excluded.archived_at,
+        unread_at = excluded.unread_at,
         updated_at = CURRENT_TIMESTAMP
     `).run(
       sessionId,
@@ -592,6 +598,7 @@ const sessionNamesDb = {
       existingName,
       nextPinnedAt,
       nextArchivedAt,
+      nextUnreadAt,
     );
   },
 
@@ -800,8 +807,10 @@ function applyCustomSessionNames(sessions, provider) {
       if (metadata.customName) session.summary = metadata.customName;
       session.pinnedAt = metadata.pinnedAt;
       session.archivedAt = metadata.archivedAt;
+      session.unreadAt = metadata.unreadAt;
       session.isPinned = Boolean(metadata.pinnedAt);
       session.isArchived = Boolean(metadata.archivedAt);
+      session.isUnread = Boolean(metadata.unreadAt);
     }
   } catch (error) {
     console.warn(`[DB] Failed to apply custom session names for ${provider}:`, error.message);

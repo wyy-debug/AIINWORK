@@ -1,14 +1,18 @@
 import { Archive, ArchiveRestore, Check, Clock, Edit2, GitBranch, MessageSquarePlus, Pin, PinOff, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState, type MouseEvent } from 'react';
 
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import { formatTimeAgo } from '../../../../utils/dateUtils';
+import { copyTextToClipboard } from '../../../../utils/clipboard';
+import { api } from '../../../../utils/api';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+
+import SessionContextMenu from './SessionContextMenu';
 
 type SidebarSessionItemProps = {
   project: Project;
@@ -23,6 +27,7 @@ type SidebarSessionItemProps = {
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   onTogglePinSession: (session: SessionWithProvider) => void;
   onToggleArchiveSession: (session: SessionWithProvider) => void;
+  onToggleUnreadSession: (session: SessionWithProvider) => void;
   onOpenConversationGuide: (project: Project, session: SessionWithProvider) => void;
   onDispatchSessionWorktree: (project: Project, session: SessionWithProvider) => void;
   onProjectSelect: (project: Project) => void;
@@ -49,6 +54,7 @@ function SidebarSessionItem({
   onSaveEditingSession,
   onTogglePinSession,
   onToggleArchiveSession,
+  onToggleUnreadSession,
   onOpenConversationGuide,
   onDispatchSessionWorktree,
   onProjectSelect,
@@ -63,8 +69,16 @@ function SidebarSessionItem({
   const isSelected = selectedSession?.id === session.id;
   const isPinned = Boolean(session.isPinned);
   const isArchived = Boolean(session.isArchived);
+  const isUnread = Boolean(session.isUnread);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const projectPath = String(project.fullPath || project.path || '');
 
   const selectMobileSession = () => {
+    onProjectSelect(project);
+    onSessionSelect(session, project.name);
+  };
+
+  const selectLocalSession = () => {
     onProjectSelect(project);
     onSessionSelect(session, project.name);
   };
@@ -77,8 +91,44 @@ function SidebarSessionItem({
     onDeleteSession(project.name, session.id, sessionView.sessionName, session.__provider);
   };
 
+  const openContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenuPosition({ x: event.clientX, y: event.clientY });
+  };
+
+  const openProjectDirectory = async () => {
+    if (!projectPath) return;
+    const response = await api.openLocalPath({ filePath: projectPath, projectName: project.name });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      alert(data?.error || '无法在资源管理器中打开工作目录');
+    }
+  };
+
+  const copyProjectDirectory = () => {
+    void copyTextToClipboard(projectPath);
+  };
+
+  const copySessionId = () => {
+    void copyTextToClipboard(session.id);
+  };
+
+  const copyDeepLink = () => {
+    const url = new URL(`/session/${encodeURIComponent(session.id)}`, window.location.href);
+    void copyTextToClipboard(url.toString());
+  };
+
+  const openMiniWindow = () => {
+    const url = `/session/${encodeURIComponent(session.id)}?mini=1`;
+    const popup = window.open(url, `mtl-session-${session.id}`, 'popup,width=980,height=760');
+    if (popup) {
+      popup.opener = null;
+    }
+  };
+
   return (
-    <div className="group relative [contain-intrinsic-size:1px_48px] [content-visibility:auto]">
+    <div className="group relative [contain-intrinsic-size:1px_48px] [content-visibility:auto]" onContextMenu={openContextMenu}>
       {sessionView.isActive && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <div className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
@@ -108,7 +158,10 @@ function SidebarSessionItem({
             </div>
 
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                {isUnread && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
+                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
@@ -195,7 +248,10 @@ function SidebarSessionItem({
           <div className="flex w-full min-w-0 items-start gap-2">
             <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3 w-3 flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                {isUnread && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
+                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
@@ -333,6 +389,30 @@ function SidebarSessionItem({
             )}
           </div>
       </div>
+      {contextMenuPosition && (
+        <SessionContextMenu
+          position={contextMenuPosition}
+          isPinned={isPinned}
+          isArchived={isArchived}
+          isUnread={isUnread}
+          canOpenWorkdir={Boolean(projectPath)}
+          canDispatchLocal
+          canDispatchWorktree={!project.worktree}
+          onClose={() => setContextMenuPosition(null)}
+          onRename={() => onStartEditingSession(session.id, sessionView.sessionName)}
+          onTogglePin={() => onTogglePinSession(session)}
+          onToggleArchive={() => onToggleArchiveSession(session)}
+          onToggleUnread={() => onToggleUnreadSession(session)}
+          onOpenWorkdir={() => { void openProjectDirectory(); }}
+          onCopyWorkdir={copyProjectDirectory}
+          onCopySessionId={copySessionId}
+          onCopyDeepLink={copyDeepLink}
+          onDispatchLocal={selectLocalSession}
+          onDispatchWorktree={() => onDispatchSessionWorktree(project, session)}
+          onOpenMiniWindow={openMiniWindow}
+          onDelete={requestDeleteSession}
+        />
+      )}
     </div>
   );
 }

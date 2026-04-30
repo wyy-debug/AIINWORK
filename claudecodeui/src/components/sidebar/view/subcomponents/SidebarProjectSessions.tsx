@@ -23,6 +23,7 @@ type SidebarProjectSessionsProps = {
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
   onTogglePinSession: (session: SessionWithProvider) => void;
   onToggleArchiveSession: (session: SessionWithProvider) => void;
+  onToggleUnreadSession: (session: SessionWithProvider) => void;
   onOpenConversationGuide: (project: Project, session: SessionWithProvider) => void;
   onDispatchSessionWorktree: (project: Project, session: SessionWithProvider) => void;
   onProjectSelect: (project: Project) => void;
@@ -72,6 +73,7 @@ export default function SidebarProjectSessions({
   onSaveEditingSession,
   onTogglePinSession,
   onToggleArchiveSession,
+  onToggleUnreadSession,
   onOpenConversationGuide,
   onDispatchSessionWorktree,
   onProjectSelect,
@@ -135,6 +137,7 @@ export default function SidebarProjectSessions({
             onSaveEditingSession={onSaveEditingSession}
             onTogglePinSession={onTogglePinSession}
             onToggleArchiveSession={onToggleArchiveSession}
+            onToggleUnreadSession={onToggleUnreadSession}
             onOpenConversationGuide={onOpenConversationGuide}
             onDispatchSessionWorktree={onDispatchSessionWorktree}
             onProjectSelect={onProjectSelect}

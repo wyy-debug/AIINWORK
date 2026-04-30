@@ -209,6 +209,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ tool, filePath, projectName, line, column }),
     }),
+  openLocalPath: ({ filePath, projectName = '' }) =>
+    apiFetch('/api/local-tools/open-path', {
+      method: 'POST',
+      body: JSON.stringify({ filePath, projectName }),
+    }),
   saveFile: (projectName, filePath, content) =>
     apiFetch(`/api/projects/${projectName}/file`, {
       method: 'PUT',

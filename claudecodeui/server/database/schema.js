@@ -35,6 +35,7 @@ export const SESSION_NAMES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_names
   custom_name TEXT NOT NULL,
   pinned_at DATETIME,
   archived_at DATETIME,
+  unread_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(session_id, provider)
