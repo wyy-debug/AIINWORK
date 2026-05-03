@@ -13,14 +13,14 @@
     "untitledSession": "Unbenannte Sitzung",
     "newSession": "Neue Sitzung",
     "codexSession": "Codex-Sitzung",
-    "fetchingProjects": "Deine MTL-Code-Projekte und -Sitzungen werden abgerufen",
+    "fetchingProjects": "Deine Argus-Projekte und -Sitzungen werden abgerufen",
     "projects": "Projekte",
     "noMatchingProjects": "Keine passenden Projekte",
     "tryDifferentSearch": "Versuch, den Suchbegriff anzupassen",
-    "runMTL-CodeCli": "Führ MTL-Code CLI in einem Projektverzeichnis aus, um zu beginnen"
+    "runClaudeCli": "Führ Argus CLI in einem Projektverzeichnis aus, um zu beginnen"
   },
   "app": {
-    "title": "MTL-Code UI",
+    "title": "Argus",
     "subtitle": "KI-Programmierassistent-Oberfläche"
   },
   "sessions": {

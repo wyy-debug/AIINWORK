@@ -14,7 +14,7 @@ import { useDropzone } from 'react-dropzone';
 import { apiFetch } from '../../../utils/api';
 import { thinkingModes } from '../constants/thinkingModes';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
-import { safeLocalStorage } from '../utils/chatStorage';
+import { getClaudeSettings, safeLocalStorage } from '../utils/chatStorage';
 import type {
   ChatMessage,
   ChatUploadedFile,
@@ -60,7 +60,7 @@ interface UseChatComposerStateArgs {
   onSessionProcessing?: (sessionId?: string | null) => void;
   onInputFocusChange?: (focused: boolean) => void;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
-  onShowSettings?: () => void;
+  onShowSettings?: (tab?: string) => void;
   pendingViewSessionRef: { current: PendingViewSession | null };
   scrollToBottom: () => void;
   addMessage: (msg: ChatMessage) => void;
@@ -101,6 +101,20 @@ const MAX_CHAT_IMAGES = 5;
 const MAX_CHAT_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_CHAT_FILES = 10;
 const MAX_CHAT_FILE_BYTES = 25 * 1024 * 1024;
+
+type OpenMythosDispatchTask = {
+  kind?: string;
+  label?: string;
+  reason?: string;
+  required?: boolean;
+  description?: string;
+};
+
+type OpenMythosDispatchDecision = {
+  openMythosAutoDispatch: boolean;
+  openMythosDispatchConfirmed: boolean;
+  previewFailed?: boolean;
+};
 
 const getNotificationSessionSummary = (
   selectedSession: ProjectSession | null,
@@ -160,6 +174,81 @@ const resolveAgentInvocation = (
     agent: mentionedAgent,
     content: content.trim() ? content : rawInput,
   };
+};
+
+const formatOpenMythosDispatchConfirmation = (tasks: OpenMythosDispatchTask[]) => {
+  const lines = tasks.slice(0, 5).map((task, index) => {
+    const label = task.label || task.kind || `Worker ${index + 1}`;
+    const reason = task.reason || task.description || '复杂任务需要并行检查';
+    const required = task.required ? '，必需' : '';
+    return `${index + 1}. ${label}${required}: ${reason}`;
+  });
+
+  return [
+    `OpenMythos 预计会自动派发 ${tasks.length} 个 worker。`,
+    '',
+    ...lines,
+    '',
+    '自动派发能提高复杂任务覆盖面，但会明显增加 token 消耗。',
+    '',
+    '确定：按计划派发 worker',
+    '取消：本次改用单 Agent 执行，不派发 worker',
+  ].join('\n');
+};
+
+const previewOpenMythosDispatch = async ({
+  provider,
+  input,
+  permissionMode,
+}: {
+  provider: LLMProvider;
+  input: string;
+  permissionMode: PermissionMode | string;
+}): Promise<OpenMythosDispatchDecision> => {
+  const defaultDecision = {
+    openMythosAutoDispatch: false,
+    openMythosDispatchConfirmed: false,
+  };
+
+  if (provider !== 'claude' || !input.trim() || typeof window === 'undefined') {
+    return defaultDecision;
+  }
+
+  try {
+    const response = await apiFetch('/api/settings/openmythos-dispatch-preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        input,
+        permissionMode,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenMythos preview failed with ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const dispatchPlan = Array.isArray(payload?.dispatchPlan)
+      ? payload.dispatchPlan.filter(Boolean) as OpenMythosDispatchTask[]
+      : [];
+
+    if (!payload?.shouldConfirm || dispatchPlan.length === 0) {
+      return defaultDecision;
+    }
+
+    const confirmed = window.confirm(formatOpenMythosDispatchConfirmation(dispatchPlan));
+    return {
+      openMythosAutoDispatch: confirmed,
+      openMythosDispatchConfirmed: confirmed,
+    };
+  } catch (error) {
+    console.warn('[OpenMythos] Dispatch preview failed; using single-agent mode for this turn.', error);
+    return {
+      openMythosAutoDispatch: false,
+      openMythosDispatchConfirmed: false,
+      previewFailed: true,
+    };
+  }
 };
 
 export function useChatComposerState({
@@ -242,7 +331,7 @@ export function useChatComposerState({
         case 'model':
           addMessage({
             type: 'assistant',
-            content: `**Current Model**: ${data.current.model}\n\n**Available Models**:\n\nMTLCode: ${data.available.mtlCode.join(', ')}`,
+            content: `**Current Model**: ${data.current.model}\n\n**Available Models**:\n\nArgus: ${data.available.mtlCode.join(', ')}`,
             timestamp: Date.now(),
           });
           break;
@@ -298,6 +387,47 @@ export function useChatComposerState({
             });
           }
           break;
+
+        case 'open-tab':
+          if (typeof data?.tab === 'string') {
+            window.dispatchEvent(new CustomEvent('argus-open-tab', {
+              detail: {
+                tab: data.tab,
+                mode: data.mode || '',
+              },
+            }));
+            addMessage({
+              type: 'assistant',
+              content: data.message || `Opening ${data.tab}`,
+              timestamp: Date.now(),
+            });
+          }
+          break;
+
+        case 'open-settings':
+          onShowSettings?.(typeof data?.tab === 'string' ? data.tab : undefined);
+          addMessage({
+            type: 'assistant',
+            content: data.message || 'Opening settings',
+            timestamp: Date.now(),
+          });
+          break;
+
+        case 'insert-text': {
+          const nextText = typeof data?.text === 'string' ? data.text : '';
+          setInput((previous) => {
+            const separator = previous.trim() ? '\n\n' : '';
+            const value = `${previous}${separator}${nextText}`;
+            inputValueRef.current = value;
+            return value;
+          });
+          addMessage({
+            type: 'assistant',
+            content: data.message || 'Inserted command text',
+            timestamp: Date.now(),
+          });
+          break;
+        }
 
         default:
           console.warn('Unknown built-in command action:', action);
@@ -688,6 +818,12 @@ export function useChatComposerState({
         messageContent = `${selectedThinkingMode.prefix}: ${messageContent}`;
       }
 
+      const openMythosDispatchDecision = await previewOpenMythosDispatch({
+        provider,
+        input: messageContent,
+        permissionMode,
+      });
+
       let uploadedImages: unknown[] = [];
       if (attachedImages.length > 0) {
         const formData = new FormData();
@@ -806,6 +942,10 @@ export function useChatComposerState({
       }
 
       const getToolsSettings = () => {
+        if (provider === 'claude') {
+          return getClaudeSettings();
+        }
+
         try {
           const settingsKey =
             provider === 'cursor'
@@ -931,6 +1071,9 @@ export function useChatComposerState({
             files: uploadedFiles,
             clientMessageId,
             clientSessionId: sessionToActivate,
+            openMythosAutoDispatch: openMythosDispatchDecision.openMythosAutoDispatch,
+            openMythosDispatchConfirmed: openMythosDispatchDecision.openMythosDispatchConfirmed,
+            openMythosDispatchPreviewFailed: Boolean(openMythosDispatchDecision.previewFailed),
           },
         });
       }
@@ -992,6 +1135,24 @@ export function useChatComposerState({
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
+
+  useEffect(() => {
+    const handleAppendChatInput = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text?.trim();
+      if (!text) {
+        return;
+      }
+      setInput((previous) => {
+        const next = previous.trim() ? `${previous.trimEnd()}\n\n${text}` : text;
+        inputValueRef.current = next;
+        return next;
+      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    window.addEventListener('argus-append-chat-input', handleAppendChatInput);
+    return () => window.removeEventListener('argus-append-chat-input', handleAppendChatInput);
+  }, []);
 
   useEffect(() => {
     if (!isLoading) {

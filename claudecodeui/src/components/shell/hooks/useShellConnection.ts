@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { Project, ProjectSession } from '../../../types/app';
+import type { ShellInitMessage } from '../types/types';
 import { TERMINAL_INIT_DELAY_MS } from '../constants/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
 
@@ -55,6 +56,44 @@ export function useShellConnection({
   const [isConnecting, setIsConnecting] = useState(false);
   const connectingRef = useRef(false);
 
+  const buildInitMessage = useCallback((confirmationId = ''): ShellInitMessage | null => {
+    const currentTerminal = terminalRef.current;
+    const currentFitAddon = fitAddonRef.current;
+    const currentProject = selectedProjectRef.current;
+    if (!currentTerminal || !currentFitAddon || !currentProject) {
+      return null;
+    }
+
+    currentFitAddon.fit();
+
+    return {
+      type: 'init',
+      projectPath: currentProject.fullPath || currentProject.path || '',
+      sessionId: isPlainShellRef.current ? null : selectedSessionRef.current?.id || null,
+      hasSession: isPlainShellRef.current ? false : Boolean(selectedSessionRef.current),
+      provider: isPlainShellRef.current ? 'plain-shell' : (selectedSessionRef.current?.__provider || localStorage.getItem('selected-provider') || 'claude'),
+      cols: currentTerminal.cols,
+      rows: currentTerminal.rows,
+      initialCommand: initialCommandRef.current,
+      isPlainShell: isPlainShellRef.current,
+      ...(confirmationId ? { confirmationId } : {}),
+    };
+  }, [
+    fitAddonRef,
+    initialCommandRef,
+    isPlainShellRef,
+    selectedProjectRef,
+    selectedSessionRef,
+    terminalRef,
+  ]);
+
+  const sendInitMessage = useCallback((socket: WebSocket, confirmationId = '') => {
+    const message = buildInitMessage(confirmationId);
+    if (message) {
+      sendSocketMessage(socket, message);
+    }
+  }, [buildInitMessage]);
+
   const handleProcessCompletion = useCallback(
     (output: string) => {
       if (!isPlainShellRef.current || !onProcessCompleteRef.current) {
@@ -97,15 +136,29 @@ export function useShellConnection({
         return;
       }
 
-      if (message.type === 'auth_url' || message.type === 'url_open') {
+	      if (message.type === 'auth_url' || message.type === 'url_open') {
         const nextAuthUrl = typeof message.url === 'string' ? message.url : '';
         if (nextAuthUrl) {
           setAuthUrl(nextAuthUrl);
         }
+	      }
+
+      if (message.type === 'runtime_permission_confirmation_required') {
+        const reason = typeof message.reason === 'string' ? message.reason : 'This shell command needs confirmation.';
+        const command = typeof message.command === 'string' ? message.command : '';
+        const confirmed = window.confirm(`${reason}${command ? `\n\n${command}` : ''}`);
+        if (!confirmed) {
+          terminalRef.current?.write(`\r\n\x1b[33mRuntime permission confirmation cancelled.\x1b[0m\r\n`);
+          return;
+        }
+        const confirmationId = typeof message.confirmationId === 'string' ? message.confirmationId : '';
+        if (wsRef.current && confirmationId) {
+          sendInitMessage(wsRef.current, confirmationId);
+        }
       }
-    },
-    [handleProcessCompletion, onOutputRef, setAuthUrl, terminalRef],
-  );
+	    },
+	    [handleProcessCompletion, onOutputRef, sendInitMessage, setAuthUrl, terminalRef, wsRef],
+	  );
 
   const connectWebSocket = useCallback(
     (isConnectionLocked = false) => {
@@ -132,28 +185,7 @@ export function useShellConnection({
           connectingRef.current = false;
           setAuthUrl('');
 
-          window.setTimeout(() => {
-            const currentTerminal = terminalRef.current;
-            const currentFitAddon = fitAddonRef.current;
-            const currentProject = selectedProjectRef.current;
-            if (!currentTerminal || !currentFitAddon || !currentProject) {
-              return;
-            }
-
-            currentFitAddon.fit();
-
-            sendSocketMessage(socket, {
-              type: 'init',
-              projectPath: currentProject.fullPath || currentProject.path || '',
-              sessionId: isPlainShellRef.current ? null : selectedSessionRef.current?.id || null,
-              hasSession: isPlainShellRef.current ? false : Boolean(selectedSessionRef.current),
-              provider: isPlainShellRef.current ? 'plain-shell' : (selectedSessionRef.current?.__provider || localStorage.getItem('selected-provider') || 'claude'),
-              cols: currentTerminal.cols,
-              rows: currentTerminal.rows,
-              initialCommand: initialCommandRef.current,
-              isPlainShell: isPlainShellRef.current,
-            });
-          }, TERMINAL_INIT_DELAY_MS);
+	          window.setTimeout(() => sendInitMessage(socket), TERMINAL_INIT_DELAY_MS);
         };
 
         socket.onmessage = (event) => {
@@ -183,15 +215,16 @@ export function useShellConnection({
       clearTerminalScreen,
       fitAddonRef,
       handleSocketMessage,
-      initialCommandRef,
-      isConnected,
-      isConnecting,
-      isPlainShellRef,
-      selectedProjectRef,
-      selectedSessionRef,
-      setAuthUrl,
-      terminalRef,
-      wsRef,
+	      initialCommandRef,
+	      isConnected,
+	      isConnecting,
+	      isPlainShellRef,
+	      selectedProjectRef,
+	      selectedSessionRef,
+        sendInitMessage,
+	      setAuthUrl,
+	      terminalRef,
+	      wsRef,
     ],
   );
 

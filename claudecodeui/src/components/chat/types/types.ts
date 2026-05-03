@@ -33,6 +33,14 @@ export interface SubagentChildTool {
   timestamp: Date;
 }
 
+export interface SubagentActivitySummary {
+  total: number;
+  running: number;
+  completed: number;
+  outputting: number;
+  latestLabel?: string;
+}
+
 export interface ChatMessage {
   type: string;
   content?: string;
@@ -134,6 +142,17 @@ export interface OpenMythosRuntimeDiagnostics {
   phaseAdapter?: boolean;
   expertRouting?: boolean;
   contextCacheDiagnostics?: boolean;
+  autoDispatchSubagents?: boolean;
+  configuredAutoDispatchSubagents?: boolean;
+  effectiveAutoDispatchSubagents?: boolean;
+  autoDispatchMinEffort?: string;
+  autoDispatchMaxWorkers?: number;
+  dispatchConfirmation?: {
+    required?: boolean;
+    confirmed?: boolean;
+    mode?: 'single-agent' | 'auto-dispatch' | string;
+    source?: string;
+  };
   minEffort: string;
   maxEffort: string;
   runtimeCard?: {
@@ -152,12 +171,18 @@ export interface OpenMythosRuntimeDiagnostics {
       reason?: string;
       required?: boolean;
     }>;
+    dispatchPlan?: Array<{
+      kind?: string;
+      label?: string;
+      reason?: string;
+      required?: boolean;
+      description?: string;
+      prompt?: string;
+    }>;
   } | null;
   contextCache?: {
     compactBoundaryCount?: number;
     microcompactBoundaryCount?: number;
-    ragExcerptCount?: number;
-    ragPromptLength?: number;
     toolSummaryCount?: number;
     summaryLength?: number;
     skillPromptLength?: number;
@@ -177,15 +202,6 @@ export interface AgentRuntimeDiagnostics {
   effectiveSkills?: string[];
   skillDetails?: AgentRuntimeSkillDetail[];
   skillPromptLength?: number;
-  ragExcerptCount?: number;
-  ragPromptLength?: number;
-  ragExcerpts?: Array<{
-    label?: string;
-    sourceName?: string;
-    relativePath?: string;
-    score?: number;
-    chars?: number;
-  }>;
   mcpDiagnosticsSummary?: Array<{
     slot?: string;
     serverName?: string;
@@ -237,7 +253,7 @@ export interface ChatInterfaceProps {
   processingSessions?: Set<string>;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
   onNavigateToSession?: (targetSessionId: string) => void;
-  onShowSettings?: () => void;
+  onShowSettings?: (tab?: string) => void;
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;

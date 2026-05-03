@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Archive,
   ArchiveRestore,
@@ -8,6 +9,7 @@ import {
   FolderOpen,
   GitBranch,
   Home,
+  MessageSquarePlus,
   MoreHorizontal,
   Pin,
   PinOff,
@@ -39,6 +41,7 @@ export type SessionContextMenuProps = {
   onCopyWorkdir?: () => void;
   onCopySessionId: () => void;
   onCopyDeepLink: () => void;
+  onOpenConversationGuide?: () => void;
   onDispatchLocal?: () => void;
   onDispatchWorktree?: () => void;
   onOpenMiniWindow: () => void;
@@ -107,12 +110,14 @@ export default function SessionContextMenu({
   onCopyWorkdir,
   onCopySessionId,
   onCopyDeepLink,
+  onOpenConversationGuide,
   onDispatchLocal,
   onDispatchWorktree,
   onOpenMiniWindow,
   onDelete,
 }: SessionContextMenuProps) {
   const menuPosition = clampMenuPosition(position);
+  const portalTarget = typeof document === 'undefined' ? null : document.body;
 
   useEffect(() => {
     const handleDismiss = () => onClose();
@@ -137,20 +142,20 @@ export default function SessionContextMenu({
     onClose();
   };
 
-  return (
+  const menu = (
     <div
-      className="fixed z-[90] w-56 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+      className="fixed z-[1000] w-56 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
       style={{ left: menuPosition.x, top: menuPosition.y }}
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
       role="menu"
     >
-      <MenuItem icon={<Edit2 className="h-4 w-4" />} label="重命名对话" onSelect={select(onRename)} />
       <MenuItem
         icon={isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
         label={isPinned ? '取消置顶' : '置顶对话'}
         onSelect={select(onTogglePin)}
       />
+      <MenuItem icon={<Edit2 className="h-4 w-4" />} label="重命名对话" onSelect={select(onRename)} />
       <MenuItem
         icon={isArchived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
         label={isArchived ? '恢复会话' : '归档对话'}
@@ -178,6 +183,13 @@ export default function SessionContextMenu({
       />
       <MenuItem icon={<Copy className="h-4 w-4" />} label="复制会话 ID" onSelect={select(onCopySessionId)} />
       <MenuItem icon={<ExternalLink className="h-4 w-4" />} label="复制深度链接" onSelect={select(onCopyDeepLink)} />
+      {onOpenConversationGuide && (
+        <MenuItem
+          icon={<MessageSquarePlus className="h-4 w-4" />}
+          label="引导/追加对话"
+          onSelect={select(onOpenConversationGuide)}
+        />
+      )}
 
       <div className="my-1 border-t border-border" />
 
@@ -200,4 +212,6 @@ export default function SessionContextMenu({
       <MenuItem icon={<Trash2 className="h-4 w-4" />} label="删除对话" destructive onSelect={select(onDelete)} />
     </div>
   );
+
+  return portalTarget ? createPortal(menu, portalTarget) : menu;
 }

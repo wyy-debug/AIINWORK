@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Archive, GitBranch, Loader2, MessageSquare, RefreshCw, Trash2, X } from 'lucide-react';
+import { Archive, ArrowRightLeft, GitBranch, Loader2, MessageSquare, Play, RefreshCw, Trash2, X } from 'lucide-react';
 
 import { cn } from '../../../../lib/utils';
 import type { Project, WorktreeDispatchMeta } from '../../../../types/app';
@@ -93,7 +93,7 @@ export default function WorktreeTasksModal({
     }
   };
 
-  const deleteWorktree = async (worktree: WorktreeDispatchMeta) => {
+	  const deleteWorktree = async (worktree: WorktreeDispatchMeta) => {
     if (!window.confirm('确定删除这个 managed worktree？如果有未提交改动，后端会阻止删除；你可以先创建分支保留改动。')) {
       return;
     }
@@ -106,6 +106,43 @@ export default function WorktreeTasksModal({
       await onRefreshProjects();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : '删除工作树失败');
+    } finally {
+      setBusyId('');
+    }
+	  };
+
+  const runSetup = async (worktree: WorktreeDispatchMeta, confirmationId = '') => {
+    setBusyId(`setup:${worktree.id}`);
+    setError('');
+    try {
+      const response = await api.runWorktreeSetup(worktree.id, confirmationId ? { confirmationId } : {});
+      const data = await readJsonResponse(response);
+      if (data?.requiresConfirmation) {
+        const confirmed = window.confirm(data.reason || 'This setup command needs confirmation before running.');
+        if (confirmed) {
+          await runSetup(worktree, data.confirmationId || '');
+        }
+        return;
+      }
+      await loadWorktrees();
+      await onRefreshProjects();
+    } catch (setupError) {
+      setError(setupError instanceof Error ? setupError.message : 'Worktree setup failed');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const handoffWorktree = async (worktree: WorktreeDispatchMeta) => {
+    setBusyId(`handoff:${worktree.id}`);
+    setError('');
+    try {
+      const response = await api.handoffWorktree(worktree.id, { direction: 'worktree-to-local' });
+      await readJsonResponse(response);
+      await loadWorktrees();
+      await onRefreshProjects();
+    } catch (handoffError) {
+      setError(handoffError instanceof Error ? handoffError.message : 'Worktree handoff failed');
     } finally {
       setBusyId('');
     }
@@ -229,7 +266,25 @@ export default function WorktreeTasksModal({
                       </button>
                       <button
                         type="button"
-                        onClick={() => void deleteWorktree(worktree)}
+                        onClick={() => void runSetup(worktree)}
+                        disabled={busyId === `setup:${worktree.id}`}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busyId === `setup:${worktree.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                        Setup
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handoffWorktree(worktree)}
+                        disabled={busyId === `handoff:${worktree.id}`}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busyId === `handoff:${worktree.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRightLeft className="h-3.5 w-3.5" />}
+                        Handoff
+                      </button>
+	                      <button
+	                        type="button"
+	                        onClick={() => void deleteWorktree(worktree)}
                         disabled={busyId === `delete:${worktree.id}` || worktree.status === 'archived'}
                         className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 px-2.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/30"
                       >

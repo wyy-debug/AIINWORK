@@ -42,8 +42,6 @@ function Sidebar({
   loadingProgress,
   onRefresh,
   onShowSettings,
-  activeTab,
-  onShowAgents,
   showSettings,
   settingsInitialTab,
   onCloseSettings,
@@ -143,12 +141,10 @@ function Sidebar({
     if (!project) {
       return [];
     }
-    return [
-      ...(project.sessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'claude') as LLMProvider })),
-      ...(project.codexSessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'codex') as LLMProvider })),
-      ...(project.cursorSessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'cursor') as LLMProvider })),
-      ...(project.geminiSessions ?? []).map((session) => ({ ...session, __provider: (session.__provider || 'gemini') as LLMProvider })),
-    ].sort((left, right) => {
+    return (project.sessions ?? []).map((session) => ({
+      ...session,
+      __provider: (session.__provider || 'claude') as LLMProvider,
+    })).sort((left, right) => {
       const leftTime = new Date(left.lastActivity || left.updated_at || left.created_at || 0).getTime();
       const rightTime = new Date(right.lastActivity || right.updated_at || right.created_at || 0).getTime();
       return rightTime - leftTime;
@@ -307,8 +303,6 @@ function Sidebar({
         <SidebarCollapsed
           onExpand={handleExpandSidebar}
           onShowSettings={onShowSettings}
-          activeTab={activeTab}
-          onShowAgents={onShowAgents}
           updateAvailable={updateAvailable}
           onShowVersionModal={() => setShowVersionModal(true)}
           t={t}
@@ -385,6 +379,11 @@ function Sidebar({
               }
               setShowNewProject(true);
             }}
+            onQuickChat={() => {
+              setSearchMode('conversations');
+              setSearchFilter('');
+              onNewConversation();
+            }}
             onCollapseSidebar={handleCollapseSidebar}
             updateAvailable={updateAvailable}
             releaseInfo={releaseInfo}
@@ -392,8 +391,6 @@ function Sidebar({
             currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
-            activeTab={activeTab}
-            onShowAgents={onShowAgents}
             projectListProps={projectListProps}
             t={t}
           />

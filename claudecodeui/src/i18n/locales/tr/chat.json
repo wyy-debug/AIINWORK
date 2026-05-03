@@ -15,7 +15,7 @@
     "user": "S",
     "error": "Hata",
     "tool": "Araç",
-    "claude": "MTL-Code",
+    "claude": "Argus",
     "cursor": "Cursor",
     "codex": "Codex",
     "gemini": "Gemini"
@@ -55,8 +55,8 @@
   "interactive": {
     "title": "Etkileşimli Prompt",
     "waiting": "CLI'da yanıtın bekleniyor",
-    "instruction": "Lütfen MTL-Code'un çalıştığı terminalde bir seçenek seç.",
-    "selectedOption": "✓ MTL-Code {{number}} numaralı seçeneği seçti",
+    "instruction": "Lütfen Argus'un çalıştığı terminalde bir seçenek seç.",
+    "selectedOption": "✓ Argus {{number}} numaralı seçeneği seçti",
     "instructionDetail": "CLI'da bu seçeneği ok tuşları veya numara girerek interaktif olarak seçebilirsin."
   },
   "thinking": {
@@ -83,7 +83,7 @@
     "title": "Uygulama Planı"
   },
   "usageLimit": {
-    "resetAt": "MTL-Code kullanım limitin doldu. Limitin **{{time}} {{timezone}}** — {{date}} tarihinde sıfırlanacak"
+    "resetAt": "Argus kullanım limitin doldu. Limitin **{{time}} {{timezone}}** — {{date}} tarihinde sıfırlanacak"
   },
   "codex": {
     "permissionMode": "İzin Modu",
@@ -139,14 +139,14 @@
   "thinkingMode": {
     "selector": {
       "title": "Düşünme Modu",
-      "description": "Uzatılmış düşünme, MTL-Code'a alternatifleri değerlendirmek için daha fazla zaman verir",
+      "description": "Uzatılmış düşünme, Argus'a alternatifleri değerlendirmek için daha fazla zaman verir",
       "active": "Aktif",
       "tip": "Daha yüksek düşünme modları daha fazla zaman alır ama daha kapsamlı analiz sağlar"
     },
     "modes": {
       "none": {
         "name": "Standart",
-        "description": "Normal MTL-Code yanıtı",
+        "description": "Normal Argus yanıtı",
         "prefix": ""
       },
       "think": {
@@ -183,7 +183,7 @@
       "google": "Google tarafından"
     },
     "readyPrompt": {
-      "claude": "MTL-Code'u {{model}} ile kullanmaya hazır. Mesajını aşağıya yazmaya başla.",
+      "claude": "Argus'u {{model}} ile kullanmaya hazır. Mesajını aşağıya yazmaya başla.",
       "cursor": "Cursor'ı {{model}} ile kullanmaya hazır. Mesajını aşağıya yazmaya başla.",
       "codex": "Codex'i {{model}} ile kullanmaya hazır. Mesajını aşağıya yazmaya başla.",
       "gemini": "Gemini'yi {{model}} ile kullanmaya hazır. Mesajını aşağıya yazmaya başla.",
@@ -230,10 +230,10 @@
     },
     "loading": "Terminal yükleniyor...",
     "connecting": "Shell'e bağlanılıyor...",
-    "startSession": "Yeni bir MTL-Code oturumu başlat",
+    "startSession": "Yeni bir Argus oturumu başlat",
     "resumeSession": "Oturuma devam et: {{displayName}}...",
     "runCommand": "{{projectName}} içinde {{command}} çalıştır",
-    "startCli": "{{projectName}} içinde MTL-Code CLI başlatılıyor",
+    "startCli": "{{projectName}} içinde Argus CLI başlatılıyor",
     "defaultCommand": "komut"
   },
   "claudeStatus": {

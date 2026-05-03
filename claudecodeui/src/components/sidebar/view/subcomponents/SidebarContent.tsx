@@ -1,9 +1,9 @@
 import { type MouseEvent, type ReactNode, useDeferredValue, useMemo, useState } from 'react';
-import { Archive, ArchiveRestore, Edit2, MessageSquare, Pin, PinOff, Search, Trash2 } from 'lucide-react';
+import { MessageSquare, MoreHorizontal, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ScrollArea } from '../../../../shared/view/ui';
-import type { AppTab, Project, ProjectSession } from '../../../../types/app';
+import type { Project, ProjectSession } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { SessionWithProvider } from '../../types/types';
@@ -82,6 +82,7 @@ type SidebarContentProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
+  onQuickChat: () => void;
   onCollapseSidebar: () => void;
   updateAvailable: boolean;
   releaseInfo: ReleaseInfo | null;
@@ -89,8 +90,6 @@ type SidebarContentProps = {
   currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
-  activeTab: AppTab;
-  onShowAgents: () => void;
   projectListProps: SidebarProjectListProps;
   t: TFunction;
 };
@@ -120,6 +119,7 @@ export default function SidebarContent({
   onRefresh,
   isRefreshing,
   onCreateProject,
+  onQuickChat,
   onCollapseSidebar,
   updateAvailable,
   releaseInfo,
@@ -127,8 +127,6 @@ export default function SidebarContent({
   currentVersion,
   onShowVersionModal,
   onShowSettings,
-  activeTab,
-  onShowAgents,
   projectListProps,
   t,
 }: SidebarContentProps) {
@@ -212,6 +210,7 @@ export default function SidebarContent({
         onRefresh={onRefresh}
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
+        onQuickChat={onQuickChat}
         onCollapseSidebar={onCollapseSidebar}
         t={t}
       />
@@ -331,7 +330,7 @@ export default function SidebarContent({
                 >
                   <button
                     type="button"
-                    className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent/55 ${
+                    className={`w-full rounded-lg px-3 py-2.5 pr-9 text-left transition-colors hover:bg-accent/55 ${
                       selectedConversationSession?.id === session.id ? 'bg-accent/65' : ''
                     } ${session.isArchived ? 'opacity-60' : ''}`}
                     onClick={() => onConversationSessionSelect(session)}
@@ -354,58 +353,15 @@ export default function SidebarContent({
                       </div>
                     </div>
                   </button>
-                  {session.__provider !== 'cursor' && (
-                    <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-lg border border-border/60 bg-background/95 p-0.5 opacity-0 shadow-sm transition focus-within:opacity-100 group-hover:opacity-100">
-                      <button
-                        type="button"
-                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                        title="重命名"
-                        aria-label="重命名"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRenameConversationSession(session, sessionView.sessionName);
-                        }}
-                      >
-                        <Edit2 className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                        title={session.isPinned ? '取消置顶' : '置顶'}
-                        aria-label={session.isPinned ? '取消置顶' : '置顶'}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onTogglePinConversationSession(session);
-                        }}
-                      >
-                        {session.isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                        title={session.isArchived ? '恢复会话' : '归档会话'}
-                        aria-label={session.isArchived ? '恢复会话' : '归档会话'}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onToggleArchiveConversationSession(session);
-                        }}
-                      >
-                        {session.isArchived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
-                        title={t('actions.delete')}
-                        aria-label={t('actions.delete')}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDeleteConversationSession(session, sessionView.sessionName);
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    className="absolute right-1.5 top-2 flex h-7 w-7 items-center justify-center rounded-md bg-background/95 text-muted-foreground opacity-0 shadow-sm ring-1 ring-border/70 transition hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                    title="打开对话菜单"
+                    aria-label="打开对话菜单"
+                    onClick={(event) => openConversationContextMenu(event, session, sessionView.sessionName)}
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </button>
                 </div>
               ))}
               {conversationContextMenu && (
@@ -428,7 +384,10 @@ export default function SidebarContent({
             </div>
           )
         ) : (
-          <SidebarProjectList {...projectListProps} />
+          <>
+            <div className="px-3 pb-1 pt-2 text-xs font-semibold text-muted-foreground">项目</div>
+            <SidebarProjectList {...projectListProps} />
+          </>
         )}
       </ScrollArea>
 
@@ -439,8 +398,6 @@ export default function SidebarContent({
         currentVersion={currentVersion}
         onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
-        activeTab={activeTab}
-        onShowAgents={onShowAgents}
         t={t}
       />
     </div>

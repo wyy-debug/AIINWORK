@@ -17,7 +17,7 @@ flowchart LR
   Frontend --> Ws["ws://127.0.0.1:{port}/ws and /shell"]
   Backend --> AppData["User appData folder"]
   Backend --> Workspace["User workspaces"]
-  Backend --> Providers["MTL-Code/Cursor/Codex/Gemini CLIs"]
+  Backend --> Providers["Argus/Cursor/Codex/Gemini CLIs"]
 ```
 
 ## Build Outputs
@@ -77,8 +77,10 @@ Current Windows implementation:
 - `scripts/package-electron-win.mjs` runs the web/server build, stages `electron-resources/runtime/node.exe`, stages the built `../claude-code/dist` backend, then invokes `electron-builder --win nsis --x64`.
 - `npm run package:electron-win` writes outputs under `../workspace/vendor/electron-dist`.
 - Windows signing and executable metadata editing are disabled for the first local package with `CSC_IDENTITY_AUTO_DISCOVERY=false` and `win.signAndEditExecutable=false`; this avoids the `winCodeSign` symbolic-link extraction failure on machines without symlink privileges.
-- On Windows with Node 24, `spawnSync('npm.cmd', ...)` can fail with `EINVAL`. `scripts/package-electron-win.mjs` wraps `.cmd` commands with `cmd.exe /d /s /c` so `npm run build` and `npx electron-builder` work inside the packaging script.
+- On Windows with Node 24, `spawnSync('npm.cmd', ...)` can fail with `EINVAL`, global `npm.cmd` can be pinned to an older Node runtime, and older npm versions can fail under Node 24. `scripts/package-electron-win.mjs` therefore runs the icon generator, local Vite, local TypeScript, `tsc-alias`, and local `electron-builder` CLI directly through the Node executable that launched the packaging script, while temporarily putting that Node directory first on `PATH` for nested tools.
+- Before staging resources, `scripts/package-electron-win.mjs` verifies native backend modules against the current packaging Node runtime. If `better-sqlite3` was previously installed with an older ABI, the script uses local `prebuild-install` to fetch the matching Node binary before building; `node-pty` is also required to load before packaging continues.
 - Application-level icons are generated from `public/icons/argus-icon.svg` by `npm run icons:app`. The generated `public/icon.ico` is used by `build.win.icon`, NSIS installer icons, desktop shortcuts, and the taskbar/startup shell. PWA/favicon/logo PNGs are generated from the same source.
+- 2026-05-03 package after the write guard was built with Node 24.14.0 and bundled Argus CLI rebuilt by Bun. Output: `C:\Users\Stan\Desktop\MTLCode\workspace\vendor\electron-dist\Argus-1.30.3-x64.exe`. Native smoke passed for `better-sqlite3` and `node-pty`.
 
 ## Native Dependency Strategy
 
@@ -96,7 +98,7 @@ If the installer must be fully self-contained, bundle a known-good Node runtime 
 6. Smoke test install, first launch, project creation, chat, file tree, shell, MCP, and TaskMaster.
 7. Add auto-update later, after installer signing and release channel are stable.
 
-## MTL-Code Bundle Strategy
+## Argus Bundle Strategy
 
 For the first Windows installer, prefer a self-contained bundle:
 

@@ -253,7 +253,7 @@
     "apiDocsLink": "API-Dokumentation",
     "documentation": {
       "title": "Externe API-Dokumentation",
-      "description": "Erfahre, wie du die externe API nutzen kannst, um MTL-Code/Cursor-Sitzungen aus deinen Anwendungen heraus zu starten.",
+      "description": "Erfahre, wie du die externe API nutzen kannst, um Argus/Cursor-Sitzungen aus deinen Anwendungen heraus zu starten.",
       "viewLink": "API-Dokumentation anzeigen →"
     },
     "loading": "Lädt...",
@@ -273,7 +273,7 @@
     },
     "account": {
       "claude": {
-        "description": "Anthropic MTL-Code KI-Assistent"
+        "description": "Anthropic Argus KI-Assistent"
       },
       "cursor": {
         "description": "Cursor KI-gestützter Code-Editor"
@@ -375,7 +375,7 @@
   "mcpServers": {
     "title": "MCP-Server",
     "description": {
-      "claude": "Model Context Protocol-Server stellen MTL-Code zusätzliche Werkzeuge und Datenquellen zur Verfügung",
+      "claude": "Model Context Protocol-Server stellen Argus zusätzliche Werkzeuge und Datenquellen zur Verfügung",
       "cursor": "Model Context Protocol-Server stellen Cursor zusätzliche Werkzeuge und Datenquellen zur Verfügung",
       "codex": "Model Context Protocol-Server stellen Codex zusätzliche Werkzeuge und Datenquellen zur Verfügung"
     },

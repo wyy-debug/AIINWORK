@@ -37,7 +37,10 @@ export function renderToolResultMessage(
 
   const rawCommand = output.command ?? ''
   const command = verbose ? rawCommand : truncateCommand(rawCommand)
-  const suffix = command !== rawCommand ? '… · stopped' : ' · stopped'
+  const action = output.stopped === false
+    ? `already ${output.status ?? 'finished'}`
+    : 'stopped'
+  const suffix = command !== rawCommand ? `... - ${action}` : ` - ${action}`
 
   return (
     <MessageResponse>

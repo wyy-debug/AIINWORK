@@ -13,14 +13,14 @@
     "untitledSession": "제목 없는 세션",
     "newSession": "새 세션",
     "codexSession": "Codex 세션",
-    "fetchingProjects": "MTL-Code 프로젝트와 세션을 가져오는 중",
+    "fetchingProjects": "Argus 프로젝트와 세션을 가져오는 중",
     "projects": "프로젝트",
     "noMatchingProjects": "일치하는 프로젝트 없음",
     "tryDifferentSearch": "검색어를 변경해보세요",
-    "runMTL-CodeCli": "프로젝트 디렉토리에서 MTL-Code CLI를 실행하여 시작하세요"
+    "runClaudeCli": "프로젝트 디렉토리에서 Argus CLI를 실행하여 시작하세요"
   },
   "app": {
-    "title": "MTL-Code UI",
+    "title": "Argus",
     "subtitle": "AI 코딩 어시스턴트 UI"
   },
   "sessions": {

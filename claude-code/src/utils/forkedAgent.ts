@@ -294,6 +294,8 @@ export type SubagentContextOverrides = {
   shareAbortController?: boolean
   /** Critical system reminder to re-inject at every user turn */
   criticalSystemReminder_EXPERIMENTAL?: string
+  /** Override OpenMythos runtime state. Pass null/undefined explicitly to isolate workers from parent policy. */
+  openMythosRuntimeState?: ToolUseContext['openMythosRuntimeState'] | null
   /** When true, canUseTool must always be called even when hooks auto-approve.
    *  Used by speculation for overlay file path rewriting. */
   requireCanUseTool?: boolean
@@ -346,6 +348,14 @@ export function createSubagentContext(
   parentContext: ToolUseContext,
   overrides?: SubagentContextOverrides,
 ): ToolUseContext {
+  const hasCriticalReminderOverride = Object.prototype.hasOwnProperty.call(
+    overrides ?? {},
+    'criticalSystemReminder_EXPERIMENTAL',
+  )
+  const hasOpenMythosRuntimeOverride = Object.prototype.hasOwnProperty.call(
+    overrides ?? {},
+    'openMythosRuntimeState',
+  )
   // Determine abortController: explicit override > share parent's > new child
   const abortController =
     overrides?.abortController ??
@@ -460,9 +470,13 @@ export function createSubagentContext(
     fileReadingLimits: parentContext.fileReadingLimits,
     userModified: parentContext.userModified,
     criticalSystemReminder_EXPERIMENTAL:
-      overrides?.criticalSystemReminder_EXPERIMENTAL ??
-      parentContext.criticalSystemReminder_EXPERIMENTAL,
-    openMythosRuntimeState: parentContext.openMythosRuntimeState,
+      hasCriticalReminderOverride
+        ? overrides?.criticalSystemReminder_EXPERIMENTAL
+        : parentContext.criticalSystemReminder_EXPERIMENTAL,
+    openMythosRuntimeState:
+      hasOpenMythosRuntimeOverride
+        ? (overrides?.openMythosRuntimeState ?? undefined)
+        : parentContext.openMythosRuntimeState,
     requireCanUseTool: overrides?.requireCanUseTool,
   }
 }

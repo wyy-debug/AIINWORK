@@ -19,6 +19,24 @@ import {
   WORKTREE_DISPATCHES_PARENT_INDEX_SQL,
   WORKTREE_DISPATCHES_PATH_INDEX_SQL,
   WORKTREE_DISPATCHES_SESSION_INDEX_SQL,
+  AUTOMATION_DEFINITIONS_TABLE_SQL,
+  AUTOMATION_DEFINITIONS_INDEX_SQL,
+  AUTOMATION_RUNS_TABLE_SQL,
+  AUTOMATION_RUNS_INDEX_SQL,
+  AUTOMATION_RUN_EVENTS_TABLE_SQL,
+  AUTOMATION_RUN_EVENTS_INDEX_SQL,
+  TRIAGE_ITEMS_TABLE_SQL,
+  TRIAGE_ITEMS_INDEX_SQL,
+  ARTIFACTS_TABLE_SQL,
+  ARTIFACTS_INDEX_SQL,
+  ARTIFACT_LINKS_TABLE_SQL,
+  ARTIFACT_LINKS_INDEX_SQL,
+  REVIEW_COMMENTS_TABLE_SQL,
+  REVIEW_COMMENTS_INDEX_SQL,
+  ACTION_RUNS_TABLE_SQL,
+  ACTION_RUNS_INDEX_SQL,
+  ACTION_RUN_EVENTS_TABLE_SQL,
+  ACTION_RUN_EVENTS_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 
@@ -147,6 +165,9 @@ const runMigrations = () => {
       ['project_name', 'ALTER TABLE worktree_dispatches ADD COLUMN project_name TEXT'],
       ['provider', "ALTER TABLE worktree_dispatches ADD COLUMN provider TEXT DEFAULT 'claude'"],
       ['branch_name', 'ALTER TABLE worktree_dispatches ADD COLUMN branch_name TEXT'],
+      ['handoff_status', 'ALTER TABLE worktree_dispatches ADD COLUMN handoff_status TEXT'],
+      ['last_run_id', 'ALTER TABLE worktree_dispatches ADD COLUMN last_run_id TEXT'],
+      ['action_profile_id', 'ALTER TABLE worktree_dispatches ADD COLUMN action_profile_id TEXT'],
     ]) {
       if (!worktreeColumnNames.includes(columnName)) {
         console.log(`Running migration: Adding ${columnName} column to worktree_dispatches`);
@@ -156,6 +177,43 @@ const runMigrations = () => {
     db.exec(WORKTREE_DISPATCHES_PARENT_INDEX_SQL);
     db.exec(WORKTREE_DISPATCHES_PATH_INDEX_SQL);
     db.exec(WORKTREE_DISPATCHES_SESSION_INDEX_SQL);
+    db.exec(AUTOMATION_DEFINITIONS_TABLE_SQL);
+    const automationColumns = db.prepare("PRAGMA table_info(automation_definitions)").all();
+    const automationColumnNames = automationColumns.map(col => col.name);
+    if (!automationColumnNames.includes('target_mode')) {
+      console.log('Running migration: Adding target_mode column to automation_definitions');
+      db.exec("ALTER TABLE automation_definitions ADD COLUMN target_mode TEXT NOT NULL DEFAULT 'triage-only'");
+    }
+    db.exec(AUTOMATION_DEFINITIONS_INDEX_SQL);
+    db.exec(AUTOMATION_RUNS_TABLE_SQL);
+    const automationRunColumns = db.prepare("PRAGMA table_info(automation_runs)").all();
+    const automationRunColumnNames = automationRunColumns.map(col => col.name);
+    for (const [columnName, columnSql] of [
+      ['trigger_type', 'ALTER TABLE automation_runs ADD COLUMN trigger_type TEXT'],
+      ['session_id', 'ALTER TABLE automation_runs ADD COLUMN session_id TEXT'],
+      ['worktree_id', 'ALTER TABLE automation_runs ADD COLUMN worktree_id TEXT'],
+      ['metadata_json', 'ALTER TABLE automation_runs ADD COLUMN metadata_json TEXT'],
+    ]) {
+      if (!automationRunColumnNames.includes(columnName)) {
+        console.log(`Running migration: Adding ${columnName} column to automation_runs`);
+        db.exec(columnSql);
+      }
+    }
+    db.exec(AUTOMATION_RUNS_INDEX_SQL);
+    db.exec(AUTOMATION_RUN_EVENTS_TABLE_SQL);
+    db.exec(AUTOMATION_RUN_EVENTS_INDEX_SQL);
+    db.exec(TRIAGE_ITEMS_TABLE_SQL);
+    db.exec(TRIAGE_ITEMS_INDEX_SQL);
+    db.exec(ARTIFACTS_TABLE_SQL);
+    db.exec(ARTIFACTS_INDEX_SQL);
+    db.exec(ARTIFACT_LINKS_TABLE_SQL);
+    db.exec(ARTIFACT_LINKS_INDEX_SQL);
+    db.exec(REVIEW_COMMENTS_TABLE_SQL);
+    db.exec(REVIEW_COMMENTS_INDEX_SQL);
+    db.exec(ACTION_RUNS_TABLE_SQL);
+    db.exec(ACTION_RUNS_INDEX_SQL);
+    db.exec(ACTION_RUN_EVENTS_TABLE_SQL);
+    db.exec(ACTION_RUN_EVENTS_INDEX_SQL);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -695,6 +753,9 @@ function mapWorktreeDispatch(row) {
     taskPrompt: row.task_prompt || '',
     displayName: row.display_name || '',
     branchName: row.branch_name || '',
+    handoffStatus: row.handoff_status || '',
+    lastRunId: row.last_run_id || '',
+    actionProfileId: row.action_profile_id || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -714,9 +775,10 @@ const worktreeDispatchesDb = {
       INSERT INTO worktree_dispatches (
         id, project_name, session_id, provider, parent_project_name, parent_project_path,
         worktree_path, base_ref, base_commit, mode, status, agent_id, skills_json,
-        app_bindings_json, task_prompt, display_name, branch_name
+        app_bindings_json, task_prompt, display_name, branch_name, handoff_status,
+        last_run_id, action_profile_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       normalized.id,
       normalized.projectName || null,
@@ -735,6 +797,9 @@ const worktreeDispatchesDb = {
       normalized.taskPrompt || null,
       normalized.displayName || null,
       normalized.branchName || null,
+      normalized.handoffStatus || null,
+      normalized.lastRunId || null,
+      normalized.actionProfileId || null,
     );
     return worktreeDispatchesDb.getById(normalized.id);
   },
@@ -791,6 +856,24 @@ const worktreeDispatchesDb = {
       SET branch_name = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(branchName || null, id);
+    return worktreeDispatchesDb.getById(id);
+  },
+
+  updateHandoff: (id, handoffStatus) => {
+    db.prepare(`
+      UPDATE worktree_dispatches
+      SET handoff_status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(handoffStatus || null, id);
+    return worktreeDispatchesDb.getById(id);
+  },
+
+  updateActionRun: (id, lastRunId, actionProfileId = null) => {
+    db.prepare(`
+      UPDATE worktree_dispatches
+      SET last_run_id = ?, action_profile_id = COALESCE(?, action_profile_id), updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(lastRunId || null, actionProfileId || null, id);
     return worktreeDispatchesDb.getById(id);
   },
 };

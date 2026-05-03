@@ -74,6 +74,9 @@ export const WORKTREE_DISPATCHES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS worktre
   task_prompt TEXT,
   display_name TEXT,
   branch_name TEXT,
+  handoff_status TEXT,
+  last_run_id TEXT,
+  action_profile_id TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`;
@@ -81,6 +84,133 @@ export const WORKTREE_DISPATCHES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS worktre
 export const WORKTREE_DISPATCHES_PARENT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_worktree_dispatches_parent ON worktree_dispatches(parent_project_name, status);`;
 export const WORKTREE_DISPATCHES_PATH_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_worktree_dispatches_path ON worktree_dispatches(worktree_path);`;
 export const WORKTREE_DISPATCHES_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_worktree_dispatches_session ON worktree_dispatches(session_id, provider);`;
+
+export const AUTOMATION_DEFINITIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS automation_definitions (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  project_name TEXT,
+  project_path TEXT,
+  prompt TEXT,
+  target_mode TEXT NOT NULL DEFAULT 'triage-only',
+  schedule_type TEXT NOT NULL DEFAULT 'manual',
+  interval_minutes INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_run_at DATETIME,
+  next_run_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const AUTOMATION_DEFINITIONS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_automation_definitions_due ON automation_definitions(enabled, next_run_at);`;
+
+export const AUTOMATION_RUNS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS automation_runs (
+  id TEXT PRIMARY KEY,
+  automation_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  trigger_type TEXT,
+  session_id TEXT,
+  worktree_id TEXT,
+  metadata_json TEXT,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  finished_at DATETIME,
+  output TEXT,
+  error TEXT,
+  FOREIGN KEY (automation_id) REFERENCES automation_definitions(id) ON DELETE CASCADE
+);`;
+
+export const AUTOMATION_RUNS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id, started_at);`;
+
+export const AUTOMATION_RUN_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS automation_run_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
+);`;
+
+export const AUTOMATION_RUN_EVENTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_automation_run_events_run ON automation_run_events(run_id, created_at);`;
+
+export const TRIAGE_ITEMS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS triage_items (
+  id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  source_id TEXT,
+  title TEXT NOT NULL,
+  body TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const TRIAGE_ITEMS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_triage_items_status ON triage_items(status, created_at);`;
+
+export const ARTIFACTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  project_name TEXT,
+  session_id TEXT,
+  content TEXT,
+  file_path TEXT,
+  metadata_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const ARTIFACTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_artifacts_project_session ON artifacts(project_name, session_id, created_at);`;
+
+export const ARTIFACT_LINKS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS artifact_links (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT,
+  session_id TEXT,
+  project_name TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
+);`;
+
+export const ARTIFACT_LINKS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_artifact_links_source ON artifact_links(source_type, source_id, created_at);`;
+
+export const REVIEW_COMMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS review_comments (
+  id TEXT PRIMARY KEY,
+  project_name TEXT NOT NULL,
+  file_path TEXT,
+  line_number INTEGER,
+  body TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'local',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const REVIEW_COMMENTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_review_comments_project ON review_comments(project_name, file_path, created_at);`;
+
+export const ACTION_RUNS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS action_runs (
+  id TEXT PRIMARY KEY,
+  project_name TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  command TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  output TEXT,
+  exit_code INTEGER,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  finished_at DATETIME
+);`;
+
+export const ACTION_RUNS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_action_runs_project ON action_runs(project_name, started_at);`;
+
+export const ACTION_RUN_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS action_run_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (run_id) REFERENCES action_runs(id) ON DELETE CASCADE
+);`;
+
+export const ACTION_RUN_EVENTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_action_run_events_run ON action_run_events(run_id, created_at);`;
 
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
@@ -151,6 +281,42 @@ ${WORKTREE_DISPATCHES_PARENT_INDEX_SQL}
 ${WORKTREE_DISPATCHES_PATH_INDEX_SQL}
 
 ${WORKTREE_DISPATCHES_SESSION_INDEX_SQL}
+
+${AUTOMATION_DEFINITIONS_TABLE_SQL}
+
+${AUTOMATION_DEFINITIONS_INDEX_SQL}
+
+${AUTOMATION_RUNS_TABLE_SQL}
+
+${AUTOMATION_RUNS_INDEX_SQL}
+
+${AUTOMATION_RUN_EVENTS_TABLE_SQL}
+
+${AUTOMATION_RUN_EVENTS_INDEX_SQL}
+
+${TRIAGE_ITEMS_TABLE_SQL}
+
+${TRIAGE_ITEMS_INDEX_SQL}
+
+${ARTIFACTS_TABLE_SQL}
+
+${ARTIFACTS_INDEX_SQL}
+
+${ARTIFACT_LINKS_TABLE_SQL}
+
+${ARTIFACT_LINKS_INDEX_SQL}
+
+${REVIEW_COMMENTS_TABLE_SQL}
+
+${REVIEW_COMMENTS_INDEX_SQL}
+
+${ACTION_RUNS_TABLE_SQL}
+
+${ACTION_RUNS_INDEX_SQL}
+
+${ACTION_RUN_EVENTS_TABLE_SQL}
+
+${ACTION_RUN_EVENTS_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, SquarePen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -228,6 +228,18 @@ export default function SidebarProjectItem({
                 ) : (
                   <>
                     <button
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onProjectSelect(project);
+                        onNewSession(project);
+                      }}
+                      title={t('sessions.newSession')}
+                    >
+                      <SquarePen className="h-4 w-4 text-primary" />
+                    </button>
+
+                    <button
                       className={cn(
                         'w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-all duration-150 border',
                         isStarred
@@ -300,7 +312,7 @@ export default function SidebarProjectItem({
         <Button
           variant="ghost"
           className={cn(
-            'hidden md:flex w-full justify-between p-2 h-auto font-normal hover:bg-accent/50',
+            'hidden md:flex h-9 w-full justify-between rounded-lg px-2 py-1.5 font-normal hover:bg-accent/55',
             isSelected && 'bg-accent text-accent-foreground',
             isStarred &&
               !isSelected &&
@@ -308,22 +320,23 @@ export default function SidebarProjectItem({
           )}
           onClick={selectAndToggleProject}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
             {isExpanded ? (
-              <FolderOpen className="h-4 w-4 flex-shrink-0 text-primary" />
+              <FolderOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
             ) : (
               <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
             )}
             <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
-                <div className="space-y-1">
+                <div className="flex min-w-0 items-center gap-1">
                   <input
                     type="text"
                     value={editingName}
                     onChange={(event) => onEditingNameChange(event.target.value)}
-                    className="w-full rounded border border-border bg-background px-2 py-1 text-sm text-foreground focus:ring-2 focus:ring-primary/20"
+                    className="h-7 w-full rounded border border-border bg-background px-2 text-sm text-foreground focus:ring-2 focus:ring-primary/20"
                     placeholder={t('projects.projectNamePlaceholder')}
                     autoFocus
+                    onClick={(event) => event.stopPropagation()}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') {
                         saveProjectName();
@@ -333,24 +346,10 @@ export default function SidebarProjectItem({
                       }
                     }}
                   />
-                  <div className="truncate text-xs text-muted-foreground" title={project.fullPath}>
-                    {project.fullPath}
-                  </div>
                 </div>
               ) : (
-                <div>
-                  <div className="truncate text-sm font-semibold text-foreground" title={project.displayName}>
-                    {project.displayName}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {sessionCountDisplay}
-                    {project.fullPath !== project.displayName && (
-                      <span className="ml-1 opacity-60" title={project.fullPath}>
-                        {' - '}
-                        {project.fullPath.length > 25 ? `...${project.fullPath.slice(-22)}` : project.fullPath}
-                      </span>
-                    )}
-                  </div>
+                <div className="truncate text-sm font-medium text-foreground" title={project.displayName}>
+                  {project.displayName}
                 </div>
               )}
             </div>
@@ -381,62 +380,16 @@ export default function SidebarProjectItem({
             ) : (
               <>
                 <div
-                  className={cn(
-                    'w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center rounded cursor-pointer touch:opacity-100',
-                    isStarred ? 'hover:bg-yellow-50 dark:hover:bg-yellow-900/20 opacity-100' : 'hover:bg-accent',
-                  )}
+                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground"
                   onClick={(event) => {
                     event.stopPropagation();
-                    toggleStarProject();
+                    onProjectSelect(project);
+                    onNewSession(project);
                   }}
-                  title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+                  title={t('sessions.newSession')}
                 >
-                  <Star
-                    className={cn(
-                      'w-3 h-3 transition-colors',
-                      isStarred
-                        ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                        : 'text-muted-foreground',
-                    )}
-                  />
+                  <SquarePen className="h-3.5 w-3.5" />
                 </div>
-                <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStartEditingProject(project);
-                  }}
-                  title={t('tooltips.renameProject')}
-                >
-                  <Edit3 className="h-3 w-3" />
-                </div>
-                <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDeleteProject(project);
-                  }}
-                  title={t('tooltips.deleteProject')}
-                >
-                  <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
-                </div>
-                {canDispatchWorktree && (
-                  <div
-                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-slate-100 group-hover:opacity-100 dark:hover:bg-slate-900/30"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onShowWorktreeTasks(project);
-                    }}
-                    title="工作树任务"
-                  >
-                    <ClipboardList className="h-3 w-3 text-slate-600 dark:text-slate-300" />
-                  </div>
-                )}
-                {isExpanded ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
-                )}
               </>
             )}
           </div>
@@ -466,7 +419,6 @@ export default function SidebarProjectItem({
         onSessionSelect={onSessionSelect}
         onDeleteSession={onDeleteSession}
         onLoadMoreSessions={onLoadMoreSessions}
-        onNewSession={onNewSession}
         t={t}
       />
     </div>

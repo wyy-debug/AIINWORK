@@ -1,7 +1,7 @@
 {
-  "name": "MTL-Code UI",
-  "short_name": "MTL-Code UI",
-  "description": "MTL-Code UI web application",
+  "name": "Argus",
+  "short_name": "Argus",
+  "description": "Argus web application",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

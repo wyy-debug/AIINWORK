@@ -286,7 +286,7 @@ export default function WorktreeDispatchModal({
                     disabled={isLoadingChoices}
                     className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10 disabled:opacity-60"
                   >
-                    <option value="">默认 MTL-Code</option>
+                    <option value="">默认 Argus</option>
                     {enabledAgents.map((agent) => (
                       <option key={agent.id} value={agent.id}>
                         {agent.shortName || agent.name}

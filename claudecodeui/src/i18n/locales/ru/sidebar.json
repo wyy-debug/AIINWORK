@@ -13,14 +13,14 @@
     "untitledSession": "Безымянный сеанс",
     "newSession": "Новый сеанс",
     "codexSession": "Сеанс Codex",
-    "fetchingProjects": "Получение ваших проектов и сеансов MTL-Code",
+    "fetchingProjects": "Получение ваших проектов и сеансов Argus",
     "projects": "проекты",
     "noMatchingProjects": "Нет подходящих проектов",
     "tryDifferentSearch": "Попробуйте изменить поисковый запрос",
-    "runMTL-CodeCli": "Запустите MTL-Code CLI в каталоге проекта для начала работы"
+    "runClaudeCli": "Запустите Argus CLI в каталоге проекта для начала работы"
   },
   "app": {
-    "title": "MTL-Code UI",
+    "title": "Argus",
     "subtitle": "Интерфейс AI помощника для программирования"
   },
   "sessions": {

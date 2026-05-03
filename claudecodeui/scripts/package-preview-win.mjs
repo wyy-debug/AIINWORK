@@ -10,7 +10,7 @@ const workspaceRoot = path.resolve(appRoot, '..');
 const bundleRoot = process.env.MTL_CODE_BUNDLE_ROOT
   ? path.resolve(process.env.MTL_CODE_BUNDLE_ROOT)
   : path.join(workspaceRoot, 'workspace', 'vendor', 'bundle');
-const previewExeName = process.env.MTL_CODE_PREVIEW_EXE_NAME || 'MTL-Code-Preview.exe';
+const previewExeName = process.env.MTL_CODE_PREVIEW_EXE_NAME || 'Argus-Preview.exe';
 const resourcesDir = path.join(bundleRoot, 'resources');
 const appBundleDir = path.join(resourcesDir, 'app');
 const runtimeDir = path.join(resourcesDir, 'runtime');
@@ -88,7 +88,7 @@ async function main() {
   }
 
   if (!existsSync(path.join(claudeCodeRoot, 'dist', 'cli-node.js'))) {
-    throw new Error('MTL-Code backend is not built. Run bun run build in ../claude-code first.');
+    throw new Error('Argus backend is not built. Run bun run build in ../claude-code first.');
   }
 
   await emptyDir(bundleRoot);
@@ -133,7 +133,7 @@ async function main() {
       path.join(mtlCodeDir, 'mtl-code.exe'),
     ]);
   } catch (error) {
-    console.warn(`MTL-Code exe compile failed; using mtl-code.cmd fallback. ${error.message}`);
+    console.warn(`Argus exe compile failed; using mtl-code.cmd fallback. ${error.message}`);
   }
 
   run(bunExe, [
@@ -147,7 +147,7 @@ async function main() {
   await writeFile(
     path.join(bundleRoot, 'README.txt'),
     [
-      'MTL-Code preview bundle',
+      'Argus preview bundle',
       '',
       `Run ${previewExeName} to start the local UI.`,
       'The launcher starts the bundled Node backend and opens http://127.0.0.1 automatically.',

@@ -205,6 +205,11 @@ export function resolveAppliedEffort(
   }
   const resolved =
     envOverride ?? appStateEffortValue ?? getDefaultEffortForModel(model)
+  // DeepSeek's Anthropic-compatible endpoint exposes max effort and treats
+  // xhigh-style deep reasoning requests as max-capability thinking.
+  if (resolved === 'xhigh' && isDeepSeekAnthropicRuntime(model)) {
+    return 'max'
+  }
   // API rejects 'xhigh' on pre-Opus-4.7 models — downgrade to 'high'.
   if (resolved === 'xhigh' && !modelSupportsXhighEffort(model)) {
     return 'high'

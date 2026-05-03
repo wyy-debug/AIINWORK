@@ -16,7 +16,7 @@ import { Button } from '../../../../../../../shared/view/ui';
 import { apiFetch } from '../../../../../../../utils/api';
 import SettingsToggle from '../../../../SettingsToggle';
 
-type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
+type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type LoopControl = 'advisory' | 'enforced';
 
 type OpenMythosRuntimeConfig = {
@@ -29,6 +29,9 @@ type OpenMythosRuntimeConfig = {
   phaseAdapter: boolean;
   expertRouting: boolean;
   contextCacheDiagnostics: boolean;
+  autoDispatchSubagents: boolean;
+  autoDispatchMinEffort: EffortLevel;
+  autoDispatchMaxWorkers: number;
   minEffort: EffortLevel;
   maxEffort: EffortLevel;
 };
@@ -70,6 +73,12 @@ type Signal = {
   weight: number;
   routeKey?: string;
   routeDefault?: string;
+  dispatch?: {
+    kind: string;
+    labelKey: string;
+    labelDefault: string;
+    required: boolean;
+  };
 };
 
 type RuntimeTranslator = (key: string, defaultValue: string) => string;
@@ -85,9 +94,16 @@ type PreviewCard = {
   routes: string[];
   phasePlan: string[];
   expertRoutes: string[];
+  dispatchPlan: Array<{
+    kind: string;
+    label: string;
+    reason: string;
+    required: boolean;
+    description: string;
+  }>;
 };
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const satisfies readonly EffortLevel[];
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly EffortLevel[];
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const DEFAULT_PREVIEW_PROMPT = 'Implement an auth database migration with rollback tests and CI verification';
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
@@ -100,8 +116,11 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
+  autoDispatchSubagents: true,
+  autoDispatchMinEffort: 'medium',
+  autoDispatchMaxWorkers: 3,
   minEffort: 'low',
-  maxEffort: 'xhigh',
+  maxEffort: 'max',
 };
 
 const HIGH_RISK_SIGNALS: Signal[] = [
@@ -112,6 +131,12 @@ const HIGH_RISK_SIGNALS: Signal[] = [
     weight: 5,
     routeKey: 'routes.security',
     routeDefault: 'Use a security-focused skill or reviewer before reporting completion.',
+    dispatch: {
+      kind: 'security',
+      labelKey: 'dispatch.security',
+      labelDefault: 'Security reviewer',
+      required: true,
+    },
   },
   {
     pattern: /\b(migration|schema|database|sql|backfill|rollback|deploy|release|ci|production)\b/i,
@@ -120,6 +145,12 @@ const HIGH_RISK_SIGNALS: Signal[] = [
     weight: 4,
     routeKey: 'routes.verification',
     routeDefault: 'Use a verification pass for migration, rollout, or CI-sensitive changes.',
+    dispatch: {
+      kind: 'verification',
+      labelKey: 'dispatch.verification',
+      labelDefault: 'Verification specialist',
+      required: true,
+    },
   },
   {
     pattern: /\b(concurrency|async|race|deadlock|performance|memory|latency|benchmark)\b/i,
@@ -128,6 +159,12 @@ const HIGH_RISK_SIGNALS: Signal[] = [
     weight: 4,
     routeKey: 'routes.performance',
     routeDefault: 'Route to a performance, async, or profiling skill when available.',
+    dispatch: {
+      kind: 'performance',
+      labelKey: 'dispatch.performance',
+      labelDefault: 'Performance specialist',
+      required: false,
+    },
   },
   {
     pattern: /\b(refactor|architecture|design|redesign|multi[- ]?module|cross[- ]?module)\b/i,
@@ -136,6 +173,12 @@ const HIGH_RISK_SIGNALS: Signal[] = [
     weight: 3,
     routeKey: 'routes.architecture',
     routeDefault: 'Use Explore/Plan agents for broad codebase research before edits.',
+    dispatch: {
+      kind: 'architecture',
+      labelKey: 'dispatch.architecture',
+      labelDefault: 'Architecture reviewer',
+      required: false,
+    },
   },
 ];
 
@@ -145,6 +188,12 @@ const IMPLEMENTATION_SIGNALS: Signal[] = [
     reasonKey: 'reasons.implementation',
     reasonDefault: 'implementation requested',
     weight: 2,
+    dispatch: {
+      kind: 'implementation',
+      labelKey: 'dispatch.implementation',
+      labelDefault: 'Implementation worker',
+      required: true,
+    },
   },
   {
     pattern: /\b(test|typecheck|lint|verify|benchmark|coverage)\b/i,
@@ -153,6 +202,12 @@ const IMPLEMENTATION_SIGNALS: Signal[] = [
     weight: 2,
     routeKey: 'routes.test',
     routeDefault: 'Run focused tests or a verification agent after edits.',
+    dispatch: {
+      kind: 'verification',
+      labelKey: 'dispatch.verification',
+      labelDefault: 'Verification specialist',
+      required: false,
+    },
   },
   {
     pattern: /\b(branch|commit|pr|pull request|merge)\b/i,
@@ -172,6 +227,12 @@ const FRONTEND_SIGNALS: Signal[] = [
     weight: 2,
     routeKey: 'routes.frontend',
     routeDefault: 'Use frontend/design guidance and verify the rendered UI when available.',
+    dispatch: {
+      kind: 'frontend',
+      labelKey: 'dispatch.frontend',
+      labelDefault: 'Frontend reviewer',
+      required: false,
+    },
   },
 ];
 
@@ -193,6 +254,11 @@ const normalizeBoolean = (value: unknown, fallback: boolean): boolean => (
 const normalizeLoopControl = (value: unknown, fallback: LoopControl): LoopControl => (
   value === 'advisory' || value === 'enforced' ? value : fallback
 );
+
+const normalizePositiveInteger = (value: unknown, fallback: number, max = 8): number => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+};
 
 const normalizeBounds = (
   minEffort: EffortLevel,
@@ -220,6 +286,9 @@ const normalizeRuntimeConfig = (value: unknown): OpenMythosRuntimeConfig => {
     phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
     expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
     contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
+    autoDispatchSubagents: normalizeBoolean(data.autoDispatchSubagents, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchSubagents),
+    autoDispatchMinEffort: normalizeEffort(data.autoDispatchMinEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort),
+    autoDispatchMaxWorkers: normalizePositiveInteger(data.autoDispatchMaxWorkers, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers),
     minEffort,
     maxEffort,
   };
@@ -328,6 +397,38 @@ const clampEffort = (
   return EFFORT_LEVELS[Math.min(Math.max(effortIndex, minIndex), maxIndex)];
 };
 
+const effortMeetsMinimum = (effort: EffortLevel, minimum: EffortLevel): boolean => (
+  EFFORT_LEVELS.indexOf(effort) >= EFFORT_LEVELS.indexOf(minimum)
+);
+
+const buildDispatchPlan = (
+  goal: string,
+  effort: EffortLevel,
+  runtimeConfig: OpenMythosRuntimeConfig,
+  signals: Signal[],
+  translate: RuntimeTranslator,
+): PreviewCard['dispatchPlan'] => {
+  if (!runtimeConfig.autoDispatchSubagents || !effortMeetsMinimum(effort, runtimeConfig.autoDispatchMinEffort)) {
+    return [];
+  }
+
+  const routes = new Map<string, PreviewCard['dispatchPlan'][number]>();
+  for (const signal of signals) {
+    if (!signal.dispatch) continue;
+    const label = translate(signal.dispatch.labelKey, signal.dispatch.labelDefault);
+    const previous = routes.get(signal.dispatch.kind);
+    routes.set(signal.dispatch.kind, {
+      kind: signal.dispatch.kind,
+      label,
+      reason: translate(signal.reasonKey, signal.reasonDefault),
+      required: Boolean(previous?.required || signal.dispatch.required),
+      description: truncate(`${label}: ${goal}`, 80),
+    });
+  }
+
+  return [...routes.values()].slice(0, Math.max(1, runtimeConfig.autoDispatchMaxWorkers));
+};
+
 const buildPreviewCard = (
   input: string,
   runtimeConfig: OpenMythosRuntimeConfig,
@@ -343,15 +444,17 @@ const buildPreviewCard = (
   ));
   const score = signals.reduce((sum, signal) => sum + signal.weight, 0)
     + Math.min(3, Math.floor(normalized.length / 600));
-  const inferredEffort: EffortLevel = score >= 8
-    ? 'xhigh'
-    : score >= 4
-      ? 'high'
-      : score >= 2
-        ? 'medium'
-        : 'low';
+  const inferredEffort: EffortLevel = score >= 10
+    ? 'max'
+    : score >= 8
+      ? 'xhigh'
+      : score >= 4
+        ? 'high'
+        : score >= 2
+          ? 'medium'
+          : 'low';
   const effort = clampEffort(inferredEffort, runtimeConfig.minEffort, runtimeConfig.maxEffort);
-  const loopBudget = effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
+  const loopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
   const phasePlan = runtimeConfig.phaseAdapter
     ? effort === 'low'
       ? ['orient', 'finalize']
@@ -365,9 +468,10 @@ const buildPreviewCard = (
   if (reasons.length === 0) {
     reasons.push(translate('reasons.small', 'small or conversational task'));
   }
+  const goal = truncate(normalized, 260);
 
   return {
-    goal: truncate(normalized, 260),
+    goal,
     effort,
     loopBudget,
     riskScore: score,
@@ -404,6 +508,7 @@ const buildPreviewCard = (
         effort === 'low' ? translate('experts.local', 'Local execution') : null,
       ].filter((route): route is string => Boolean(route))).slice(0, 5)
       : [],
+    dispatchPlan: buildDispatchPlan(goal, effort, runtimeConfig, signals, translate),
   };
 };
 
@@ -577,7 +682,7 @@ export default function OpenMythosRuntimeContent() {
       try {
         const response = await apiFetch('/api/settings/mtl-code-model');
         if (!response.ok) {
-          throw new Error('加载 MTLCode 运行时配置失败');
+          throw new Error('加载 Argus 运行时配置失败');
         }
         const payload = await response.json();
         const nextConfig = toConfig(payload.config);
@@ -661,7 +766,7 @@ export default function OpenMythosRuntimeContent() {
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error('保存 MTLCode 运行时配置失败');
+        throw new Error('保存 Argus 运行时配置失败');
       }
 
       const responsePayload = await response.json();
@@ -690,7 +795,7 @@ export default function OpenMythosRuntimeContent() {
           </h3>
           <p className="text-sm text-muted-foreground">
             {t('openMythosRuntime.subtitle', {
-              defaultValue: '配置 MTL-Code 会话的自适应推理强度、冻结任务卡和技能路由提示。',
+              defaultValue: '配置 Argus 会话的自适应推理强度、冻结任务卡和技能路由提示。',
             })}
           </p>
         </div>
@@ -787,6 +892,17 @@ export default function OpenMythosRuntimeContent() {
               onChange={(contextCacheDiagnostics) => updateRuntimeConfig({ contextCacheDiagnostics })}
             />
 
+            <RuntimeToggleRow
+              icon={Route}
+              title={t('openMythosRuntime.autoDispatchSubagents', { defaultValue: '自动分发子智能体' })}
+              description={t('openMythosRuntime.autoDispatchSubagentsDescription', {
+                defaultValue: '复杂任务会生成 Coordinator worker 派发计划，并由 Argus 首轮自动启动对应 worker。',
+              })}
+              checked={runtimeConfig.autoDispatchSubagents}
+              disabled={disabled || !runtimeConfig.enabled}
+              onChange={(autoDispatchSubagents) => updateRuntimeConfig({ autoDispatchSubagents })}
+            />
+
             <div className="space-y-4 rounded-lg border border-border bg-background p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <ShieldCheck className="h-4 w-4 text-primary" />
@@ -806,6 +922,39 @@ export default function OpenMythosRuntimeContent() {
                 onChange={handleMaxEffortChange}
                 formatEffortLevel={formatEffortLevel}
               />
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-border bg-background p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Route className="h-4 w-4 text-primary" />
+                {t('openMythosRuntime.dispatchPolicy', { defaultValue: '子智能体派发策略' })}
+              </div>
+              <EffortSegmentedControl
+                label={t('openMythosRuntime.autoDispatchMinEffort', { defaultValue: '最低派发强度' })}
+                value={runtimeConfig.autoDispatchMinEffort}
+                disabled={disabled || !runtimeConfig.enabled || !runtimeConfig.autoDispatchSubagents}
+                onChange={(autoDispatchMinEffort) => updateRuntimeConfig({ autoDispatchMinEffort })}
+                formatEffortLevel={formatEffortLevel}
+              />
+              <label className="block space-y-2">
+                <span className="text-sm font-medium text-foreground">
+                  {t('openMythosRuntime.autoDispatchMaxWorkers', { defaultValue: '最大 worker 数' })}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={runtimeConfig.autoDispatchMaxWorkers}
+                  disabled={disabled || !runtimeConfig.enabled || !runtimeConfig.autoDispatchSubagents}
+                  onChange={(event) => updateRuntimeConfig({
+                    autoDispatchMaxWorkers: normalizePositiveInteger(
+                      event.target.value,
+                      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers,
+                    ),
+                  })}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </label>
             </div>
 
             <div className="space-y-3 rounded-lg border border-border bg-background p-4">
@@ -889,6 +1038,14 @@ export default function OpenMythosRuntimeContent() {
                 values={previewCard.expertRoutes.length > 0
                   ? previewCard.expertRoutes
                   : [t('openMythosRuntime.disabledValue', { defaultValue: '已关闭' })]}
+              />
+              <PreviewList
+                label={t('openMythosRuntime.dispatchPlanLabel', { defaultValue: '自动派发计划' })}
+                values={previewCard.dispatchPlan.length > 0
+                  ? previewCard.dispatchPlan.map((task) => (
+                    `${task.label}${task.required ? ` (${t('openMythosRuntime.requiredValue', { defaultValue: '必需' })})` : ''}: ${task.description}`
+                  ))
+                  : [t('openMythosRuntime.noDispatchValue', { defaultValue: '当前提示不会自动派发 worker' })]}
               />
             </div>
           ) : (

@@ -15,7 +15,7 @@
     "user": "U",
     "error": "Errore",
     "tool": "Strumento",
-    "claude": "MTL-Code",
+    "claude": "Argus",
     "cursor": "Cursor",
     "codex": "Codex",
     "gemini": "Gemini"
@@ -55,8 +55,8 @@
   "interactive": {
     "title": "Prompt interattivo",
     "waiting": "In attesa della tua risposta nella CLI",
-    "instruction": "Seleziona un'opzione nel terminale dove MTL-Code è in esecuzione.",
-    "selectedOption": "✓ MTL-Code ha selezionato l'opzione {{number}}",
+    "instruction": "Seleziona un'opzione nel terminale dove Argus è in esecuzione.",
+    "selectedOption": "✓ Argus ha selezionato l'opzione {{number}}",
     "instructionDetail": "Nella CLI, selezioneresti questa opzione interattivamente usando i tasti freccia o digitando il numero."
   },
   "thinking": {
@@ -83,7 +83,7 @@
     "title": "Piano di implementazione"
   },
   "usageLimit": {
-    "resetAt": "Limite di utilizzo MTL-Code raggiunto. Il tuo limite verrà ripristinato alle **{{time}} {{timezone}}** - {{date}}"
+    "resetAt": "Limite di utilizzo Argus raggiunto. Il tuo limite verrà ripristinato alle **{{time}} {{timezone}}** - {{date}}"
   },
   "codex": {
     "permissionMode": "Modalità permessi",
@@ -139,14 +139,14 @@
   "thinkingMode": {
     "selector": {
       "title": "Modalità ragionamento",
-      "description": "Il ragionamento esteso dà a MTL-Code più tempo per valutare le alternative",
+      "description": "Il ragionamento esteso dà a Argus più tempo per valutare le alternative",
       "active": "Attivo",
       "tip": "Modalità di ragionamento più elevate richiedono più tempo ma forniscono un'analisi più approfondita"
     },
     "modes": {
       "none": {
         "name": "Standard",
-        "description": "Risposta MTL-Code normale",
+        "description": "Risposta Argus normale",
         "prefix": ""
       },
       "think": {
@@ -183,7 +183,7 @@
       "google": "di Google"
     },
     "readyPrompt": {
-      "claude": "Pronto a usare MTL-Code con {{model}}. Inizia a digitare il tuo messaggio qui sotto.",
+      "claude": "Pronto a usare Argus con {{model}}. Inizia a digitare il tuo messaggio qui sotto.",
       "cursor": "Pronto a usare Cursor con {{model}}. Inizia a digitare il tuo messaggio qui sotto.",
       "codex": "Pronto a usare Codex con {{model}}. Inizia a digitare il tuo messaggio qui sotto.",
       "gemini": "Pronto a usare Gemini con {{model}}. Inizia a digitare il tuo messaggio qui sotto.",
@@ -230,10 +230,10 @@
     },
     "loading": "Caricamento terminale...",
     "connecting": "Connessione alla shell...",
-    "startSession": "Avvia una nuova sessione MTL-Code",
+    "startSession": "Avvia una nuova sessione Argus",
     "resumeSession": "Riprendi sessione: {{displayName}}...",
     "runCommand": "Esegui {{command}} in {{projectName}}",
-    "startCli": "Avvio MTL-Code CLI in {{projectName}}",
+    "startCli": "Avvio Argus CLI in {{projectName}}",
     "defaultCommand": "comando"
   },
   "claudeStatus": {

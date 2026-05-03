@@ -1,10 +1,12 @@
 import express from 'express';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 import path from 'path';
 import { promises as fs } from 'fs';
 import { extractProjectDirectory } from '../projects.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
+import { db } from '../database/db.js';
 
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
@@ -43,6 +45,42 @@ function spawnAsync(command, args, options = {}) {
       error.stderr = stderr;
       reject(error);
     });
+  });
+}
+
+function spawnWithInput(command, args, input, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      ...options,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const error = new Error(`Command failed: ${command} ${args.join(' ')}`);
+      error.code = code;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    });
+
+    child.stdin.end(input);
   });
 }
 
@@ -232,6 +270,40 @@ function parseStatusFilePaths(statusOutput) {
     .filter(Boolean);
 }
 
+function parsePorcelainStatus(statusOutput) {
+  return statusOutput
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim())
+    .map((line) => {
+      const indexStatus = line[0] || ' ';
+      const worktreeStatus = line[1] || ' ';
+      const rawPath = line.substring(3);
+      const filePath = normalizeRepositoryRelativeFilePath(rawPath.split(' -> ')[1] || rawPath);
+      const status = `${indexStatus}${worktreeStatus}`;
+      const isUntracked = status === '??';
+      const staged = !isUntracked && indexStatus !== ' ';
+      const unstaged = isUntracked || worktreeStatus !== ' ';
+      const statusCode = isUntracked ? 'untracked' : [indexStatus, worktreeStatus].find((entry) => entry !== ' ') || 'M';
+      const kind = statusCode === 'A'
+        ? 'added'
+        : statusCode === 'D'
+          ? 'deleted'
+          : isUntracked
+            ? 'untracked'
+            : 'modified';
+      return {
+        path: filePath,
+        status,
+        indexStatus,
+        worktreeStatus,
+        kind,
+        staged,
+        unstaged,
+      };
+    });
+}
+
 function buildFilePathCandidates(projectPath, repositoryRootPath, filePath) {
   const normalizedFilePath = normalizeRepositoryRelativeFilePath(filePath);
   const projectRelativePath = normalizeRepositoryRelativeFilePath(path.relative(repositoryRootPath, projectPath));
@@ -287,6 +359,50 @@ async function resolveRepositoryFilePath(projectPath, filePath) {
   };
 }
 
+async function resolveProjectRepository(projectName) {
+  const projectPath = await getActualProjectPath(projectName);
+  await validateGitRepository(projectPath);
+  const repositoryRootPath = await getRepositoryRootPath(projectPath);
+  return { projectPath, repositoryRootPath };
+}
+
+async function getReviewSummary(projectName) {
+  const { projectPath, repositoryRootPath } = await resolveProjectRepository(projectName);
+  const branch = await getCurrentBranchName(projectPath);
+  const { stdout: statusOutput } = await spawnAsync('git', ['status', '--porcelain'], { cwd: repositoryRootPath });
+  const files = parsePorcelainStatus(statusOutput);
+  const { stdout: stagedDiff } = await spawnAsync('git', ['diff', '--cached', '--stat'], { cwd: repositoryRootPath });
+  const { stdout: unstagedDiff } = await spawnAsync('git', ['diff', '--stat'], { cwd: repositoryRootPath });
+  const comments = db.prepare(`
+    SELECT file_path, line_number, body, source, status
+    FROM review_comments
+    WHERE project_name = ? AND status = 'open'
+    ORDER BY file_path ASC, line_number ASC, created_at ASC
+  `).all(projectName);
+
+  const content = [
+    `Project: ${projectName}`,
+    `Branch: ${branch || 'unknown'}`,
+    '',
+    `Changed files: ${files.length}`,
+    ...files.map((file) => `- ${file.status} ${file.path}`),
+    '',
+    stagedDiff.trim() ? `Staged diff:\n${stagedDiff.trim()}` : 'Staged diff: none',
+    '',
+    unstagedDiff.trim() ? `Unstaged diff:\n${unstagedDiff.trim()}` : 'Unstaged diff: none',
+    '',
+    comments.length > 0 ? 'Open review notes:' : 'Open review notes: none',
+    ...comments.map((comment) => {
+      const location = comment.file_path
+        ? `${comment.file_path}${comment.line_number ? `:${comment.line_number}` : ''}`
+        : 'Project';
+      return `- [${comment.source}] ${location}: ${comment.body}`;
+    }),
+  ].join('\n');
+
+  return { branch, files, comments, content };
+}
+
 // Get git status for a project
 router.get('/status', async (req, res) => {
   const { project } = req.query;
@@ -307,31 +423,28 @@ router.get('/status', async (req, res) => {
     // Get git status
     const { stdout: statusOutput } = await spawnAsync('git', ['status', '--porcelain'], { cwd: projectPath });
 
+    const files = parsePorcelainStatus(statusOutput);
     const modified = [];
     const added = [];
     const deleted = [];
     const untracked = [];
 
-    statusOutput.split('\n').forEach(line => {
-      if (!line.trim()) return;
-
-      const status = line.substring(0, 2);
-      const file = line.substring(3);
-
-      if (status === 'M ' || status === ' M' || status === 'MM') {
-        modified.push(file);
-      } else if (status === 'A ' || status === 'AM') {
-        added.push(file);
-      } else if (status === 'D ' || status === ' D') {
-        deleted.push(file);
-      } else if (status === '??') {
-        untracked.push(file);
+    files.forEach((file) => {
+      if (file.kind === 'modified') {
+        modified.push(file.path);
+      } else if (file.kind === 'added') {
+        added.push(file.path);
+      } else if (file.kind === 'deleted') {
+        deleted.push(file.path);
+      } else if (file.kind === 'untracked') {
+        untracked.push(file.path);
       }
     });
 
     res.json({
       branch,
       hasCommits,
+      files,
       modified,
       added,
       deleted,
@@ -352,7 +465,8 @@ router.get('/status', async (req, res) => {
 
 // Get diff for a specific file
 router.get('/diff', async (req, res) => {
-  const { project, file } = req.query;
+  const { project, file, full } = req.query;
+  const includeFullPatch = full === 'true' || full === '1';
   
   if (!project || !file) {
     return res.status(400).json({ error: 'Project name and file path are required' });
@@ -414,7 +528,7 @@ router.get('/diff', async (req, res) => {
 
       if (unstagedDiff) {
         // Show unstaged changes if they exist
-        diff = stripDiffHeaders(unstagedDiff);
+        diff = includeFullPatch ? unstagedDiff : stripDiffHeaders(unstagedDiff);
       } else {
         // If no unstaged changes, check for staged changes (index vs HEAD)
         const { stdout: stagedDiff } = await spawnAsync(
@@ -422,7 +536,7 @@ router.get('/diff', async (req, res) => {
           ['diff', '--cached', '--', repositoryRelativeFilePath],
           { cwd: repositoryRootPath },
         );
-        diff = stripDiffHeaders(stagedDiff) || '';
+        diff = (includeFullPatch ? stagedDiff : stripDiffHeaders(stagedDiff)) || '';
       }
     }
 
@@ -430,6 +544,189 @@ router.get('/diff', async (req, res) => {
   } catch (error) {
     console.error('Git diff error:', error);
     res.json({ error: error.message });
+  }
+});
+
+// Stage a specific file for review/commit workflows
+router.post('/stage', async (req, res) => {
+  const { project, file } = req.body;
+
+  if (!project || !file) {
+    return res.status(400).json({ error: 'Project name and file path are required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project);
+    await validateGitRepository(projectPath);
+
+    const {
+      repositoryRootPath,
+      repositoryRelativeFilePath,
+    } = await resolveRepositoryFilePath(projectPath, file);
+
+    await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+
+    res.json({
+      success: true,
+      output: `Staged ${repositoryRelativeFilePath}`,
+    });
+  } catch (error) {
+    console.error('Git stage error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Unstage a specific file while preserving the working tree
+router.post('/unstage', async (req, res) => {
+  const { project, file } = req.body;
+
+  if (!project || !file) {
+    return res.status(400).json({ error: 'Project name and file path are required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project);
+    await validateGitRepository(projectPath);
+
+    const {
+      repositoryRootPath,
+      repositoryRelativeFilePath,
+    } = await resolveRepositoryFilePath(projectPath, file);
+
+    const hasCommits = await repositoryHasCommits(repositoryRootPath);
+
+    try {
+      await spawnAsync('git', ['restore', '--staged', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+    } catch (error) {
+      if (!hasCommits) {
+        await spawnAsync('git', ['rm', '--cached', '-r', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      } else {
+        await spawnAsync('git', ['reset', 'HEAD', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      }
+    }
+
+    res.json({
+      success: true,
+      output: `Unstaged ${repositoryRelativeFilePath}`,
+    });
+  } catch (error) {
+    console.error('Git unstage error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/hunk-action', async (req, res) => {
+  const { project, file, action, patch } = req.body || {};
+
+  if (!project || !file || !action || !patch) {
+    return res.status(400).json({ error: 'Project, file, action, and patch are required' });
+  }
+
+  if (!['stage', 'unstage', 'discard'].includes(action)) {
+    return res.status(400).json({ error: 'Unsupported hunk action' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project);
+    await validateGitRepository(projectPath);
+    const {
+      repositoryRootPath,
+      repositoryRelativeFilePath,
+    } = await resolveRepositoryFilePath(projectPath, file);
+    validateFilePath(repositoryRelativeFilePath, repositoryRootPath);
+
+    const args = ['apply', '--whitespace=nowarn'];
+    if (action === 'stage') {
+      args.push('--cached');
+    } else if (action === 'unstage') {
+      args.push('--cached', '--reverse');
+    } else if (action === 'discard') {
+      args.push('--reverse');
+    }
+
+    await spawnWithInput('git', args, patch, { cwd: repositoryRootPath });
+    res.json({ success: true, output: `${action} hunk for ${repositoryRelativeFilePath}` });
+  } catch (error) {
+    console.error('Git hunk action error:', error);
+    res.status(500).json({ error: error.stderr || error.message || 'Failed to apply hunk action' });
+  }
+});
+
+router.post('/stage-all', async (req, res) => {
+  const { project } = req.body || {};
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const { repositoryRootPath } = await resolveProjectRepository(project);
+    await spawnAsync('git', ['add', '-A'], { cwd: repositoryRootPath });
+    res.json({ success: true, output: 'Staged all local changes' });
+  } catch (error) {
+    console.error('Git stage-all error:', error);
+    res.status(500).json({ error: error.stderr || error.message || 'Failed to stage all changes' });
+  }
+});
+
+router.post('/unstage-all', async (req, res) => {
+  const { project } = req.body || {};
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const { repositoryRootPath } = await resolveProjectRepository(project);
+    const hasCommits = await repositoryHasCommits(repositoryRootPath);
+    try {
+      await spawnAsync('git', ['restore', '--staged', ':/'], { cwd: repositoryRootPath });
+    } catch (error) {
+      if (!hasCommits) {
+        await spawnAsync('git', ['rm', '--cached', '-r', '.'], { cwd: repositoryRootPath });
+      } else {
+        await spawnAsync('git', ['reset', 'HEAD', '--', '.'], { cwd: repositoryRootPath });
+      }
+    }
+    res.json({ success: true, output: 'Unstaged all staged changes' });
+  } catch (error) {
+    console.error('Git unstage-all error:', error);
+    res.status(500).json({ error: error.stderr || error.message || 'Failed to unstage all changes' });
+  }
+});
+
+router.post('/discard-all', async (req, res) => {
+  const { project } = req.body || {};
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const { repositoryRootPath } = await resolveProjectRepository(project);
+    const hasCommits = await repositoryHasCommits(repositoryRootPath);
+    if (hasCommits) {
+      await spawnAsync('git', ['restore', '--staged', ':/'], { cwd: repositoryRootPath }).catch(() => undefined);
+      await spawnAsync('git', ['restore', ':/'], { cwd: repositoryRootPath }).catch(() => undefined);
+    } else {
+      await spawnAsync('git', ['rm', '--cached', '-r', '.'], { cwd: repositoryRootPath }).catch(() => undefined);
+    }
+    await spawnAsync('git', ['clean', '-fd'], { cwd: repositoryRootPath });
+    res.json({ success: true, output: 'Discarded all local changes and removed untracked files' });
+  } catch (error) {
+    console.error('Git discard-all error:', error);
+    res.status(500).json({ error: error.stderr || error.message || 'Failed to discard all changes' });
+  }
+});
+
+router.get('/review-summary', async (req, res) => {
+  const { project } = req.query;
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    res.json({ success: true, ...(await getReviewSummary(String(project))) });
+  } catch (error) {
+    console.error('Git review summary error:', error);
+    res.status(500).json({ error: error.stderr || error.message || 'Failed to build review summary' });
   }
 });
 
@@ -1482,6 +1779,135 @@ router.post('/delete-untracked', async (req, res) => {
   } catch (error) {
     console.error('Git delete untracked error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/comments', async (req, res) => {
+  const projectName = String(req.query.project || '');
+  const status = ['open', 'closed', 'all'].includes(String(req.query.status || 'open'))
+    ? String(req.query.status || 'open')
+    : 'open';
+  if (!projectName) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const rows = status === 'all'
+      ? db.prepare(`
+        SELECT * FROM review_comments
+        WHERE project_name = ?
+        ORDER BY created_at DESC
+      `).all(projectName)
+      : db.prepare(`
+        SELECT * FROM review_comments
+        WHERE project_name = ? AND status = ?
+        ORDER BY created_at DESC
+      `).all(projectName, status);
+    res.json({
+      success: true,
+      comments: rows.map((row) => ({
+        id: row.id,
+        projectName: row.project_name,
+        filePath: row.file_path || '',
+        lineNumber: row.line_number || null,
+        body: row.body,
+        source: row.source,
+        status: row.status,
+        createdAt: row.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error('Review comments list error:', error);
+    res.status(500).json({ error: error.message || 'Failed to load review comments' });
+  }
+});
+
+router.post('/comments', async (req, res) => {
+  const projectName = String(req.body?.project || '');
+  const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+
+  if (!projectName || !body) {
+    return res.status(400).json({ error: 'Project name and comment body are required' });
+  }
+
+  try {
+    const id = `review_${crypto.randomUUID?.() || Date.now()}`;
+    db.prepare(`
+      INSERT INTO review_comments (id, project_name, file_path, line_number, body, source)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      projectName,
+      req.body?.filePath || null,
+      Number.isFinite(Number(req.body?.lineNumber)) ? Number(req.body.lineNumber) : null,
+      body,
+      req.body?.source || 'local',
+    );
+    res.json({ success: true, id });
+  } catch (error) {
+    console.error('Review comment create error:', error);
+    res.status(500).json({ error: error.message || 'Failed to save review comment' });
+  }
+});
+
+router.patch('/comments/:id', async (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!['open', 'closed'].includes(status)) {
+    return res.status(400).json({ error: 'Comment status must be open or closed' });
+  }
+
+  try {
+    const result = db.prepare(`
+      UPDATE review_comments
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(status, req.params.id);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Review comment not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Review comment update error:', error);
+    res.status(500).json({ error: error.message || 'Failed to update review comment' });
+  }
+});
+
+router.post('/feedback', async (req, res) => {
+  const projectName = String(req.body?.project || '');
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+
+  if (!projectName || !text) {
+    return res.status(400).json({ error: 'Project name and feedback text are required' });
+  }
+
+  try {
+    const blocks = text
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter(Boolean);
+    const created = [];
+    const insert = db.prepare(`
+      INSERT INTO review_comments (id, project_name, file_path, line_number, body, source)
+      VALUES (?, ?, ?, ?, ?, 'pr-feedback')
+    `);
+
+    for (const block of blocks) {
+      const locationMatch = block.match(/([\w./\\-]+):(\d+)/);
+      const id = `review_${crypto.randomUUID?.() || `${Date.now()}_${created.length}`}`;
+      insert.run(
+        id,
+        projectName,
+        locationMatch?.[1]?.replace(/\\/g, '/') || null,
+        locationMatch ? Number(locationMatch[2]) : null,
+        block,
+      );
+      created.push(id);
+    }
+
+    res.json({ success: true, created });
+  } catch (error) {
+    console.error('Review feedback import error:', error);
+    res.status(500).json({ error: error.message || 'Failed to import review feedback' });
   }
 });
 

@@ -15,7 +15,7 @@
     "user": "U",
     "error": "Error",
     "tool": "Tool",
-    "claude": "MTL-Code",
+    "claude": "Argus",
     "cursor": "Cursor",
     "codex": "Codex",
     "gemini": "Gemini"
@@ -55,8 +55,8 @@
   "interactive": {
     "title": "Interactive Prompt",
     "waiting": "Waiting for your response in the CLI",
-    "instruction": "Please select an option in your terminal where MTL-Code is running.",
-    "selectedOption": "✓ MTL-Code selected option {{number}}",
+    "instruction": "Please select an option in your terminal where Argus is running.",
+    "selectedOption": "✓ Argus selected option {{number}}",
     "instructionDetail": "In the CLI, you would select this option interactively using arrow keys or by typing the number."
   },
   "thinking": {
@@ -83,7 +83,7 @@
     "title": "Implementation Plan"
   },
   "usageLimit": {
-    "resetAt": "MTL-Code usage limit reached. Your limit will reset at **{{time}} {{timezone}}** - {{date}}"
+    "resetAt": "Argus usage limit reached. Your limit will reset at **{{time}} {{timezone}}** - {{date}}"
   },
   "codex": {
     "permissionMode": "Permission Mode",
@@ -139,14 +139,14 @@
   "thinkingMode": {
     "selector": {
       "title": "Thinking Mode",
-      "description": "Extended thinking gives MTL-Code more time to evaluate alternatives",
+      "description": "Extended thinking gives Argus more time to evaluate alternatives",
       "active": "Active",
       "tip": "Higher thinking modes take more time but provide more thorough analysis"
     },
     "modes": {
       "none": {
         "name": "Standard",
-        "description": "Regular MTL-Code response",
+        "description": "Regular Argus response",
         "prefix": ""
       },
       "think": {
@@ -183,7 +183,7 @@
       "google": "by Google"
     },
     "readyPrompt": {
-      "claude": "Ready to use MTL-Code with {{model}}. Start typing your message below.",
+      "claude": "Ready to use Argus with {{model}}. Start typing your message below.",
       "cursor": "Ready to use Cursor with {{model}}. Start typing your message below.",
       "codex": "Ready to use Codex with {{model}}. Start typing your message below.",
       "gemini": "Ready to use Gemini with {{model}}. Start typing your message below.",
@@ -230,10 +230,10 @@
     },
     "loading": "Loading terminal...",
     "connecting": "Connecting to shell...",
-    "startSession": "Start a new MTL-Code session",
+    "startSession": "Start a new Argus session",
     "resumeSession": "Resume session: {{displayName}}...",
     "runCommand": "Run {{command}} in {{projectName}}",
-    "startCli": "Starting MTL-Code CLI in {{projectName}}",
+    "startCli": "Starting Argus CLI in {{projectName}}",
     "defaultCommand": "command"
   },
   "claudeStatus": {

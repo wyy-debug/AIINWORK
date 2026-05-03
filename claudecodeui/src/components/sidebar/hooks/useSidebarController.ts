@@ -77,6 +77,23 @@ type UseSidebarControllerArgs = {
   sidebarVisible: boolean;
 };
 
+const isMtlCodeProvider = (provider?: string | null) => !provider || provider === 'claude';
+
+const filterMtlCodeSearchResult = (projectResult: ConversationProjectResult): ConversationProjectResult | null => {
+  const sessions = projectResult.sessions
+    .map((session) => ({
+      ...session,
+      matches: session.matches.filter((match) => isMtlCodeProvider(match.provider)),
+    }))
+    .filter((session) => isMtlCodeProvider(session.provider) && session.matches.length > 0);
+
+  if (sessions.length === 0) {
+    return null;
+  }
+
+  return { ...projectResult, sessions };
+};
+
 export function useSidebarController({
   projects,
   selectedProject,
@@ -223,7 +240,15 @@ export function useSidebarController({
       eventSourceRef.current = es;
 
       const accumulated: ConversationProjectResult[] = [];
-      let totalMatches = 0;
+
+      const updateVisibleResults = () => {
+        const totalMatches = accumulated.reduce(
+          (total, projectResult) =>
+            total + projectResult.sessions.reduce((sum, session) => sum + session.matches.length, 0),
+          0,
+        );
+        setConversationResults({ results: [...accumulated], totalMatches, query });
+      };
 
       es.addEventListener('result', (evt) => {
         if (seq !== searchSeqRef.current) { es.close(); return; }
@@ -234,9 +259,11 @@ export function useSidebarController({
             scannedProjects: number;
             totalProjects: number;
           };
-          accumulated.push(data.projectResult);
-          totalMatches = data.totalMatches;
-          setConversationResults({ results: [...accumulated], totalMatches, query });
+          const visibleProjectResult = filterMtlCodeSearchResult(data.projectResult);
+          if (visibleProjectResult) {
+            accumulated.push(visibleProjectResult);
+            updateVisibleResults();
+          }
           setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
         } catch {
           // Ignore malformed SSE data
@@ -247,7 +274,6 @@ export function useSidebarController({
         if (seq !== searchSeqRef.current) { es.close(); return; }
         try {
           const data = JSON.parse(evt.data) as { totalMatches: number; scannedProjects: number; totalProjects: number };
-          totalMatches = data.totalMatches;
           setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
         } catch {
           // Ignore malformed SSE data

@@ -1,12 +1,12 @@
-# MTL-Code Backend Integration
+# Argus Backend Integration
 
 Date: 2026-04-26
 
 ## Decision
 
-`claudecodeui` is now treated as MTL-Code UI. The UI starts the local MTL-Code backend through the Claude Agent SDK compatibility path.
+`claudecodeui` is now treated as Argus. The UI starts the local Argus backend through the Claude Agent SDK compatibility path.
 
-The provider key remains `claude` for now because it is part of the existing WebSocket message contract, normalized message storage, SDK preset names, and many provider maps. User-facing copy, package metadata, CLI names, app data paths, and default backend execution now use MTL-Code naming.
+The provider key remains `claude` for now because it is part of the existing WebSocket message contract, normalized message storage, SDK preset names, and many provider maps. User-facing copy, package metadata, CLI names, app data paths, and default backend execution now use Argus naming.
 
 ## Runtime Contract
 
@@ -23,7 +23,7 @@ The provider key remains `claude` for now because it is part of the existing Web
 1. Frontend sends the existing `claude-command` WebSocket message.
 2. `server/index.js` keeps routing that message to `queryClaudeSDK`.
 3. `server/claude-sdk.js` sets `pathToClaudeCodeExecutable` to `MTL_CODE_CLI_PATH || CLAUDE_CLI_PATH || "mtl-code"`.
-4. The SDK spawns MTL-Code while keeping Claude SDK presets such as `claude_code` for compatibility.
+4. The SDK spawns Argus while keeping Claude SDK presets such as `claude_code` for compatibility.
 5. Project/session discovery checks `~/.mtl-code/projects` first and then `~/.claude/projects`.
 
 ## Packaging Impact

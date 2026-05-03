@@ -4,13 +4,13 @@ Date: 2026-04-27
 
 ## Goal
 
-The remote repository server has been extracted from MTL-Code UI into a standalone project:
+The remote repository server has been extracted from Argus into a standalone project:
 
 ```text
 E:\AIINWORK\agent-skill-hub
 ```
 
-MTL-Code UI remains a repository client that consumes HTTP(S) `catalog.json` files. Agent/Skill Hub owns the shared backend pieces:
+Argus remains a repository client that consumes HTTP(S) `catalog.json` files. Agent/Skill Hub owns the shared backend pieces:
 
 - public catalog publishing
 - public content download
@@ -31,7 +31,7 @@ Hub mounts:
 - Admin API: `/api/admin`
 - Migration alias: `/api/agent-repository-server`
 
-MTL-Code UI no longer imports or mounts `server/routes/agent-repository-server.js`.
+Argus no longer imports or mounts `server/routes/agent-repository-server.js`.
 
 ## Storage
 
@@ -171,7 +171,7 @@ List/read/update/delete published items:
 
 ## Client Setup
 
-To consume a deployed server from another MTL-Code UI:
+To consume a deployed server from another Argus:
 
 1. Open Settings > Agents > Repository.
 2. Add the catalog URL:

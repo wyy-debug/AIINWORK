@@ -1,0 +1,53 @@
+{
+  "name": "argus-vscode",
+  "displayName": "Argus IDE Bridge",
+  "description": "Local IDE bridge for sending active editor context to Argus.",
+  "version": "0.1.0",
+  "publisher": "argus",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:argus.sendSelection",
+    "onCommand:argus.openActiveSession"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Argus",
+      "properties": {
+        "argus.bridgeUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3987",
+          "description": "Argus local backend URL."
+        },
+        "argus.bridgeToken": {
+          "type": "string",
+          "default": "",
+          "description": "Token from /api/ide-bridge/token."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "argus.sendSelection",
+        "title": "Argus: Send Selection"
+      },
+      {
+        "command": "argus.openActiveSession",
+        "title": "Argus: Open Active Session"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.9.3"
+  }
+}

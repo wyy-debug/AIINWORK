@@ -12,12 +12,12 @@ import os from 'os';
 
 /**
  * Check if task-master-ai MCP server is configured
- * Reads directly from MTL-Code configuration files with legacy Claude fallback.
+ * Reads directly from Argus configuration files with legacy Claude fallback.
  * @returns {Promise<Object>} MCP detection result
  */
 export async function detectTaskMasterMCPServer() {
     try {
-        // Read MTL-Code configuration files directly, then fall back to legacy Claude files.
+        // Read Argus configuration files directly, then fall back to legacy Claude files.
         const homeDir = os.homedir();
         const configPaths = [
             path.join(homeDir, '.mtl-code.json'),
@@ -45,7 +45,7 @@ export async function detectTaskMasterMCPServer() {
         if (!configData) {
             return {
                 hasMCPServer: false,
-                reason: 'No MTL-Code configuration file found',
+                reason: 'No Argus configuration file found',
                 hasConfig: false
             };
         }

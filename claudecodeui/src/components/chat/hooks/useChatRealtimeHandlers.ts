@@ -43,6 +43,7 @@ type LatestChatMessage = {
   text?: string;
   tokens?: number;
   canInterrupt?: boolean;
+  contextBudget?: unknown;
   tokenBudget?: unknown;
   agentRuntime?: AgentRuntimeDiagnostics;
   newSessionId?: string;
@@ -187,7 +188,12 @@ export function useChatRealtimeHandlers({
     const sid = msg.sessionId || activeViewSessionId;
 
     if (msg.kind === 'status' && msg.text === 'agent_runtime_debug') {
-      if (sid && activeViewSessionId && sid !== activeViewSessionId) {
+      if (
+        sid
+        && activeViewSessionId
+        && sid !== activeViewSessionId
+        && !isTemporarySessionId(activeViewSessionId)
+      ) {
         return;
       }
       const runtime = msg.agentRuntime && typeof msg.agentRuntime === 'object'
@@ -195,6 +201,7 @@ export function useChatRealtimeHandlers({
         : null;
       setAgentRuntimeDiagnostics?.(runtime ? {
         ...runtime,
+        sessionId: sid || runtime.sessionId || null,
         receivedAt: new Date().toLocaleString(),
       } : null);
       return;
@@ -350,8 +357,11 @@ export function useChatRealtimeHandlers({
       }
 
       case 'status': {
-        if (msg.text === 'token_budget' && msg.tokenBudget) {
-          setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+        if (msg.text === 'token_budget' && (msg.contextBudget || msg.tokenBudget)) {
+          setTokenBudget({
+            ...(msg.tokenBudget && typeof msg.tokenBudget === 'object' ? msg.tokenBudget as Record<string, unknown> : {}),
+            contextBudget: msg.contextBudget || msg.tokenBudget,
+          });
         } else if (msg.text) {
           setClaudeStatus({
             text: msg.text,

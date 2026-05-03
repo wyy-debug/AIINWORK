@@ -2,25 +2,25 @@
 
 Date: 2026-04-28
 
-本文说明 MTL-Code UI 中“上下文压缩”的使用方式、界面含义和注意事项。
+本文说明 Argus 中“上下文压缩”的使用方式、界面含义和注意事项。
 
 ## 它是什么
 
-上下文压缩用于解决长对话接近模型上下文窗口上限的问题。真正执行压缩的是底层 MTL-Code / Claude Code runtime，GUI 负责把压缩发生的位置、类型和摘要清楚展示出来。
+上下文压缩用于解决长对话接近模型上下文窗口上限的问题。真正执行压缩的是底层 Argus / Claude Code runtime，GUI 负责把压缩发生的位置、类型和摘要清楚展示出来。
 
-它和 RAG 不是同一个功能：
+This is separate from the removed knowledge/RAG feature:
 
 - 上下文压缩：把很长的历史对话压成摘要，让当前会话继续。
-- RAG/知识源：把上传的文档、资料、规范检索出来，额外注入给 Agent。
+- Knowledge/RAG: removed from the current product runtime; uploaded documents are no longer indexed or injected into Agent prompts.
 
-普通代码项目不需要为了上下文压缩去配置 RAG。
+Normal code projects do not need a knowledge base for context compaction.
 
 ## 什么时候会触发
 
 有两种方式：
 
 1. 自动触发
-   当对话历史、工具结果、项目上下文接近当前模型的上下文窗口上限时，MTL-Code 会自动压缩。
+   当对话历史、工具结果、项目上下文接近当前模型的上下文窗口上限时，Argus 会自动压缩。
 
 2. 手动触发
    在输入框中输入 `/compact`，可以主动压缩当前会话。
@@ -77,7 +77,7 @@ Date: 2026-04-28
 
 ### 需要回查旧细节
 
-压缩摘要是摘要，不保证包含所有旧细节。如果需要非常具体的旧信息，可以要求 MTL-Code 回看完整 transcript 或相关文件。
+压缩摘要是摘要，不保证包含所有旧细节。如果需要非常具体的旧信息，可以要求 Argus 回看完整 transcript 或相关文件。
 
 示例：
 
@@ -87,7 +87,7 @@ Date: 2026-04-28
 
 ## 配置上下文窗口
 
-上下文窗口由设置中的模型运行参数决定。MTL-Code UI 会把该值传给后端：
+上下文窗口由设置中的模型运行参数决定。Argus 会把该值传给后端：
 
 - `MTL_CODE_MAX_CONTEXT_TOKENS`
 - `CONTEXT_WINDOW`
@@ -103,7 +103,7 @@ Date: 2026-04-28
 ## 注意事项
 
 1. GUI 不自己压缩对话
-   GUI 只是展示 runtime 写入的压缩边界和摘要。真正的摘要生成、边界写入和继续会话由 MTL-Code / Claude Code 完成。
+   GUI 只是展示 runtime 写入的压缩边界和摘要。真正的摘要生成、边界写入和继续会话由 Argus / Claude Code 完成。
 
 2. 压缩摘要可能丢失细节
    摘要会保留主要目标、代码路径、决策、错误和下一步，但不等于完整历史。关键命令、完整日志、长代码片段可能被省略。
@@ -111,8 +111,8 @@ Date: 2026-04-28
 3. 工具输出微压缩不是失败
    `工具输出已压缩` 通常表示旧工具结果被清理或摘要化，以释放上下文。它不代表工具执行失败。
 
-4. RAG 不能替代上下文压缩
-   RAG 适合长期资料、规范、上传文档。上下文压缩处理的是当前会话历史。
+4. Knowledge/RAG cannot replace context compaction
+   Knowledge/RAG has been removed from the product runtime; context compaction still handles current conversation history.
 
 5. 上下文越大不代表永远不用压缩
    1M context 能显著推迟压缩，但大型项目、长工具输出、多轮 Agent/Skill 调用仍可能触发。
@@ -131,7 +131,7 @@ Date: 2026-04-28
 
 - 当前会话还没有触发压缩。
 - 历史记录中没有 `compact_boundary` / `microcompact_boundary`。
-- 会话来自非 MTL-Code/Claude provider，尚未写入该类事件。
+- 会话来自非 Argus/Claude provider，尚未写入该类事件。
 
 ### 压缩摘要为空
 

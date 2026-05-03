@@ -1,10 +1,10 @@
-# MTL-Code Multi Model Profiles and MiMo Setup
+# Argus Multi Model Profiles and MiMo Setup
 
 Date: 2026-04-29
 
 ## What Changed
 
-- MTL-Code model settings now support multiple Anthropic-compatible model profiles.
+- Argus model settings now support multiple Anthropic-compatible model profiles.
 - Only one profile is active at a time. Saving an active profile writes it to `~/.mtl-code/settings.json` as the runtime `ANTHROPIC_*` environment.
 - Existing single-model settings are migrated into a default profile automatically.
 - MiMo presets are available in the Model settings page.
@@ -42,17 +42,17 @@ Recommended context defaults:
 
 ## User Flow
 
-1. Open Settings > MTLCode > Model.
+1. Open Settings > Argus > Model.
 2. Click a MiMo preset or Add to create a custom profile.
 3. Fill Base URL, Model, API Key, and Context window tokens.
 4. Click Use this model.
 5. Click Save.
-6. New MTL-Code sessions will use the active profile.
+6. New Argus sessions will use the active profile.
 
 ## Runtime Notes
 
 - The chat UI still sends the `mtlcode` sentinel model so the backend can resolve the active profile from settings.
 - For MiMo profiles, the backend sets Sonnet, Opus, Haiku, and subagent model defaults to the selected MiMo model.
-- MiMo is treated as a third-party Anthropic-compatible endpoint, so MTL-Code does not force `output_config.effort` or the Anthropic effort beta by default. This avoids slow first-token latency on simple prompts.
+- MiMo is treated as a third-party Anthropic-compatible endpoint, so Argus does not force `output_config.effort` or the Anthropic effort beta by default. This avoids slow first-token latency on simple prompts.
 - MiMo supports `Authorization: Bearer` authentication, which is compatible with `ANTHROPIC_AUTH_TOKEN`.
 - Token Plan users should replace the base URL with the exclusive Token Plan base URL shown in the MiMo console if it differs from the default China endpoint.

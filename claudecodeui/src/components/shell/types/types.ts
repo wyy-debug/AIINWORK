@@ -15,6 +15,7 @@ export type ShellInitMessage = {
   rows: number;
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
+  confirmationId?: string;
 };
 
 export type ShellResizeMessage = {
@@ -34,6 +35,12 @@ export type ShellIncomingMessage =
   | { type: 'output'; data: string }
   | { type: 'auth_url'; url?: string }
   | { type: 'url_open'; url?: string }
+  | {
+      type: 'runtime_permission_confirmation_required';
+      confirmationId?: string;
+      reason?: string;
+      command?: string;
+    }
   | { type: string; [key: string]: unknown };
 
 export type UseShellRuntimeOptions = {

@@ -27,6 +27,7 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
   subagentModel: 'MTL_CODE_SUBAGENT_MODEL',
   legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
+  coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
 };
 
 export const OPENMYTHOS_RUNTIME_SETTINGS_KEY = 'openMythosRuntime';
@@ -41,6 +42,9 @@ export const OPENMYTHOS_RUNTIME_ENV_KEYS = {
   phaseAdapter: 'MTL_CODE_OPENMYTHOS_PHASE_ADAPTER',
   expertRouting: 'MTL_CODE_OPENMYTHOS_EXPERT_ROUTING',
   contextCacheDiagnostics: 'MTL_CODE_OPENMYTHOS_CONTEXT_CACHE_DIAGNOSTICS',
+  autoDispatchSubagents: 'MTL_CODE_OPENMYTHOS_AUTO_DISPATCH',
+  autoDispatchMinEffort: 'MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT',
+  autoDispatchMaxWorkers: 'MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MAX_WORKERS',
   minEffort: 'MTL_CODE_OPENMYTHOS_MIN_EFFORT',
   maxEffort: 'MTL_CODE_OPENMYTHOS_MAX_EFFORT',
 };
@@ -55,14 +59,19 @@ export const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG = Object.freeze({
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
+  autoDispatchSubagents: true,
+  autoDispatchMinEffort: 'medium',
+  autoDispatchMaxWorkers: 3,
   minEffort: 'low',
-  maxEffort: 'xhigh',
+  maxEffort: 'max',
 });
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
-const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
+const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const OPENMYTHOS_LOOP_CONTROLS = ['advisory', 'enforced'];
 const MIMO_MODEL_CONTEXT_WINDOWS = {
+  'deepseek-v4-pro': 1_000_000,
+  'deepseek-v4-flash': 1_000_000,
   'mimo-v2.5-pro': 1_000_000,
   'mimo-v2.5': 1_000_000,
   'mimo-v2-pro': 1_000_000,
@@ -108,6 +117,14 @@ function normalizeOpenMythosLoopControl(value, fallback) {
   return OPENMYTHOS_LOOP_CONTROLS.includes(normalized) ? normalized : fallback;
 }
 
+function normalizeOpenMythosPositiveInteger(value, fallback, max = 8) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(parsed, max);
+}
+
 function normalizeOpenMythosEffortBounds(config) {
   const minIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(config.minEffort);
   const maxIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(config.maxEffort);
@@ -133,6 +150,9 @@ export function normalizeOpenMythosRuntimeConfig(value, fallback = DEFAULT_OPENM
     phaseAdapter: normalizeOpenMythosBoolean(data.phaseAdapter, fallback.phaseAdapter),
     expertRouting: normalizeOpenMythosBoolean(data.expertRouting, fallback.expertRouting),
     contextCacheDiagnostics: normalizeOpenMythosBoolean(data.contextCacheDiagnostics, fallback.contextCacheDiagnostics),
+    autoDispatchSubagents: normalizeOpenMythosBoolean(data.autoDispatchSubagents, fallback.autoDispatchSubagents),
+    autoDispatchMinEffort: normalizeOpenMythosEffort(data.autoDispatchMinEffort, fallback.autoDispatchMinEffort),
+    autoDispatchMaxWorkers: normalizeOpenMythosPositiveInteger(data.autoDispatchMaxWorkers, fallback.autoDispatchMaxWorkers),
     minEffort: normalizeOpenMythosEffort(data.minEffort, fallback.minEffort),
     maxEffort: normalizeOpenMythosEffort(data.maxEffort, fallback.maxEffort),
   });
@@ -150,6 +170,11 @@ export function readOpenMythosRuntimeConfig(settings = {}, env = {}) {
     phaseAdapter: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter),
     expertRouting: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting),
     contextCacheDiagnostics: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics),
+    autoDispatchSubagents: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchSubagents),
+    autoDispatchMinEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMinEffort)
+      || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort,
+    autoDispatchMaxWorkers: readPositiveIntegerEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMaxWorkers)
+      || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers,
     minEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort)
       || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort,
     maxEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort)
@@ -172,6 +197,9 @@ export function applyOpenMythosRuntimeToEnv(env, config) {
   env[OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter] = normalized.phaseAdapter ? '1' : '0';
   env[OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting] = normalized.expertRouting ? '1' : '0';
   env[OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics] = normalized.contextCacheDiagnostics ? '1' : '0';
+  env[OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchSubagents] = normalized.autoDispatchSubagents ? '1' : '0';
+  env[OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMinEffort] = normalized.autoDispatchMinEffort;
+  env[OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMaxWorkers] = String(normalized.autoDispatchMaxWorkers);
   env[OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort] = normalized.minEffort;
   env[OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort] = normalized.maxEffort;
   return env;
@@ -254,15 +282,22 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
 
   const riskScore = signals.reduce((sum, signal) => sum + signal.weight, 0)
     + Math.min(3, Math.floor(prompt.length / 600));
-  const inferredEffort = riskScore >= 8 ? 'xhigh' : riskScore >= 4 ? 'high' : riskScore >= 2 ? 'medium' : 'low';
+  const inferredEffort = riskScore >= 10 ? 'max' : riskScore >= 8 ? 'xhigh' : riskScore >= 4 ? 'high' : riskScore >= 2 ? 'medium' : 'low';
   const effort = clampOpenMythosEffort(inferredEffort, normalizedConfig.minEffort, normalizedConfig.maxEffort);
-  const loopBudget = effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
+  const loopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
   const phasePlan = normalizedConfig.phaseAdapter
     ? buildOpenMythosPhasePlan(effort)
     : ['implement', 'finalize'];
   const expertRoutes = normalizedConfig.expertRouting
     ? buildOpenMythosExpertRoutes(signals, effort)
     : [];
+  const dispatchPlan = buildOpenMythosDispatchPlan({
+    config: normalizedConfig,
+    goal: prompt.length <= 260 ? prompt : `${prompt.slice(0, 259)}...`,
+    effort,
+    signals,
+    expertRoutes,
+  });
 
   return {
     goal: prompt.length <= 260 ? prompt : `${prompt.slice(0, 259)}...`,
@@ -280,6 +315,7 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
         : 'Use the smallest safe change and keep verification visible.',
     ],
     expertRoutes,
+    dispatchPlan,
   };
 }
 
@@ -322,6 +358,54 @@ function buildOpenMythosExpertRoutes(signals, effort) {
     });
   }
   return [...routes.values()].slice(0, 5);
+}
+
+function effortMeetsMinimum(effort, minimum) {
+  return OPENMYTHOS_EFFORT_LEVELS.indexOf(effort) >= OPENMYTHOS_EFFORT_LEVELS.indexOf(minimum);
+}
+
+function buildOpenMythosDispatchPlan({ config, goal, effort, signals, expertRoutes }) {
+  if (!config.autoDispatchSubagents || !effortMeetsMinimum(effort, config.autoDispatchMinEffort)) {
+    return [];
+  }
+
+  const tasks = expertRoutes
+    .filter((route) => route.kind !== 'local')
+    .map((route) => toDispatchTask(route, goal));
+
+  const hasImplementationSignal = signals.some((signal) => signal.reason === 'implementation requested');
+  if (hasImplementationSignal && tasks.length === 0) {
+    tasks.push(toDispatchTask({
+      kind: 'implementation',
+      label: 'Implementation worker',
+      reason: 'implementation requested',
+      required: true,
+    }, goal));
+  }
+
+  return tasks.slice(0, Math.max(1, config.autoDispatchMaxWorkers));
+}
+
+function toDispatchTask(route, goal) {
+  const description = `${route.label}: ${goal}`.length <= 80
+    ? `${route.label}: ${goal}`
+    : `${route.label}: ${goal}`.slice(0, 79) + '...';
+  return {
+    kind: route.kind,
+    label: route.label,
+    reason: route.reason,
+    required: Boolean(route.required),
+    description,
+    prompt: [
+      'You are an Argus worker selected by OpenMythos auto-dispatch.',
+      `User goal: ${goal}`,
+      `Route: ${route.label}.`,
+      `Reason: ${route.reason}.`,
+      route.required ? 'This route is required for a safe answer.' : 'This route is helpful if it materially improves the answer.',
+      'Work autonomously. Read relevant files, inspect evidence, and only edit when the task explicitly requires implementation within this route.',
+      'Do not revert unrelated user changes. Report concrete files, findings, edits, and verification results back to the coordinator.',
+    ].join('\n'),
+  };
 }
 
 function uniqueStrings(values) {
@@ -456,6 +540,10 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   const model = canonicalizeAnthropicModel(profile.model);
   const contextWindowTokens = resolveProfileContextWindow({ ...profile, model }, settingsEnv);
   const openMythosRuntime = readOpenMythosRuntimeConfig(settings, settingsEnv);
+  const coordinatorModeEnabled = Boolean(
+    openMythosRuntime.enabled !== false
+    && openMythosRuntime.autoDispatchSubagents !== false,
+  );
   const runtimeEnv = {
     [ANTHROPIC_MODEL_ENV_KEYS.baseUrl]: profile.baseUrl,
     [ANTHROPIC_MODEL_ENV_KEYS.model]: model,
@@ -465,6 +553,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: profile.bareMode !== false ? '1' : '0',
     [MTL_CODE_MODEL_ENV_KEYS.maxContextTokens]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
+    [MTL_CODE_MODEL_ENV_KEYS.coordinatorMode]: coordinatorModeEnabled ? '1' : '0',
   };
   applyOpenMythosRuntimeToEnv(runtimeEnv, openMythosRuntime);
 

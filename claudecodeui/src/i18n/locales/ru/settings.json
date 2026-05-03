@@ -253,7 +253,7 @@
     "apiDocsLink": "Документация API",
     "documentation": {
       "title": "Документация внешнего API",
-      "description": "Узнайте, как использовать внешний API для запуска сеансов MTL-Code/Cursor из ваших приложений.",
+      "description": "Узнайте, как использовать внешний API для запуска сеансов Argus/Cursor из ваших приложений.",
       "viewLink": "Просмотр документации API →"
     },
     "loading": "Загрузка...",
@@ -273,7 +273,7 @@
     },
     "account": {
       "claude": {
-        "description": "AI-ассистент Anthropic MTL-Code"
+        "description": "AI-ассистент Anthropic Argus"
       },
       "cursor": {
         "description": "Редактор кода с AI Cursor"
@@ -375,7 +375,7 @@
   "mcpServers": {
     "title": "MCP серверы",
     "description": {
-      "claude": "Серверы Model Context Protocol предоставляют дополнительные инструменты и источники данных для MTL-Code",
+      "claude": "Серверы Model Context Protocol предоставляют дополнительные инструменты и источники данных для Argus",
       "cursor": "Серверы Model Context Protocol предоставляют дополнительные инструменты и источники данных для Cursor",
       "codex": "Серверы Model Context Protocol предоставляют дополнительные инструменты и источники данных для Codex"
     },

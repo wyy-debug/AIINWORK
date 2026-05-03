@@ -4,7 +4,13 @@ import { useTranslation } from 'react-i18next';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import PermissionContext from '../../../contexts/PermissionContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
-import type { AgentRuntimeDiagnostics, ChatInterfaceProps, Provider  } from '../types/types';
+import type {
+  AgentRuntimeDiagnostics,
+  ChatInterfaceProps,
+  ChatMessage,
+  Provider,
+  SubagentActivitySummary,
+} from '../types/types';
 import type { LLMProvider } from '../../../types/app';
 import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../types/agent';
 import { api } from '../../../utils/api';
@@ -39,6 +45,94 @@ const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
 const INTERACTIVE_PERMISSION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+const MAX_RUNTIME_DIAGNOSTICS_CACHE_SIZE = 100;
+const runtimeDiagnosticsBySessionCache = new Map<string, AgentRuntimeDiagnostics>();
+
+function cacheRuntimeDiagnostics(sessionKey: string, diagnostics: AgentRuntimeDiagnostics) {
+  if (!sessionKey) return;
+  runtimeDiagnosticsBySessionCache.set(sessionKey, diagnostics);
+  if (runtimeDiagnosticsBySessionCache.size <= MAX_RUNTIME_DIAGNOSTICS_CACHE_SIZE) {
+    return;
+  }
+  const oldestKey = runtimeDiagnosticsBySessionCache.keys().next().value;
+  if (oldestKey) {
+    runtimeDiagnosticsBySessionCache.delete(oldestKey);
+  }
+}
+
+function parseSubagentLabel(message: ChatMessage): string {
+  const input = message.toolInput;
+  const payload = (() => {
+    if (!input) return null;
+    if (typeof input === 'object') return input as Record<string, unknown>;
+    if (typeof input !== 'string') return null;
+    try {
+      const parsed = JSON.parse(input) as unknown;
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const candidates = [
+    payload?.description,
+    payload?.subagent_type,
+    payload?.agent,
+    payload?.label,
+    message.toolName,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return 'worker';
+}
+
+function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySummary {
+  let total = 0;
+  let running = 0;
+  let completed = 0;
+  let outputting = 0;
+  let latestLabel = '';
+
+  for (const message of messages) {
+    if (!message.isSubagentContainer) continue;
+    total += 1;
+
+    const state = message.subagentState;
+    const childTools = state?.childTools || [];
+    const currentTool = state && state.currentToolIndex >= 0
+      ? childTools[state.currentToolIndex] || null
+      : null;
+    const isComplete = Boolean(state?.isComplete || message.toolResult);
+
+    if (isComplete) {
+      completed += 1;
+    } else {
+      running += 1;
+    }
+
+    const hasLiveChildOutput = !isComplete && (
+      Boolean(currentTool)
+      || childTools.some((childTool) => !childTool.toolResult)
+    );
+    if (hasLiveChildOutput) {
+      outputting += 1;
+    }
+
+    latestLabel = parseSubagentLabel(message) || latestLabel;
+  }
+
+  return {
+    total,
+    running,
+    completed,
+    outputting,
+    latestLabel: latestLabel || undefined,
+  };
+}
 
 function normalizeAgentAppBindings(value: unknown): AgentAppBinding[] {
   if (!Array.isArray(value)) return [];
@@ -414,6 +508,7 @@ function ChatInterface({
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
+    sessionLoadError,
     isLoadingMoreMessages,
     hasMoreMessages,
     totalMessages,
@@ -455,6 +550,41 @@ function ChatInterface({
     () => {
       const sessionId = selectedSession?.id || currentSessionId;
       return sessionId && !isTemporarySessionId(sessionId) ? sessionId : null;
+    },
+    [currentSessionId, selectedSession?.id],
+  );
+
+  const subagentActivity = useMemo(
+    () => summarizeSubagentActivity(chatMessages),
+    [chatMessages],
+  );
+
+  const setCachedAgentRuntimeDiagnostics = useCallback<React.Dispatch<React.SetStateAction<AgentRuntimeDiagnostics | null>>>(
+    (valueOrUpdater) => {
+      setAgentRuntimeDiagnostics((previous) => {
+        const next = typeof valueOrUpdater === 'function'
+          ? valueOrUpdater(previous)
+          : valueOrUpdater;
+
+        if (next) {
+          const sessionKey = String(
+            next.sessionId
+            || selectedSession?.id
+            || currentSessionId
+            || pendingViewSessionRef.current?.sessionId
+            || '',
+          );
+          const nextWithSession = sessionKey && !next.sessionId
+            ? { ...next, sessionId: sessionKey }
+            : next;
+          if (sessionKey) {
+            cacheRuntimeDiagnostics(sessionKey, nextWithSession);
+          }
+          return nextWithSession;
+        }
+
+        return next;
+      });
     },
     [currentSessionId, selectedSession?.id],
   );
@@ -571,8 +701,36 @@ function ChatInterface({
   ]);
 
   useEffect(() => {
-    setAgentRuntimeDiagnostics(null);
-  }, [isConversationSpace, selectedProject?.name, selectedSession?.id]);
+    const sessionKey = selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || '';
+    if (!sessionKey) {
+      setAgentRuntimeDiagnostics(null);
+      return;
+    }
+
+    const cached = runtimeDiagnosticsBySessionCache.get(sessionKey);
+    if (cached) {
+      setAgentRuntimeDiagnostics(cached);
+      return;
+    }
+
+    setAgentRuntimeDiagnostics((previous) => {
+      if (
+        previous
+        && previous.sessionId
+        && isTemporarySessionId(previous.sessionId)
+        && !isTemporarySessionId(sessionKey)
+      ) {
+        const migrated = {
+          ...previous,
+          sessionId: sessionKey,
+        };
+        cacheRuntimeDiagnostics(sessionKey, migrated);
+        return migrated;
+      }
+
+      return null;
+    });
+  }, [currentSessionId, isConversationSpace, selectedProject?.name, selectedSession?.id]);
 
   useEffect(() => {
     if (!agentBindingEnabled) {
@@ -1030,10 +1188,12 @@ function ChatInterface({
       provider: (selectedSession.__provider || providerVal) as LLMProvider,
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
+      limit: allMessagesLoaded ? null : Math.max(visibleMessageCount, 20),
+      offset: 0,
     });
     setIsLoading(false);
     setCanAbortSession(false);
-  }, [selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession]);
+  }, [allMessagesLoaded, selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession, visibleMessageCount]);
 
   useChatRealtimeHandlers({
     latestMessage,
@@ -1046,7 +1206,7 @@ function ChatInterface({
     setCanAbortSession,
     setClaudeStatus,
     setTokenBudget,
-    setAgentRuntimeDiagnostics,
+    setAgentRuntimeDiagnostics: setCachedAgentRuntimeDiagnostics,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamBufferRef,
@@ -1148,6 +1308,7 @@ function ChatInterface({
           onWheel={handleScroll}
           onTouchMove={handleScroll}
           isLoadingSessionMessages={isLoadingSessionMessages}
+          sessionLoadError={sessionLoadError}
           chatMessages={chatMessages}
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -1224,8 +1385,9 @@ function ChatInterface({
               setSelectedProjectSkillNames([]);
             }
           }}
-          showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0}
+          showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0 || Boolean(agentRuntimeDiagnostics)}
           agentRuntimeDiagnostics={agentRuntimeDiagnostics}
+          subagentActivity={subagentActivity}
           tokenBudget={tokenBudget}
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}

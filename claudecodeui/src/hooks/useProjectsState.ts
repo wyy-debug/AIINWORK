@@ -66,22 +66,19 @@ const projectsHaveChanges = (
 };
 
 const getProjectSessions = (project: Project): ProjectSession[] => {
-  return [
-    ...(project.sessions ?? []),
-    ...(project.codexSessions ?? []),
-    ...(project.cursorSessions ?? []),
-    ...(project.geminiSessions ?? []),
-  ];
+  return project.sessions ?? [];
 };
 
 const getProjectSessionsWithProviders = (project: Project): ProjectSession[] => [
   ...(project.sessions ?? []).map((session) => ({ ...session, __provider: session.__provider || 'claude' })),
-  ...(project.codexSessions ?? []).map((session) => ({ ...session, __provider: session.__provider || 'codex' })),
-  ...(project.cursorSessions ?? []).map((session) => ({ ...session, __provider: session.__provider || 'cursor' })),
-  ...(project.geminiSessions ?? []).map((session) => ({ ...session, __provider: session.__provider || 'gemini' })),
 ];
 
 type WorkspaceMode = 'projects' | 'conversations';
+type RouteSessionState = {
+  status: 'idle' | 'resolving' | 'missing';
+  sessionId?: string;
+  message?: string;
+};
 
 const isUpdateAdditive = (
   currentProjects: Project[],
@@ -119,10 +116,18 @@ const isUpdateAdditive = (
   );
 };
 
-const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'preview', 'agents']);
+const VALID_TABS: Set<string> = new Set([
+  'chat',
+  'review',
+  'shell',
+  'files',
+  'actions',
+  'browser',
+  'artifacts',
+]);
 
 const isValidTab = (tab: string): tab is AppTab => {
-  return VALID_TABS.has(tab) || tab.startsWith('plugin:');
+  return VALID_TABS.has(tab);
 };
 
 const readPersistedTab = (): AppTab => {
@@ -152,6 +157,7 @@ export function useProjectsState({
   const [selectedConversationSession, setSelectedConversationSession] = useState<ProjectSession | null>(null);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
+  const [routeSessionState, setRouteSessionState] = useState<RouteSessionState>({ status: 'idle' });
 
   useEffect(() => {
     try {
@@ -166,10 +172,10 @@ export function useProjectsState({
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress | null>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState('agents');
+  const [settingsInitialTab, setSettingsInitialTab] = useState('runtime');
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
   const [quickStartAgentId, setQuickStartAgentId] = useState('');
-  const [quickStartAgentRequestId, setQuickStartAgentRequestId] = useState(0);
+  const quickStartAgentRequestId = 0;
   const [newConversationRequestId, setNewConversationRequestId] = useState(0);
   const [newProjectSessionRequestId, setNewProjectSessionRequestId] = useState(0);
 
@@ -196,7 +202,7 @@ export function useProjectsState({
           return projectData;
         }
 
-        return projectsHaveChanges(prevProjects, projectData, true)
+        return projectsHaveChanges(prevProjects, projectData, false)
           ? projectData
           : prevProjects;
       });
@@ -242,10 +248,61 @@ export function useProjectsState({
     setShowSettings(true);
   }, []);
 
+	  useEffect(() => {
+	    void fetchProjects();
+	    void fetchConversationProject();
+	  }, [fetchConversationProject, fetchProjects]);
+
   useEffect(() => {
-    void fetchProjects();
-    void fetchConversationProject();
-  }, [fetchConversationProject, fetchProjects]);
+    const handleOpenSession = async (event: Event) => {
+      const detail = (event as CustomEvent<{ projectName?: string; sessionId?: string }>).detail || {};
+      if (!detail.sessionId) return;
+      try {
+        const response = await api.projects();
+        const freshProjects = (await response.json()) as Project[];
+        setProjects(freshProjects);
+        const targetProject = freshProjects.find((project) => (
+          project.name === detail.projectName
+          || project.worktree?.sessionId === detail.sessionId
+          || project.sessions?.some((session) => session.id === detail.sessionId)
+        ));
+        if (!targetProject) {
+          setRouteSessionState({
+            status: 'missing',
+            sessionId: detail.sessionId,
+            message: 'The generated session was not found after refreshing projects.',
+          });
+          navigate(`/session/${detail.sessionId}`);
+          return;
+        }
+        const targetSession = getProjectSessionsWithProviders(targetProject).find((session) => session.id === detail.sessionId)
+          || (targetProject.worktree?.sessionId === detail.sessionId
+            ? {
+              id: detail.sessionId,
+              title: targetProject.worktree.displayName || targetProject.worktree.taskPrompt || detail.sessionId,
+              summary: targetProject.worktree.displayName || targetProject.worktree.taskPrompt || detail.sessionId,
+              __provider: targetProject.worktree.provider || 'claude',
+              __projectName: targetProject.name,
+            }
+            : null);
+        setWorkspaceMode('projects');
+        setSelectedProject(targetProject);
+        setSelectedSession(targetSession);
+        setSelectedConversationSession(null);
+        setActiveTab('chat');
+        setRouteSessionState({ status: 'idle' });
+        navigate(`/session/${detail.sessionId}`);
+      } catch (error) {
+        setRouteSessionState({
+          status: 'missing',
+          sessionId: detail.sessionId,
+          message: error instanceof Error ? error.message : 'Failed to open generated session.',
+        });
+      }
+    };
+    window.addEventListener('argus-open-session', handleOpenSession);
+    return () => window.removeEventListener('argus-open-session', handleOpenSession);
+  }, [navigate]);
 
   // Auto-select the project when there is only one, so the user lands on the new session page
   useEffect(() => {
@@ -358,18 +415,30 @@ export function useProjectsState({
   useEffect(() => {
     if (!sessionId) {
       routeSessionModeSwitchRef.current = false;
+      setRouteSessionState({ status: 'idle' });
       return;
     }
     if (routeSessionModeSwitchRef.current) {
       return;
     }
 
+    if (isLoadingProjects || isLoadingConversations) {
+      setRouteSessionState({
+        status: 'resolving',
+        sessionId,
+        message: 'Loading session route...',
+      });
+    }
+
     for (const project of projects) {
       const claudeSession = project.sessions?.find((session) => session.id === sessionId);
       if (claudeSession) {
+        setRouteSessionState({ status: 'idle' });
         const shouldUpdateProject = selectedProject?.name !== project.name;
         const shouldUpdateSession =
           selectedSession?.id !== sessionId || selectedSession.__provider !== 'claude';
+        const shouldEnterSession =
+          workspaceMode !== 'projects' || shouldUpdateProject || shouldUpdateSession;
 
         setWorkspaceMode('projects');
         if (shouldUpdateProject) {
@@ -378,56 +447,12 @@ export function useProjectsState({
         if (shouldUpdateSession) {
           setSelectedSession({ ...claudeSession, __provider: 'claude' });
         }
-        return;
-      }
-
-      const cursorSession = project.cursorSessions?.find((session) => session.id === sessionId);
-      if (cursorSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'cursor';
-
-        setWorkspaceMode('projects');
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...cursorSession, __provider: 'cursor' });
+        if (shouldEnterSession) {
+          setActiveTab('chat');
         }
         return;
       }
 
-      const codexSession = project.codexSessions?.find((session) => session.id === sessionId);
-      if (codexSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'codex';
-
-        setWorkspaceMode('projects');
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...codexSession, __provider: 'codex' });
-        }
-        return;
-      }
-
-      const geminiSession = project.geminiSessions?.find((session) => session.id === sessionId);
-      if (geminiSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'gemini';
-
-        setWorkspaceMode('projects');
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...geminiSession, __provider: 'gemini' });
-        }
-        return;
-      }
     }
 
     if (conversationProject) {
@@ -435,24 +460,38 @@ export function useProjectsState({
         .find((session) => session.id === sessionId);
 
       if (conversationSession) {
+        setRouteSessionState({ status: 'idle' });
+        const shouldUpdateConversationSession = selectedConversationSession?.id !== sessionId;
+        const shouldEnterSession = workspaceMode !== 'conversations' || shouldUpdateConversationSession;
         setWorkspaceMode('conversations');
-        if (selectedConversationSession?.id !== sessionId) {
+        if (shouldUpdateConversationSession) {
           setSelectedConversationSession(conversationSession);
         }
-        if (activeTab !== 'chat') {
+        if (shouldEnterSession) {
           setActiveTab('chat');
         }
+        return;
       }
     }
+
+    if (!isLoadingProjects && !isLoadingConversations) {
+      setRouteSessionState({
+        status: 'missing',
+        sessionId,
+        message: 'This session was not found. It may have been deleted or belongs to a project that is no longer available.',
+      });
+    }
   }, [
-    activeTab,
     conversationProject,
+    isLoadingConversations,
+    isLoadingProjects,
     projects,
     selectedConversationSession?.id,
     selectedProject?.name,
     selectedSession?.__provider,
     selectedSession?.id,
     sessionId,
+    workspaceMode,
   ]);
 
   const handleProjectSelect = useCallback(
@@ -490,7 +529,7 @@ export function useProjectsState({
       setSelectedSession(session);
       setSelectedConversationSession(null);
 
-      if (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'agents') {
+      if (activeTab !== 'chat') {
         setActiveTab('chat');
       }
 
@@ -530,24 +569,13 @@ export function useProjectsState({
     [isMobile, navigate],
   );
 
-  const handleShowAgents = useCallback(() => {
-    setActiveTab('agents');
-    setSelectedSession(null);
-    setSelectedConversationSession(null);
-    navigate('/');
-
-    if (isMobile) {
-      setSidebarOpen(false);
-    }
-  }, [isMobile, navigate]);
-
   const handleWorkspaceModeChange = useCallback(
     (mode: WorkspaceMode) => {
       routeSessionModeSwitchRef.current = true;
       setWorkspaceMode(mode);
       if (mode === 'conversations') {
         setSelectedSession(null);
-        if (activeTab !== 'chat' && activeTab !== 'agents') {
+        if (activeTab !== 'chat') {
           setActiveTab('chat');
         }
         void fetchConversationProject();
@@ -596,37 +624,16 @@ export function useProjectsState({
     }
   }, [fetchConversationProject, isMobile, navigate]);
 
-  const handleQuickStartAgent = useCallback(
-    (agentId: string) => {
-      if (!agentId) {
-        return;
-      }
-
-      routeSessionModeSwitchRef.current = true;
-      setWorkspaceMode('conversations');
-      setSelectedSession(null);
-      setSelectedConversationSession(null);
-      setActiveTab('chat');
-      setQuickStartAgentId(agentId);
-      setQuickStartAgentRequestId((previous) => previous + 1);
-      void fetchConversationProject();
-      navigate('/');
-
-      if (isMobile) {
-        setSidebarOpen(false);
-      }
-    },
-    [fetchConversationProject, isMobile, navigate],
-  );
-
   const handleSessionDelete = useCallback(
     (sessionIdToDelete: string) => {
       if (selectedSession?.id === sessionIdToDelete) {
         setSelectedSession(null);
+        setActiveTab('chat');
         navigate('/');
       }
       if (selectedConversationSession?.id === sessionIdToDelete) {
         setSelectedConversationSession(null);
+        setActiveTab('chat');
         navigate('/');
       }
 
@@ -645,9 +652,6 @@ export function useProjectsState({
           ? {
             ...previous,
             sessions: previous.sessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-            codexSessions: previous.codexSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-            cursorSessions: previous.cursorSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
-            geminiSessions: previous.geminiSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
           }
           : previous
       ));
@@ -662,7 +666,7 @@ export function useProjectsState({
       const freshProjects = (await response.json()) as Project[];
 
       setProjects((prevProjects) =>
-        projectsHaveChanges(prevProjects, freshProjects, true) ? freshProjects : prevProjects,
+        projectsHaveChanges(prevProjects, freshProjects, false) ? freshProjects : prevProjects,
       );
 
       if (!selectedProject) {
@@ -739,9 +743,6 @@ export function useProjectsState({
       loadingProgress,
       onRefresh: handleSidebarRefresh,
       onShowSettings: () => setShowSettings(true),
-      activeTab,
-      onShowAgents: handleShowAgents,
-      onQuickStartAgent: handleQuickStartAgent,
       showSettings,
       settingsInitialTab,
       onCloseSettings: () => setShowSettings(false),
@@ -753,8 +754,6 @@ export function useProjectsState({
       handleProjectSelect,
       handleSessionDelete,
       handleSessionSelect,
-      handleShowAgents,
-      handleQuickStartAgent,
       handleConversationSessionSelect,
       handleNewConversation,
       handleSidebarRefresh,
@@ -762,10 +761,10 @@ export function useProjectsState({
       isLoadingProjects,
       isMobile,
       loadingProgress,
+      navigate,
       projects,
       conversationProject,
       settingsInitialTab,
-      activeTab,
       workspaceMode,
       selectedProject,
       selectedConversationSession,
@@ -796,6 +795,7 @@ export function useProjectsState({
     showSettings,
     settingsInitialTab,
     externalMessageUpdate,
+    routeSessionState,
     setActiveTab,
     setSidebarOpen,
     setIsInputFocused,

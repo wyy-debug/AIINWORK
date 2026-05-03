@@ -108,7 +108,7 @@ async function scanCommandsDirectory(dir, baseDir, namespace) {
 const builtInCommands = [
   {
     name: '/help',
-    description: 'Show help documentation for MTL-Code',
+    description: 'Show help documentation for Argus',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
@@ -132,7 +132,7 @@ const builtInCommands = [
   },
   {
     name: '/memory',
-    description: 'Open MTL.md memory file for editing',
+    description: 'Open the Argus project memory file for editing',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
@@ -153,8 +153,56 @@ const builtInCommands = [
     description: 'Rewind the conversation to a previous state',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
-  }
-];
+  },
+  {
+    name: '/review',
+    description: 'Open the Review panel for local changes',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'review' }
+  },
+  {
+    name: '/actions',
+    description: 'Open project setup, run, test, and build actions',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'actions' }
+  },
+  {
+    name: '/browser',
+    description: 'Open the local browser and visual comments panel',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'browser' }
+  },
+  {
+    name: '/worktree',
+    description: 'Open worktree task dispatch controls',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'actions', mode: 'worktree' }
+  },
+  {
+    name: '/automations',
+    description: 'Open local automations and triage inbox',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'automations' }
+  },
+	  {
+	    name: '/artifacts',
+	    description: 'Open result artifacts and previews',
+	    namespace: 'builtin',
+	    metadata: { type: 'builtin', tab: 'artifacts' }
+	  },
+  {
+    name: '/mcp',
+    description: 'Open Argus MCP status and settings',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'chat', settingsTab: 'mcp' }
+  },
+  {
+    name: '/plan-mode',
+    description: 'Insert a plan-mode instruction into the current chat',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'chat', insertText: 'Please work in plan mode first.' }
+	  }
+	];
 
 /**
  * Built-in command handlers
@@ -162,7 +210,7 @@ const builtInCommands = [
  */
 const builtInHandlers = {
   '/help': async (args, context) => {
-    const helpText = `# MTL-Code Commands
+    const helpText = `# Argus Commands
 
 ## Built-in Commands
 
@@ -237,12 +285,21 @@ Custom commands can be created in:
 
   '/cost': async (args, context) => {
     const tokenUsage = context?.tokenUsage || {};
+    const contextBudget = tokenUsage.contextBudget || tokenUsage;
     const provider = context?.provider || 'claude';
     const model = context?.model || CLAUDE_MODELS.DEFAULT;
 
-    const used = Number(tokenUsage.used ?? tokenUsage.totalUsed ?? tokenUsage.total_tokens ?? 0) || 0;
+    const used = Number(
+      contextBudget?.cumulative?.used ??
+        tokenUsage.used ??
+        tokenUsage.totalUsed ??
+        tokenUsage.total_tokens ??
+        0,
+    ) || 0;
     const total =
       Number(
+          contextBudget?.window?.tokens ??
+          contextBudget?.cumulative?.total ??
           tokenUsage.total ??
           tokenUsage.contextWindow ??
           parseInt(process.env.CONTEXT_WINDOW || '200000', 10),
@@ -251,7 +308,8 @@ Custom commands can be created in:
 
     const inputTokensRaw =
       Number(
-        tokenUsage.inputTokens ??
+        contextBudget?.cumulative?.breakdown?.input ??
+          tokenUsage.inputTokens ??
           tokenUsage.input ??
           tokenUsage.cumulativeInputTokens ??
           tokenUsage.promptTokens ??
@@ -259,15 +317,20 @@ Custom commands can be created in:
       ) || 0;
     const outputTokens =
       Number(
-        tokenUsage.outputTokens ??
+        contextBudget?.cumulative?.breakdown?.output ??
+          tokenUsage.outputTokens ??
           tokenUsage.output ??
           tokenUsage.cumulativeOutputTokens ??
           tokenUsage.completionTokens ??
           0,
       ) || 0;
+    const contextBudgetCacheTokens =
+      (contextBudget?.cumulative?.breakdown?.cacheRead || 0)
+      + (contextBudget?.cumulative?.breakdown?.cacheCreation || 0);
     const cacheTokens =
       Number(
-        tokenUsage.cacheReadTokens ??
+        (contextBudgetCacheTokens > 0 ? contextBudgetCacheTokens : undefined) ??
+          tokenUsage.cacheReadTokens ??
           tokenUsage.cacheCreationTokens ??
           tokenUsage.cacheTokens ??
           tokenUsage.cachedTokens ??
@@ -355,7 +418,7 @@ Custom commands can be created in:
         action: 'memory',
         data: {
           error: 'No project selected',
-          message: 'Please select a project to access its MTL.md file'
+          message: 'Please select a project to access its Argus memory file'
         }
       };
     }
@@ -385,8 +448,8 @@ Custom commands can be created in:
         path: memoryPath,
         exists,
         message: exists
-          ? `Opening MTL-Code memory file at ${memoryPath}`
-          : `MTL.md not found at ${memoryPath}. Create it to store project-specific instructions.`
+          ? `Opening Argus memory file at ${memoryPath}`
+          : `Project memory file not found at ${memoryPath}. Create it to store project-specific instructions.`
       }
     };
   },
@@ -423,7 +486,55 @@ Custom commands can be created in:
         message: `Rewinding conversation by ${steps} step${steps > 1 ? 's' : ''}...`
       }
     };
-  }
+  },
+
+  '/review': async () => ({
+    type: 'builtin',
+    action: 'open-tab',
+    data: { tab: 'review', message: 'Opening Review panel...' }
+  }),
+
+  '/actions': async () => ({
+    type: 'builtin',
+    action: 'open-tab',
+    data: { tab: 'actions', message: 'Opening Actions panel...' }
+  }),
+
+  '/browser': async () => ({
+    type: 'builtin',
+    action: 'open-tab',
+    data: { tab: 'browser', message: 'Opening Browser panel...' }
+  }),
+
+  '/automations': async () => ({
+    type: 'builtin',
+    action: 'open-tab',
+    data: { tab: 'automations', message: 'Opening Automations panel...' }
+  }),
+
+  '/artifacts': async () => ({
+    type: 'builtin',
+    action: 'open-tab',
+    data: { tab: 'artifacts', message: 'Opening Artifacts panel...' }
+  }),
+
+	  '/worktree': async () => ({
+	    type: 'builtin',
+	    action: 'open-tab',
+	    data: { tab: 'actions', mode: 'worktree', message: 'Opening Worktree controls...' }
+	  }),
+
+  '/mcp': async () => ({
+    type: 'builtin',
+    action: 'open-settings',
+    data: { tab: 'mcp', message: 'Opening MCP settings...' }
+  }),
+
+  '/plan-mode': async () => ({
+    type: 'builtin',
+    action: 'insert-text',
+    data: { text: 'Please work in plan mode first.', message: 'Plan-mode instruction inserted.' }
+  })
 };
 
 /**

@@ -125,7 +125,7 @@ function buildPushBody(event) {
   const message = CODE_MAP[event.code] || 'You have a new notification';
 
   return {
-    title: sessionName || 'MTL-Code UI',
+    title: sessionName || 'Argus',
     body: `${providerLabel}: ${message}`,
     data: {
       sessionId: event.sessionId || null,

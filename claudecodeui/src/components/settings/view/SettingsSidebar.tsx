@@ -1,7 +1,8 @@
-import { Bot, Palette } from 'lucide-react';
+import { Bot, Palette, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { cn } from '../../../lib/utils';
-import { PillBar, Pill } from '../../../shared/view/ui';
+import { Pill, PillBar } from '../../../shared/view/ui';
 import type { SettingsMainTab } from '../types/types';
 
 type SettingsSidebarProps = {
@@ -12,12 +13,14 @@ type SettingsSidebarProps = {
 type NavItem = {
   id: SettingsMainTab;
   labelKey: string;
-  icon: typeof Bot;
+  defaultLabel: string;
+  icon: LucideIcon;
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { id: 'agents', labelKey: 'mainTabs.agents', icon: Bot },
-  { id: 'appearance', labelKey: 'mainTabs.appearance', icon: Palette },
+  { id: 'agents', labelKey: 'mainTabs.argusHub', defaultLabel: '模型 / Hub', icon: Bot },
+  { id: 'runtime', labelKey: 'mainTabs.runtime', defaultLabel: '运行时', icon: ShieldCheck },
+  { id: 'appearance', labelKey: 'mainTabs.appearance', defaultLabel: '外观', icon: Palette },
 ];
 
 export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebarProps) {
@@ -25,7 +28,6 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
 
   return (
     <>
-      {/* Desktop sidebar */}
       <aside className="hidden w-56 flex-shrink-0 border-r border-border bg-muted/30 md:flex md:flex-col">
         <nav className="flex flex-col gap-1 p-3">
           {NAV_ITEMS.map((item) => {
@@ -44,14 +46,13 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
                 )}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
-                {t(item.labelKey)}
+                {t(item.labelKey, { defaultValue: item.defaultLabel })}
               </button>
             );
           })}
         </nav>
       </aside>
 
-      {/* Mobile horizontal nav — pill bar */}
       <div className="flex-shrink-0 border-b border-border px-3 py-2 md:hidden">
         <PillBar className="scrollbar-hide w-full overflow-x-auto">
           {NAV_ITEMS.map((item) => {
@@ -65,7 +66,7 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
                 className="flex-shrink-0"
               >
                 <Icon className="h-3.5 w-3.5" />
-                {t(item.labelKey)}
+                {t(item.labelKey, { defaultValue: item.defaultLabel })}
               </Pill>
             );
           })}

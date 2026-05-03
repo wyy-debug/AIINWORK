@@ -80,6 +80,34 @@ export default function WorkspacePathField({
     [onAdvanceToConfirm, onChange],
   );
 
+  const handleBrowseClick = useCallback(async () => {
+    if (disabled) {
+      return;
+    }
+
+    const nativeProjectRootPicker = window.argusDesktop?.selectProjectRoot;
+    if (nativeProjectRootPicker) {
+      try {
+        const result = await nativeProjectRootPicker({
+          defaultPath: value.trim() || undefined,
+        });
+
+        if (result.error) {
+          throw new Error(result.error);
+        }
+
+        if (!result.canceled && result.path) {
+          handleFolderSelected(result.path, workspaceType === 'existing');
+        }
+        return;
+      } catch (error) {
+        console.error('Failed to open native project root picker:', error);
+      }
+    }
+
+    setShowFolderBrowser(true);
+  }, [disabled, handleFolderSelected, value, workspaceType]);
+
   return (
     <>
       <div className="relative flex gap-2">
@@ -116,7 +144,7 @@ export default function WorkspacePathField({
         <Button
           type="button"
           variant="outline"
-          onClick={() => setShowFolderBrowser(true)}
+          onClick={handleBrowseClick}
           className="px-3"
           title="Browse folders"
           disabled={disabled}

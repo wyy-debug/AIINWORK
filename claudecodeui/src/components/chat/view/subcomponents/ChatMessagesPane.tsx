@@ -16,6 +16,7 @@ interface ChatMessagesPaneProps {
   onWheel: () => void;
   onTouchMove: () => void;
   isLoadingSessionMessages: boolean;
+  sessionLoadError?: string;
   chatMessages: ChatMessage[];
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
@@ -255,6 +256,7 @@ export default function ChatMessagesPane({
   onWheel,
   onTouchMove,
   isLoadingSessionMessages,
+  sessionLoadError,
   chatMessages,
   selectedSession,
   currentSessionId,
@@ -417,6 +419,11 @@ export default function ChatMessagesPane({
             <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
+        </div>
+      ) : sessionLoadError ? (
+        <div className="mx-auto mt-10 max-w-md rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="font-medium">Session messages unavailable</div>
+          <div className="mt-1 text-destructive/80">{sessionLoadError}</div>
         </div>
       ) : chatMessages.length === 0 ? (
         <ProviderSelectionEmptyState

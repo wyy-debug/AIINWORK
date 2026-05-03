@@ -183,12 +183,12 @@ export default function ProviderSelectionEmptyState({
           <div className="mb-8 text-center">
             <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
               {t("providerSelection.mtlCodeTitle", {
-                defaultValue: "MTLCode",
+                defaultValue: "Argus",
               })}
             </h2>
             <p className="mt-1 text-[13px] text-muted-foreground">
               {t("providerSelection.mtlCodeDescription", {
-                defaultValue: "Start a new conversation with MTLCode.",
+                defaultValue: "Start a new conversation with Argus.",
               })}
             </p>
           </div>
@@ -251,7 +251,7 @@ export default function ProviderSelectionEmptyState({
 
           <p className="mt-4 text-center text-sm text-muted-foreground/70">
             {t("providerSelection.readyPrompt.mtlCode", {
-              defaultValue: "Ready to use MTLCode. Start typing your message below.",
+              defaultValue: "Ready to use Argus. Start typing your message below.",
             })}
           </p>
 

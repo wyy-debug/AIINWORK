@@ -1,18 +1,19 @@
 import React, { useEffect } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
-import AgentConfigDashboard from '../../agents/view/AgentConfigDashboard';
 import FileTree from '../../file-tree/view/FileTree';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
-import PluginTabContent from '../../plugins/view/PluginTabContent';
+import ReviewPanel from '../../review/view/ReviewPanel';
+import ActionsPanel from '../../actions/view/ActionsPanel';
+import BrowserPanel from '../../browser/view/BrowserPanel';
+import ArtifactsPanel from '../../artifacts/view/ArtifactsPanel';
+import GlobalCommandMenu from '../../command-menu/view/GlobalCommandMenu';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
-import { TaskMasterPanel } from '../../task-master';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -23,16 +24,8 @@ type TaskMasterContextValue = {
   setCurrentProject?: ((project: Project) => void) | null;
 };
 
-type TasksSettingsContextValue = {
-  tasksEnabled: boolean;
-  isTaskMasterInstalled: boolean | null;
-  isTaskMasterReady: boolean | null;
-};
-
 function MainContent({
-  projects,
   selectedProject,
-  projectSelectedProject,
   selectedSession,
   isConversationSpace = false,
   quickStartAgentId,
@@ -57,14 +50,15 @@ function MainContent({
   onNavigateToSession,
   onShowSettings,
   externalMessageUpdate,
+  routeSessionState,
+  onRecoverSession,
 }: MainContentProps) {
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
-  const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
-  const shouldShowTasksTab = Boolean(!isConversationSpace && tasksEnabled && isTaskMasterInstalled);
+  const shouldShowTasksTab = false;
 
   const {
     editingFile,
@@ -94,21 +88,43 @@ function MainContent({
     if (!shouldShowTasksTab && activeTab === 'tasks') {
       setActiveTab('chat');
     }
+    if (
+      activeTab === 'agents'
+      || activeTab === 'preview'
+      || activeTab === 'automations'
+      || activeTab.startsWith('plugin:')
+    ) {
+      setActiveTab('chat');
+    }
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
 
-  if (activeTab === 'agents') {
+  if (isLoading) {
+    return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
+  }
+
+  if (routeSessionState?.status === 'resolving') {
     return (
-      <AgentConfigDashboard
+      <MainContentStateView
+        mode="session-loading"
         isMobile={isMobile}
         onMenuClick={onMenuClick}
-        projects={projects}
-        selectedProject={projectSelectedProject || selectedProject}
+        sessionId={routeSessionState.sessionId}
+        message={routeSessionState.message}
       />
     );
   }
 
-  if (isLoading) {
-    return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
+  if (routeSessionState?.status === 'missing') {
+    return (
+      <MainContentStateView
+        mode="session-missing"
+        isMobile={isMobile}
+        onMenuClick={onMenuClick}
+        sessionId={routeSessionState.sessionId}
+        message={routeSessionState.message}
+        onRecoverSession={onRecoverSession}
+      />
+    );
   }
 
   if (!selectedProject) {
@@ -119,6 +135,7 @@ function MainContent({
 
   return (
     <div className="flex h-full flex-col">
+      <GlobalCommandMenu selectedProject={selectedProject} setActiveTab={setActiveTab} />
       <MainContentHeader
         activeTab={visibleActiveTab}
         setActiveTab={setActiveTab}
@@ -162,7 +179,7 @@ function MainContent({
                 autoScrollToBottom={autoScrollToBottom}
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
-                onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
+                onShowAllTasks={null}
               />
             </ErrorBoundary>
           </div>
@@ -184,17 +201,27 @@ function MainContent({
             </div>
           )}
 
-          {shouldShowTasksTab && <TaskMasterPanel isVisible={visibleActiveTab === 'tasks'} />}
-
-          <div className={`h-full overflow-hidden ${visibleActiveTab === 'preview' ? 'block' : 'hidden'}`} />
-
-          {visibleActiveTab.startsWith('plugin:') && (
+          {visibleActiveTab === 'review' && (
             <div className="h-full overflow-hidden">
-              <PluginTabContent
-                pluginName={visibleActiveTab.replace('plugin:', '')}
-                selectedProject={selectedProject}
-                selectedSession={selectedSession}
-              />
+              <ReviewPanel selectedProject={selectedProject} />
+            </div>
+          )}
+
+          {visibleActiveTab === 'actions' && (
+            <div className="h-full overflow-hidden">
+              <ActionsPanel selectedProject={selectedProject} sessionId={selectedSession?.id || null} />
+            </div>
+          )}
+
+          {visibleActiveTab === 'browser' && (
+            <div className="h-full overflow-hidden">
+              <BrowserPanel selectedProject={selectedProject} sessionId={selectedSession?.id || null} />
+            </div>
+          )}
+
+          {visibleActiveTab === 'artifacts' && (
+            <div className="h-full overflow-hidden">
+              <ArtifactsPanel selectedProject={selectedProject} sessionId={selectedSession?.id || null} />
             </div>
           )}
         </div>

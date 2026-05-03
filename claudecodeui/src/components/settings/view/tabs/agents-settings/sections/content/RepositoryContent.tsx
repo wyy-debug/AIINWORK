@@ -231,7 +231,6 @@ const DEFAULT_SLOT_LABELS = [
   { id: 'calendar', label: 'Calendar' },
   { id: 'chat', label: 'Chat' },
   { id: 'email', label: 'Email' },
-  { id: 'knowledge', label: 'Knowledge base' },
   { id: 'project-tracker', label: 'Project tracker' },
 ] as const;
 
@@ -978,7 +977,7 @@ function McpSetupDialog({ item, values, busy, action, error, onChange, onClose, 
 
         <div className="overflow-y-auto p-5">
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-            安装会把 MCP 包下载安装到本机，然后写入 MTL-Code/Claude Code 的 MCP 配置。
+            安装会把 MCP 包下载安装到本机，然后写入 Argus/Claude Code 的 MCP 配置。
             工具列表由后端运行时发现；这里先配置启动参数和必填输入。
           </div>
 

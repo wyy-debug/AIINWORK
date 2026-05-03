@@ -25,6 +25,7 @@ const {
   isValidNumericEffort,
   convertEffortValueToLevel,
   getEffortLevelDescription,
+  resolveAppliedEffort,
   resolvePickerEffortPersistence,
   EFFORT_LEVELS,
 } = await import('src/utils/effort.js')
@@ -222,6 +223,14 @@ describe('getEffortLevelDescription', () => {
   test("returns description for 'max'", () => {
     const desc = getEffortLevelDescription('max')
     expect(desc).toContain('Maximum')
+  })
+})
+
+// ─── resolveAppliedEffort ────────────────────────────────────────────────
+
+describe('resolveAppliedEffort', () => {
+  test("maps DeepSeek xhigh requests to 'max'", () => {
+    expect(resolveAppliedEffort('deepseek-v4-pro', 'xhigh')).toBe('max')
   })
 })
 

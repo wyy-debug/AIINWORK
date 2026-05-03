@@ -15,7 +15,7 @@
     "user": "U",
     "error": "오류",
     "tool": "도구",
-    "claude": "MTL-Code",
+    "claude": "Argus",
     "cursor": "Cursor",
     "codex": "Codex",
     "gemini": "Gemini"
@@ -55,8 +55,8 @@
   "interactive": {
     "title": "대화형 프롬프트",
     "waiting": "CLI에서 응답을 기다리는 중",
-    "instruction": "MTL-Code가 실행 중인 터미널에서 옵션을 선택해주세요.",
-    "selectedOption": "✓ MTL-Code가 옵션 {{number}}을(를) 선택했습니다",
+    "instruction": "Argus가 실행 중인 터미널에서 옵션을 선택해주세요.",
+    "selectedOption": "✓ Argus가 옵션 {{number}}을(를) 선택했습니다",
     "instructionDetail": "CLI에서 화살표 키 또는 숫자를 입력하여 이 옵션을 대화형으로 선택합니다."
   },
   "thinking": {
@@ -83,7 +83,7 @@
     "title": "구현 계획"
   },
   "usageLimit": {
-    "resetAt": "MTL-Code 사용량 한도에 도달했습니다. 한도는 **{{time}} {{timezone}}** - {{date}}에 초기화됩니다"
+    "resetAt": "Argus 사용량 한도에 도달했습니다. 한도는 **{{time}} {{timezone}}** - {{date}}에 초기화됩니다"
   },
   "codex": {
     "permissionMode": "권한 모드",
@@ -121,14 +121,14 @@
   "thinkingMode": {
     "selector": {
       "title": "Thinking 모드",
-      "description": "확장된 thinking은 MTL-Code에게 대안을 평가할 시간을 더 줍니다",
+      "description": "확장된 thinking은 Argus에게 대안을 평가할 시간을 더 줍니다",
       "active": "활성",
       "tip": "높은 thinking 모드는 시간이 더 걸리지만 더 철저한 분석을 제공합니다"
     },
     "modes": {
       "none": {
         "name": "Standard",
-        "description": "일반 MTL-Code 응답",
+        "description": "일반 Argus 응답",
         "prefix": ""
       },
       "think": {
@@ -165,7 +165,7 @@
       "google": "Google 제공"
     },
     "readyPrompt": {
-      "claude": "{{model}} 모델로 MTL-Code를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요.",
+      "claude": "{{model}} 모델로 Argus를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요.",
       "cursor": "{{model}} 모델로 Cursor를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요.",
       "codex": "{{model}} 모델로 Codex를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요.",
       "gemini": "{{model}} 모델로 Gemini를 사용할 준비가 되었습니다. 아래에 메시지를 입력하세요.",
@@ -212,10 +212,10 @@
     },
     "loading": "터미널 로딩 중...",
     "connecting": "Shell에 연결 중...",
-    "startSession": "새 MTL-Code 세션 시작",
+    "startSession": "새 Argus 세션 시작",
     "resumeSession": "세션 재개: {{displayName}}...",
     "runCommand": "{{projectName}}에서 {{command}} 실행",
-    "startCli": "{{projectName}}에서 MTL-Code CLI 시작",
+    "startCli": "{{projectName}}에서 Argus CLI 시작",
     "defaultCommand": "명령어"
   },
   "claudeStatus": {

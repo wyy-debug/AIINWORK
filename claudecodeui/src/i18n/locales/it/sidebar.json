@@ -13,14 +13,14 @@
     "untitledSession": "Sessione senza titolo",
     "newSession": "Nuova sessione",
     "codexSession": "Sessione Codex",
-    "fetchingProjects": "Recupero dei tuoi progetti e sessioni MTL-Code",
+    "fetchingProjects": "Recupero dei tuoi progetti e sessioni Argus",
     "projects": "progetti",
     "noMatchingProjects": "Nessun progetto corrispondente",
     "tryDifferentSearch": "Prova a modificare il termine di ricerca",
-    "runMTL-CodeCli": "Esegui MTL-Code CLI in una directory di progetto per iniziare"
+    "runClaudeCli": "Esegui Argus CLI in una directory di progetto per iniziare"
   },
   "app": {
-    "title": "MTL-Code UI",
+    "title": "Argus",
     "subtitle": "Interfaccia assistente di programmazione AI"
   },
   "sessions": {

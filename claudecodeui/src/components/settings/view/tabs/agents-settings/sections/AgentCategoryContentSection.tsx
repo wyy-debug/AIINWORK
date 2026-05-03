@@ -2,7 +2,6 @@ import type { AgentCategoryContentSectionProps } from '../types';
 import { McpServers } from '../../../../../mcp';
 
 import ModelConfigContent from './content/ModelConfigContent';
-import OpenMythosRuntimeContent from './content/OpenMythosRuntimeContent';
 import PermissionsContent from './content/PermissionsContent';
 import RepositoryContent from './content/RepositoryContent';
 
@@ -21,10 +20,6 @@ export default function AgentCategoryContentSection({
     <div className="min-w-0 flex-1 overflow-y-auto p-4 md:p-5 xl:p-6">
       {selectedCategory === 'model' && selectedAgent === 'claude' && (
         <ModelConfigContent />
-      )}
-
-      {selectedCategory === 'runtime' && selectedAgent === 'claude' && (
-        <OpenMythosRuntimeContent />
       )}
 
       {selectedCategory === 'permissions' && selectedAgent === 'claude' && (

@@ -1,8 +1,8 @@
-import { Archive, ArchiveRestore, Check, Clock, Edit2, GitBranch, MessageSquarePlus, Pin, PinOff, Trash2, X } from 'lucide-react';
+import { Check, MoreHorizontal, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { memo, useMemo, useState, type MouseEvent } from 'react';
 
-import { Badge, Button } from '../../../../shared/view/ui';
+import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import { formatTimeAgo } from '../../../../utils/dateUtils';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
@@ -10,7 +10,6 @@ import { api } from '../../../../utils/api';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
-import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
 import SessionContextMenu from './SessionContextMenu';
 
@@ -138,99 +137,32 @@ function SidebarSessionItem({
       <div className="md:hidden">
         <div
           className={cn(
-            'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
-            isSelected ? 'bg-primary/5 border-primary/20' : '',
+            'relative mx-3 my-0.5 rounded-lg px-3 py-2 active:scale-[0.98] transition-all duration-150',
+            isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
             isArchived && 'opacity-60',
-            !isSelected && sessionView.isActive
-              ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
-              : 'border-border/30',
           )}
           onClick={selectMobileSession}
         >
-          <div className="flex items-center gap-2">
-            <div
-              className={cn(
-                'w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0',
-                isSelected ? 'bg-primary/10' : 'bg-muted/50',
-              )}
-            >
-              <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
-            </div>
-
+          <div className="flex min-w-0 items-center gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1.5">
                 {isUnread && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
-                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
-              </div>
-              <div className="mt-0.5 flex items-center gap-1">
-                <Clock className="h-2.5 w-2.5 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">
-                  {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
-                </span>
-                {sessionView.messageCount > 0 && (
-                  <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs">
-                    {sessionView.messageCount}
-                  </Badge>
-                )}
-                <span className="ml-1 opacity-70">
-                  <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
-                </span>
+                <div className="truncate text-sm font-medium text-foreground">{sessionView.sessionName}</div>
               </div>
             </div>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
+            </span>
 
-            {!sessionView.isCursorSession && (
-              <div className="ml-1 flex items-center gap-1">
-                <button
-                  className="hidden h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onTogglePinSession(session);
-                  }}
-                  title={isPinned ? '取消置顶' : '置顶'}
-                >
-                  {isPinned ? <PinOff className="h-2.5 w-2.5" /> : <Pin className="h-2.5 w-2.5" />}
-                </button>
-                <button
-                  className="flex h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onToggleArchiveSession(session);
-                  }}
-                  title={isArchived ? '恢复' : '归档'}
-                >
-                  {isArchived ? <ArchiveRestore className="h-2.5 w-2.5" /> : <Archive className="h-2.5 w-2.5" />}
-                </button>
-                <button
-                  className="flex h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenConversationGuide(project, session);
-                  }}
-                  title="引导/追加对话"
-                >
-                  <MessageSquarePlus className="h-2.5 w-2.5" />
-                </button>
-                <button
-                  className="flex h-5 w-5 items-center justify-center rounded-md bg-muted/70 opacity-80 transition-transform active:scale-95"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDispatchSessionWorktree(project, session);
-                  }}
-                  title="派生到新工作树"
-                >
-                  <GitBranch className="h-2.5 w-2.5" />
-                </button>
-                <button
-                  className="flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    requestDeleteSession();
-                  }}
-                >
-                  <Trash2 className="h-2.5 w-2.5 text-red-600 dark:text-red-400" />
-                </button>
-              </div>
-            )}
+            <button
+              type="button"
+              className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
+              onClick={openContextMenu}
+              aria-label="打开对话菜单"
+              title="打开对话菜单"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </div>
@@ -239,41 +171,24 @@ function SidebarSessionItem({
         <Button
           variant="ghost"
           className={cn(
-            'w-full justify-start p-2 h-auto font-normal text-left hover:bg-accent/50 transition-colors duration-200',
+            'h-8 w-full justify-start rounded-lg px-3 py-1.5 pr-12 font-normal text-left hover:bg-accent/55 transition-colors duration-150',
             isSelected && 'bg-accent text-accent-foreground',
             isArchived && 'opacity-60',
           )}
-          onClick={() => onSessionSelect(session, project.name)}
+          onClick={selectLocalSession}
         >
-          <div className="flex w-full min-w-0 items-start gap-2">
-            <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3 w-3 flex-shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-1.5">
-                {isUnread && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
-                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
-              </div>
-              <div className="mt-0.5 flex items-center gap-1">
-                <Clock className="h-2.5 w-2.5 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">
-                  {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
-                </span>
-                {sessionView.messageCount > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className="ml-auto px-1 py-0 text-xs transition-opacity group-hover:opacity-0"
-                  >
-                    {sessionView.messageCount}
-                  </Badge>
-                )}
-                <span className="ml-1 opacity-70 transition-opacity group-hover:opacity-0">
-                  <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
-                </span>
-              </div>
+          <div className="flex w-full min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              {isUnread && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
+              <div className="truncate text-sm font-medium leading-5 text-foreground">{sessionView.sessionName}</div>
             </div>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
+            </span>
           </div>
         </Button>
 
-        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 opacity-0 transition-all duration-200 group-hover:opacity-100">
+        <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 transform items-center gap-1 opacity-0 transition-all duration-200 focus-within:opacity-100 group-hover:opacity-100">
             {editingSession === session.id ? (
               <>
                 <input
@@ -314,78 +229,15 @@ function SidebarSessionItem({
                 </button>
               </>
             ) : (
-              <>
-                <button
-                  className="hidden h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onTogglePinSession(session);
-                  }}
-                  title={isPinned ? '取消置顶' : '置顶'}
-                >
-                  {isPinned ? (
-                    <PinOff className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                  ) : (
-                    <Pin className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                  )}
-                </button>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onToggleArchiveSession(session);
-                  }}
-                  title={isArchived ? '恢复会话' : '归档会话'}
-                >
-                  {isArchived ? (
-                    <ArchiveRestore className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                  ) : (
-                    <Archive className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                  )}
-                </button>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenConversationGuide(project, session);
-                  }}
-                  title="引导/追加对话"
-                >
-                  <MessageSquarePlus className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                </button>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDispatchSessionWorktree(project, session);
-                  }}
-                  title="派生到新工作树"
-                >
-                  <GitBranch className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                </button>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStartEditingSession(session.id, sessionView.sessionName);
-                  }}
-                  title={t('tooltips.editSessionName')}
-                >
-                  <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                </button>
-                {!sessionView.isCursorSession && (
-                  <button
-                    className="flex h-6 w-6 items-center justify-center rounded bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      requestDeleteSession();
-                    }}
-                    title={t('tooltips.deleteSession')}
-                  >
-                    <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
-                  </button>
-                )}
-              </>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded-md bg-background/95 text-muted-foreground shadow-sm ring-1 ring-border/70 transition hover:bg-muted hover:text-foreground"
+                onClick={openContextMenu}
+                title="打开对话菜单"
+                aria-label="打开对话菜单"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
             )}
           </div>
       </div>
@@ -407,6 +259,7 @@ function SidebarSessionItem({
           onCopyWorkdir={copyProjectDirectory}
           onCopySessionId={copySessionId}
           onCopyDeepLink={copyDeepLink}
+          onOpenConversationGuide={() => onOpenConversationGuide(project, session)}
           onDispatchLocal={selectLocalSession}
           onDispatchWorktree={() => onDispatchSessionWorktree(project, session)}
           onOpenMiniWindow={openMiniWindow}

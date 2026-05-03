@@ -1,6 +1,6 @@
-# MTL-Code 使用文档
+# Argus 使用文档
 
-本文面向日常使用 MTL-Code UI 的用户，说明项目、独立对话、模型、Agent、Skill、MCP、Hub、Worktree、权限、RAG、上下文压缩和 OpenMythos Runtime 的使用方法与注意事项。
+This guide is for everyday Argus usage: projects, standalone conversations, models, Agent, Skill, MCP, Hub, Worktree, permissions, context compaction, and OpenMythos Runtime.
 
 ## 1. 基本概念
 
@@ -8,13 +8,13 @@
 - 独立对话：不绑定项目目录，适合问答、规划、资料整理、Agent 工作流。
 - Agent：一组角色、提示词、Skill、MCP 绑定和模型上下文配置。
 - Skill：本地 `SKILL.md` 指令包，通常安装在 `~/.codex/skills` 或 `~/.mtl-code/skills`。
-- MCP：外部工具服务器，运行时由 MTL-Code / Claude Code 发现工具。
+- MCP：外部工具服务器，运行时由 Argus / Claude Code 发现工具。
 - Hub：独立的 Agent/Skill/MCP 远端仓库服务，Code UI 只消费 catalog 和调用 Hub API。
 - Worktree：从 Git 项目中的某条会话派生出的独立工作树，默认 detached HEAD，主项目保持干净。
 
 ## 2. 模型配置
 
-路径：`设置 > 智能体 > MTLCode > Model`
+路径：`设置 > 智能体 > Argus > Model`
 
 可以配置多个模型 Profile，每个 Profile 包含：
 
@@ -47,7 +47,7 @@
 
 注意：
 
-1. 项目普通会话默认使用 MTL-Code，不强制显示 Agent 配置。
+1. 项目普通会话默认使用 Argus，不强制显示 Agent 配置。
 2. 项目中可以直接添加 Skill，用于后续对话。
 3. 项目和独立对话是两个空间，不应混用会话列表。
 4. 需要 Agent 参与代码任务时，先在项目会话中保存 Agent/Skill/MCP/模型绑定，再从该会话派生 Worktree。
@@ -90,7 +90,7 @@
 
 ## 5. Skill
 
-Skill 是 MTL-Code 追加给模型的本地能力说明，核心入口是 `SKILL.md`。
+Skill 是 Argus 追加给模型的本地能力说明，核心入口是 `SKILL.md`。
 
 使用方式：
 
@@ -130,7 +130,7 @@ MCP Server 用于扩展工具能力，例如 Redmine、代码搜索、本地服�
 
 使用方式：
 
-1. 在 `设置 > 智能体 > MTLCode > MCP 服务器` 配置 MCP。
+1. 在 `设置 > 智能体 > Argus > MCP 服务器` 配置 MCP。
 2. 从 Hub 安装 MCP 时按 manifest 填写 required setup fields，例如 token、root。
 3. 安装后点击 `检测可用性`。
 4. 在 Agent 槽位中选择真实 `MCP: <serverName>`。
@@ -140,7 +140,7 @@ MCP Server 用于扩展工具能力，例如 Redmine、代码搜索、本地服�
 1. 密钥只显示是否 configured，不在 UI、日志、诊断中明文展示。
 2. `root` 通常是 MCP 默认工作目录或默认代码根；如果工具调用时显式传了 `codeRoot`，以调用参数为准。
 3. 如果提示缺少 `REDMINE_API_KEY`，说明 runtime 启动 MCP 时没有拿到该环境变量或配置字段。
-4. MCP 工具列表不伪造；没有 runtime tool-list API 时，只显示“配置已绑定，工具列表将在会话启动后由 MTL-Code 发现”。
+4. MCP 工具列表不伪造；没有 runtime tool-list API 时，只显示“配置已绑定，工具列表将在会话启动后由 Argus 发现”。
 
 ## 8. Agent / Skill / MCP Hub
 
@@ -216,19 +216,19 @@ Worktree 用于从 Git 项目里的某条会话派生隔离任务。项目提供
 4. 如果仍然弹权限，查看诊断面板里的 permissionMode、skipPermissions、allowedTools、disallowedTools 和冲突提示。
 5. MCP 或子进程工具可能需要单独规则匹配。
 
-## 11. RAG 与上下文压缩
+## 11. Context Compaction
 
-MTL-Code 当前有三类上下文能力：
+Argus 当前有三类上下文能力：
 
 1. 项目上下文：runtime 通过文件、Git、Shell、工具读取当前项目。
-2. Agent RAG：UI 上传文档并建立轻量索引，运行时注入匹配片段。
+2. Agent knowledge/RAG: removed from the current product runtime; no upload, indexing, retrieval, or prompt injection.
 3. 对话压缩：runtime 自动或手动 `/compact` 压缩长历史。
 
 注意：
 
-1. Claude Code / MTL-Code 本身没有一个 GUI 中可配置的传统 RAG 知识库。
-2. Agent RAG 是 MTL-Code UI 提供的知识源层。
-3. 普通代码阅读不需要配置 RAG。
+1. Claude Code / Argus does not expose a GUI-configurable traditional RAG knowledge base.
+2. Argus no longer provides the Agent knowledge/RAG layer in the product runtime.
+3. Normal code reading does not require a knowledge base.
 4. 压缩摘要可能丢失细节，复杂任务压缩后建议先让 Agent 复述当前状态。
 
 ## 12. OpenMythos Runtime
@@ -241,7 +241,7 @@ OpenMythos Runtime 用于把任务难度、冻结目标、专家路由、阶段�
 - 原始任务稳定注入：冻结目标、约束、验收标准会在工具续写和子代理上下文中重注入。
 - 专家路由：确定性提示安全、验证、性能、架构、前端、Git 或本地执行路线。
 - 按阶段适配器：`orient -> plan -> implement -> verify -> finalize`，前两阶段阻止写操作。
-- 压缩型上下文缓存：显示 compact、microcompact、RAG、tool summary 账本；不是 MLA/KV cache。
+- Compaction cache diagnostics show compact, microcompact, and tool summary ledgers; this is not MLA/KV cache.
 - 深度 benchmark：提供离线 benchmark 脚本对比预算、路由、阶段和预估成本。
 
 注意：

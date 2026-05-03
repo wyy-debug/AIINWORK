@@ -49,7 +49,7 @@
     "title": "Erste Schritte mit TaskMaster",
     "subtitle": "Dein Leitfaden für produktives Aufgabenmanagement",
     "examples": {
-      "parsePRD": "💬 Beispiel:\n\"Ich habe gerade ein neues Projekt mit MTL-Code Task Master initialisiert. Ich habe ein PRD unter .taskmaster/docs/prd.txt. Kannst du mir helfen, es zu analysieren und die ersten Aufgaben einzurichten?\"",
+      "parsePRD": "💬 Beispiel:\n\"Ich habe gerade ein neues Projekt mit Argus Task Master initialisiert. Ich habe ein PRD unter .taskmaster/docs/prd.txt. Kannst du mir helfen, es zu analysieren und die ersten Aufgaben einzurichten?\"",
       "expandTask": "💬 Beispiel:\n\"Aufgabe 5 scheint komplex. Kannst du sie in Unteraufgaben aufteilen?\"",
       "addTask": "💬 Beispiel:\n\"Bitte füge eine neue Aufgabe hinzu, um Benutzerprofilbild-Uploads mit Cloudinary zu implementieren, und recherchiere den besten Ansatz.\""
     },

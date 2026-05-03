@@ -344,8 +344,11 @@ export const SettingsSchema = lazySchema(() =>
           phaseAdapter: z.boolean().optional().describe('Enable orient/plan/implement/verify/finalize phase guidance and early read-only guards.'),
           expertRouting: z.boolean().optional().describe('Use deterministic task signals to suggest expert routes.'),
           contextCacheDiagnostics: z.boolean().optional().describe('Expose compact/RAG/tool-summary context ledger diagnostics.'),
-          minEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
-          maxEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+          autoDispatchSubagents: z.boolean().optional().describe('Allow OpenMythos to provide a coordinator worker dispatch plan.'),
+          autoDispatchMinEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+          autoDispatchMaxWorkers: z.number().positive().int().max(8).optional(),
+          minEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+          maxEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         })
         .optional()
         .describe('OpenMythos-inspired runtime controls for MTL-Code sessions'),

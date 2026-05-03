@@ -165,7 +165,7 @@ export const readStringRecord = (value: unknown): Record<string, string> | undef
 export const readJsonConfig = async (filePath: string): Promise<Record<string, unknown>> => {
   try {
     const content = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const parsed = JSON.parse(content.replace(/^\uFEFF/, '')) as Record<string, unknown>;
     return readObjectRecord(parsed) ?? {};
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;

@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import type { TaskStateBase } from 'src/Task.js'
+import { isTerminalTaskStatus } from 'src/Task.js'
 import { buildTool, type ToolDef } from 'src/Tool.js'
 import { stopTask } from 'src/tasks/stopTask.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
@@ -24,6 +25,14 @@ const outputSchema = lazySchema(() =>
     message: z.string().describe('Status message about the operation'),
     task_id: z.string().describe('The ID of the task that was stopped'),
     task_type: z.string().describe('The type of the task that was stopped'),
+    stopped: z
+      .boolean()
+      .optional()
+      .describe('Whether the task was actively stopped by this call'),
+    status: z
+      .string()
+      .optional()
+      .describe('The task status observed by this call'),
     // Optional: tool outputs are persisted to transcripts and replayed on --resume
     // without re-validation, so sessions from before this field was added lack it.
     command: z
@@ -79,7 +88,7 @@ export const TaskStopTool = buildTool({
       }
     }
 
-    if (task.status !== 'running') {
+    if (task.status !== 'running' && !isTerminalTaskStatus(task.status)) {
       return {
         result: false,
         message: `Task ${id} is not running (status: ${task.status})`,
@@ -106,12 +115,26 @@ export const TaskStopTool = buildTool({
   renderToolResultMessage,
   async call(
     { task_id, shell_id },
-    { getAppState, setAppState, abortController },
+    { getAppState, setAppState },
   ) {
     // Support both task_id and shell_id (deprecated KillShell compat)
     const id = task_id ?? shell_id
     if (!id) {
       throw new Error('Missing required parameter: task_id')
+    }
+
+    const task = getAppState().tasks?.[id] as TaskStateBase | undefined
+    if (task && isTerminalTaskStatus(task.status)) {
+      return {
+        data: {
+          message: `Task ${id} is already ${task.status}; no stop was needed`,
+          task_id: id,
+          task_type: task.type,
+          command: task.description,
+          stopped: false,
+          status: task.status,
+        },
+      }
     }
 
     const result = await stopTask(id, {
@@ -125,6 +148,8 @@ export const TaskStopTool = buildTool({
         task_id: result.taskId,
         task_type: result.taskType,
         command: result.command,
+        stopped: true,
+        status: 'killed',
       },
     }
   },

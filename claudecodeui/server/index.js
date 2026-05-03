@@ -39,25 +39,45 @@ import {
 import agentRepositoryRoutes from './routes/agent-repository.js';
 import agentRoutes from './routes/agent.js';
 import agentsRoutes from './routes/agents.js';
+import artifactsRoutes from './routes/artifacts.js';
 import authRoutes from './routes/auth.js';
+import automationsRoutes, { startAutomationScheduler } from './routes/automations.js';
 import codexRoutes from './routes/codex.js';
 import commandsRoutes from './routes/commands.js';
 import cursorRoutes from './routes/cursor.js';
 import geminiRoutes from './routes/gemini.js';
 import gitRoutes from './routes/git.js';
+import ideBridgeRoutes from './routes/ide-bridge.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
 import messagesRoutes from './routes/messages.js';
 import pluginsRoutes from './routes/plugins.js';
+import projectActionsRoutes from './routes/project-actions.js';
 import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import sessionAgentRoutes from './routes/session-agents.js';
 import settingsRoutes from './routes/settings.js';
 import taskmasterRoutes from './routes/taskmaster.js';
+import triageRoutes from './routes/triage.js';
 import userRoutes from './routes/user.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
+import {
+    buildContextBudgetFromFlatUsage,
+    buildContextBudgetFromJsonlLines,
+    toContextBudgetResponse,
+} from './services/context-budget-service.js';
+import {
+    readProjectTextFileSnapshot,
+    recordFileMutationEvent,
+    saveProjectTextFileWithGuard,
+    toFileMutationHttpError,
+} from './services/file-mutation-service.js';
 import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig } from './services/mtl-code-model-service.js';
+import {
+    evaluateRuntimePermission,
+    resolveRuntimeShell,
+} from './services/runtime-permission-service.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { c } from './utils/colors.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
@@ -333,6 +353,13 @@ app.use('/api/projects', authenticateToken, projectsRoutes);
 
 // Git API Routes (protected)
 app.use('/api/git', authenticateToken, gitRoutes);
+
+// Codex-style local productivity routes (protected)
+app.use('/api/project-actions', authenticateToken, projectActionsRoutes);
+app.use('/api/automations', authenticateToken, automationsRoutes);
+app.use('/api/triage', authenticateToken, triageRoutes);
+app.use('/api/artifacts', authenticateToken, artifactsRoutes);
+app.use('/api/ide-bridge', authenticateToken, ideBridgeRoutes);
 
 // Cursor API Routes (protected)
 app.use('/api/cursor', authenticateToken, cursorRoutes);
@@ -853,10 +880,10 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const { resolved } = await resolveReadableProjectPath(projectName, filePath);
+        const { resolved, projectRoot } = await resolveReadableProjectPath(projectName, filePath);
 
-        const content = await fsPromises.readFile(resolved, 'utf8');
-        res.json({ content, path: resolved });
+        const snapshot = await readProjectTextFileSnapshot({ projectRoot, resolvedPath: resolved });
+        res.json(snapshot);
     } catch (error) {
         console.error('Error reading file:', error);
         if (error.statusCode) {
@@ -1080,7 +1107,7 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
 app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) => {
     try {
         const { projectName } = req.params;
-        const { filePath, content } = req.body;
+        const { filePath, content, baseHash } = req.body;
 
 
         // Security: ensure the requested path is inside the project root
@@ -1092,18 +1119,27 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Content is required' });
         }
 
-        const { resolved } = await resolveReadableProjectPath(projectName, filePath);
+        const resolvedInfo = await resolveReadableProjectPath(projectName, filePath);
 
-        // Write the new content
-        await fsPromises.writeFile(resolved, content, 'utf8');
+        const result = await saveProjectTextFileWithGuard({
+            projectName: resolvedInfo.projectName || projectName,
+            projectRoot: resolvedInfo.projectRoot,
+            resolvedPath: resolvedInfo.resolved,
+            content,
+            baseHash,
+        });
 
         res.json({
+            ...result,
             success: true,
-            path: resolved,
             message: 'File saved successfully'
         });
     } catch (error) {
         console.error('Error saving file:', error);
+        const mutationError = toFileMutationHttpError(error);
+        if (mutationError) {
+            return res.status(mutationError.statusCode).json(mutationError.body);
+        }
         if (error.statusCode) {
             res.status(error.statusCode).json({ error: error.message });
         } else if (error.code === 'ENOENT') {
@@ -1596,6 +1632,14 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             }
             await fsPromises.writeFile(resolvedPath, '', 'utf8');
         }
+        await recordFileMutationEvent({
+            operation: type === 'file' ? 'create-file' : 'create-directory',
+            projectName,
+            projectRoot,
+            filePath: resolvedPath,
+            relativePath: path.relative(projectRoot, resolvedPath).split(path.sep).join('/'),
+            metadata: { type },
+        });
 
         res.json({
             success: true,
@@ -1671,6 +1715,17 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
 
         // Rename
         await fsPromises.rename(resolvedOldPath, resolvedNewPath);
+        await recordFileMutationEvent({
+            operation: 'rename-path',
+            projectName,
+            projectRoot,
+            filePath: resolvedNewPath,
+            relativePath: path.relative(projectRoot, resolvedNewPath).split(path.sep).join('/'),
+            metadata: {
+                oldPath: path.relative(projectRoot, resolvedOldPath).split(path.sep).join('/'),
+                newName,
+            },
+        });
 
         res.json({
             success: true,
@@ -1737,6 +1792,14 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
         } else {
             await fsPromises.unlink(resolvedPath);
         }
+        await recordFileMutationEvent({
+            operation: stats.isDirectory() ? 'delete-directory' : 'delete-file',
+            projectName,
+            projectRoot,
+            filePath: resolvedPath,
+            relativePath: path.relative(projectRoot, resolvedPath).split(path.sep).join('/'),
+            metadata: { type: stats.isDirectory() ? 'directory' : 'file' },
+        });
 
         res.json({
             success: true,
@@ -1888,6 +1951,17 @@ const uploadFilesHandler = async (req, res) => {
                 // Move file (copy + unlink to handle cross-device scenarios)
                 await fsPromises.copyFile(file.path, destPath);
                 await fsPromises.unlink(file.path);
+                await recordFileMutationEvent({
+                    operation: 'upload-file',
+                    projectName,
+                    projectRoot,
+                    filePath: destPath,
+                    relativePath: path.relative(projectRoot, destPath).split(path.sep).join('/'),
+                    metadata: {
+                        size: file.size,
+                        mimeType: file.mimetype,
+                    },
+                });
 
                 uploadedFiles.push({
                     name: fileName,
@@ -2036,6 +2110,9 @@ function getConcreteCommandSessionId(data) {
     return String(sessionId);
 }
 
+const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
+const ARGUS_STALE_EXACT_TOOL_DENIES = new Set(['Bash', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write']);
+
 function normalizeRuntimeToolSettings(settings = {}) {
     const source = settings && typeof settings === 'object' ? settings : {};
     return {
@@ -2043,7 +2120,9 @@ function normalizeRuntimeToolSettings(settings = {}) {
             ? source.allowedTools.filter((entry) => typeof entry === 'string' && entry.trim())
             : [],
         disallowedTools: Array.isArray(source.disallowedTools)
-            ? source.disallowedTools.filter((entry) => typeof entry === 'string' && entry.trim())
+            ? source.disallowedTools
+                .filter((entry) => typeof entry === 'string' && entry.trim())
+                .filter((entry) => !ARGUS_STALE_EXACT_TOOL_DENIES.has(entry))
             : [],
         skipPermissions: Boolean(source.skipPermissions),
     };
@@ -2054,7 +2133,7 @@ function createRuntimePermissionSnapshot(data) {
     const toolsSettings = normalizeRuntimeToolSettings(options.toolsSettings);
     const permissionMode = typeof options.permissionMode === 'string' && options.permissionMode.trim()
         ? options.permissionMode.trim()
-        : 'default';
+        : ARGUS_DEFAULT_PERMISSION_MODE;
     const skipPermissions = Boolean(toolsSettings.skipPermissions || options.skipPermissions);
     const bypassPermissions = permissionMode !== 'plan' && Boolean(
         skipPermissions || permissionMode === 'bypassPermissions'
@@ -2108,17 +2187,22 @@ function createRuntimeDiagnosticsPayload(data) {
         return null;
     }
     const permissions = createRuntimePermissionSnapshot(data);
+    const runtimeForPreview = diagnostics.openMythosRuntime
+        && diagnostics.openMythosRuntime.effectiveAutoDispatchSubagents === false
+        ? {
+            ...diagnostics.openMythosRuntime,
+            autoDispatchSubagents: false,
+        }
+        : diagnostics.openMythosRuntime;
     const openMythosRuntime = diagnostics.openMythosRuntime
         ? {
             ...diagnostics.openMythosRuntime,
             runtimeCard: buildOpenMythosRuntimePreview(
                 data?.command,
-                diagnostics.openMythosRuntime,
+                runtimeForPreview,
                 permissions.permissionMode,
             ),
             contextCache: {
-                ragExcerptCount: diagnostics.ragExcerptCount || 0,
-                ragPromptLength: diagnostics.ragPromptLength || 0,
                 skillPromptLength: diagnostics.skillPromptLength || 0,
                 appendSystemPromptLength: diagnostics.appendSystemPromptLength || 0,
             },
@@ -2148,7 +2232,7 @@ function summarizeMcpBindings(bindings = []) {
                 serverName,
                 status: binding.status || 'optional',
                 runtimeToolsStatus: 'discovered-after-session-start',
-                message: 'Configuration is bound; MTL-Code runtime discovers MCP tools when the session starts.',
+                message: 'Configuration is bound; Argus runtime discovers MCP tools when the session starts.',
             };
         });
 }
@@ -2240,14 +2324,44 @@ function normalizeModelProfileId(value) {
         .replace(/^-+|-+$/g, '');
 }
 
+function applyOpenMythosDispatchChoice(openMythosRuntime, options = {}) {
+    if (!openMythosRuntime || typeof openMythosRuntime !== 'object') {
+        return openMythosRuntime;
+    }
+
+    const isSingleAgentOverride = options.openMythosAutoDispatch === false;
+    const isConfirmed = options.openMythosDispatchConfirmed === true;
+    if (!isSingleAgentOverride && !isConfirmed) {
+        return {
+            ...openMythosRuntime,
+            configuredAutoDispatchSubagents: openMythosRuntime.autoDispatchSubagents !== false,
+            effectiveAutoDispatchSubagents: openMythosRuntime.autoDispatchSubagents !== false,
+        };
+    }
+
+    const configuredAutoDispatchSubagents = openMythosRuntime.autoDispatchSubagents !== false;
+    return {
+        ...openMythosRuntime,
+        configuredAutoDispatchSubagents,
+        effectiveAutoDispatchSubagents: isSingleAgentOverride ? false : configuredAutoDispatchSubagents,
+        dispatchConfirmation: {
+            required: true,
+            confirmed: isConfirmed && !isSingleAgentOverride,
+            mode: isSingleAgentOverride ? 'single-agent' : 'auto-dispatch',
+            source: 'chat-composer',
+        },
+    };
+}
+
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
-    const openMythosRuntime = provider === 'claude'
+    let openMythosRuntime = provider === 'claude'
         ? await readResolvedOpenMythosRuntimeConfig().catch((error) => {
             console.warn('[OpenMythos Runtime] Failed to read settings:', error?.message || error);
             return null;
         })
         : null;
+    openMythosRuntime = applyOpenMythosDispatchChoice(openMythosRuntime, data?.options || {});
     const concreteSessionId = getConcreteCommandSessionId(data);
     const allowSessionAgentBinding = data?.options?.allowSessionAgentBinding === true;
     const storedBinding = allowSessionAgentBinding && concreteSessionId
@@ -2300,9 +2414,6 @@ async function applyAgentRuntimeToChatCommand(data) {
                         effectiveSkills: [],
                         skillDetails: [],
                         skillPromptLength: 0,
-                        ragExcerptCount: 0,
-                        ragPromptLength: 0,
-                        ragExcerpts: [],
                         mcpDiagnosticsSummary: [],
                         appendSystemPromptLength: 0,
                         contextWindowTokens: data?.options?.contextWindowTokens || null,
@@ -2342,9 +2453,6 @@ async function applyAgentRuntimeToChatCommand(data) {
                 effectiveSkills: sessionSkills,
                 skillDetails: skillReferences.details,
                 skillPromptLength: skillReferences.promptLength,
-                ragExcerptCount: 0,
-                ragPromptLength: 0,
-                ragExcerpts: [],
                 mcpDiagnosticsSummary: [],
                 appendSystemPromptLength: appendSystemPrompt.length,
                 contextWindowTokens: data?.options?.contextWindowTokens || null,
@@ -2405,9 +2513,6 @@ async function applyAgentRuntimeToChatCommand(data) {
             effectiveSkills: runtime.agent.skills,
             skillDetails: skillReferences.details,
             skillPromptLength: skillReferences.promptLength,
-            ragExcerptCount: runtime.knowledgeDiagnostics?.ragExcerptCount || 0,
-            ragPromptLength: runtime.knowledgeDiagnostics?.ragPromptLength || 0,
-            ragExcerpts: runtime.knowledgeDiagnostics?.ragExcerpts || [],
             appendSystemPromptLength: runtime.appendSystemPrompt.length,
             contextWindowTokens: runtime.contextWindowTokens,
             model: runtime.model || data?.options?.model || '',
@@ -2625,8 +2730,9 @@ function handleShellConnection(ws) {
                 const sessionId = data.sessionId;
                 const hasSession = data.hasSession;
                 const provider = data.provider || 'claude';
-                const initialCommand = data.initialCommand;
-                const isPlainShell = data.isPlainShell || (!!initialCommand && !hasSession) || provider === 'plain-shell';
+	                const initialCommand = data.initialCommand;
+	                const isPlainShell = data.isPlainShell || (!!initialCommand && !hasSession) || provider === 'plain-shell';
+                const confirmationId = typeof data.confirmationId === 'string' ? data.confirmationId : '';
                 urlDetectionBuffer = '';
                 announcedAuthUrls.clear();
 
@@ -2693,7 +2799,7 @@ function handleShellConnection(ws) {
                 if (isPlainShell) {
                     welcomeMsg = `\x1b[36mStarting terminal in: ${projectPath}\x1b[0m\r\n`;
                 } else {
-                    const providerName = provider === 'cursor' ? 'Cursor' : (provider === 'codex' ? 'Codex' : (provider === 'gemini' ? 'Gemini' : 'MTL-Code'));
+                    const providerName = provider === 'cursor' ? 'Cursor' : (provider === 'codex' ? 'Codex' : (provider === 'gemini' ? 'Gemini' : 'Argus'));
                     welcomeMsg = hasSession ?
                         `\x1b[36mResuming ${providerName} session ${sessionId} in: ${projectPath}\x1b[0m\r\n` :
                         `\x1b[36mStarting new ${providerName} session in: ${projectPath}\x1b[0m\r\n`;
@@ -2774,7 +2880,7 @@ function handleShellConnection(ws) {
                             shellCommand = command;
                         }
                     } else {
-                        // MTL-Code (Claude-compatible provider key)
+                        // Argus (Claude-compatible provider key)
                         const command = initialCommand || resolveMtlCodeCliCommand();
                         if (hasSession && sessionId) {
                             if (os.platform() === 'win32') {
@@ -2789,9 +2895,34 @@ function handleShellConnection(ws) {
 
                     console.log('🔧 Executing shell command:', shellCommand);
 
-                    // Use appropriate shell based on platform
-                    const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
-                    const shellArgs = os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand];
+	                    const permission = evaluateRuntimePermission({
+	                        command: shellCommand,
+	                        cwd: resolvedProjectPath,
+	                        projectPath: resolvedProjectPath,
+	                        operation: 'shell',
+                        confirmationId,
+	                    });
+	                    if (permission.requiresConfirmation) {
+	                        ws.send(JSON.stringify({
+	                            type: 'runtime_permission_confirmation_required',
+                              confirmationId: permission.confirmationId,
+                              reason: permission.reason,
+                              command: shellCommand,
+	                        }));
+	                        return;
+	                    }
+                    if (!permission.allowed) {
+                        ws.send(JSON.stringify({
+                            type: 'output',
+                            data: `\r\n\x1b[31mBlocked by runtime permissions: ${permission.reason}\x1b[0m\r\n`
+                        }));
+                        return;
+                    }
+
+                    // Use runtime terminal settings for plain shells, while preserving agent resume syntax.
+                    const runtimeLaunch = isPlainShell ? resolveRuntimeShell(shellCommand) : null;
+                    const shell = runtimeLaunch?.shell || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
+                    const shellArgs = runtimeLaunch?.args || (os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand]);
 
                     // Use terminal dimensions from client if provided, otherwise use defaults
                     const termCols = data.cols || 80;
@@ -3169,6 +3300,7 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
                 used: 0,
                 total: 0,
                 breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                contextBudget: null,
                 unsupported: true,
                 message: 'Token usage tracking not available for Cursor sessions'
             });
@@ -3180,6 +3312,7 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
                 used: 0,
                 total: 0,
                 breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                contextBudget: null,
                 unsupported: true,
                 message: 'Token usage tracking not available for Gemini sessions'
             });
@@ -3250,10 +3383,13 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
                 }
             }
 
-            return res.json({
-                used: totalTokens,
-                total: contextWindow
+            const contextBudget = await buildContextBudgetFromFlatUsage({
+                currentBreakdown: { input: totalTokens, output: 0, cacheRead: 0, cacheCreation: 0 },
+                cumulativeBreakdown: { input: totalTokens, output: 0, cacheRead: 0, cacheCreation: 0 },
+                total: contextWindow,
+                windowSource: 'codex_token_count',
             });
+            return res.json(toContextBudgetResponse(contextBudget));
         }
 
         // Handle Claude sessions (default)
@@ -3267,7 +3403,7 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
         }
 
         // Construct the JSONL file path
-        // MTL-Code stores session files in ~/.mtl-code/projects/[encoded-project-path]/[session-id].jsonl
+        // Argus stores session files in ~/.mtl-code/projects/[encoded-project-path]/[session-id].jsonl
         // The encoding replaces any non-alphanumeric character (except -) with -
         const encodedPath = projectPath.replace(/[^a-zA-Z0-9-]/g, '-');
         const projectDir = findClaudeProviderProjectDir(encodedPath);
@@ -3292,46 +3428,15 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
         }
         const lines = fileContent.trim().split('\n');
 
-        const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW, 10);
-        const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 200000;
-        let inputTokens = 0;
-        let cacheCreationTokens = 0;
-        let cacheReadTokens = 0;
-
-        // Find the latest assistant message with usage data (scan from end)
-        for (let i = lines.length - 1; i >= 0; i--) {
-            try {
-                const entry = JSON.parse(lines[i]);
-
-                // Only count assistant messages which have usage data
-                if (entry.type === 'assistant' && entry.message?.usage) {
-                    const usage = entry.message.usage;
-
-                    // Use token counts from latest assistant message only
-                    inputTokens = usage.input_tokens || 0;
-                    cacheCreationTokens = usage.cache_creation_input_tokens || 0;
-                    cacheReadTokens = usage.cache_read_input_tokens || 0;
-
-                    break; // Stop after finding the latest assistant message
-                }
-            } catch (parseError) {
-                // Skip lines that can't be parsed
-                continue;
-            }
-        }
-
-        // Calculate total context usage (excluding output_tokens, as per ccusage)
-        const totalUsed = inputTokens + cacheCreationTokens + cacheReadTokens;
-
-        res.json({
-            used: totalUsed,
-            total: contextWindow,
-            breakdown: {
-                input: inputTokens,
-                cacheCreation: cacheCreationTokens,
-                cacheRead: cacheReadTokens
-            }
+        const sessionModelProfileId = sessionAgentBindingsDb
+            .getBinding(safeSessionId, 'claude')
+            ?.configuration
+            ?.modelProfileId || null;
+        const contextBudget = await buildContextBudgetFromJsonlLines(lines, {
+            modelProfileId: sessionModelProfileId,
+            env: process.env,
         });
+        res.json(toContextBudgetResponse(contextBudget));
     } catch (error) {
         console.error('Error reading session token usage:', error);
         res.status(500).json({ error: 'Failed to read session token usage' });
@@ -3481,6 +3586,7 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+        startAutomationScheduler();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -3489,8 +3595,8 @@ async function startServer() {
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');
         const isProduction = fs.existsSync(distIndexPath);
 
-        // Log MTL-Code implementation mode
-        console.log(`${c.info('[INFO]')} Using MTL-Code backend via Claude Agent SDK compatibility`);
+        // Log Argus implementation mode
+        console.log(`${c.info('[INFO]')} Using Argus backend via Claude Agent SDK compatibility`);
         console.log('');
 
         if (isProduction) {
@@ -3504,7 +3610,7 @@ async function startServer() {
 
             console.log('');
             console.log(c.dim('═'.repeat(63)));
-            console.log(`  ${c.bright('MTL-Code UI Server - Ready')}`);
+            console.log(`  ${c.bright('Argus Server - Ready')}`);
             console.log(c.dim('═'.repeat(63)));
             console.log('');
             console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);

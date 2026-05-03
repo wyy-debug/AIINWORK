@@ -263,7 +263,7 @@ export default function AgentSessionSetupDialog({
                     : 'MCP 槽位会使用 Provider 设置中已配置的 MCP Server。'}
             </p>
             <p className="mt-1">
-              工具列表会在会话启动后由 MTL-Code 原生 runtime 发现；这里绑定的是具体 MCP Server 配置。
+              工具列表会在会话启动后由 Argus 原生 runtime 发现；这里绑定的是具体 MCP Server 配置。
             </p>
           </div>
         )}

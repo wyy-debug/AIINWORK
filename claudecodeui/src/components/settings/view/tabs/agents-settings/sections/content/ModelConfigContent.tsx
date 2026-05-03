@@ -43,7 +43,7 @@ type ModelPreset = {
   contextWindowTokens: number;
 };
 
-type OpenMythosEffort = 'low' | 'medium' | 'high' | 'xhigh';
+type OpenMythosEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type OpenMythosLoopControl = 'advisory' | 'enforced';
 
 type OpenMythosRuntimeConfig = {
@@ -56,6 +56,9 @@ type OpenMythosRuntimeConfig = {
   phaseAdapter: boolean;
   expertRouting: boolean;
   contextCacheDiagnostics: boolean;
+  autoDispatchSubagents: boolean;
+  autoDispatchMinEffort: OpenMythosEffort;
+  autoDispatchMaxWorkers: number;
   minEffort: OpenMythosEffort;
   maxEffort: OpenMythosEffort;
 };
@@ -79,7 +82,7 @@ type MtlCodeModelConfig = {
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic';
-const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
+const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const OPENMYTHOS_LOOP_CONTROLS = ['advisory', 'enforced'] as const;
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   enabled: true,
@@ -91,8 +94,11 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
+  autoDispatchSubagents: true,
+  autoDispatchMinEffort: 'medium',
+  autoDispatchMaxWorkers: 3,
   minEffort: 'low',
-  maxEffort: 'xhigh',
+  maxEffort: 'max',
 };
 
 const makeId = (prefix = 'model') => (
@@ -133,6 +139,11 @@ const normalizeLoopControl = (value: unknown, fallback: OpenMythosLoopControl): 
     : fallback;
 };
 
+const normalizePositiveInteger = (value: unknown, fallback: number, max = 8): number => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+};
+
 const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => {
   const data = isObjectRecord(value) ? value : {};
   const minEffort = normalizeEffort(data.minEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort);
@@ -150,6 +161,9 @@ const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => 
     phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
     expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
     contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
+    autoDispatchSubagents: normalizeBoolean(data.autoDispatchSubagents, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchSubagents),
+    autoDispatchMinEffort: normalizeEffort(data.autoDispatchMinEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort),
+    autoDispatchMaxWorkers: normalizePositiveInteger(data.autoDispatchMaxWorkers, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers),
     minEffort: minIndex <= maxIndex ? minEffort : maxEffort,
     maxEffort: minIndex <= maxIndex ? maxEffort : minEffort,
   };
@@ -281,7 +295,7 @@ export default function ModelConfigContent() {
       try {
         const response = await apiFetch('/api/settings/mtl-code-model');
         if (!response.ok) {
-          throw new Error(await readResponseError(response, '加载 MTLCode 模型配置失败'));
+          throw new Error(await readResponseError(response, '加载 Argus 模型配置失败'));
         }
 
         const payload = await response.json();
@@ -294,7 +308,7 @@ export default function ModelConfigContent() {
         console.error(error);
         if (!cancelled) {
           setStatus('error');
-          setErrorMessage(error instanceof Error ? error.message : '加载 MTLCode 模型配置失败');
+          setErrorMessage(error instanceof Error ? error.message : '加载 Argus 模型配置失败');
         }
       } finally {
         if (!cancelled) {
@@ -401,7 +415,7 @@ export default function ModelConfigContent() {
       });
 
       if (!response.ok) {
-        throw new Error(await readResponseError(response, '保存 MTLCode 模型配置失败'));
+        throw new Error(await readResponseError(response, '保存 Argus 模型配置失败'));
       }
 
       const responsePayload = await response.json();
@@ -413,7 +427,7 @@ export default function ModelConfigContent() {
     } catch (error) {
       console.error(error);
       setStatus('error');
-      setErrorMessage(error instanceof Error ? error.message : '保存 MTLCode 模型配置失败');
+      setErrorMessage(error instanceof Error ? error.message : '保存 Argus 模型配置失败');
     } finally {
       setIsSaving(false);
     }
@@ -425,7 +439,7 @@ export default function ModelConfigContent() {
         <Bot className="h-5 w-5 text-emerald-500" />
         <div>
           <h3 className="text-lg font-medium text-foreground">
-            {t('mtlCodeModel.title', { defaultValue: 'MTLCode 模型' })}
+            {t('mtlCodeModel.title', { defaultValue: 'Argus 模型' })}
           </h3>
           <p className="text-sm text-muted-foreground">
             {t('mtlCodeModel.subtitle', {
@@ -629,7 +643,7 @@ export default function ModelConfigContent() {
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {t('mtlCodeModel.bareModeDescription', {
-                      defaultValue: '使用 --bare 启动 MTL-Code，让新会话更干净。',
+                      defaultValue: '使用 --bare 启动 Argus，让新会话更干净。',
                     })}
                   </p>
                 </div>
@@ -649,7 +663,7 @@ export default function ModelConfigContent() {
         <div className="min-h-5 text-sm">
           {status === 'success' && (
             <span className="text-emerald-600 dark:text-emerald-400">
-              {t('mtlCodeModel.saved', { defaultValue: '已保存到 MTL-Code 设置。' })}
+              {t('mtlCodeModel.saved', { defaultValue: '已保存到 Argus 设置。' })}
             </span>
           )}
           {status === 'error' && (

@@ -273,7 +273,7 @@
     "apiDocsLink": "API Dokümantasyonu",
     "documentation": {
       "title": "Harici API Dokümantasyonu",
-      "description": "Uygulamalarından MTL-Code/Cursor oturumları tetiklemek için harici API'nin nasıl kullanılacağını öğren.",
+      "description": "Uygulamalarından Argus/Cursor oturumları tetiklemek için harici API'nin nasıl kullanılacağını öğren.",
       "viewLink": "API Dokümantasyonunu Görüntüle →"
     },
     "loading": "Yükleniyor...",
@@ -293,7 +293,7 @@
     },
     "account": {
       "claude": {
-        "description": "Anthropic MTL-Code AI asistanı"
+        "description": "Anthropic Argus AI asistanı"
       },
       "cursor": {
         "description": "Cursor AI destekli kod editörü"
@@ -395,7 +395,7 @@
   "mcpServers": {
     "title": "MCP Sunucuları",
     "description": {
-      "claude": "Model Context Protocol sunucuları MTL-Code'a ek araçlar ve veri kaynakları sağlar",
+      "claude": "Model Context Protocol sunucuları Argus'a ek araçlar ve veri kaynakları sağlar",
       "cursor": "Model Context Protocol sunucuları Cursor'a ek araçlar ve veri kaynakları sağlar",
       "codex": "Model Context Protocol sunucuları Codex'e ek araçlar ve veri kaynakları sağlar"
     },

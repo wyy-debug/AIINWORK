@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+
 import type { SettingsMainTab } from '../types/types';
 
 type SettingsMainTabsProps = {
@@ -8,13 +9,14 @@ type SettingsMainTabsProps = {
 
 type MainTabConfig = {
   id: SettingsMainTab;
-  labelKey?: string;
-  label?: string;
+  labelKey: string;
+  label: string;
 };
 
 const TAB_CONFIG: MainTabConfig[] = [
-  { id: 'agents', labelKey: 'mainTabs.agents' },
-  { id: 'appearance', labelKey: 'mainTabs.appearance' },
+  { id: 'agents', labelKey: 'mainTabs.argusHub', label: '模型 / Hub' },
+  { id: 'runtime', labelKey: 'mainTabs.runtime', label: '运行时' },
+  { id: 'appearance', labelKey: 'mainTabs.appearance', label: '外观' },
 ];
 
 export default function SettingsMainTabs({ activeTab, onChange }: SettingsMainTabsProps) {
@@ -22,7 +24,11 @@ export default function SettingsMainTabs({ activeTab, onChange }: SettingsMainTa
 
   return (
     <div className="border-b border-border">
-       <div className="flex px-4 md:px-6 overflow-x-auto scrollbar-hide" role="tablist" aria-label={t('mainTabs.label', { defaultValue: 'Settings' })}>
+      <div
+        className="scrollbar-hide flex overflow-x-auto px-4 md:px-6"
+        role="tablist"
+        aria-label={t('mainTabs.label', { defaultValue: '设置' })}
+      >
         {TAB_CONFIG.map((tab) => {
           const isActive = activeTab === tab.id;
 
@@ -32,13 +38,13 @@ export default function SettingsMainTabs({ activeTab, onChange }: SettingsMainTa
               role="tab"
               aria-selected={isActive}
               onClick={() => onChange(tab.id)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+              className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
                 isActive
                   ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              {tab.labelKey ? t(tab.labelKey) : tab.label}
+              {t(tab.labelKey, { defaultValue: tab.label })}
             </button>
           );
         })}

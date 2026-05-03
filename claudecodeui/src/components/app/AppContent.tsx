@@ -48,6 +48,7 @@ export default function AppContent() {
     openSettings,
     refreshProjectsSilently,
     sidebarSharedProps,
+    routeSessionState,
   } = useProjectsState({
     sessionId,
     navigate,
@@ -77,6 +78,39 @@ export default function AppContent() {
       }
     };
   }, [openSettings]);
+
+  useEffect(() => {
+    const normalizePanelToTab = (value?: string) => {
+      if (value === 'changes') return 'review';
+      if (value === 'run') return 'actions';
+      if (value === 'preview') return 'browser';
+      if (value === 'results') return 'artifacts';
+      return value;
+    };
+
+    const handleOpenTab = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab?: string; panel?: string }>).detail || {};
+      const tab = normalizePanelToTab(detail.tab || detail.panel);
+      if (
+        tab === 'chat'
+        || tab === 'review'
+        || tab === 'shell'
+        || tab === 'files'
+        || tab === 'actions'
+        || tab === 'browser'
+        || tab === 'artifacts'
+      ) {
+        setActiveTab(tab);
+      }
+    };
+
+    window.addEventListener('argus-open-tab', handleOpenTab);
+    window.addEventListener('argus-open-panel', handleOpenTab);
+    return () => {
+      window.removeEventListener('argus-open-tab', handleOpenTab);
+      window.removeEventListener('argus-open-panel', handleOpenTab);
+    };
+  }, [setActiveTab]);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
@@ -186,7 +220,7 @@ export default function AppContent() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <MainContent
+      <MainContent
           projects={projects}
           selectedProject={selectedProject}
           projectSelectedProject={projectSelectedProject}
@@ -213,8 +247,10 @@ export default function AppContent() {
           onReplaceTemporarySession={replaceTemporarySession}
           onNavigateToSession={(targetSessionId: string) => navigate(`/session/${targetSessionId}`)}
           onShowSettings={() => setShowSettings(true)}
-          externalMessageUpdate={externalMessageUpdate}
-        />
+        externalMessageUpdate={externalMessageUpdate}
+        routeSessionState={routeSessionState}
+        onRecoverSession={() => navigate('/')}
+      />
       </div>
 
     </div>

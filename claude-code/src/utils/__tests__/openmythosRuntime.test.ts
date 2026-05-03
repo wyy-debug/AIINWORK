@@ -24,20 +24,25 @@ describe('openmythos runtime card', () => {
     expect(card?.loopBudget).toBe(2)
     expect(card?.phasePlan).toEqual(['orient', 'finalize'])
     expect(card?.routes.join(' ')).toContain('Handle locally')
+    expect(card?.dispatchPlan).toEqual([])
   })
 
   test('escalates risky implementation work and records routes', () => {
+    process.env.MTL_CODE_COORDINATOR_MODE = '1'
     const card = buildOpenMythosRuntimeCard(
       'Implement an auth database migration with rollback tests and CI verification',
     )
 
-    expect(card?.effort).toBe('xhigh')
+    expect(card?.effort).toBe('max')
+    expect(card?.loopBudget).toBe(6)
     expect(card?.reasons).toContain('security or privacy sensitive work')
     expect(card?.reasons).toContain('deployment, data, or CI risk')
     expect(card?.routes.join(' ')).toContain('security-focused skill')
     expect(card?.routes.join(' ')).toContain('verification pass')
     expect(card?.riskScore).toBeGreaterThanOrEqual(8)
     expect(card?.expertRoutes.map(route => route.kind)).toContain('security')
+    expect(card?.dispatchPlan.map(task => task.kind)).toContain('security')
+    expect(card?.dispatchPlan.map(task => task.kind)).toContain('verification')
     expect(card?.phasePlan).toEqual([
       'orient',
       'plan',
@@ -63,6 +68,7 @@ describe('openmythos runtime card', () => {
     expect(reminder).toContain('Adaptive effort:')
     expect(reminder).toContain('Current phase:')
     expect(reminder).toContain('Expert routes:')
+    expect(reminder).toContain('Auto-dispatch worker plan:')
   })
 
   test('creates enforced runtime state with read-only early phases', () => {
@@ -72,6 +78,7 @@ describe('openmythos runtime card', () => {
     const state = createOpenMythosRuntimeState(card)
 
     expect(state.loopControl).toBe('enforced')
+    expect(state.hardDispatchAttempted).toBe(false)
     expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(true)
     expect(state.phase).toBe('orient')
     expect(isOpenMythosReadOnlyPhase(state)).toBe(true)
@@ -100,7 +107,7 @@ describe('openmythos runtime card', () => {
 
     const card = buildOpenMythosRuntimeCard('Implement auth migration')
 
-    expect(card?.effort).toBe('xhigh')
+    expect(card?.effort).toBe('max')
     expect(shouldApplyAdaptiveEffort(undefined)).toBe(false)
     expect(shouldAttachOpenMythosRuntimeCard()).toBe(true)
   })
@@ -121,6 +128,70 @@ describe('openmythos runtime card', () => {
     expect(card.routes).toEqual([])
     expect(formatOpenMythosRuntimeReminder(card)).toContain(
       'Skill/subagent routing: disabled',
+    )
+  })
+
+  test('only dispatches workers in coordinator mode above the configured effort', () => {
+    const prompt = 'Refactor multi-module architecture'
+    let card = buildOpenMythosRuntimeCard(prompt)
+    expect(card?.dispatchPlan).toEqual([])
+
+    process.env.MTL_CODE_COORDINATOR_MODE = '1'
+    card = buildOpenMythosRuntimeCard(prompt)
+    expect(card?.dispatchPlan.length).toBeGreaterThan(0)
+    expect(formatOpenMythosRuntimeReminder(card!)).toContain(
+      'Coordinator instruction: before direct implementation',
+    )
+
+    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT = 'high'
+    card = buildOpenMythosRuntimeCard(prompt)
+    expect(card?.dispatchPlan).toEqual([])
+  })
+
+  test('can disable auto-dispatch and cap worker count', () => {
+    process.env.MTL_CODE_COORDINATOR_MODE = '1'
+    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '0'
+    let card = buildOpenMythosRuntimeCard(
+      'Implement an auth database migration with rollback tests and CI verification',
+    )
+    expect(card?.dispatchPlan).toEqual([])
+
+    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '1'
+    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MAX_WORKERS = '2'
+    card = buildOpenMythosRuntimeCard(
+      'Implement an auth database migration with rollback tests and CI verification plus frontend verification',
+    )
+    expect(card?.dispatchPlan.length).toBeLessThanOrEqual(2)
+  })
+
+  test('does not auto-dispatch again for worker task notifications', () => {
+    process.env.MTL_CODE_COORDINATOR_MODE = '1'
+
+    const card = buildOpenMythosRuntimeCard(`
+      <task-notification>
+        <task-id>agent-a1b</task-id>
+        <status>completed</status>
+        <summary>Implementation worker completed</summary>
+        <result>Implement an auth database migration with rollback tests and CI verification.</result>
+      </task-notification>
+    `)
+
+    expect(card?.dispatchPlan).toEqual([])
+    expect(formatOpenMythosRuntimeReminder(card!)).toContain(
+      'no automatic worker dispatch is required',
+    )
+  })
+
+  test('reminder suppresses duplicate coordinator dispatch after hard dispatch', () => {
+    process.env.MTL_CODE_COORDINATOR_MODE = '1'
+    const card = buildOpenMythosRuntimeCard('Refactor multi-module architecture')
+    if (!card) throw new Error('expected runtime card')
+    const state = createOpenMythosRuntimeState(card)
+
+    state.hardDispatchAttempted = true
+
+    expect(formatOpenMythosRuntimeReminder(card, state)).toContain(
+      'worker dispatch was already attempted',
     )
   })
 

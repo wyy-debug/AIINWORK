@@ -10,7 +10,7 @@ This note documents the current single-conversation Agent binding path. Agent co
 
 ## Current Behavior
 
-Enabled Agents are loaded only in standalone conversation space. Project sessions always use the default MTL-Code configuration and do not show Agent selection or Agent setup controls.
+Enabled Agents are loaded only in standalone conversation space. Project sessions always use the default Argus configuration and do not show Agent selection or Agent setup controls.
 
 For a new standalone conversation, the empty conversation screen asks whether this conversation should use an Agent. Choosing the default path keeps the session unbound. Choosing the Agent path lets the user select an enabled Agent. If that Agent has application slots, the frontend opens a setup dialog and requires every slot to be mapped to an application before the Agent is enabled for that conversation.
 

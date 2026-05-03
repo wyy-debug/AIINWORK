@@ -40,7 +40,7 @@ const getScopeLabel = (scope: McpScope, mode: McpFormMode): string => {
   }
 
   if (scope === 'local') {
-    return 'MTL-Code Local';
+    return 'Argus Local';
   }
 
   return mode === 'global' ? 'Project (All Providers)' : 'Project';
@@ -54,7 +54,7 @@ const getScopeDescription = (scope: McpScope, mode: McpFormMode): string => {
   }
 
   if (scope === 'local') {
-    return 'Stored in MTL-Code user settings for the selected project';
+    return 'Stored in Argus user settings for the selected project';
   }
 
   return mode === 'global'

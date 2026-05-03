@@ -10,8 +10,8 @@
     "appearance": "Appearance"
   },
   "mtlCodeModel": {
-    "title": "MTLCode Models",
-    "subtitle": "Manage Anthropic-compatible model profiles and choose the one MTL-Code uses at runtime.",
+    "title": "Argus Models",
+    "subtitle": "Manage Anthropic-compatible model profiles and choose the one Argus uses at runtime.",
     "profiles": "Model profiles",
     "add": "Add",
     "unnamedProfile": "Unnamed model",
@@ -31,15 +31,15 @@
     "apiKeyConfigured": "Configured",
     "contextWindowTokens": "Context window tokens",
     "bareMode": "Lightweight startup",
-    "bareModeDescription": "Start MTL-Code with --bare for cleaner first-use sessions.",
-    "saved": "Saved to MTL-Code settings.",
+    "bareModeDescription": "Start Argus with --bare for cleaner first-use sessions.",
+    "saved": "Saved to Argus settings.",
     "saveFailed": "Could not save model settings.",
     "saving": "Saving",
     "save": "Save"
   },
   "openMythosRuntime": {
     "title": "OpenMythos Runtime",
-    "subtitle": "Tune adaptive effort, frozen task cards, and skill routing hints for MTL-Code sessions.",
+    "subtitle": "Tune adaptive effort, frozen task cards, and skill routing hints for Argus sessions.",
     "enabled": "OpenMythos Runtime",
     "enabledDescription": "Attach runtime guidance to each turn and allow adaptive effort decisions.",
     "adaptiveEffort": "Adaptive effort",
@@ -55,7 +55,12 @@
     "expertRouting": "Expert routing",
     "expertRoutingDescription": "Deterministically suggest security, verification, performance, architecture, or frontend experts.",
     "contextCacheDiagnostics": "Context cache diagnostics",
-    "contextCacheDiagnosticsDescription": "Show compact, RAG, and tool-summary ledger data in diagnostics without pretending to be KV cache.",
+    "contextCacheDiagnosticsDescription": "Show compact conversation and tool-summary ledger data in diagnostics without pretending to be KV cache.",
+    "autoDispatchSubagents": "Auto-dispatch subagents",
+    "autoDispatchSubagentsDescription": "Complex tasks generate a Coordinator worker dispatch plan and Argus launches the matching workers on the first turn.",
+    "dispatchPolicy": "Subagent dispatch policy",
+    "autoDispatchMinEffort": "Minimum dispatch effort",
+    "autoDispatchMaxWorkers": "Maximum worker count",
     "effortBounds": "Effort bounds",
     "minEffort": "Minimum effort",
     "maxEffort": "Maximum effort",
@@ -72,6 +77,9 @@
     "constraintsLabel": "Constraints",
     "acceptanceLabel": "Acceptance",
     "routesLabel": "Routes",
+    "dispatchPlanLabel": "Auto-dispatch plan",
+    "requiredValue": "required",
+    "noDispatchValue": "This prompt will not auto-dispatch workers",
     "emptyPreview": "Enter a prompt to preview the runtime card.",
     "disabledPreview": "Runtime is disabled.",
     "saved": "Runtime settings saved.",
@@ -85,7 +93,8 @@
       "low": "Low",
       "medium": "Medium",
       "high": "High",
-      "xhigh": "XHigh"
+      "xhigh": "XHigh",
+      "max": "Max"
     },
     "loopControlOptions": {
       "enforced": {
@@ -131,6 +140,14 @@
     },
     "experts": {
       "local": "Local execution"
+    },
+    "dispatch": {
+      "security": "Security reviewer worker",
+      "verification": "Verification worker",
+      "performance": "Performance worker",
+      "architecture": "Architecture worker",
+      "frontend": "Frontend worker",
+      "implementation": "Implementation worker"
     },
     "phases": {
       "orient": "Orient",
@@ -407,7 +424,7 @@
     "apiDocsLink": "API Documentation",
     "documentation": {
       "title": "External API Documentation",
-      "description": "Learn how to use the external API to trigger MTL-Code/Cursor sessions from your applications.",
+      "description": "Learn how to use the external API to trigger Argus/Cursor sessions from your applications.",
       "viewLink": "View API Documentation →"
     },
     "loading": "Loading...",
@@ -427,7 +444,7 @@
     },
     "account": {
       "claude": {
-        "description": "Anthropic MTL-Code AI assistant"
+        "description": "Anthropic Argus AI assistant"
       },
       "cursor": {
         "description": "Cursor AI-powered code editor"
@@ -529,7 +546,7 @@
   "mcpServers": {
     "title": "MCP Servers",
     "description": {
-      "claude": "Model Context Protocol servers provide additional tools and data sources to MTL-Code",
+      "claude": "Model Context Protocol servers provide additional tools and data sources to Argus",
       "cursor": "Model Context Protocol servers provide additional tools and data sources to Cursor",
       "codex": "Model Context Protocol servers provide additional tools and data sources to Codex"
     },

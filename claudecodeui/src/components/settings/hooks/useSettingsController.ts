@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useTheme } from '../../../contexts/ThemeContext';
 import { apiFetch } from '../../../utils/api';
+import { ARGUS_DEFAULT_PERMISSION_MODE, getClaudeSettings } from '../../chat/utils/chatStorage';
 import {
   DEFAULT_CODE_EDITOR_SETTINGS,
   DEFAULT_CURSOR_PERMISSIONS,
@@ -51,11 +52,11 @@ type NotificationPreferencesResponse = {
   preferences?: NotificationPreferencesState;
 };
 
-const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'appearance'];
+const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'runtime', 'appearance'];
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
   // Keep backwards compatibility with older callers that still pass "tools".
-  if (tab === 'tools') {
+  if (tab === 'tools' || tab === 'mcp') {
     return 'agents';
   }
 
@@ -96,7 +97,7 @@ const createEmptyClaudePermissions = (): ClaudePermissionsState => ({
   allowedTools: [],
   disallowedTools: [],
   skipPermissions: false,
-  permissionMode: 'default',
+  permissionMode: ARGUS_DEFAULT_PERMISSION_MODE,
 });
 
 const createEmptyCursorPermissions = (): CursorPermissionsState => ({
@@ -140,15 +141,12 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
 
   const loadSettings = useCallback(async () => {
     try {
-      const savedClaudeSettings = parseJson<ClaudeSettingsStorage>(
-        localStorage.getItem('claude-settings'),
-        {},
-      );
+      const savedClaudeSettings = getClaudeSettings() as ClaudeSettingsStorage;
       setClaudePermissions({
         allowedTools: savedClaudeSettings.allowedTools || [],
         disallowedTools: savedClaudeSettings.disallowedTools || [],
         skipPermissions: Boolean(savedClaudeSettings.skipPermissions),
-        permissionMode: savedClaudeSettings.permissionMode || 'default',
+        permissionMode: savedClaudeSettings.permissionMode || ARGUS_DEFAULT_PERMISSION_MODE,
       });
       setProjectSortOrder(savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name');
 
@@ -209,7 +207,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         allowedTools: claudePermissions.allowedTools,
         disallowedTools: claudePermissions.disallowedTools,
         skipPermissions: claudePermissions.skipPermissions,
-        permissionMode: claudePermissions.permissionMode || 'default',
+        permissionMode: claudePermissions.permissionMode || ARGUS_DEFAULT_PERMISSION_MODE,
         projectSortOrder,
         lastUpdated: now,
       }));

@@ -15,10 +15,15 @@ import {
 import {
   OPENMYTHOS_RUNTIME_SETTINGS_KEY,
   applyOpenMythosRuntimeToEnv,
+  buildOpenMythosRuntimePreview,
   canonicalizeAnthropicModel,
   normalizeOpenMythosRuntimeConfig,
   readOpenMythosRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
+import {
+  readRuntimePermissions,
+  saveRuntimePermissions,
+} from '../services/runtime-permission-service.js';
 
 const router = express.Router();
 const ANTHROPIC_ENV_KEYS = {
@@ -37,6 +42,7 @@ const MTL_CODE_ENV_KEYS = {
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
   subagentModel: 'MTL_CODE_SUBAGENT_MODEL',
   legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
+  coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
 };
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_PAYG_ANTHROPIC_BASE_URL = 'https://api.xiaomimimo.com/anthropic';
@@ -270,6 +276,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
     runtime: {
       bareMode: activeProfile.bareMode !== false,
       contextWindowTokens: activeContextWindowTokens,
+      coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
     },
     openMythosRuntime: readOpenMythosRuntimeConfig(settings, env),
   };
@@ -348,6 +355,9 @@ const normalizeModelConfigInput = (body) => {
     },
     runtime: {
       bareMode: runtime.bareMode !== false,
+      coordinatorMode: Object.prototype.hasOwnProperty.call(runtime, 'coordinatorMode')
+        ? runtime.coordinatorMode !== false
+        : undefined,
       contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
         : undefined,
@@ -476,6 +486,32 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
   } else {
     delete settings.model;
   }
+};
+
+const readArgusRuntimeConfig = (settings) => {
+  const env = readObjectRecord(settings.env) ?? {};
+  return {
+    coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
+  };
+};
+
+const normalizeArgusRuntimeInput = (body) => ({
+  coordinatorMode: readObjectRecord(body)?.coordinatorMode !== false,
+});
+
+const applyArgusRuntimeToEnv = (env, runtime) => {
+  if (typeof runtime?.coordinatorMode !== 'boolean') {
+    return;
+  }
+  env[MTL_CODE_ENV_KEYS.coordinatorMode] = runtime.coordinatorMode !== false ? '1' : '0';
+};
+
+const applyCoordinatorModeFromOpenMythosRuntime = (env, runtime) => {
+  const shouldUseCoordinator = Boolean(
+    runtime?.enabled !== false
+    && runtime?.autoDispatchSubagents !== false,
+  );
+  env[MTL_CODE_ENV_KEYS.coordinatorMode] = shouldUseCoordinator ? '1' : '0';
 };
 
 // ===============================
@@ -747,7 +783,7 @@ router.post('/push/unsubscribe', async (req, res) => {
 });
 
 // ===============================
-// MTL-Code Model Runtime
+// Argus Model Runtime
 // ===============================
 
 router.get('/mtl-code-model', async (req, res) => {
@@ -758,8 +794,8 @@ router.get('/mtl-code-model', async (req, res) => {
       config: toMtlCodeModelConfig(settings, filePath),
     });
   } catch (error) {
-    console.error('Error reading MTL-Code model settings:', error);
-    res.status(500).json({ error: 'Failed to read MTL-Code model settings' });
+    console.error('Error reading Argus model settings:', error);
+    res.status(500).json({ error: 'Failed to read Argus model settings' });
   }
 });
 
@@ -771,12 +807,14 @@ router.put('/mtl-code-model', async (req, res) => {
 
     const activeProfile = mergeAndStoreModelProfiles(settings, env, input);
     applyActiveProfileToEnv(settings, env, activeProfile);
+    applyArgusRuntimeToEnv(env, input.runtime);
     const openMythosRuntime = normalizeOpenMythosRuntimeConfig(
       readObjectRecord(req.body?.openMythosRuntime),
       readOpenMythosRuntimeConfig(settings, env),
     );
     settings[OPENMYTHOS_RUNTIME_SETTINGS_KEY] = openMythosRuntime;
     applyOpenMythosRuntimeToEnv(env, openMythosRuntime);
+    applyCoordinatorModeFromOpenMythosRuntime(env, openMythosRuntime);
     clearOpenAIEnv(env);
     settings.env = env;
     await writeJsonConfig(filePath, settings);
@@ -786,8 +824,93 @@ router.put('/mtl-code-model', async (req, res) => {
       config: toMtlCodeModelConfig(settings, filePath),
     });
   } catch (error) {
-    console.error('Error saving MTL-Code model settings:', error);
-    res.status(500).json({ error: 'Failed to save MTL-Code model settings' });
+    console.error('Error saving Argus model settings:', error);
+    res.status(500).json({ error: 'Failed to save Argus model settings' });
+  }
+});
+
+router.post('/openmythos-dispatch-preview', async (req, res) => {
+  try {
+    const { filePath, settings } = await readMtlCodeSettings();
+    const body = readObjectRecord(req.body) ?? {};
+    const input = readOptionalString(body.input) || readOptionalString(body.command) || '';
+    const permissionMode = readOptionalString(body.permissionMode) || '';
+    const env = readObjectRecord(settings.env) ?? {};
+    const openMythosRuntime = readOpenMythosRuntimeConfig(settings, env);
+    const runtimeCard = buildOpenMythosRuntimePreview(input, openMythosRuntime, permissionMode);
+    const dispatchPlan = Array.isArray(runtimeCard?.dispatchPlan) ? runtimeCard.dispatchPlan : [];
+
+    res.json({
+      success: true,
+      configPath: filePath,
+      openMythosRuntime,
+      runtimeCard,
+      dispatchPlan,
+      shouldConfirm: Boolean(
+        openMythosRuntime?.enabled
+        && openMythosRuntime?.autoDispatchSubagents
+        && dispatchPlan.length > 0
+      ),
+    });
+  } catch (error) {
+    console.error('Error previewing OpenMythos dispatch:', error);
+    res.status(500).json({ error: 'Failed to preview OpenMythos dispatch' });
+  }
+});
+
+router.get('/argus-runtime', async (req, res) => {
+  try {
+    const { filePath, settings } = await readMtlCodeSettings();
+    res.json({
+      success: true,
+      runtime: {
+        ...readArgusRuntimeConfig(settings),
+        configPath: filePath,
+      },
+    });
+  } catch (error) {
+    console.error('Error reading Argus runtime settings:', error);
+    res.status(500).json({ error: 'Failed to read Argus runtime settings' });
+  }
+});
+
+router.put('/argus-runtime', async (req, res) => {
+  try {
+    const { filePath, settings } = await readMtlCodeSettings();
+    const env = readObjectRecord(settings.env) ?? {};
+    const runtime = normalizeArgusRuntimeInput(req.body);
+    applyArgusRuntimeToEnv(env, runtime);
+    settings.env = env;
+    await writeJsonConfig(filePath, settings);
+    res.json({
+      success: true,
+      runtime: {
+        ...readArgusRuntimeConfig(settings),
+        configPath: filePath,
+      },
+    });
+  } catch (error) {
+    console.error('Error saving Argus runtime settings:', error);
+    res.status(500).json({ error: 'Failed to save Argus runtime settings' });
+  }
+});
+
+router.get('/runtime-permissions', async (_req, res) => {
+  try {
+    res.json({ success: true, permissions: readRuntimePermissions() });
+  } catch (error) {
+    console.error('Error reading runtime permissions:', error);
+    res.status(500).json({ error: 'Failed to read runtime permissions' });
+  }
+});
+
+router.put('/runtime-permissions', async (req, res) => {
+  try {
+    const permissions = saveRuntimePermissions(req.body || {});
+    res.json({ success: true, permissions });
+  } catch (error) {
+    console.error('Error saving runtime permissions:', error);
+    res.status(500).json({ error: 'Failed to save runtime permissions' });
   }
 });
 

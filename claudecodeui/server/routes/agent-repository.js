@@ -44,8 +44,8 @@ async function ensureDir(dirPath) {
 function createEmptyCatalog() {
   return {
     schemaVersion: 1,
-    name: 'MTL-Code Agent Repository',
-    description: 'Shared prompt templates and skills for MTL-Code.',
+    name: 'Argus Agent Repository',
+    description: 'Shared prompt templates and skills for Argus.',
     updatedAt: nowIso(),
     items: [],
   };

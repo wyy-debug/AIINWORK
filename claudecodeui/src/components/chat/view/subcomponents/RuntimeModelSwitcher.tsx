@@ -49,7 +49,7 @@ type RuntimeModelSwitcherProps = {
 };
 
 const MTL_CODE_PROVIDER: LLMProvider = 'claude';
-const FALLBACK_MODEL_LABEL = CLAUDE_MODELS.OPTIONS[0]?.label || 'MTLCode';
+const FALLBACK_MODEL_LABEL = CLAUDE_MODELS.OPTIONS[0]?.label || 'Argus';
 const MODEL_SETTINGS_EVENT = 'mtlCodeModelSettingsChanged';
 
 function formatContextWindow(tokens?: number) {
@@ -335,14 +335,14 @@ export default function RuntimeModelSwitcher({
       )}
       aria-haspopup="dialog"
       aria-expanded={isOpen}
-      title="切换当前会话的 MTL-Code 运行模型"
+      title="切换当前会话的 Argus 运行模型"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/15">
         <SessionProviderLogo provider={MTL_CODE_PROVIDER} className="h-5 w-5" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-foreground">
-          <span className="shrink-0">MTL-Code</span>
+          <span className="shrink-0">Argus</span>
           <span className="text-muted-foreground">/</span>
           <span className="truncate">{profileLabel(activeProfile)}</span>
         </span>
@@ -372,7 +372,7 @@ export default function RuntimeModelSwitcher({
       )}
       aria-haspopup="dialog"
       aria-expanded={isOpen}
-      title="切换当前会话的 MTL-Code 运行模型"
+      title="切换当前会话的 Argus 运行模型"
     >
       <ServerIcon className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate text-left font-medium">

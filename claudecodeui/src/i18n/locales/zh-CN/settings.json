@@ -10,7 +10,7 @@
     "appearance": "外观"
   },
   "mtlCodeModel": {
-    "title": "MTLCode 模型",
+    "title": "Argus 模型",
     "subtitle": "管理兼容 Anthropic 协议的模型配置，并选择当前运行时使用的模型。",
     "profiles": "模型配置",
     "add": "添加",
@@ -31,15 +31,15 @@
     "apiKeyConfigured": "已配置",
     "contextWindowTokens": "上下文 tokens",
     "bareMode": "轻量启动",
-    "bareModeDescription": "使用 --bare 启动 MTL-Code，让新会话更干净。",
-    "saved": "已保存到 MTL-Code 设置。",
+    "bareModeDescription": "使用 --bare 启动 Argus，让新会话更干净。",
+    "saved": "已保存到 Argus 设置。",
     "saveFailed": "无法保存模型设置。",
     "saving": "保存中",
     "save": "保存"
   },
   "openMythosRuntime": {
     "title": "OpenMythos 运行时",
-    "subtitle": "配置 MTL-Code 会话的自适应推理强度、冻结任务卡和技能路由提示。",
+    "subtitle": "配置 Argus 会话的自适应推理强度、冻结任务卡和技能路由提示。",
     "enabled": "OpenMythos 运行时",
     "enabledDescription": "为每轮任务注入运行时引导，并允许按任务复杂度自动选择推理强度。",
     "adaptiveEffort": "自适应推理强度",
@@ -56,6 +56,11 @@
     "expertRoutingDescription": "按任务信号确定性建议安全、验证、性能、架构或前端专家。",
     "contextCacheDiagnostics": "上下文缓存诊断",
     "contextCacheDiagnosticsDescription": "在诊断中显示压缩、检索增强和工具摘要账本；不伪装成 KV 缓存。",
+    "autoDispatchSubagents": "自动分发子智能体",
+    "autoDispatchSubagentsDescription": "复杂任务会生成 Coordinator worker 派发计划，并由 Argus 首轮自动启动对应 worker。",
+    "dispatchPolicy": "子智能体派发策略",
+    "autoDispatchMinEffort": "最低派发强度",
+    "autoDispatchMaxWorkers": "最大 worker 数",
     "effortBounds": "推理强度范围",
     "minEffort": "最低推理强度",
     "maxEffort": "最高推理强度",
@@ -72,6 +77,9 @@
     "constraintsLabel": "约束",
     "acceptanceLabel": "验收标准",
     "routesLabel": "路由建议",
+    "dispatchPlanLabel": "自动派发计划",
+    "requiredValue": "必需",
+    "noDispatchValue": "当前提示不会自动派发 worker",
     "emptyPreview": "输入提示词后可预览运行时任务卡。",
     "disabledPreview": "运行时已关闭。",
     "saved": "运行时设置已保存。",
@@ -85,7 +93,8 @@
       "low": "低",
       "medium": "中",
       "high": "高",
-      "xhigh": "极深"
+      "xhigh": "极深",
+      "max": "最大"
     },
     "loopControlOptions": {
       "enforced": {
@@ -131,6 +140,14 @@
     },
     "experts": {
       "local": "本地执行"
+    },
+    "dispatch": {
+      "security": "安全审查 worker",
+      "verification": "验证 worker",
+      "performance": "性能 worker",
+      "architecture": "架构 worker",
+      "frontend": "前端 worker",
+      "implementation": "实现 worker"
     },
     "phases": {
       "orient": "定位",
@@ -223,6 +240,8 @@
   },
   "mainTabs": {
     "label": "设置",
+    "argusHub": "模型 / Hub",
+    "runtime": "运行时",
     "agents": "智能体",
     "appearance": "外观",
     "git": "Git",
@@ -407,7 +426,7 @@
     "apiDocsLink": "API 文档",
     "documentation": {
       "title": "外部 API 文档",
-      "description": "了解如何使用外部 API 从您的应用程序触发 MTL-Code/Cursor 会话。",
+      "description": "了解如何使用外部 API 从您的应用程序触发 Argus/Cursor 会话。",
       "viewLink": "查看 API 文档 →"
     },
     "loading": "加载中...",
@@ -427,7 +446,7 @@
     },
     "account": {
       "claude": {
-        "description": "Anthropic MTL-Code AI 助手"
+        "description": "Anthropic Argus AI 助手"
       },
       "cursor": {
         "description": "Cursor AI 驱动的代码编辑器"
@@ -529,7 +548,7 @@
   "mcpServers": {
     "title": "MCP 服务器",
     "description": {
-      "claude": "Model Context Protocol 服务器为 MTL-Code 提供额外的工具和数据源",
+      "claude": "Model Context Protocol 服务器为 Argus 提供额外的工具和数据源",
       "cursor": "Model Context Protocol 服务器为 Cursor 提供额外的工具和数据源",
       "codex": "Model Context Protocol 服务器为 Codex 提供额外的工具和数据源"
     },

@@ -56,7 +56,7 @@ function makeRoot(id, label, scope, provider, dir, workspacePath = '') {
 
 function getSkillRoots(workspacePath = '') {
   const roots = [
-    makeRoot('user:mtl-code', 'MTL-Code user skills', 'user', 'mtl-code', path.join(MTL_CODE_HOME_DIR, 'skills')),
+    makeRoot('user:mtl-code', 'Argus user skills', 'user', 'mtl-code', path.join(MTL_CODE_HOME_DIR, 'skills')),
     makeRoot('user:claude', 'Claude user skills', 'user', 'claude', path.join(LEGACY_CLAUDE_HOME_DIR, 'skills')),
     makeRoot('user:codex', 'Codex user skills', 'user', 'codex', path.join(CODEX_HOME_DIR, 'skills')),
   ];
@@ -64,7 +64,7 @@ function getSkillRoots(workspacePath = '') {
   if (workspacePath && typeof workspacePath === 'string' && path.isAbsolute(workspacePath)) {
     const workspaceRoot = path.resolve(workspacePath);
     roots.push(
-      makeRoot('project:mtl-code', 'Project MTL-Code skills', 'project', 'mtl-code', path.join(workspaceRoot, '.mtl-code', 'skills'), workspaceRoot),
+      makeRoot('project:mtl-code', 'Project Argus skills', 'project', 'mtl-code', path.join(workspaceRoot, '.mtl-code', 'skills'), workspaceRoot),
       makeRoot('project:claude', 'Project Claude skills', 'project', 'claude', path.join(workspaceRoot, '.claude', 'skills'), workspaceRoot),
       makeRoot('project:codex', 'Project Codex skills', 'project', 'codex', path.join(workspaceRoot, '.codex', 'skills'), workspaceRoot),
     );

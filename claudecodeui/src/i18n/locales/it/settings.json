@@ -273,7 +273,7 @@
     "apiDocsLink": "Documentazione API",
     "documentation": {
       "title": "Documentazione API esterna",
-      "description": "Scopri come usare l'API esterna per avviare sessioni MTL-Code/Cursor dalle tue applicazioni.",
+      "description": "Scopri come usare l'API esterna per avviare sessioni Argus/Cursor dalle tue applicazioni.",
       "viewLink": "Vedi documentazione API →"
     },
     "loading": "Caricamento...",
@@ -293,7 +293,7 @@
     },
     "account": {
       "claude": {
-        "description": "Assistente AI Anthropic MTL-Code"
+        "description": "Assistente AI Anthropic Argus"
       },
       "cursor": {
         "description": "Editor di codice potenziato da AI Cursor"
@@ -395,7 +395,7 @@
   "mcpServers": {
     "title": "Server MCP",
     "description": {
-      "claude": "I server Model Context Protocol forniscono strumenti e fonti dati aggiuntive a MTL-Code",
+      "claude": "I server Model Context Protocol forniscono strumenti e fonti dati aggiuntive a Argus",
       "cursor": "I server Model Context Protocol forniscono strumenti e fonti dati aggiuntive a Cursor",
       "codex": "I server Model Context Protocol forniscono strumenti e fonti dati aggiuntive a Codex"
     },

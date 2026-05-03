@@ -49,7 +49,7 @@
     "title": "TaskMasterを始める",
     "subtitle": "生産的なタスク管理のガイド",
     "examples": {
-      "parsePRD": "💬 例：\n「MTL-Code Task Masterで新しいプロジェクトを初期化しました。.taskmaster/docs/prd.txtにPRDがあります。解析して初期タスクを設定するのを手伝ってもらえますか？」",
+      "parsePRD": "💬 例：\n「Argus Task Masterで新しいプロジェクトを初期化しました。.taskmaster/docs/prd.txtにPRDがあります。解析して初期タスクを設定するのを手伝ってもらえますか？」",
       "expandTask": "💬 例：\n「タスク5は複雑そうです。サブタスクに分解してもらえますか？」",
       "addTask": "💬 例：\n「Cloudinaryを使用してユーザープロフィール画像のアップロードを実装する新しいタスクを追加してください。最適なアプローチを調査してください。」"
     },

@@ -20,6 +20,22 @@ function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: st
     return t('mainContent.projectFiles');
   }
 
+  if (activeTab === 'review') {
+    return 'Changes';
+  }
+
+  if (activeTab === 'actions') {
+    return 'Run';
+  }
+
+  if (activeTab === 'browser') {
+    return 'Preview';
+  }
+
+  if (activeTab === 'artifacts') {
+    return 'Results';
+  }
+
   if (activeTab === 'tasks' && shouldShowTasksTab) {
     return 'TaskMaster';
   }

@@ -8,20 +8,29 @@ sequenceDiagram
   participant App as React App
   participant API as Express /api
   participant WS as WebSocket /ws
-  participant Providers as Provider session folders
+  participant ArgusStore as Argus session folders
+  participant Legacy as Legacy provider folders
 
   Browser->>App: load app
   App->>API: auth status / user
   App->>WS: connect with token
   App->>API: GET /api/projects
-  API->>Providers: scan native project/session stores
-  Providers-->>API: projects and sessions
+  API->>ArgusStore: scan ~/.mtl-code/projects
+  ArgusStore-->>API: Argus projects and sessions
+  API->>Legacy: optional fallback ~/.claude/projects only
+  Legacy-->>API: legacy-compatible Argus sessions
   API-->>App: project list
-  API->>Providers: watch folders with chokidar
-  Providers-->>API: file changes
+  API->>ArgusStore: watch folders with chokidar
+  ArgusStore-->>API: file changes
   API-->>WS: projects_updated / loading_progress
   WS-->>App: refresh sidebar/session metadata
 ```
+
+First-use invariant: sidebar/project/conversation UI consumes only Argus sessions. `codexSessions`、`cursorSessions`、`geminiSessions` may still appear in legacy data contracts, but they must not be merged into visible conversation lists, search results, or route-sync selection.
+
+Desktop sidebar invariant: top-level actions are quick conversation, search, and the project/conversation switch. Plugins, automations, and the separate Agent config dashboard are not first-use sidebar actions. Project rows stay compact and session rows are clickable across the full row; the `...` affordance owns secondary actions such as rename, pin, archive, dispatch, copy, and delete.
+
+Project creation invariant: packaged desktop builds must open the native Windows folder picker through the Electron `argusDesktop.selectProjectRoot` bridge. The React `FolderBrowserModal` remains only as a web/non-Electron fallback, while runtime paths such as `resources/mtl-code` and `~/.mtl-code` stay unchanged for compatibility.
 
 关键文件：
 
@@ -37,43 +46,98 @@ sequenceDiagram
 2. `useProjectsState` 保存 `selectedProject` 和 `selectedSession`，并跳转到 `/session/:sessionId`。
 3. `MainContent` 在 `chat` tab 渲染 `ChatInterface`。
 4. `useSessionStore` 从 `/api/sessions/:sessionId/messages` 拉取持久化消息。
-5. `server/routes/messages.js` 调用选中 Provider 的 session adapter。
-6. Provider 历史被转换为 `NormalizedMessage[]`。
+5. `server/routes/messages.js` 调用 Argus/`claude` compatibility session adapter。
+6. Argus 历史被转换为 `NormalizedMessage[]`。
 7. 前端合并 server messages 和 realtime messages 后渲染。
 
 关键不变量：server history 是稳定来源，realtime messages 是飞行中的覆盖层。
+
+会话路由和面板切换不变量：
+
+1. 点击侧边栏会话或直接打开 `/session/:id` 时，项目、会话和 URL 必须先对齐，并进入 Chat。
+2. 当当前 URL 已经指向同一个 session 时，顶部 Chat / Files / Shell / Changes / Run / Preview / Results 面板切换不能再次被路由同步逻辑重置回 Chat。
+
+滚动稳定性不变量：
+
+1. 后台 `projects_updated`、WebSocket reconnect 或 agent/subagent 历史合并触发消息刷新时，只刷新当前可见窗口；除非用户主动加载全部历史，不要把完整 JSONL 历史一次性替换进 DOM。
+2. 同一 session 的历史刷新必须捕获当前可见消息锚点并恢复滚动位置；如果用户本来在底部，则刷新后回到底部。
+3. 程序化刷新和锚点恢复期间必须临时屏蔽“滚到顶部自动加载更早消息”，避免消息高度重算把对话区误判为用户滚到顶部。
 
 ## 发送 Agent 消息
 
 ```mermaid
 sequenceDiagram
   participant Chat as ChatInterface
+  participant Settings as /api/settings
   participant WS as /ws
   participant Server as server/index.js
-  participant Runtime as Provider runtime
+  participant Runtime as Argus runtime
   participant Store as useSessionStore
 
-  Chat->>WS: provider command message
-  WS->>Server: claude-command / cursor-command / codex-command / gemini-command
-  Server->>Runtime: query or spawn provider
-  Runtime-->>Server: native SDK/CLI events
+  Chat->>Settings: preview OpenMythos dispatchPlan
+  Settings-->>Chat: confirm or single-agent decision
+  Chat->>WS: Argus command message
+  WS->>Server: claude-command compatibility message
+  Server->>Runtime: spawn mtl-code stream-json
+  Runtime-->>Server: native runtime events
   Server-->>WS: NormalizedMessage events
   WS-->>Chat: latestMessage
   Chat->>Store: append/update realtime messages
   Store-->>Chat: merged render state
 ```
 
-`server/index.js` 当前处理的 Provider command message type：
+OpenMythos 自动派发确认流程：
 
-- `claude-command`
+1. `useChatComposerState` 在真正发送前调用 `POST /api/settings/openmythos-dispatch-preview`。
+2. 后端使用 `buildOpenMythosRuntimePreview()` 和当前 `~/.mtl-code/settings.json` 生成 `dispatchPlan`。
+3. 如果没有派发计划，本轮默认以单 Agent 执行，并把 `openMythosAutoDispatch: false` 放入 command options，避免 CLI 自己重新判断后意外派发。
+4. 如果存在派发计划，前端弹出中文确认：确定则发送 `openMythosDispatchConfirmed: true` 并允许自动派发；取消则发送 `openMythosAutoDispatch: false`。
+5. `server/claude-sdk.js` 根据 command options 注入 `MTL_CODE_OPENMYTHOS_AUTO_DISPATCH=0` 或 `MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED=1`，子进程最终以该单次决策为准。
+6. `agent_runtime_debug` 会记录本轮确认状态，诊断面板只展示后端实际收到的配置。
+
+`server/index.js` 当前主路径处理 `claude-command`，它是 Argus 的 compatibility message type。以下其他 command types 可能仍在旧代码中存在，但属于 legacy hidden Provider surface：
+
 - `cursor-command`
 - `codex-command`
 - `gemini-command`
+
+Argus 主路径还会使用：
+
+- `claude-command`
 - `abort-session`
 - `check-session-status`
 - `get-pending-permissions`
 - `get-active-sessions`
 - `claude-permission-response`
+
+## ContextBudget / 上下文显示流程
+
+UI 的上下文数字统一使用 `ContextBudget`，不要再让实时、REST、历史加载各算一套。
+
+```mermaid
+sequenceDiagram
+  participant Runtime as Argus runtime
+  participant SDK as server/claude-sdk.js
+  participant Budget as context-budget-service
+  participant API as /token-usage and messages
+  participant UI as Chat composer
+
+  Runtime-->>SDK: result.modelUsage
+  SDK->>Budget: buildContextBudgetFromModelUsage()
+  Budget-->>SDK: current + cumulative + window
+  SDK-->>UI: status token_budget with contextBudget and legacy tokenBudget
+  UI->>API: reload /token-usage or /messages
+  API->>Budget: buildContextBudgetFromJsonlLines/Entries()
+  API-->>UI: same ContextBudget plus legacy used/total
+```
+
+关键口径：
+
+1. `current.used` 表示当前请求占用的上下文窗口，按 `input + cacheRead + cacheCreation` 计算，不包含 `output`。
+2. `cumulative.used` 表示当前会话累计 token 流量，包含 `input + output + cacheRead + cacheCreation`。
+3. `window.tokens` 的优先级是 Argus `modelUsage.contextWindow`、会话绑定模型 profile、当前 active profile、环境变量、`200000` fallback。
+4. DeepSeek V4 profile（`deepseek-v4-pro`、`deepseek-v4-flash`）必须显示 1M 窗口；如果显示 200K，优先检查 profile 绑定和 `ContextBudget.window.source`。
+5. `tokenBudget`、`tokenUsage.used`、`tokenUsage.total` 仍保留为旧 UI/命令兼容字段，但新 UI 必须从 `contextBudget.current` 和 `contextBudget.cumulative` 读取。
 
 New-session UI invariant:
 
@@ -85,14 +149,25 @@ New-session UI invariant:
 
 ## Tool Permission 流程
 
-1. Claude SDK 发出 permission request。
+1. Argus runtime 通过 `claude-command` compatibility path 发出 permission request。
 2. 后端通过 `/ws` 发送 normalized permission event。
 3. Chat UI 渲染 permission request。
 4. 用户允许或拒绝。
-5. UI 携带 `requestId` 发送 `claude-permission-response`。
+5. UI 携带 `requestId` 发送 `claude-permission-response`。这里的 message type 是兼容名称，不是用户可见品牌。
 6. `server/claude-sdk.js` 解析 pending approval，然后继续或阻止工具调用。
 
 除非产品明确要求“记住权限”，一次性 approval 不应被持久化。
+
+Argus first-use 默认权限为 `acceptEdits`：新会话会自动允许 `Edit`、`Write`、`MultiEdit`、`NotebookEdit` 这类文件编辑工具，Shell/Bash 仍按规则申请或走 Runtime Permissions。历史 `localStorage` 或旧设置里如果保存了整类 `Bash`、`Edit`、`Write` deny，前端 `chatStorage` 和后端 `claude-sdk.js` 会清理这些 stale deny，避免 Task/Agent worker 被派发后无法落盘。`Task`/`Agent` 本身只负责派发 worker，真正写入仍由 worker 内部调用文件编辑工具完成。
+
+## 运行诊断流程
+
+1. 每次发送 Argus 消息前，`server/index.js` 会根据最终 command options 生成 `runtimeDiagnostics`。
+2. 后端通过 WebSocket 发送 `kind=status`、`text=agent_runtime_debug` 的 normalized message。
+3. `useChatRealtimeHandlers` 接收后给诊断补上当前可见 session id，并写入 ChatInterface。
+4. `ChatInterface` 通过模块级 session 缓存保存最近一次诊断；切换到别的会话再回来时必须恢复原 session 的诊断，不依赖组件内部 ref。
+5. `AgentRuntimeDiagnosticsPanel` 只展示最近一次后端实际收到的配置，不从前端预估配置生成。
+6. 新会话从临时 id 替换成真实 id 时，需要把诊断迁移到真实 session id，避免首轮诊断在刷新项目/会话后消失。
 
 ## Workspace 文件流程
 
@@ -105,12 +180,48 @@ New-session UI invariant:
 
 ## Git 流程
 
-1. `GitPanel` 调用 `/api/git/*` endpoints。
-2. `server/routes/git.js` 解析 project context 并执行 Git 命令。
-3. UI 渲染 status、diff、branch、commit history、remote state。
-4. commit 和 remote 操作返回结构化状态或错误给 panel。
+Review is the first visible Git-backed surface in the current first-use product. It exposes local change review, file diffs, stage, unstage, and discard. Broader Git settings, Git-first project creation, branch management, history, and remotes remain compatibility/future surfaces.
 
-Git 改动影响 workspace，不影响 Provider 原生 session history。
+1. `ReviewPanel` calls `/api/git/status` and `/api/git/diff` for project-scoped local changes.
+2. Review file actions call `/api/git/stage`, `/api/git/unstage`, and `/api/git/discard`.
+3. `server/routes/git.js` resolves the project into the actual repository root before executing Git commands.
+4. The broader legacy `GitPanel` can still call branch, commit, history, and remote endpoints, but it is not shown in first-use navigation.
+
+Git 改动影响 workspace，不影响 Argus 原生 session history。
+
+## 写入守卫流程
+
+文件编辑器和文件树写入必须优先走 `server/services/file-mutation-service.js`，不要在路由里直接散落 `writeFile`。Argus CLI 的 `FileWriteTool` / `FileEditTool` 继续走 `../claude-code/src/utils/file.ts` 的 `writeTextContent`，该底层写入需要保持临时文件替换和写后内容校验。
+
+```mermaid
+sequenceDiagram
+  participant Editor as Code editor
+  participant API as /api/projects/:projectName/file
+  participant Guard as file-mutation-service
+  participant Disk as Workspace file
+  participant Log as ~/.mtl-code-ui/file-mutations.jsonl
+
+  Editor->>API: GET file
+  API->>Guard: readProjectTextFileSnapshot
+  Guard-->>Editor: content + baseHash
+  Editor->>API: PUT content + baseHash
+  API->>Guard: saveProjectTextFileWithGuard
+  Guard->>Disk: read current hash
+  Guard->>Guard: compare current hash with baseHash
+  Guard->>Disk: write temp file and rename
+  Guard->>Disk: verify written hash
+  Guard->>Log: append mutation event
+  Guard-->>Editor: next baseHash
+```
+
+关键不变量：
+
+1. 保存文本文件时，前端必须回传最近一次读取到的 `baseHash`。
+2. 如果磁盘上的当前 hash 和 `baseHash` 不一致，后端返回 `409 FILE_WRITE_CONFLICT`，前端提示用户重新加载，不能覆盖。
+3. 写入必须使用同目录临时文件加 `rename`，写完后重新读取校验 hash。
+4. 同一进程内同一文件写入要串行化，避免两个保存请求同时读取同一个旧 hash 后互相覆盖。
+  5. 写入、创建、重命名、删除和上传都要记录到 `file-mutations.jsonl`，方便回溯“谁在什么时候动了什么”。
+  6. Argus CLI 工具写入完成后必须重新读取目标文件并比对内容，避免 Windows/同步盘/杀软干扰下出现“工具返回成功但磁盘内容不一致”。
 
 ## Shell 流程
 
@@ -134,7 +245,7 @@ Git 改动影响 workspace，不影响 Provider 原生 session history。
 4. Provider-specific MCP adapter 读写原生 Provider config。
 5. UI 按 scope 刷新 grouped server list。
 
-Global add 走 `/api/providers/mcp/servers/global`，对支持的 scope 应用到所有 Provider。
+Global add 走 `/api/providers/mcp/servers/global`，但 first-use 产品默认只应影响 Argus/`claude` compatibility provider。不要因为 legacy adapters 存在就把 MCP UI 扩展为多 Provider 选择器。
 
 Agent Builder 的“浏览应用 > 自定义 MCP”复用同一套 Provider MCP API：
 
@@ -163,7 +274,7 @@ MCP diagnostics updates:
 1. Repository MCP cards can call `GET /api/providers/:provider/mcp/servers/:name/diagnose?scope=user|project&workspacePath=...`.
 2. Diagnostics checks whether the package directory exists, npm dependencies are present, provider config was written, required setup fields are configured, and the stdio command can launch.
 3. Password/token fields are reported only as `configured` or `missing`; secret values are never returned.
-4. Manifest-declared tools are shown as a hint, but live tool discovery still belongs to the MTL-Code runtime after the conversation starts.
+4. Manifest-declared tools are shown as a hint, but live tool discovery still belongs to the Argus runtime after the conversation starts.
 
 ## Plugin 流程
 
@@ -187,15 +298,15 @@ MCP diagnostics updates:
 8. Installing an Agent template through the guided setup also creates or updates a runtime Agent config through `POST /api/agents`, using the installed markdown as the Agent system prompt.
 9. Skills install as single files or full package directories. They are not auto-bound to an Agent until the user selects or references them in Agent configuration.
 10. Agent Builder loads real installed Skills through `GET /api/agents/skills/installed`, scanning user and project skill roots for `SKILL.md`.
-11. Skill discovery roots include `~/.mtl-code/skills`, `~/.claude/skills`, `~/.codex/skills`, and matching project-local `.mtl-code/.claude/.codex/skills` folders when a workspace path is available.
+11. Skill discovery roots prefer `~/.mtl-code/skills` and project-local `.mtl-code/skills`. `.claude/skills` is a legacy compatibility fallback; `.codex/skills` and other legacy roots should not become visible first-use concepts unless multi-provider support is explicitly restored.
 12. Bound Agent skills are marked as callable only when the Skill registry can find a matching installed package. Missing skills remain visible but show as not installed.
 
 ## Remote Agent Repository Server Flow
 
-1. Remote repository serving is no longer embedded in MTL-Code UI. It lives in the standalone `agent-skill-hub` project.
-2. MTL-Code UI acts as a client: users add `https://host/agent-repository/catalog.json` as a Repository source.
+1. Remote repository serving is no longer embedded in Argus. It lives in the standalone `agent-skill-hub` project.
+2. Argus acts as a client: users add `https://host/agent-repository/catalog.json` as a Repository source.
 3. Public submissions call the Hub's `POST /agent-repository/submit` endpoint and are stored under the Hub data directory.
-4. Admin review APIs live on the Hub under `/api/admin/*`; MTL-Code UI no longer mounts `/api/agent-repository-server`.
+4. Admin review APIs live on the Hub under `/api/admin/*`; Argus no longer mounts `/api/agent-repository-server`.
 5. Published items appear in `GET /agent-repository/catalog.json` with relative `contentUrl` and `likeUrl` values.
 6. Remote likes call `POST /agent-repository/items/:itemId/like`, update global counters, and are reflected in the next catalog sync.
 7. Published Agent templates preserve ChatGPT-style metadata (`icon`, `supportedApps`, `appSlots`, `capabilities`) so downstream clients can render a guided creation flow.
@@ -206,24 +317,24 @@ MCP diagnostics updates:
 
 1. Agent runtime configs are persisted by `server/services/agent-config-service.js` in `~/.mtl-code-ui/agents/agents.json`.
 2. The main Agent config page is a template/config management surface, not a workspace-start screen. It loads and edits configs through authenticated `/api/agents` endpoints, including model, context window, prompt, skills, tools, app bindings, guardrails, and trigger keywords.
-3. Project chat never loads or displays Agent selection. It sends commands with `allowSessionAgentBinding: false`, so project sessions use the default MTL-Code runtime even if a stale binding row exists.
+3. Project chat never loads or displays Agent selection. It sends commands with `allowSessionAgentBinding: false`, so project sessions use the default Argus runtime even if a stale binding row exists.
 4. Standalone conversation chat loads enabled agents and binds selection to a single conversation, not to the workspace. Persisted conversation bindings use authenticated backend APIs:
    - `GET /api/sessions/:sessionId/agent?provider=claude`
    - `PUT /api/sessions/:sessionId/agent`
    - `DELETE /api/sessions/:sessionId/agent?provider=claude`
-5. New standalone conversations show a yes/no choice for whether to use an Agent. Choosing no keeps the default MTL-Code conversation. Choosing yes asks for the Agent and, if needed, slot setup.
+5. New standalone conversations show a yes/no choice for whether to use an Agent. Choosing no keeps the default Argus conversation. Choosing yes asks for the Agent and, if needed, slot setup.
 6. If the selected Agent declares application slots, the composer opens a setup dialog and requires slot-to-app selections before binding the Agent to the conversation.
 7. Per-conversation Agent slot selections are stored as `session_agent_bindings.config_json`. New installs create the column with the table; existing installs add it during DB migration.
 8. A leading `@agent` mention can match `id`, `name`, or `shortName` and overrides the conversation Agent for that one message only.
 9. Frontend sends the resolved agent as `options.agentId`, resolved slot config as `options.agentAppBindings`, and the guard flag `options.allowSessionAgentBinding` in the existing WebSocket command payload. This keeps the provider command shape stable while making slots backend-visible.
 10. `server/index.js` resolves the agent at send time. If a concrete session ID is available and the frontend did not send `options.agentId`, the backend falls back to the persisted session binding only when `allowSessionAgentBinding === true`. If fresh `options.agentAppBindings` are not sent, it falls back to the persisted `config_json`. Disabled, draft, or missing agents are ignored.
 11. `server/services/agent-config-service.js` applies session slot configuration before building the Agent prompt, so the prompt reflects the per-conversation app choices rather than only the reusable Agent template defaults.
-12. Agent knowledge sources are resolved through `server/services/agent-rag-service.js`. Indexed uploaded-file chunks are scored against the current user command and appended to the Agent prompt as RAG excerpts.
+12. Agent knowledge/RAG is removed from the product runtime. Do not add upload, indexing, retrieval, or RAG prompt injection surfaces unless the product direction changes again.
 13. Agent skills are resolved through `server/services/agent-skill-service.js` at runtime. Installed skills include provider/scope/path details in the Agent prompt; missing skills are explicitly marked as unavailable.
-14. For MTL-Code (`claude-command` compatibility path), the backend passes the agent profile through `--append-system-prompt`, preserving the default coding/safety prompt while adding the selected Agent role, skills, application bindings, RAG excerpts, memory metadata, and guardrails.
-15. Agent `modelConfig.contextWindowTokens` is forwarded as `options.contextWindowTokens`; `server/claude-sdk.js` writes it into `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW` for the spawned MTL-Code child. This is a real backend runtime override, not a GUI-only value.
-16. Agent `modelConfig.model` overrides the MTL-Code model only when it is not `inherit`. Non-MTL providers receive the Agent prompt in-band but do not inherit the MTL-Code model override.
-17. Agent MCP app bindings do not create a separate runtime transport. They reference MCP servers already persisted through Provider MCP config, so the spawned MTL-Code provider discovers them through its native config files.
+14. For Argus (`claude-command` compatibility path), the backend passes the agent profile through `--append-system-prompt`, preserving the default coding/safety prompt while adding the selected Agent role, skills, application bindings, memory metadata, and guardrails.
+15. Agent `modelConfig.contextWindowTokens` is forwarded as `options.contextWindowTokens`; `server/claude-sdk.js` writes it into `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW` for the spawned Argus child. This is a real backend runtime override, not a GUI-only value.
+16. Agent `modelConfig.model` overrides the Argus model only when it is not `inherit`. Legacy providers are hidden in first-use UI and should not drive visible model behavior.
+17. Agent MCP app bindings do not create a separate runtime transport. They reference MCP servers already persisted through Provider MCP config, so the spawned Argus provider discovers them through its native config files.
 
 Agent quick start:
 
@@ -237,10 +348,11 @@ Project/conversation separation:
 
 1. Project sessions and standalone conversations are independent sidebar modes.
 2. `useProjectsState` clears `selectedConversationSession` when project mode or a project session is selected.
+3. Both modes display Argus sessions only. Legacy provider sessions must remain hidden even if backend payloads still carry `cursorSessions`、`codexSessions` or `geminiSessions`.
 
 2026-04-28 implementation note:
 
-1. Project chat uses the default MTL-Code runtime path. It does not load Agent lists or render Agent selectors in the composer. It can still show installed Skills; when a project session selects Skills, the UI persists an empty-Agent session binding with `configuration.skills` so later messages in that same session keep the Skill context.
+1. Project chat uses the default Argus runtime path. It does not load Agent lists or render Agent selectors in the composer. It can still show installed Skills; when a project session selects Skills, the UI persists an empty-Agent session binding with `configuration.skills` so later messages in that same session keep the Skill context.
 2. Standalone conversation chat owns Agent and Skill binding. It loads enabled Agents, installed Skills, persisted session binding, and sends `allowSessionAgentBinding: true`.
 3. Agent setup dialogs resolve MCP slots from real provider MCP configuration by reading user-scoped MCP servers and, when a workspace path is available, project-scoped MCP servers.
 4. Placeholder app values such as `Custom MCP` or `自定义 MCP` are not valid final slot selections. A user must choose a concrete `MCP: <serverName>` entry before enabling the Agent for the conversation.
@@ -251,6 +363,44 @@ Project/conversation separation:
 9. Switching to conversation mode clears `selectedSession` so project-backed sessions do not remain active behind the standalone conversation list.
 10. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
 11. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
+
+## OpenMythos 自动派发流程
+
+OpenMythos 是策略层，Argus Coordinator/Subagent 是执行层。运行时不会在后端预创建 worker，而是在 Argus CLI 的隐藏运行时提醒里输出 `dispatchPlan`，再由 Coordinator 首轮调用现有 `Agent({ subagent_type: "worker" })`。
+
+```mermaid
+sequenceDiagram
+  participant UI as Argus UI
+  participant API as Express runtime config
+  participant CLI as Argus CLI
+  participant Coord as Coordinator
+  participant Worker as Agent worker
+
+  UI->>API: 保存 openMythosRuntime
+  API->>CLI: 注入 MTL_CODE_OPENMYTHOS_* 和 MTL_CODE_COORDINATOR_MODE
+  CLI->>CLI: 根据任务生成 runtimeCard 和 dispatchPlan
+  CLI->>Coord: 追加 OpenMythos runtime reminder
+  Coord->>Worker: 首轮按 dispatchPlan 启动 worker
+  Worker-->>Coord: <task-notification>
+  Coord->>Coord: 汇总 worker 结果，不重新生成 dispatchPlan
+  Coord-->>UI: 合并 worker 结果并继续主会话
+```
+
+关键不变量：
+
+1. `low` effort 不自动派发。
+2. `autoDispatchSubagents=false` 时不自动派发。
+3. `MTL_CODE_COORDINATOR_MODE` 未开启时不自动派发。
+4. `autoDispatchMinEffort` 控制最低触发强度，默认 `medium`。
+5. `autoDispatchMaxWorkers` 控制最多 worker 数，默认 3。
+6. 诊断面板必须展示自动派发开关、最低派发强度、最大 worker 数和当前 `dispatchPlan`。
+7. Chat 输入框上方必须在收到 `agent_runtime_debug` 后展示 OpenMythos 状态提示，让普通对话也能看到自动派发是否开启以及当前是否有 worker 计划。
+8. Worker 回传的 `<task-notification>` 是汇总输入，不是新的用户任务；OpenMythos 不得为它生成新的 `dispatchPlan`。
+9. SDK/print 路径的硬派发在同一个 runtime state 里只允许尝试一次，避免 worker 完成后同一计划被重复启动。
+10. `<task-notification>` 是 coordinator/subagent 的内部控制消息，不应该作为用户蓝色气泡渲染。后端 `ClaudeSessionsProvider` 会在历史/实时归一化时过滤，前端 `useChatMessages` 也会兜底跳过。
+11. `useChatMessages` 会把带 `parentToolUseId` 的实时 child tool 归并回对应 `Task` / `Agent` 容器，并跳过这些内部 child 消息的主聊天渲染。
+12. 输入框上方的 Subagent 状态条只从当前会话的 `Task` / `Agent` 容器聚合：`running` 表示容器未完成，`completed` 表示已有 tool result，`outputting` 表示未完成且存在正在输出的 child tool。
+13. OpenMythos 诊断需要区分 `configuredAutoDispatchSubagents` 和 `effectiveAutoDispatchSubagents`：设置开启但本轮没有 worker 计划、或用户选择单 Agent 时，UI 应显示“设置开启，本轮单 Agent”，不能误写成“运行时设置关闭”。
 
 ## Worktree Dispatch Management
 
@@ -272,7 +422,7 @@ Project/conversation separation:
 Channel status:
 
 1. The Agent Builder channel cards are currently configuration placeholders only.
-2. DingTalk, Slack, webhook, and other external channel runtimes are intentionally deferred until the Agent/MCP/RAG/repository loop is stable.
+2. DingTalk, Slack, webhook, and other external channel runtimes are intentionally deferred until the Agent/MCP/repository loop is stable.
 
 Agent management APIs:
 
@@ -281,31 +431,31 @@ Agent management APIs:
 3. `GET /api/agents/skills/installed?workspacePath=...` lists installed Skill packages and their callable status.
 4. `POST /api/agents` creates or upserts an Agent.
 5. `PUT /api/agents/:agentId` and `PATCH /api/agents/:agentId` update an Agent.
-6. `DELETE /api/agents/:agentId` deletes the Agent, removes its uploaded knowledge directory, and clears session bindings for that Agent.
+6. `DELETE /api/agents/:agentId` deletes the Agent and clears session bindings for that Agent.
 
-## MTLCode Anthropic-Compatible Model Config Flow
+## Argus Anthropic-Compatible Model Config Flow
 
-1. User opens Settings > Agents; the only visible agent is `MTLCode`, while the internal provider key remains `claude`.
+1. User opens Settings > Agents; the only visible agent is `Argus`, while the internal provider key remains `claude`.
 2. The Model tab calls `GET /api/settings/mtl-code-model`.
 3. `server/routes/settings.js` reads `~/.mtl-code/settings.json`, with a legacy read-only fallback to `~/.claude/settings.json`.
 4. The UI saves changes with `PUT /api/settings/mtl-code-model`.
 5. The route writes `modelType: "anthropic"`, `model`, `env.ANTHROPIC_AUTH_TOKEN`, `env.ANTHROPIC_BASE_URL`, `env.ANTHROPIC_MODEL`, and Anthropic default model aliases.
 6. The route clears legacy `env.OPENAI_*` keys so new sessions cannot accidentally route through OpenAI Chat Completions.
-7. New MTL-Code backend sessions load those settings and use the Anthropic Messages API request format.
+7. New Argus backend sessions load those settings and use the Anthropic Messages API request format.
 8. Auth status reports `method: "anthropic_compatible"` when an Anthropic token is configured for a custom base URL.
 
-Invariant: visible naming is MTLCode, but backend/session compatibility still uses the `claude` provider key until the full provider ID migration is completed.
+Invariant: visible naming is Argus, but backend/session compatibility still uses the `claude` provider key until the full provider ID migration is completed.
 
-New-chat invariant: `ProviderSelectionEmptyState.tsx` is not a provider/model picker. It shows one `MTL-Code / MTLCode` surface, and `useChatProviderState.ts` rewrites stale local storage values back to `selected-provider=claude` and `claude-model=mtlcode`.
+New-chat invariant: `ProviderSelectionEmptyState.tsx` is not a provider/model picker. It shows one `Argus` surface, and `useChatProviderState.ts` rewrites stale local storage values back to `selected-provider=claude` and `claude-model=mtlcode`.
 
 DeepSeek Anthropic adapter invariant:
 
 1. DeepSeek custom runtime config uses the Anthropic-compatible endpoint, typically `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
-2. `server/claude-sdk.js` merges `~/.mtl-code/settings.json.env` into the spawned MTL-Code child process so model/base URL/token/effort settings are active even when the UI server itself was started without those env vars.
-3. UI-spawned MTL-Code uses the `runtime.bareMode` setting from `/api/settings/mtl-code-model`; when enabled, `server/claude-sdk.js` adds `--bare` to avoid hooks, auto-memory, plugin sync, LSP startup, and CLAUDE.md auto-discovery unless context is explicitly provided.
+2. `server/claude-sdk.js` merges `~/.mtl-code/settings.json.env` into the spawned Argus child process so model/base URL/token/effort settings are active even when the UI server itself was started without those env vars.
+3. UI-spawned Argus uses the `runtime.bareMode` setting from `/api/settings/mtl-code-model`; when enabled, `server/claude-sdk.js` adds `--bare` to avoid hooks, auto-memory, plugin sync, LSP startup, and CLAUDE.md auto-discovery unless context is explicitly provided.
 4. When the endpoint or model is DeepSeek, the spawn env supplies both `MTL_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EFFORT_LEVEL` with a default of `high`, plus `MTL_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` from the configured Haiku/small model.
-5. The MTL-Code backend treats DeepSeek as Anthropic-compatible but suppresses Anthropic `thinking.budget_tokens`; DeepSeek thinking strength is controlled through `output_config.effort`.
-6. Context window length is part of the same saved settings flow. The UI writes `runtime.contextWindowTokens`; `server/routes/settings.js` persists it as `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW`; `server/claude-sdk.js` passes it to the spawned MTL-Code child process. DeepSeek 1M endpoints should be set explicitly to `1000000`; there is no provider-specific automatic context-window override.
+5. The Argus backend treats DeepSeek as Anthropic-compatible but suppresses Anthropic `thinking.budget_tokens`; DeepSeek thinking strength is controlled through `output_config.effort`.
+6. Context window length is part of the same saved settings flow. The UI writes `runtime.contextWindowTokens`; `server/routes/settings.js` persists it as `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW`; `server/claude-sdk.js` passes it to the spawned Argus child process. DeepSeek 1M endpoints should be set explicitly to `1000000`; there is no provider-specific automatic context-window override.
 7. A high `cache_read_input_tokens` number on a simple prompt is usually the coding-agent prompt/tool/project context being read from provider cache, not the literal user prompt size. `--bare` reduces avoidable auto-context, but agent tool schemas still cost context.
 
 Project session discovery invariant:
@@ -314,10 +464,11 @@ Project session discovery invariant:
 2. `findProjectDir()` must return the concrete encoded project directory, not the parent `projects` root.
 3. `getSessions()` reads JSONL files from that concrete directory and converts entries with `sessionId` into sidebar sessions.
 4. A project showing chat messages in the main panel but `0` sidebar sessions usually means discovery is pointed at the wrong folder level or the native JSONL parser no longer matches the persisted message shape.
+5. The first-use sidebar intentionally displays only Argus sessions. The internal compatibility provider is still `claude`, so project and standalone conversation lists consume `project.sessions` and ignore `codexSessions`, `cursorSessions`, and `geminiSessions` in the visible conversation UI.
 
 Context compaction visibility:
 
-1. MTL-Code / Claude Code owns actual context compaction. The UI does not summarize chat history itself.
+1. Argus runtime owns actual context compaction. The UI does not summarize chat history itself.
 2. Claude JSONL `system` entries with `subtype=compact_boundary` or `subtype=microcompact_boundary` are normalized as `context_compaction` messages.
 3. When a `compact_boundary` is followed by an `isCompactSummary` transcript-only user entry, `ClaudeSessionsProvider.fetchHistory()` attaches that summary to the same normalized compaction event and skips the synthetic user entry.
 4. Realtime compaction events can still render without a summary first; if the runtime later streams an orphan compact summary, it renders as a separate summary card rather than a normal user message.

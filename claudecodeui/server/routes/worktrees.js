@@ -5,12 +5,17 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 
+import { queryClaudeSDK } from '../claude-sdk.js';
 import {
   addProjectManually,
   deleteProject,
   extractProjectDirectory,
 } from '../projects.js';
-import { sessionAgentBindingsDb, worktreeDispatchesDb } from '../database/db.js';
+import { db, sessionAgentBindingsDb, worktreeDispatchesDb } from '../database/db.js';
+import {
+  evaluateRuntimePermission,
+  resolveRuntimeShell,
+} from '../services/runtime-permission-service.js';
 
 const router = express.Router();
 
@@ -159,83 +164,295 @@ async function removeProjectConfig(projectName) {
   }
 }
 
+export async function createManagedWorktreeDispatch(parentProjectName, body = {}) {
+  const parentProjectPath = path.resolve(await extractProjectDirectory(parentProjectName));
+
+  let repoRoot;
+  try {
+    repoRoot = await getRepoRoot(parentProjectPath);
+  } catch {
+    const error = new Error('Project is not a Git repository');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const taskPrompt = normalizeString(body?.taskPrompt, 20000);
+  const title = normalizeString(body?.title, 120) || taskPrompt.split(/\r?\n/)[0] || 'Worktree task';
+  const requestedBaseRef = normalizeString(body?.baseRef, 200);
+  const baseRef = requestedBaseRef || await getCurrentBranchOrHead(repoRoot);
+  const baseCommitResult = await runGit(['rev-parse', baseRef], repoRoot);
+  const baseCommit = baseCommitResult.stdout.trim();
+  const parentDirty = await getDirtyState(repoRoot);
+
+  const id = crypto.randomUUID();
+  const worktreeRoot = getWorktreeRoot();
+  await fs.mkdir(worktreeRoot, { recursive: true });
+
+  const repoName = slugify(path.basename(repoRoot));
+  const worktreeName = `${repoName}-${slugify(title)}-${id.slice(0, 8)}`;
+  const worktreePath = path.join(worktreeRoot, worktreeName);
+  if (!ensurePathInside(worktreeRoot, worktreePath)) {
+    const error = new Error('Resolved worktree path is outside the configured worktree root');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await runGit(['worktree', 'add', '--detach', worktreePath, baseRef], repoRoot);
+
+  const parentDisplayName = getProjectDisplayName(parentProjectName, parentProjectPath);
+  const displayName = normalizeString(body?.displayName, 120) || `${parentDisplayName} - WT ${id.slice(0, 8)}`;
+  const project = await addProjectManually(worktreePath, displayName);
+  const skills = normalizeStringArray(body?.skills);
+  const appBindings = normalizeAppBindings(body?.appBindings);
+  const agentId = normalizeString(body?.agentId, 120);
+  const provider = normalizeString(body?.provider, 40) || 'claude';
+
+  let worktree = worktreeDispatchesDb.create({
+    id,
+    projectName: project.name,
+    sessionId: null,
+    provider,
+    parentProjectName,
+    parentProjectPath,
+    worktreePath,
+    baseRef,
+    baseCommit,
+    mode: 'managed',
+    status: 'created',
+    agentId,
+    skills,
+    appBindings,
+    taskPrompt,
+    displayName,
+  });
+
+  if (body?.sessionId) {
+    const sessionId = normalizeString(body.sessionId, 200);
+    worktree = worktreeDispatchesDb.updateSession(id, sessionId, provider);
+    if (agentId || skills.length > 0) {
+      sessionAgentBindingsDb.setAgent(sessionId, provider, agentId, { appBindings, skills });
+    }
+  }
+
+  return {
+    worktree,
+    project: { ...project, worktree },
+    parentDirty,
+  };
+}
+
+function createId(prefix) {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+async function readWorktreeSetupCommand(worktreePath) {
+  const configPath = path.join(worktreePath, '.mtl-code', 'actions.json');
+  try {
+    const parsed = JSON.parse(await fs.readFile(configPath, 'utf8'));
+    const setup = parsed.actions?.setup || parsed.setup || {};
+    if (typeof setup === 'string') return setup.trim();
+    if (!setup || typeof setup !== 'object') return '';
+    const platformKey = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux';
+    return String(setup.platforms?.[platformKey] || setup.command || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function createBootstrapWriter() {
+  let sessionId = '';
+  return {
+    userId: null,
+    send(payload) {
+      try {
+        const message = typeof payload === 'string' ? JSON.parse(payload) : payload;
+        if (message?.newSessionId) sessionId = message.newSessionId;
+        if (message?.sessionId) sessionId = message.sessionId;
+      } catch {
+        // Ignore non-JSON output.
+      }
+    },
+    setSessionId(value) {
+      sessionId = value || sessionId;
+    },
+    getSessionId() {
+      return sessionId || null;
+    },
+  };
+}
+
+async function bindArgusSessionForWorktree(worktree, prompt = '') {
+  if (!worktree?.id || !worktree.worktreePath || !prompt.trim()) {
+    return worktree;
+  }
+  worktreeDispatchesDb.updateStatus(worktree.id, 'running');
+  const writer = createBootstrapWriter();
+  await queryClaudeSDK(prompt, {
+    cwd: worktree.worktreePath,
+    projectPath: worktree.worktreePath,
+    sessionSummary: worktree.displayName || prompt.slice(0, 80),
+    permissionMode: 'bypassPermissions',
+  }, writer);
+  const sessionId = writer.getSessionId();
+  let updated = worktreeDispatchesDb.updateStatus(worktree.id, 'done');
+  if (sessionId) {
+    updated = worktreeDispatchesDb.updateSession(worktree.id, sessionId, worktree.provider || 'claude');
+  }
+  return updated;
+}
+
+function persistActionRun(run) {
+  db.prepare(`
+    INSERT INTO action_runs (id, project_name, project_path, action_type, command, status, output, exit_code, started_at, finished_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    run.id,
+    run.projectName,
+    run.projectPath,
+    run.actionType,
+    run.command,
+    run.status,
+    run.output || '',
+    run.exitCode ?? null,
+    run.startedAt,
+    run.finishedAt || null,
+  );
+}
+
+function persistActionArtifact(run) {
+  db.prepare(`
+    INSERT INTO artifacts (id, kind, title, project_name, content, metadata_json)
+    VALUES (?, 'action-log', ?, ?, ?, ?)
+  `).run(
+    createId('artifact'),
+    `worktree setup ${run.status}: ${run.command}`.slice(0, 240),
+    run.projectName || null,
+    run.output || '',
+    JSON.stringify({
+      source: 'actions',
+      runId: run.id,
+      actionType: run.actionType,
+      status: run.status,
+      exitCode: run.exitCode ?? null,
+      projectPath: run.projectPath,
+    }),
+  );
+}
+
 router.post('/projects/:projectName/worktrees', async (req, res) => {
   try {
-    const parentProjectName = req.params.projectName;
-    const parentProjectPath = path.resolve(await extractProjectDirectory(parentProjectName));
-
-    let repoRoot;
-    try {
-      repoRoot = await getRepoRoot(parentProjectPath);
-    } catch {
-      return res.status(400).json({ error: 'Project is not a Git repository' });
+    const result = await createManagedWorktreeDispatch(req.params.projectName, req.body || {});
+    if (req.body?.createNewSession || req.body?.startArgus) {
+      result.worktree = await bindArgusSessionForWorktree(result.worktree, result.worktree.taskPrompt || req.body?.taskPrompt || '');
+      result.project = { ...result.project, worktree: result.worktree };
     }
-
-    const taskPrompt = normalizeString(req.body?.taskPrompt, 20000);
-    const title = normalizeString(req.body?.title, 120) || taskPrompt.split(/\r?\n/)[0] || 'Worktree task';
-    const requestedBaseRef = normalizeString(req.body?.baseRef, 200);
-    const baseRef = requestedBaseRef || await getCurrentBranchOrHead(repoRoot);
-    const baseCommitResult = await runGit(['rev-parse', baseRef], repoRoot);
-    const baseCommit = baseCommitResult.stdout.trim();
-    const parentDirty = await getDirtyState(repoRoot);
-
-    const id = crypto.randomUUID();
-    const worktreeRoot = getWorktreeRoot();
-    await fs.mkdir(worktreeRoot, { recursive: true });
-
-    const repoName = slugify(path.basename(repoRoot));
-    const worktreeName = `${repoName}-${slugify(title)}-${id.slice(0, 8)}`;
-    const worktreePath = path.join(worktreeRoot, worktreeName);
-    if (!ensurePathInside(worktreeRoot, worktreePath)) {
-      return res.status(400).json({ error: 'Resolved worktree path is outside the configured worktree root' });
-    }
-
-    await runGit(['worktree', 'add', '--detach', worktreePath, baseRef], repoRoot);
-
-    const parentDisplayName = getProjectDisplayName(parentProjectName, parentProjectPath);
-    const displayName = normalizeString(req.body?.displayName, 120) || `${parentDisplayName} - WT ${id.slice(0, 8)}`;
-    const project = await addProjectManually(worktreePath, displayName);
-    const skills = normalizeStringArray(req.body?.skills);
-    const appBindings = normalizeAppBindings(req.body?.appBindings);
-    const agentId = normalizeString(req.body?.agentId, 120);
-    const provider = normalizeString(req.body?.provider, 40) || 'claude';
-
-    let worktree = worktreeDispatchesDb.create({
-      id,
-      projectName: project.name,
-      sessionId: null,
-      provider,
-      parentProjectName,
-      parentProjectPath,
-      worktreePath,
-      baseRef,
-      baseCommit,
-      mode: 'managed',
-      status: 'created',
-      agentId,
-      skills,
-      appBindings,
-      taskPrompt,
-      displayName,
-    });
-
-    if (req.body?.sessionId) {
-      const sessionId = normalizeString(req.body.sessionId, 200);
-      worktree = worktreeDispatchesDb.updateSession(id, sessionId, provider);
-      if (agentId || skills.length > 0) {
-        sessionAgentBindingsDb.setAgent(sessionId, provider, agentId, { appBindings, skills });
-      }
-    }
-
     res.json({
       success: true,
-      worktree,
-      project: { ...project, worktree },
-      parentDirty,
+      ...result,
     });
   } catch (error) {
     console.error('[Worktree] Failed to create worktree:', error);
-    res.status(500).json({ error: error.message || 'Failed to create worktree' });
+    res.status(error.statusCode || 500).json({ error: error.message || 'Failed to create worktree' });
+  }
+});
+
+router.post('/worktrees/:id/handoff', async (req, res) => {
+  try {
+    const worktree = worktreeDispatchesDb.getById(req.params.id);
+    if (!worktree) {
+      return res.status(404).json({ error: 'Worktree not found' });
+    }
+    const direction = req.body?.direction === 'local-to-worktree' ? 'local-to-worktree' : 'worktree-to-local';
+    const status = direction === 'worktree-to-local' ? 'ready-for-local-handoff' : 'ready-for-worktree-handoff';
+
+    if (direction === 'worktree-to-local') {
+      const parentDirty = await getDirtyState(worktree.parentProjectPath);
+      if (parentDirty.isDirty && req.body?.allowDirtyParent !== true) {
+        return res.status(409).json({
+          error: 'Parent project has local changes. Commit, stash, or explicitly allow dirty handoff first.',
+          dirtyStatus: parentDirty.status,
+        });
+      }
+      if (req.body?.branchName && !worktree.branchName) {
+        const branchName = validateBranchName(req.body.branchName);
+        await runGit(['checkout', '-b', branchName], worktree.worktreePath);
+        worktreeDispatchesDb.updateBranch(worktree.id, branchName);
+      }
+    }
+
+    const updated = worktreeDispatchesDb.updateHandoff(worktree.id, status);
+    res.json({ success: true, worktree: updated, direction });
+  } catch (error) {
+    console.error('[Worktree] Handoff failed:', error);
+    res.status(500).json({ error: error.message || 'Failed to hand off worktree' });
+  }
+});
+
+router.post('/worktrees/:id/run-setup', async (req, res) => {
+  try {
+    const worktree = worktreeDispatchesDb.getById(req.params.id);
+    if (!worktree) {
+      return res.status(404).json({ error: 'Worktree not found' });
+    }
+    const command = String(req.body?.command || await readWorktreeSetupCommand(worktree.worktreePath) || '').trim();
+    if (!command) {
+      return res.status(400).json({ error: 'No setup command configured for this worktree' });
+    }
+    const permission = evaluateRuntimePermission({
+      command,
+      cwd: worktree.worktreePath,
+      projectPath: worktree.worktreePath,
+      operation: 'worktree-setup',
+      confirmationId: req.body?.confirmationId || '',
+    });
+    if (permission.requiresConfirmation) {
+      return res.json({
+        success: true,
+        requiresConfirmation: true,
+        confirmationId: permission.confirmationId,
+        reason: permission.reason,
+      });
+    }
+    if (!permission.allowed) {
+      return res.status(403).json({ error: permission.reason || 'Setup is not allowed by runtime permissions' });
+    }
+
+    const run = {
+      id: createId('action'),
+      projectName: worktree.projectName || worktree.displayName || worktree.id,
+      projectPath: worktree.worktreePath,
+      actionType: 'setup',
+      command,
+      status: 'running',
+      output: '',
+      exitCode: null,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+    };
+    const launch = resolveRuntimeShell(command);
+    const child = spawn(launch.shell, launch.args, {
+      cwd: worktree.worktreePath,
+      shell: false,
+      windowsHide: true,
+      env: { ...process.env },
+    });
+    child.stdout?.on('data', (chunk) => { run.output += chunk.toString(); });
+    child.stderr?.on('data', (chunk) => { run.output += chunk.toString(); });
+    child.once('error', (error) => {
+      run.status = 'failed';
+      run.output += `\n${error.message}`;
+    });
+    const exitCode = await new Promise((resolve) => child.once('close', resolve));
+    run.status = exitCode === 0 ? 'completed' : 'failed';
+    run.exitCode = exitCode;
+    run.finishedAt = new Date().toISOString();
+    persistActionRun(run);
+    persistActionArtifact(run);
+    worktreeDispatchesDb.updateActionRun(worktree.id, run.id, 'setup');
+    res.json({ success: true, run });
+  } catch (error) {
+    console.error('[Worktree] Setup failed:', error);
+    res.status(500).json({ error: error.message || 'Failed to run worktree setup' });
   }
 });
 

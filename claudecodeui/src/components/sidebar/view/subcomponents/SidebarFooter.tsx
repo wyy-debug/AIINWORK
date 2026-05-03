@@ -1,8 +1,7 @@
-import { Bot, Settings, ArrowUpCircle } from 'lucide-react';
+import { Settings, ArrowUpCircle } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { IS_PLATFORM } from '../../../../constants/config';
-import { cn } from '../../../../lib/utils';
-import type { AppTab } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 
 type SidebarFooterProps = {
@@ -12,8 +11,6 @@ type SidebarFooterProps = {
   currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
-  activeTab: AppTab;
-  onShowAgents: () => void;
   t: TFunction;
 };
 
@@ -24,13 +21,8 @@ export default function SidebarFooter({
   currentVersion,
   onShowVersionModal,
   onShowSettings,
-  activeTab,
-  onShowAgents,
   t,
 }: SidebarFooterProps) {
-  const isAgentsActive = activeTab === 'agents';
-  const agentConfigLabel = t('actions.agentConfig', { defaultValue: 'Agent 配置' });
-
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       {/* Update banner */}
@@ -87,19 +79,6 @@ export default function SidebarFooter({
       {/* Desktop primary actions */}
       <div className="hidden space-y-1 px-2 py-1.5 md:block">
         <button
-          className={cn(
-            'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors',
-            isAgentsActive
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
-          )}
-          onClick={onShowAgents}
-          aria-current={isAgentsActive ? 'page' : undefined}
-        >
-          <Bot className="h-3.5 w-3.5" />
-          <span className="text-sm">{agentConfigLabel}</span>
-        </button>
-        <button
           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           onClick={onShowSettings}
         >
@@ -112,28 +91,13 @@ export default function SidebarFooter({
       {!IS_PLATFORM && (
         <div className="hidden px-3 py-2 text-center md:block">
           <span className="text-[10px] text-muted-foreground/40">
-            MTL-Code UI v{currentVersion} – {t('branding.openSource')}
+            Argus v{currentVersion} – {t('branding.openSource')}
           </span>
         </div>
       )}
 
       {/* Mobile primary actions */}
       <div className="space-y-2 px-3 py-3 md:hidden">
-        <button
-          className={cn(
-            'flex h-12 w-full items-center gap-3.5 rounded-xl px-4 transition-all active:scale-[0.98]',
-            isAgentsActive
-              ? 'bg-primary/10 text-primary'
-              : 'bg-muted/40 text-foreground hover:bg-muted/60',
-          )}
-          onClick={onShowAgents}
-          aria-current={isAgentsActive ? 'page' : undefined}
-        >
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-background/80">
-            <Bot className="h-4 w-4" />
-          </div>
-          <span className="text-base font-medium">{agentConfigLabel}</span>
-        </button>
         <button
           className="flex h-12 w-full items-center gap-3.5 rounded-xl bg-muted/40 px-4 transition-all hover:bg-muted/60 active:scale-[0.98]"
           onClick={onShowSettings}

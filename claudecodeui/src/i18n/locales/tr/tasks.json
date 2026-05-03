@@ -49,7 +49,7 @@
     "title": "TaskMaster'a Başlarken",
     "subtitle": "Verimli görev yönetimi için rehberin",
     "examples": {
-      "parsePRD": "💬 Örnek:\n\"MTL-Code Task Master ile yeni bir proje başlattım. .taskmaster/docs/prd.txt altında bir PRD'm var. Bunu ayrıştırıp ilk görevleri kurmama yardım eder misin?\"",
+      "parsePRD": "💬 Örnek:\n\"Argus Task Master ile yeni bir proje başlattım. .taskmaster/docs/prd.txt altında bir PRD'm var. Bunu ayrıştırıp ilk görevleri kurmama yardım eder misin?\"",
       "expandTask": "💬 Örnek:\n\"Görev 5 karmaşık görünüyor. Bunu alt görevlere bölebilir misin?\"",
       "addTask": "💬 Örnek:\n\"Lütfen Cloudinary kullanarak kullanıcı profil resmi yükleme özelliği için yeni bir görev ekle, en iyi yaklaşımı araştır.\""
     },

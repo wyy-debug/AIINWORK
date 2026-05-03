@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, shell } from 'electron';
+import { app, BrowserView, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 const electronDir = path.dirname(fileURLToPath(import.meta.url));
 const sourceAppRoot = path.resolve(electronDir, '..');
 const appRoot = app.isPackaged ? app.getAppPath() : sourceAppRoot;
+const preloadEntry = path.join(electronDir, 'preload.cjs');
 const resourcesRoot = app.isPackaged
   ? process.resourcesPath
   : path.join(sourceAppRoot, 'electron-resources');
@@ -21,6 +22,11 @@ const backendLogPath = path.join(userDataDir, 'logs', 'backend.log');
 
 let backendProcess = null;
 let mainWindow = null;
+let backendBecameHealthy = false;
+let browserPreviewWindow = null;
+let browserView = null;
+let activeBrowserProjectPath = '';
+const configuredBrowserWebContents = new WeakSet();
 
 const resolveWindowIconPath = () => {
   const candidates = app.isPackaged
@@ -35,6 +41,324 @@ const resolveWindowIconPath = () => {
 
   return candidates.find((candidate) => existsSync(candidate));
 };
+
+const isTrustedRenderer = (event) => {
+  try {
+    const rendererUrl = new URL(event.senderFrame?.url || event.sender.getURL());
+    return ['127.0.0.1', 'localhost'].includes(rendererUrl.hostname);
+  } catch {
+    return false;
+  }
+};
+
+const resolveDialogDefaultPath = (requestedPath) => {
+  const homePath = app.getPath('home');
+  const desktopPath = app.getPath('desktop') || homePath;
+
+  if (typeof requestedPath !== 'string' || !requestedPath.trim()) {
+    return desktopPath;
+  }
+
+  let candidate = requestedPath.trim();
+  if (candidate === '~') {
+    candidate = homePath;
+  } else if (
+    candidate.startsWith(`~${path.sep}`) ||
+    candidate.startsWith('~/') ||
+    candidate.startsWith('~\\')
+  ) {
+    candidate = path.join(homePath, candidate.slice(2));
+  }
+
+  let currentPath = candidate;
+  while (currentPath && currentPath !== path.dirname(currentPath)) {
+    if (existsSync(currentPath)) {
+      return currentPath;
+    }
+    currentPath = path.dirname(currentPath);
+  }
+
+  return existsSync(desktopPath) ? desktopPath : homePath;
+};
+
+ipcMain.handle('dialog:select-project-root', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { canceled: true, error: 'Untrusted renderer' };
+  }
+
+  const dialogOptions = {
+    title: 'Select Project Root',
+    defaultPath: resolveDialogDefaultPath(options?.defaultPath),
+    properties: ['openDirectory', 'createDirectory'],
+  };
+
+  const ownerWindow =
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getFocusedWindow();
+  const result = ownerWindow
+    ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || !result.filePaths?.[0]) {
+    return { canceled: true };
+  }
+
+  return {
+    canceled: false,
+    path: result.filePaths[0],
+  };
+});
+
+const isBrowserUrlAllowed = (targetUrl, projectPath = '') => {
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return false;
+  }
+
+  if (['http:', 'https:'].includes(parsed.protocol)) {
+    return ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  }
+
+  if (parsed.protocol !== 'file:') {
+    return false;
+  }
+
+  if (!projectPath) {
+    return false;
+  }
+
+  let filePath;
+  try {
+    filePath = fileURLToPath(parsed);
+  } catch {
+    return false;
+  }
+  const resolvedProjectPath = path.resolve(projectPath);
+  const resolvedFilePath = path.resolve(filePath);
+  return resolvedFilePath === resolvedProjectPath || resolvedFilePath.startsWith(`${resolvedProjectPath}${path.sep}`);
+};
+
+const resolveBrowserProjectPath = (projectPath = '') => {
+  if (typeof projectPath === 'string' && projectPath.trim()) {
+    activeBrowserProjectPath = path.resolve(projectPath.trim());
+  }
+  return activeBrowserProjectPath;
+};
+
+const configureBrowserWebContents = (webContents) => {
+  if (!webContents || configuredBrowserWebContents.has(webContents)) {
+    return;
+  }
+  configuredBrowserWebContents.add(webContents);
+
+  const isAllowed = (targetUrl) => isBrowserUrlAllowed(targetUrl, activeBrowserProjectPath);
+  const blockIfDisallowed = (event, targetUrl) => {
+    if (!isAllowed(targetUrl)) {
+      event.preventDefault();
+    }
+  };
+
+  webContents.on('will-navigate', blockIfDisallowed);
+  webContents.on('will-redirect', blockIfDisallowed);
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowed(url)) {
+      webContents.loadURL(url).catch(() => undefined);
+    }
+    return { action: 'deny' };
+  });
+};
+
+const getBrowserPreviewWindow = () => {
+  if (browserPreviewWindow && !browserPreviewWindow.isDestroyed()) {
+    return browserPreviewWindow;
+  }
+
+  browserPreviewWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  configureBrowserWebContents(browserPreviewWindow.webContents);
+  return browserPreviewWindow;
+};
+
+const getBrowserView = () => {
+  if (browserView && !browserView.webContents.isDestroyed()) {
+    return browserView;
+  }
+
+  browserView = new BrowserView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  configureBrowserWebContents(browserView.webContents);
+  return browserView;
+};
+
+const getBrowserWebContents = () => {
+  if (browserView && !browserView.webContents.isDestroyed()) {
+    return browserView.webContents;
+  }
+  return getBrowserPreviewWindow().webContents;
+};
+
+const normalizeBrowserBounds = (bounds = {}) => ({
+  x: Math.max(0, Math.round(Number(bounds.x) || 0)),
+  y: Math.max(0, Math.round(Number(bounds.y) || 0)),
+  width: Math.max(120, Math.round(Number(bounds.width) || 120)),
+  height: Math.max(120, Math.round(Number(bounds.height) || 120)),
+});
+
+ipcMain.handle('browser:attach', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const ownerWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.fromWebContents(event.sender);
+  if (!ownerWindow) {
+    return { success: false, error: 'Main window is unavailable' };
+  }
+  const view = getBrowserView();
+  ownerWindow.setBrowserView(view);
+  view.setBounds(normalizeBrowserBounds(options?.bounds));
+  view.setAutoResize({ width: true, height: true });
+  if (options?.url) {
+    const projectPath = resolveBrowserProjectPath(options?.projectPath);
+    if (!isBrowserUrlAllowed(options.url, projectPath)) {
+      return { success: false, error: 'Only localhost, 127.0.0.1, ::1, or file URLs under the project are allowed.' };
+    }
+    await view.webContents.loadURL(options.url);
+  }
+  return { success: true, url: view.webContents.getURL() };
+});
+
+ipcMain.handle('browser:resize', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  if (!browserView || browserView.webContents.isDestroyed()) {
+    return { success: true };
+  }
+  browserView.setBounds(normalizeBrowserBounds(options?.bounds));
+  return { success: true, url: browserView.webContents.getURL() };
+});
+
+ipcMain.handle('browser:open', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const projectPath = resolveBrowserProjectPath(options?.projectPath);
+  if (!isBrowserUrlAllowed(options?.url, projectPath)) {
+    return { success: false, error: 'Only localhost, 127.0.0.1, ::1, or file URLs under the project are allowed.' };
+  }
+  const webContents = getBrowserWebContents();
+  await webContents.loadURL(options.url);
+  return { success: true, url: webContents.getURL() };
+});
+
+ipcMain.handle('browser:navigate', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const projectPath = resolveBrowserProjectPath(options?.projectPath);
+  if (!isBrowserUrlAllowed(options?.url, projectPath)) {
+    return { success: false, error: 'Only localhost, 127.0.0.1, ::1, or file URLs under the project are allowed.' };
+  }
+  const webContents = getBrowserWebContents();
+  await webContents.loadURL(options.url);
+  return { success: true, url: webContents.getURL() };
+});
+
+ipcMain.handle('browser:back', async (event) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const webContents = getBrowserWebContents();
+  if (webContents.canGoBack()) {
+    webContents.goBack();
+  }
+  return { success: true, url: webContents.getURL() };
+});
+
+ipcMain.handle('browser:forward', async (event) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const webContents = getBrowserWebContents();
+  if (webContents.canGoForward()) {
+    webContents.goForward();
+  }
+  return { success: true, url: webContents.getURL() };
+});
+
+ipcMain.handle('browser:refresh', async (event) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const webContents = getBrowserWebContents();
+  webContents.reload();
+  return { success: true, url: webContents.getURL() };
+});
+
+ipcMain.handle('browser:screenshot', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const projectPath = resolveBrowserProjectPath(options?.projectPath);
+  if (!isBrowserUrlAllowed(options?.url, projectPath)) {
+    return { success: false, error: 'Only localhost, 127.0.0.1, ::1, or file URLs under the project are allowed.' };
+  }
+
+  const webContents = getBrowserWebContents();
+  if (webContents.getURL() !== options.url) {
+    await webContents.loadURL(options.url);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const image = await webContents.capturePage();
+  return {
+    success: true,
+    dataUrl: image.toDataURL(),
+  };
+});
+
+ipcMain.handle('browser:close', async (event) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  if (browserPreviewWindow && !browserPreviewWindow.isDestroyed()) {
+    browserPreviewWindow.close();
+  }
+  browserPreviewWindow = null;
+  const ownerWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.fromWebContents(event.sender);
+  if (ownerWindow && browserView && !browserView.webContents.isDestroyed()) {
+    ownerWindow.removeBrowserView(browserView);
+  }
+  if (browserView && !browserView.webContents.isDestroyed()) {
+    browserView.webContents.close();
+  }
+  browserView = null;
+  activeBrowserProjectPath = '';
+  return { success: true };
+});
+
+ipcMain.handle('browser:detach', async (event) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+  const ownerWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.fromWebContents(event.sender);
+  if (ownerWindow && browserView && !browserView.webContents.isDestroyed()) {
+    ownerWindow.removeBrowserView(browserView);
+  }
+  return { success: true };
+});
 
 const findFreePort = (startPort) => new Promise((resolve) => {
   const tryPort = (port) => {
@@ -54,7 +378,7 @@ const waitForHealth = (port, timeoutMs = 45000) => new Promise((resolve, reject)
 
   const retry = () => {
     if (Date.now() - startedAt > timeoutMs) {
-      reject(new Error(`MTL-Code UI backend did not become healthy on port ${port}`));
+      reject(new Error(`Argus backend did not become healthy on port ${port}`));
       return;
     }
 
@@ -81,6 +405,16 @@ const waitForHealth = (port, timeoutMs = 45000) => new Promise((resolve, reject)
 
   poll();
 });
+
+const readBackendLogTail = () => {
+  try {
+    const log = readFileSync(backendLogPath, 'utf8');
+    const lines = log.split(/\r?\n/).filter(Boolean);
+    return lines.slice(-40).join('\n');
+  } catch {
+    return '';
+  }
+};
 
 const resolveMtlCodeCliPath = () => {
   const candidates = [
@@ -138,18 +472,39 @@ const startBackend = async () => {
   });
 
   pipeBackendLogs();
+  backendBecameHealthy = false;
+
+  const backendExitDuringStartup = new Promise((_, reject) => {
+    backendProcess.once('exit', (code, signal) => {
+      if (backendBecameHealthy || app.isQuitting) {
+        return;
+      }
+
+      const logTail = readBackendLogTail();
+      reject(new Error([
+        `Argus backend exited before health check. code=${code ?? 'null'} signal=${signal ?? 'null'}`,
+        `Backend log: ${backendLogPath}`,
+        logTail ? `\nLast backend log lines:\n${logTail}` : '',
+      ].filter(Boolean).join('\n')));
+    });
+  });
 
   backendProcess.once('exit', (code, signal) => {
-    if (!app.isQuitting) {
+    if (backendBecameHealthy && !app.isQuitting) {
       dialog.showErrorBox(
-        'MTL-Code UI backend stopped',
+        'Argus backend stopped',
         `Backend process exited unexpectedly. code=${code ?? 'null'} signal=${signal ?? 'null'}\n\nLog: ${backendLogPath}`,
       );
       app.quit();
     }
   });
 
-  await waitForHealth(port);
+  await Promise.race([
+    waitForHealth(port).then(() => {
+      backendBecameHealthy = true;
+    }),
+    backendExitDuringStartup,
+  ]);
   return `http://127.0.0.1:${port}`;
 };
 
@@ -160,11 +515,12 @@ const createMainWindow = async (url) => {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    title: 'MTL-Code',
+    title: 'Argus',
     icon: resolveWindowIconPath(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: preloadEntry,
       sandbox: true,
     },
   });
@@ -182,6 +538,11 @@ const createMainWindow = async (url) => {
 };
 
 const stopBackend = () => {
+  if (browserPreviewWindow && !browserPreviewWindow.isDestroyed()) {
+    browserPreviewWindow.close();
+    browserPreviewWindow = null;
+  }
+
   if (!backendProcess || backendProcess.killed) {
     return;
   }
@@ -209,7 +570,7 @@ if (!app.requestSingleInstanceLock()) {
       const url = await startBackend();
       await createMainWindow(url);
     } catch (error) {
-      dialog.showErrorBox('MTL-Code failed to start', error?.stack || error?.message || String(error));
+      dialog.showErrorBox('Argus failed to start', error?.stack || error?.message || String(error));
       app.quit();
     }
   });

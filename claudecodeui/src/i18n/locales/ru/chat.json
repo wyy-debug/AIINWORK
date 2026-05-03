@@ -15,7 +15,7 @@
     "user": "П",
     "error": "Ошибка",
     "tool": "Инструмент",
-    "claude": "MTL-Code",
+    "claude": "Argus",
     "cursor": "Cursor",
     "codex": "Codex",
     "gemini": "Gemini"
@@ -55,8 +55,8 @@
   "interactive": {
     "title": "Интерактивный запрос",
     "waiting": "Ожидание вашего ответа в CLI",
-    "instruction": "Пожалуйста, выберите опцию в терминале, где запущен MTL-Code.",
-    "selectedOption": "✓ MTL-Code выбрал опцию {{number}}",
+    "instruction": "Пожалуйста, выберите опцию в терминале, где запущен Argus.",
+    "selectedOption": "✓ Argus выбрал опцию {{number}}",
     "instructionDetail": "В CLI вы бы выбрали эту опцию интерактивно, используя клавиши со стрелками или введя номер."
   },
   "thinking": {
@@ -83,7 +83,7 @@
     "title": "План реализации"
   },
   "usageLimit": {
-    "resetAt": "Достигнут лимит использования MTL-Code. Ваш лимит будет сброшен в **{{time}} {{timezone}}** - {{date}}"
+    "resetAt": "Достигнут лимит использования Argus. Ваш лимит будет сброшен в **{{time}} {{timezone}}** - {{date}}"
   },
   "codex": {
     "permissionMode": "Режим разрешений",
@@ -139,14 +139,14 @@
   "thinkingMode": {
     "selector": {
       "title": "Режим размышления",
-      "description": "Расширенное размышление дает MTL-Code больше времени для оценки альтернатив",
+      "description": "Расширенное размышление дает Argus больше времени для оценки альтернатив",
       "active": "Активен",
       "tip": "Более высокие режимы размышления занимают больше времени, но обеспечивают более тщательный анализ"
     },
     "modes": {
       "none": {
         "name": "Стандартный",
-        "description": "Обычный ответ MTL-Code",
+        "description": "Обычный ответ Argus",
         "prefix": ""
       },
       "think": {
@@ -183,7 +183,7 @@
       "google": "от Google"
     },
     "readyPrompt": {
-      "claude": "Готов использовать MTL-Code с {{model}}. Начните вводить сообщение ниже.",
+      "claude": "Готов использовать Argus с {{model}}. Начните вводить сообщение ниже.",
       "cursor": "Готов использовать Cursor с {{model}}. Начните вводить сообщение ниже.",
       "codex": "Готов использовать Codex с {{model}}. Начните вводить сообщение ниже.",
       "gemini": "Готов использовать Gemini с {{model}}. Начните вводить сообщение ниже.",
@@ -230,10 +230,10 @@
     },
     "loading": "Загрузка терминала...",
     "connecting": "Подключение к оболочке...",
-    "startSession": "Начать новый сеанс MTL-Code",
+    "startSession": "Начать новый сеанс Argus",
     "resumeSession": "Возобновить сеанс: {{displayName}}...",
     "runCommand": "Выполнить {{command}} в {{projectName}}",
-    "startCli": "Запуск MTL-Code CLI в {{projectName}}",
+    "startCli": "Запуск Argus CLI в {{projectName}}",
     "defaultCommand": "команда"
   },
   "claudeStatus": {

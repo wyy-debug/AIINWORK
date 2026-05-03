@@ -1,13 +1,13 @@
 /**
- * MTL-Code Runtime Integration
+ * Argus Runtime Integration
  *
  * This module keeps the historical public API name used by the UI server, but
- * execution is delegated directly to the paired MTL-Code backend CLI.
+ * execution is delegated directly to the paired Argus backend CLI.
  *
  * Key features:
- * - Direct MTL-Code CLI execution
+ * - Direct Argus CLI execution
  * - Session management with abort capability
- * - Options mapping between UI settings and MTL-Code flags
+ * - Options mapping between UI settings and Argus flags
  * - WebSocket message streaming
  */
 
@@ -26,6 +26,10 @@ import {
   resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
 import {
+  buildContextBudgetFromModelUsage,
+  toLegacyTokenBudget,
+} from './services/context-budget-service.js';
+import {
   createNotificationEvent,
   notifyRunFailed,
   notifyRunStopped,
@@ -33,6 +37,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { evaluateRuntimePermission } from './services/runtime-permission-service.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -42,6 +47,14 @@ const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEO
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
+const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
+const ARGUS_STALE_EXACT_TOOL_DENIES = new Set([
+  'Bash',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'Write',
+]);
 
 function normalizeToolSettings(settings = {}) {
   return {
@@ -49,10 +62,21 @@ function normalizeToolSettings(settings = {}) {
       ? settings.allowedTools.filter(entry => typeof entry === 'string' && entry.trim())
       : [],
     disallowedTools: Array.isArray(settings.disallowedTools)
-      ? settings.disallowedTools.filter(entry => typeof entry === 'string' && entry.trim())
+      ? settings.disallowedTools
+        .filter(entry => typeof entry === 'string' && entry.trim())
+        .filter(entry => !ARGUS_STALE_EXACT_TOOL_DENIES.has(entry))
       : [],
     skipPermissions: Boolean(settings.skipPermissions)
   };
+}
+
+function normalizePermissionMode(value) {
+  return value === 'default'
+    || value === 'acceptEdits'
+    || value === 'bypassPermissions'
+    || value === 'plan'
+    ? value
+    : ARGUS_DEFAULT_PERMISSION_MODE;
 }
 
 function shouldBypassToolPermissions(options = {}, settings = normalizeToolSettings()) {
@@ -170,7 +194,7 @@ function getMtlCodeCliCandidates() {
 }
 
 function resolveMtlCodeCliPath() {
-  return getMtlCodeCliCandidates()[0] || 'no MTL-Code backend candidate found';
+  return getMtlCodeCliCandidates()[0] || 'no Argus backend candidate found';
 }
 
 function normalizeWindowsDrivePath(value) {
@@ -233,7 +257,7 @@ function resolveWorkingDirectory(rawCwd) {
 
   const repaired = repairHyphenDecodedPath(rawCwd);
   if (repaired && existsSync(repaired)) {
-    console.warn(`[MTL-Code] Repaired missing cwd "${rawCwd}" -> "${repaired}"`);
+    console.warn(`[Argus] Repaired missing cwd "${rawCwd}" -> "${repaired}"`);
     return repaired;
   }
 
@@ -345,7 +369,7 @@ function matchesToolPermission(entry, toolName, input) {
 }
 
 /**
- * Builds the MTL-Code CLI flags used by the headless stream-json protocol.
+ * Builds the Argus CLI flags used by the headless stream-json protocol.
  * The prompt itself is written to stdin as a structured user message so stdin
  * can stay open for permission control responses.
  * @param {Object} options - UI command options
@@ -377,6 +401,7 @@ function getMtlCodeGlobalConfigFile(env = process.env) {
 function buildMtlCodeArgs(options = {}, env = process.env) {
   const { sessionId, toolsSettings, permissionMode } = options;
   const settings = normalizeToolSettings(toolsSettings);
+  const requestedPermissionMode = normalizePermissionMode(permissionMode);
 
   const args = [
     '--print',
@@ -405,19 +430,20 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     args.push('--resume', sessionId);
   }
 
-  const bypassToolPermissions = shouldBypassToolPermissions(options, settings);
+  const permissionOptions = { ...options, permissionMode: requestedPermissionMode };
+  const bypassToolPermissions = shouldBypassToolPermissions(permissionOptions, settings);
   const effectivePermissionMode = bypassToolPermissions
     ? 'bypassPermissions'
-    : permissionMode;
+    : requestedPermissionMode;
   if (effectivePermissionMode && effectivePermissionMode !== 'default') {
     args.push('--permission-mode', effectivePermissionMode);
   }
-  if ((settings.skipPermissions || options.skipPermissions) && permissionMode !== 'plan') {
+  if ((settings.skipPermissions || options.skipPermissions) && requestedPermissionMode !== 'plan') {
     args.push('--dangerously-skip-permissions');
   }
 
   const allowedTools = [...(settings.allowedTools || [])];
-  if (permissionMode === 'plan') {
+  if (requestedPermissionMode === 'plan') {
     const planModeTools = ['Read', 'Agent', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
     for (const tool of planModeTools) {
       if (!allowedTools.includes(tool)) {
@@ -436,7 +462,7 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     args.push('--append-system-prompt', options.appendSystemPrompt);
   }
 
-  // Let MTL-Code resolve the concrete runtime model from ~/.mtl-code/settings.json
+  // Let Argus resolve the concrete runtime model from ~/.mtl-code/settings.json
   // and OPENAI_* env vars unless the UI sends an explicit non-sentinel model.
   const optionModel = canonicalizeAnthropicModel(options.model);
   if (optionModel && optionModel !== MTL_CODE_MODEL.value) {
@@ -498,7 +524,7 @@ function resolveConfiguredContextWindow(env, overrideTokens = null) {
 async function buildMtlCodeSpawnEnv(options = {}) {
   const settingsEnv = await readMtlCodeSettingsEnv();
   const modelRuntime = await resolveMtlCodeModelRuntime(options.modelProfileId).catch((error) => {
-    console.warn('[MTL-Code] Failed to resolve session model profile:', error?.message || error);
+    console.warn('[Argus] Failed to resolve session model profile:', error?.message || error);
     return null;
   });
   const spawnEnv = {
@@ -507,6 +533,9 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     ...(modelRuntime?.env || {}),
     MTLCODE: '1'
   };
+  if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
+    spawnEnv.MTL_CODE_COORDINATOR_MODE = '1';
+  }
   for (const key of [
     'ANTHROPIC_MODEL',
     'ANTHROPIC_DEFAULT_HAIKU_MODEL',
@@ -526,6 +555,13 @@ async function buildMtlCodeSpawnEnv(options = {}) {
   if (configuredContextWindow) {
     spawnEnv.MTL_CODE_MAX_CONTEXT_TOKENS = configuredContextWindow;
     spawnEnv.CONTEXT_WINDOW = configuredContextWindow;
+  }
+
+  if (options.openMythosAutoDispatch === false) {
+    spawnEnv.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '0';
+    spawnEnv.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '0';
+  } else if (options.openMythosDispatchConfirmed === true) {
+    spawnEnv.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '1';
   }
 
   if (isDeepSeekAnthropicRuntime(spawnEnv)) {
@@ -616,44 +652,21 @@ function transformMessage(sdkMessage) {
 }
 
 /**
- * Extracts token usage from SDK result messages
+ * Extracts context budget from Argus result messages.
  * @param {Object} resultMessage - SDK result message
- * @returns {Object|null} Token budget object or null
+ * @param {Object} options - Runtime options used to resolve the model window
+ * @returns {Promise<Object|null>} Context budget object or null
  */
-function extractTokenBudget(resultMessage) {
+async function extractContextBudget(resultMessage, options = {}) {
   if (resultMessage.type !== 'result' || !resultMessage.modelUsage) {
     return null;
   }
 
-  // Get the first model's usage data
-  const modelKey = Object.keys(resultMessage.modelUsage)[0];
-  const modelData = resultMessage.modelUsage[modelKey];
-
-  if (!modelData) {
-    return null;
-  }
-
-  // Use cumulative tokens if available (tracks total for the session)
-  // Otherwise fall back to per-request tokens
-  const inputTokens = modelData.cumulativeInputTokens || modelData.inputTokens || 0;
-  const outputTokens = modelData.cumulativeOutputTokens || modelData.outputTokens || 0;
-  const cacheReadTokens = modelData.cumulativeCacheReadInputTokens || modelData.cacheReadInputTokens || 0;
-  const cacheCreationTokens = modelData.cumulativeCacheCreationInputTokens || modelData.cacheCreationInputTokens || 0;
-
-  // Total used = input + output + cache tokens
-  const totalUsed = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
-
-  // Prefer the backend-reported model window; fall back to the UI env budget.
-  const contextWindow = parseInt(modelData.contextWindow, 10)
-    || parseInt(process.env.CONTEXT_WINDOW, 10)
-    || 200000;
-
-  // Token calc logged via token-budget WS event
-
-  return {
-    used: totalUsed,
-    total: contextWindow
-  };
+  return buildContextBudgetFromModelUsage(resultMessage, {
+    modelProfileId: options.modelProfileId,
+    contextWindowTokens: options.contextWindowTokens,
+    env: process.env,
+  });
 }
 
 /**
@@ -936,7 +949,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     if (request.subtype !== 'can_use_tool') {
       writeMtlCodeJson(child, buildUnsupportedControlResponse(
         message,
-        `Unsupported MTL-Code control request subtype: ${request.subtype || 'unknown'}`
+        `Unsupported Argus control request subtype: ${request.subtype || 'unknown'}`
       ));
       return;
     }
@@ -1001,7 +1014,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     try {
       message = JSON.parse(line);
     } catch {
-      console.warn('[MTL-Code] Non-JSON stdout:', line);
+      console.warn('[Argus] Non-JSON stdout:', line);
       return;
     }
 
@@ -1024,9 +1037,10 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     if (message.type === 'result') {
       resultReceived = true;
-      const tokenBudgetData = extractTokenBudget(message);
-      if (tokenBudgetData) {
-        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: sid, provider: 'claude' }));
+      const contextBudget = await extractContextBudget(message, options);
+      const tokenBudgetData = toLegacyTokenBudget(contextBudget);
+      if (contextBudget && tokenBudgetData) {
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', contextBudget, tokenBudget: tokenBudgetData, sessionId: sid, provider: 'claude' }));
       }
       closeMtlCodeInput(child);
     }
@@ -1040,13 +1054,22 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     const launches = resolveMtlCodeLaunches();
     const cwd = resolveWorkingDirectory(options.cwd || options.projectPath);
+    const permission = evaluateRuntimePermission({
+      command: 'argus-backend',
+      cwd,
+      projectPath: options.projectPath || options.cwd || cwd,
+      operation: 'argus-backend',
+    });
+    if (!permission.allowed) {
+      throw new Error(permission.reason || 'Argus backend spawn is not allowed by runtime permissions');
+    }
     const childEnv = await buildMtlCodeSpawnEnv(options);
     const cliArgs = buildMtlCodeArgs(options, childEnv);
     let lastSpawnError = null;
 
     for (const launch of launches) {
       const args = [...launch.argsPrefix, ...cliArgs];
-      console.log('[MTL-Code] Starting backend:', launch.displayCommand);
+      console.log('[Argus] Starting backend:', launch.displayCommand);
       let candidateChild;
       try {
         candidateChild = spawn(launch.command, args, {
@@ -1059,7 +1082,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       } catch (spawnError) {
         lastSpawnError = spawnError;
         console.warn(
-          `[MTL-Code] Failed to spawn ${launch.displayCommand}; trying next backend candidate:`,
+          `[Argus] Failed to spawn ${launch.displayCommand}; trying next backend candidate:`,
           spawnError?.message || spawnError
         );
         continue;
@@ -1072,7 +1095,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       } catch (spawnError) {
         lastSpawnError = spawnError;
         console.warn(
-          `[MTL-Code] Failed to start ${launch.displayCommand}; trying next backend candidate:`,
+          `[Argus] Failed to start ${launch.displayCommand}; trying next backend candidate:`,
           spawnError?.message || spawnError
         );
         candidateChild.kill?.('SIGTERM');
@@ -1080,7 +1103,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
 
     if (!child) {
-      throw lastSpawnError || new Error('No usable MTL-Code backend candidate found');
+      throw lastSpawnError || new Error('No usable Argus backend candidate found');
     }
 
     if (sessionId || clientSessionId) {
@@ -1136,7 +1159,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const aborted = Boolean(child._mtlCodeAborted || signal);
     if (code && code !== 0 && !resultReceived && !aborted) {
       const stderrText = stderrLines.slice(-12).join('\n');
-      const message = stderrText || `MTL-Code backend exited with code ${code}`;
+      const message = stderrText || `Argus backend exited with code ${code}`;
       ws.send(createNormalizedMessage({ kind: 'error', content: message, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       notifyRunFailed({
         userId: ws?.userId || null,
@@ -1159,7 +1182,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       });
     }
   } catch (error) {
-    console.error('MTL-Code query error:', error);
+    console.error('Argus query error:', error);
 
     if (child && !child.killed) {
       child.kill('SIGTERM');
@@ -1171,7 +1194,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     const installed = await providerAuthService.isProviderInstalled('claude');
     const errorContent = !installed
-      ? `MTL-Code backend is not installed or not on PATH. Build/link MTL-Code, or set MTL_CODE_CLI_PATH. Current fallback: ${resolveMtlCodeCliPath()}`
+      ? `Argus backend is not installed or not on PATH. Build/link Argus, or set MTL_CODE_CLI_PATH. Current fallback: ${resolveMtlCodeCliPath()}`
       : error.message;
 
     ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
@@ -1190,11 +1213,11 @@ async function queryClaudeSDK(command, options = {}, ws) {
 }
 
 const query = () => {
-  throw new Error('Legacy query path is disabled; use MTL-Code direct execution.');
+  throw new Error('Legacy query path is disabled; use Argus direct execution.');
 };
 
 function mapCliOptionsToSDK() {
-  throw new Error('Legacy query option mapping is disabled; use MTL-Code direct execution.');
+  throw new Error('Legacy query option mapping is disabled; use Argus direct execution.');
 }
 
 async function loadMcpConfig() {
@@ -1407,9 +1430,10 @@ async function queryClaudeSDKLegacy(command, options = {}, ws) {
         if (models.length > 0) {
           // Model info available in result message
         }
-        const tokenBudgetData = extractTokenBudget(message);
-        if (tokenBudgetData) {
-          ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        const contextBudget = await extractContextBudget(message, options);
+        const tokenBudgetData = toLegacyTokenBudget(contextBudget);
+        if (contextBudget && tokenBudgetData) {
+          ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', contextBudget, tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
       }
     }
@@ -1434,7 +1458,7 @@ async function queryClaudeSDKLegacy(command, options = {}, ws) {
     // Complete
 
   } catch (error) {
-    console.error('MTL-Code legacy query path error:', error);
+    console.error('Argus legacy query path error:', error);
 
     // Clean up session on error
     if (capturedSessionId) {
@@ -1444,10 +1468,10 @@ async function queryClaudeSDKLegacy(command, options = {}, ws) {
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
 
-    // Check if MTL-Code CLI is installed for a clearer error message
+    // Check if Argus CLI is installed for a clearer error message
     const installed = await providerAuthService.isProviderInstalled('claude');
     const errorContent = !installed
-      ? `MTL-Code backend is not installed or not on PATH. Install/link mtl-code, or set MTL_CODE_CLI_PATH. Current fallback: ${resolveMtlCodeCliPath()}`
+      ? `Argus backend is not installed or not on PATH. Install/link mtl-code, or set MTL_CODE_CLI_PATH. Current fallback: ${resolveMtlCodeCliPath()}`
       : error.message;
 
     // Send error to WebSocket
@@ -1498,7 +1522,7 @@ async function abortClaudeSDKSession(sessionId) {
 }
 
 /**
- * Sends an additional user guidance message into an active MTL-Code session.
+ * Sends an additional user guidance message into an active Argus session.
  * This is used by the UI while a response is still running.
  * @param {string} sessionId - Active session identifier or temporary client session id
  * @param {string} content - Additional user guidance

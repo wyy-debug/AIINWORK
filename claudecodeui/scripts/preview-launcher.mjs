@@ -16,7 +16,7 @@ const mtlCodeBunEntry = path.join(resourcesDir, 'mtl-code', 'dist', 'cli-bun.js'
 const mtlCodeNodeEntry = path.join(resourcesDir, 'mtl-code', 'dist', 'cli-node.js');
 const bunExe = process.env.BUN_EXE || path.join(os.homedir(), '.bun', 'bin', 'bun.exe');
 const appDataDir = process.env.APP_DATA_DIR ||
-  path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'MTL-Code-UI');
+  path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Argus-UI');
 
 function findFreePort(startPort) {
   return new Promise((resolve, reject) => {
@@ -117,7 +117,7 @@ async function main() {
     env.BUN_EXE = bunExe;
   }
 
-  console.log(`Starting MTL-Code UI at ${url}`);
+  console.log(`Starting Argus at ${url}`);
   console.log(`Bundle: ${bundleRoot}`);
   console.log(`Data: ${appDataDir}`);
 

@@ -50,6 +50,7 @@ export interface NormalizedMessage {
   text?: string;
   tokens?: number;
   canInterrupt?: boolean;
+  contextBudget?: unknown;
   tokenBudget?: unknown;
   requestId?: string;
   input?: unknown;
@@ -87,11 +88,13 @@ export interface SessionSlot {
   _lastServerRef: NormalizedMessage[];
   _lastRealtimeRef: NormalizedMessage[];
   status: SessionStatus;
+  errorMessage?: string;
   fetchedAt: number;
   total: number;
   hasMore: boolean;
   offset: number;
   tokenUsage: unknown;
+  contextBudget: unknown;
 }
 
 const EMPTY: NormalizedMessage[] = [];
@@ -104,11 +107,13 @@ function createEmptySlot(): SessionSlot {
     _lastServerRef: EMPTY,
     _lastRealtimeRef: EMPTY,
     status: 'idle',
+    errorMessage: undefined,
     fetchedAt: 0,
     total: 0,
     hasMore: false,
     offset: 0,
     tokenUsage: null,
+    contextBudget: null,
   };
 }
 
@@ -304,7 +309,14 @@ export function useSessionStore() {
       const response = await apiFetch(url);
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        let message = `HTTP ${response.status}`;
+        try {
+          const errorData = await response.json();
+          message = errorData?.error || errorData?.details || message;
+        } catch {
+          // Keep HTTP status fallback.
+        }
+        throw new Error(message);
       }
 
       const data = await response.json();
@@ -316,9 +328,13 @@ export function useSessionStore() {
       slot.offset = (opts.offset ?? 0) + messages.length;
       slot.fetchedAt = Date.now();
       slot.status = 'idle';
+      slot.errorMessage = undefined;
       recomputeMergedIfNeeded(slot);
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
+        slot.contextBudget = data.tokenUsage?.contextBudget || data.tokenUsage;
+      } else if (data.contextBudget) {
+        slot.contextBudget = data.contextBudget;
       }
 
       notify(sessionId);
@@ -326,6 +342,7 @@ export function useSessionStore() {
     } catch (error) {
       console.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
       slot.status = 'error';
+      slot.errorMessage = error instanceof Error ? error.message : 'Failed to load session messages';
       notify(sessionId);
       return slot;
     }
@@ -439,6 +456,9 @@ export function useSessionStore() {
     if (!toSlot.tokenUsage && fromSlot.tokenUsage) {
       toSlot.tokenUsage = fromSlot.tokenUsage;
     }
+    if (!toSlot.contextBudget && fromSlot.contextBudget) {
+      toSlot.contextBudget = fromSlot.contextBudget;
+    }
 
     recomputeMergedIfNeeded(toSlot);
     store.delete(fromSessionId);
@@ -459,6 +479,8 @@ export function useSessionStore() {
       provider?: LLMProvider;
       projectName?: string;
       projectPath?: string;
+      limit?: number | null;
+      offset?: number;
     } = {},
   ) => {
     const slot = getSlot(sessionId);
@@ -467,6 +489,10 @@ export function useSessionStore() {
       if (opts.provider) params.append('provider', opts.provider);
       if (opts.projectName) params.append('projectName', opts.projectName);
       if (opts.projectPath) params.append('projectPath', opts.projectPath);
+      if (opts.limit !== null && opts.limit !== undefined) {
+        params.append('limit', String(opts.limit));
+        params.append('offset', String(opts.offset ?? 0));
+      }
 
       const qs = params.toString();
       const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
@@ -475,10 +501,20 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
-      slot.serverMessages = data.messages || [];
+      const messages: NormalizedMessage[] = data.messages || [];
+      slot.serverMessages = messages;
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
+      slot.offset = opts.limit !== null && opts.limit !== undefined
+        ? (opts.offset ?? 0) + messages.length
+        : messages.length;
       slot.fetchedAt = Date.now();
+      if (data.tokenUsage) {
+        slot.tokenUsage = data.tokenUsage;
+        slot.contextBudget = data.tokenUsage?.contextBudget || data.tokenUsage;
+      } else if (data.contextBudget) {
+        slot.contextBudget = data.contextBudget;
+      }
       // drop realtime messages that the server has caught up with to prevent unbounded growth.
       slot.realtimeMessages = [];
       recomputeMergedIfNeeded(slot);

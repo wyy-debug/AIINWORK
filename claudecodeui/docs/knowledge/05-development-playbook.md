@@ -10,8 +10,10 @@
 | `npm run typecheck` | 同时 typecheck 前端和后端配置。 |
 | `npm run lint` | lint `src/` 和 `server/`。 |
 | `npm run build` | 构建 client 和 server output。 |
+| `npm run package:electron-win` | 生成 Windows NSIS 安装包到 `../workspace/vendor/electron-dist`。 |
 
 使用 Node 22+；当前 `.nvmrc` 指向 major version `22`。
+Windows 安装包建议用仓库内 Node 24 runtime 启动脚本，并显式设置 `ARGUS_RUNTIME_NODE`，避免系统 Node 18 导致 native module ABI 或 Vite 版本问题。
 
 ## 通用改动清单
 
@@ -57,22 +59,25 @@
 - 在 `src/components/chat/tools/configs` 增加配置。
 - 在 `ContentRenderers` 或 `InteractiveRenderers` 增加或复用 renderer。
 - Tool display 应由 normalized message data 驱动，不要绑死 Provider 特例。
+- Subagent 状态展示应从 `ChatMessage.isSubagentContainer` 和 `subagentState` 聚合；不要把 `<task-notification>` 或 worker 内部消息渲染成用户消息。
 - 验证 collapsed/expanded、raw parameter display、thinking visibility、permission interactions。
 
 ## 2026-04-26 Agent Model Config Checklist
 
-- Keep the first-use Settings > Agents UI to one visible agent: `MTLCode`.
-- Keep the first-use Chat empty state to one visible static model card: `MTL-Code / MTLCode`; do not reintroduce the searchable model picker.
+- Keep the first-use Settings > Agents UI to one visible agent: `Argus`.
+- Keep the first-use Chat empty state to one visible static model card: `Argus / Argus`; do not reintroduce the searchable model picker.
 - Keep the internal provider key as `claude` until WebSocket, session, MCP, and normalized message contracts are migrated together.
-- Chat execution must call the paired MTL-Code runtime directly through stream-json; do not reintroduce `@anthropic-ai/claude-agent-sdk` for MTL-Code chat turns.
-- Keep `@anthropic-ai/claude-agent-sdk` out of app dependencies and packaged `resources/app/node_modules`; the UI backend must launch MTL-Code directly.
+- Chat execution must call the paired Argus runtime directly through stream-json; do not reintroduce `@anthropic-ai/claude-agent-sdk` for Argus chat turns.
+- Keep `@anthropic-ai/claude-agent-sdk` out of app dependencies and packaged `resources/app/node_modules`; the UI backend must launch Argus directly.
 - Local development should prefer Bun plus `../claude-code/dist/cli-bun.js`; packaged preview should prefer `resources/mtl-code/mtl-code.exe` but keep automatic fallback to bundled CLI entrypoints for Windows `spawn ENOENT` cases.
 - Never add bare `mtl-code` to the chat runtime fallback list on Windows; it can require `cmd.exe` and fail before reaching a real backend.
 - Keep packaged `mtl-code.cmd` Bun-first so fallback execution still uses `dist/cli-bun.js` when Bun is installed.
-- Before diagnosing Windows `spawn ENOENT` as a missing MTL-Code executable, check whether the child-process `cwd` exists. Project discovery can decode provider project names into malformed paths such as `C//Users/.../new/web/app`; repair the cwd or return a clear missing-directory error before spawning.
+- Before diagnosing Windows `spawn ENOENT` as a missing Argus executable, check whether the child-process `cwd` exists. Project discovery can decode provider project names into malformed paths such as `C//Users/.../new/web/app`; repair the cwd or return a clear missing-directory error before spawning.
 - Anthropic-compatible model config belongs in `server/routes/settings.js` and writes to `~/.mtl-code/settings.json`.
-- Align saved keys with MTL-Code: `modelType: "anthropic"`, `model`, and `env.ANTHROPIC_*`; clear legacy `env.OPENAI_*` so chat does not choose the OpenAI provider.
+- Align saved keys with Argus: `modelType: "anthropic"`, `model`, and `env.ANTHROPIC_*`; clear legacy `env.OPENAI_*` so chat does not choose the OpenAI provider.
 - Keep first-use Settings to Agents/Appearance only; keep TaskMaster/community surfaces hidden unless explicitly reintroduced.
+- Context display changes must go through `server/services/context-budget-service.js` and `src/components/chat/utils/contextBudget.ts`; never recompute `tokenBudget/tokenUsage/contextWindowTokens` independently in a route or component.
+- For DeepSeek 1M profiles, verify `ContextBudget.window.tokens === 1000000` and check `window.source` before treating high cache-read tokens as real prompt size.
 - Verify this surface with `npm run typecheck`, `npm run lint`, and a GET/PUT smoke test for `/api/settings/mtl-code-model` when a dev server is running.
 
 ## 验证矩阵
@@ -85,6 +90,7 @@
 | WebSocket/chat | typecheck/lint，发消息，resume session，abort session，刷新浏览器重连。 |
 | Provider | typecheck/lint，auth status，session history，新 session，resumed session，MCP config。 |
 | Files/Git/Shell | typecheck/lint，path safety smoke test，project root 和 nested path 都测。 |
+| Desktop packaging | 先用 Bun 重建 `../claude-code/dist`，再用 Node 24 运行 `scripts/package-electron-win.mjs`；确认 `better-sqlite3` 和 `node-pty` packaged smoke 通过。 |
 | Plugins | typecheck/lint，list/install/enable/disable，plugin tab render，backend process start/stop。 |
 
 ## Review 启发式

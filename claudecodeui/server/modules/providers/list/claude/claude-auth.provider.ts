@@ -45,7 +45,7 @@ function getProviderHomeDirs(): string[] {
 
 export class ClaudeProviderAuth implements IProviderAuth {
   /**
-   * Checks whether the MTL-Code CLI is available on this host.
+   * Checks whether the Argus CLI is available on this host.
    */
   private checkInstalled(): boolean {
       const cliPath = resolveMtlCodeCliPath();
@@ -58,7 +58,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
   }
 
   /**
-   * Returns MTL-Code installation and credential status using the compatible auth priority.
+   * Returns Argus installation and credential status using the compatible auth priority.
    */
   async getStatus(): Promise<ProviderAuthStatus> {
     const installed = this.checkInstalled();
@@ -70,7 +70,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
         authenticated: false,
         email: null,
         method: null,
-        error: `MTL-Code CLI is not installed. Set MTL_CODE_CLI_PATH or add ${MTL_CODE_DEFAULT_CLI} to PATH.`,
+        error: `Argus CLI is not installed. Set MTL_CODE_CLI_PATH or add ${MTL_CODE_DEFAULT_CLI} to PATH.`,
       };
     }
 
@@ -109,7 +109,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
   }
 
   /**
-   * Checks MTL-Code credentials in the same priority order used by the backend.
+   * Checks Argus credentials in the same priority order used by the backend.
    */
   private async checkCredentials(): Promise<ClaudeCredentialsStatus> {
     const settings = await this.loadSettings();
@@ -145,7 +145,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
         authenticated: false,
         email: anthropicModel,
         method: 'anthropic_compatible',
-        error: 'Anthropic-compatible MTL-Code config is missing ANTHROPIC_AUTH_TOKEN.',
+        error: 'Anthropic-compatible Argus config is missing ANTHROPIC_AUTH_TOKEN.',
       };
     }
 

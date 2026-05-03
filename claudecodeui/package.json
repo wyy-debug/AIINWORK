@@ -1,7 +1,7 @@
 {
   "name": "mtl-code-ui",
   "version": "1.30.3",
-  "description": "A local-first web UI for the MTL-Code backend",
+  "description": "A local-first web UI for the Argus backend",
   "type": "module",
   "main": "dist-server/server/index.js",
   "bin": {
@@ -66,7 +66,7 @@
     "ui",
     "mobile IDE"
   ],
-  "author": "MTL-Code UI Contributors",
+  "author": "Argus Contributors",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -170,7 +170,7 @@
   },
   "build": {
     "appId": "com.aiinwork.mtlcode",
-    "productName": "MTL-Code",
+    "productName": "Argus",
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "asar": false,
     "npmRebuild": false,
@@ -224,7 +224,7 @@
       "installerHeaderIcon": "public/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "MTL-Code"
+      "shortcutName": "Argus"
     }
   }
 }

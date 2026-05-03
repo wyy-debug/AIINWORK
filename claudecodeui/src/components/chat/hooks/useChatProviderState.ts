@@ -3,6 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CLAUDE_MODELS } from '../../../../shared/modelConstants';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
+import {
+  ARGUS_DEFAULT_PERMISSION_MODE,
+  CLAUDE_SETTINGS_KEY,
+  getClaudeSettings,
+  normalizeArgusClaudeSettings,
+} from '../utils/chatStorage';
 
 interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
@@ -10,33 +16,26 @@ interface UseChatProviderStateArgs {
 
 const MTL_CODE_PROVIDER: LLMProvider = 'claude';
 const MTL_CODE_MODEL = CLAUDE_MODELS.DEFAULT;
-const CLAUDE_SETTINGS_KEY = 'claude-settings';
 
 const toPermissionMode = (value: unknown): PermissionMode => (
-  value === 'acceptEdits'
+  value === 'default'
+  || value === 'acceptEdits'
   || value === 'bypassPermissions'
   || value === 'plan'
     ? value
-    : 'default'
+    : ARGUS_DEFAULT_PERMISSION_MODE
 );
 
 const readStoredPermissionMode = (): PermissionMode => {
-  try {
-    const rawSettings = localStorage.getItem(CLAUDE_SETTINGS_KEY);
-    if (!rawSettings) {
-      return 'default';
-    }
-    const settings = JSON.parse(rawSettings) as { permissionMode?: unknown };
-    return toPermissionMode(settings.permissionMode);
-  } catch {
-    return 'default';
-  }
+  return getClaudeSettings().permissionMode || ARGUS_DEFAULT_PERMISSION_MODE;
 };
 
 const writeStoredPermissionMode = (permissionMode: PermissionMode) => {
   try {
     const rawSettings = localStorage.getItem(CLAUDE_SETTINGS_KEY);
-    const settings = rawSettings ? JSON.parse(rawSettings) as Record<string, unknown> : {};
+    const settings = rawSettings
+      ? normalizeArgusClaudeSettings(JSON.parse(rawSettings))
+      : normalizeArgusClaudeSettings(null);
     localStorage.setItem(CLAUDE_SETTINGS_KEY, JSON.stringify({
       ...settings,
       permissionMode,

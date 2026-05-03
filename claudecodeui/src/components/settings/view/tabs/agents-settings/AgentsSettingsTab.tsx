@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { AgentCategory, AgentProvider } from '../../../types/types';
 
@@ -17,9 +17,14 @@ export default function AgentsSettingsTab({
   geminiPermissionMode,
   onGeminiPermissionModeChange,
   projects,
+  initialCategory = 'model',
 }: AgentsSettingsTabProps) {
   const [selectedAgent, setSelectedAgent] = useState<AgentProvider>('claude');
-  const [selectedCategory, setSelectedCategory] = useState<AgentCategory>('model');
+  const [selectedCategory, setSelectedCategory] = useState<AgentCategory>(initialCategory);
+
+  useEffect(() => {
+    setSelectedCategory(initialCategory);
+  }, [initialCategory]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">

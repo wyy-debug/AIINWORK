@@ -13,14 +13,14 @@
     "untitledSession": "Adsız Oturum",
     "newSession": "Yeni Oturum",
     "codexSession": "Codex Oturumu",
-    "fetchingProjects": "MTL-Code projelerin ve oturumların getiriliyor",
+    "fetchingProjects": "Argus projelerin ve oturumların getiriliyor",
     "projects": "proje",
     "noMatchingProjects": "Eşleşen proje yok",
     "tryDifferentSearch": "Arama terimini değiştirmeyi dene",
-    "runMTL-CodeCli": "Başlamak için bir proje dizininde MTL-Code CLI çalıştır"
+    "runClaudeCli": "Başlamak için bir proje dizininde Argus CLI çalıştır"
   },
   "app": {
-    "title": "MTL-Code UI",
+    "title": "Argus",
     "subtitle": "AI kodlama asistanı arayüzü"
   },
   "sessions": {

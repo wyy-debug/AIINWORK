@@ -59,8 +59,14 @@ export type MainContentProps = {
   processingSessions: Set<string>;
   onReplaceTemporarySession: SessionLifecycleHandler;
   onNavigateToSession: (targetSessionId: string) => void;
-  onShowSettings: () => void;
+  onShowSettings: (tab?: string) => void;
   externalMessageUpdate: number;
+  routeSessionState?: {
+    status: 'idle' | 'resolving' | 'missing';
+    sessionId?: string;
+    message?: string;
+  };
+  onRecoverSession?: () => void;
 };
 
 export type MainContentHeaderProps = {
@@ -75,9 +81,12 @@ export type MainContentHeaderProps = {
 };
 
 export type MainContentStateViewProps = {
-  mode: 'loading' | 'empty';
+  mode: 'loading' | 'empty' | 'session-loading' | 'session-missing';
   isMobile: boolean;
   onMenuClick: () => void;
+  sessionId?: string;
+  message?: string;
+  onRecoverSession?: () => void;
 };
 
 export type MobileMenuButtonProps = {

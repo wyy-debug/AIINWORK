@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+
 import type { Project } from '../../../types/app';
 import type {
   AdditionalSessionsByProject,
@@ -107,22 +108,7 @@ export const getAllSessions = (
     ...(additionalSessions[project.name] || []),
   ].map((session) => ({ ...session, __provider: 'claude' as const }));
 
-  const cursorSessions = (project.cursorSessions || []).map((session) => ({
-    ...session,
-    __provider: 'cursor' as const,
-  }));
-
-  const codexSessions = (project.codexSessions || []).map((session) => ({
-    ...session,
-    __provider: 'codex' as const,
-  }));
-
-  const geminiSessions = (project.geminiSessions || []).map((session) => ({
-    ...session,
-    __provider: 'gemini' as const,
-  }));
-
-  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions].sort((a, b) => {
+  return claudeSessions.sort((a, b) => {
     if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
       return a.isPinned ? -1 : 1;
     }

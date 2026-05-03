@@ -4,8 +4,41 @@
  */
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
-import type { ChatMessage, SubagentChildTool } from '../types/types';
+import type { ChatMessage, SubagentChildTool, ToolResult } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
+
+function isTaskNotificationContent(content: string): boolean {
+  const trimmed = decodeHtmlEntities(content).trimStart();
+  return /^<task-notification\b/i.test(trimmed)
+    || /^&lt;task-notification\b/i.test(trimmed);
+}
+
+function isInternalAgentFailureNarration(content: string): boolean {
+  const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
+  return normalized.includes('i literally cannot stop myself')
+    || normalized.includes('pathological at this point')
+    || normalized.includes('every single agent i launch')
+    || normalized.includes('provide the user with the complete updated code')
+    || normalized.includes('they can replace their existing file with the new version');
+}
+
+function normalizeToolTimestamp(value: unknown): Date {
+  const date = value ? new Date(value as string | number | Date) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function toToolResult(value: NormalizedMessage | ToolResult | null | undefined): ToolResult | null {
+  if (!value) return null;
+  const record = value as Record<string, unknown>;
+  const result = record.toolResult && typeof record.toolResult === 'object'
+    ? record.toolResult as Record<string, unknown>
+    : record;
+  return {
+    content: typeof result.content === 'string' ? result.content : JSON.stringify(result.content),
+    isError: Boolean(result.isError),
+    toolUseResult: result.toolUseResult,
+  };
+}
 
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
@@ -25,37 +58,48 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     }
   }
 
+  const subagentChildToolMap = new Map<string, SubagentChildTool[]>();
   for (const msg of messages) {
+    if (msg.kind !== 'tool_use' || !msg.parentToolUseId) continue;
+    const childToolId = msg.toolId || msg.id;
+    const childTool: SubagentChildTool = {
+      toolId: childToolId,
+      toolName: msg.toolName || 'Tool',
+      toolInput: msg.toolInput ?? '',
+      toolResult: toToolResult(msg.toolResult || (childToolId ? toolResultMap.get(childToolId) : null)),
+      timestamp: normalizeToolTimestamp(msg.timestamp),
+    };
+    const existing = subagentChildToolMap.get(msg.parentToolUseId) || [];
+    subagentChildToolMap.set(msg.parentToolUseId, [...existing, childTool]);
+  }
+
+  for (const msg of messages) {
+    if (msg.parentToolUseId && msg.kind !== 'tool_result') {
+      continue;
+    }
+
     switch (msg.kind) {
       case 'text': {
         const content = msg.content || '';
         if (!content.trim()) continue;
 
         if (msg.role === 'user') {
-          // Parse task notifications
-          const taskNotifRegex = /<task-notification>\s*<task-id>[^<]*<\/task-id>\s*<output-file>[^<]*<\/output-file>\s*<status>([^<]*)<\/status>\s*<summary>([^<]*)<\/summary>\s*<\/task-notification>/g;
-          const taskNotifMatch = taskNotifRegex.exec(content);
-          if (taskNotifMatch) {
-            converted.push({
-              id: `${msg.id}:task-notification`,
-              type: 'assistant',
-              content: taskNotifMatch[2]?.trim() || 'Background task finished',
-              timestamp: msg.timestamp,
-              isTaskNotification: true,
-              taskStatus: taskNotifMatch[1]?.trim() || 'completed',
-            });
-          } else {
-            converted.push({
-              id: msg.id,
-              type: 'user',
-              content: unescapeWithMathProtection(decodeHtmlEntities(content)),
-              timestamp: msg.timestamp,
-            });
+          if (isTaskNotificationContent(content)) {
+            continue;
           }
+          converted.push({
+            id: msg.id,
+            type: 'user',
+            content: unescapeWithMathProtection(decodeHtmlEntities(content)),
+            timestamp: msg.timestamp,
+          });
         } else {
           let text = decodeHtmlEntities(content);
           text = unescapeWithMathProtection(text);
           text = formatUsageLimitText(text);
+          if (isInternalAgentFailureNarration(text)) {
+            continue;
+          }
           converted.push({
             id: msg.id,
             type: 'assistant',
@@ -79,18 +123,18 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               toolName: tool.toolName,
               toolInput: tool.toolInput,
               toolResult: tool.toolResult || null,
-              timestamp: new Date(tool.timestamp || Date.now()),
+              timestamp: normalizeToolTimestamp(tool.timestamp),
             });
           }
         }
+        const realtimeChildTools = msg.toolId ? subagentChildToolMap.get(msg.toolId) || [] : [];
+        for (const childTool of realtimeChildTools) {
+          if (!childTools.some((tool) => tool.toolId === childTool.toolId)) {
+            childTools.push(childTool);
+          }
+        }
 
-        const toolResult = tr
-          ? {
-              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-              isError: Boolean(tr.isError),
-              toolUseResult: (tr as any).toolUseResult,
-            }
-          : null;
+        const toolResult = toToolResult(tr);
 
         converted.push({
           id: msg.id,

@@ -273,7 +273,7 @@
     "apiDocsLink": "API 문서",
     "documentation": {
       "title": "외부 API 문서",
-      "description": "외부 API를 사용하여 애플리케이션에서 MTL-Code/Cursor 세션을 트리거하는 방법을 알아보세요.",
+      "description": "외부 API를 사용하여 애플리케이션에서 Argus/Cursor 세션을 트리거하는 방법을 알아보세요.",
       "viewLink": "API 문서 보기 →"
     },
     "loading": "로딩 중...",
@@ -293,7 +293,7 @@
     },
     "account": {
       "claude": {
-        "description": "Anthropic MTL-Code AI 어시스턴트"
+        "description": "Anthropic Argus AI 어시스턴트"
       },
       "cursor": {
         "description": "Cursor AI 기반 코드 에디터"
@@ -395,7 +395,7 @@
   "mcpServers": {
     "title": "MCP 서버",
     "description": {
-      "claude": "Model Context Protocol 서버는 MTL-Code에 추가 도구와 데이터 소스를 제공합니다",
+      "claude": "Model Context Protocol 서버는 Argus에 추가 도구와 데이터 소스를 제공합니다",
       "cursor": "Model Context Protocol 서버는 Cursor에 추가 도구와 데이터 소스를 제공합니다",
       "codex": "Model Context Protocol 서버는 Codex에 추가 도구와 데이터 소스를 제공합니다"
     },

@@ -61,7 +61,11 @@ import {
 import { headlessProfilerCheckpoint } from './utils/headlessProfiler.js'
 import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.js'
 import { getInMemoryErrors } from './utils/log.js'
-import { countToolCalls, SYNTHETIC_MESSAGES } from './utils/messages.js'
+import {
+  countToolCalls,
+  createAssistantMessage,
+  SYNTHETIC_MESSAGES,
+} from './utils/messages.js'
 import {
   getMainLoopModel,
   parseUserSpecifiedModel,
@@ -73,8 +77,14 @@ import {
 } from './utils/processUserInput/processUserInput.js'
 import {
   createOpenMythosRuntimeState,
+  formatOpenMythosRuntimeReminder,
   shouldEnforceOpenMythosLoopBudget,
 } from './utils/openmythosRuntime.js'
+import {
+  formatOpenMythosHardDispatchMessage,
+  runOpenMythosHardDispatch,
+  shouldRunOpenMythosHardDispatch,
+} from './utils/openmythosHardDispatch.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
 import {
@@ -423,6 +433,7 @@ export class QueryEngine {
       shouldQuery,
       allowedTools,
       model: modelFromUserInput,
+      effort: effortFromUserInput,
       openMythosRuntimeCard,
       resultText,
     } = await processUserInput({
@@ -542,6 +553,14 @@ export class QueryEngine {
       setSDKStatus,
       openMythosRuntimeState,
     }
+    if (effortFromUserInput !== undefined) {
+      const previousGetAppState = processUserInputContext.getAppState
+      processUserInputContext.getAppState = () => ({
+        ...previousGetAppState(),
+        effortValue: effortFromUserInput,
+      })
+    }
+    processUserInputContext.renderedSystemPrompt = systemPrompt
 
     headlessProfilerCheckpoint('before_skills_plugins')
     // Cache-only: headless/SDK/CCR startup must not block on network for
@@ -691,6 +710,68 @@ export class QueryEngine {
     const initialStructuredOutputCalls = jsonSchema
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
+
+    if (
+      openMythosRuntimeState &&
+      shouldRunOpenMythosHardDispatch(
+        openMythosRuntimeState,
+        processUserInputContext,
+      )
+    ) {
+      const hardDispatchParentMessage = createAssistantMessage({ content: '' })
+      const hardDispatchResult = await runOpenMythosHardDispatch({
+        state: openMythosRuntimeState,
+        toolUseContext: processUserInputContext,
+        canUseTool: wrappedCanUseTool,
+        assistantMessage: hardDispatchParentMessage,
+      })
+
+      if (hardDispatchResult.launched.length > 0) {
+        if (!hasAcknowledgedInitialMessages && messagesToAck.length > 0) {
+          hasAcknowledgedInitialMessages = true
+          for (const msgToAck of messagesToAck) {
+            if (msgToAck.type === 'user') {
+              yield {
+                type: 'user',
+                message: msgToAck.message,
+                session_id: getSessionId(),
+                parent_tool_use_id: null,
+                uuid: msgToAck.uuid,
+                timestamp: msgToAck.timestamp,
+                isReplay: true,
+              } as unknown as SDKUserMessageReplay
+            }
+          }
+        }
+
+        const hardDispatchMessage = createAssistantMessage({
+          content: formatOpenMythosHardDispatchMessage(hardDispatchResult),
+        })
+        messages.push(hardDispatchMessage)
+        this.mutableMessages.push(hardDispatchMessage)
+        if (persistSession) {
+          await recordTranscript(messages)
+          if (
+            isEnvTruthy(process.env.MTL_CODE_EAGER_FLUSH) ||
+            isEnvTruthy(process.env.MTL_CODE_IS_COWORK)
+          ) {
+            await flushSessionStorage()
+          }
+        }
+
+        yield* normalizeMessage(hardDispatchMessage)
+        processUserInputContext = {
+          ...processUserInputContext,
+          messages,
+          openMythosRuntimeState,
+          criticalSystemReminder_EXPERIMENTAL:
+            formatOpenMythosRuntimeReminder(
+              openMythosRuntimeState.card,
+              openMythosRuntimeState,
+            ),
+        }
+      }
+    }
 
     const effectiveMaxTurns =
       maxTurns ??

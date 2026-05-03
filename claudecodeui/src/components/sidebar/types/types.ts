@@ -1,4 +1,4 @@
-import type { AppTab, LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../types/app';
 
 export type ProjectSortOrder = 'name' | 'date';
 export type WorkspaceMode = 'projects' | 'conversations';
@@ -42,9 +42,6 @@ export type SidebarProps = {
   loadingProgress: LoadingProgress | null;
   onRefresh: () => Promise<void> | void;
   onShowSettings: () => void;
-  activeTab: AppTab;
-  onShowAgents: () => void;
-  onQuickStartAgent: (agentId: string) => void;
   showSettings: boolean;
   settingsInitialTab: string;
   onCloseSettings: () => void;

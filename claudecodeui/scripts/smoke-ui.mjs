@@ -46,7 +46,7 @@ async function run() {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
 
-    await page.getByText(/MTL-Code|MTLCode/i).first().waitFor({ timeout: 20_000 });
+    await page.getByText(/Argus|Argus/i).first().waitFor({ timeout: 20_000 });
     logStep('main shell loaded');
 
     await clickFirstVisible(page, [
@@ -85,7 +85,7 @@ async function run() {
       await page.keyboard.type('smoke input');
       logStep('composer accepts input');
 
-      const modelTrigger = page.locator('button:has-text("Default"), button:has-text("MiMo"), button:has-text("MTL-Code")').first();
+      const modelTrigger = page.locator('button:has-text("Default"), button:has-text("MiMo"), button:has-text("Argus")').first();
       if (await modelTrigger.count().catch(() => 0)) {
         await modelTrigger.click({ timeout: 5000 });
         await page.locator('text=/切换模型|Switch model/i').first().waitFor({ timeout: 5000 });

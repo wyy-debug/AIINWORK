@@ -85,12 +85,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ sessionId, provider }),
     }),
-  createWorktreeBranch: (worktreeId, branchName) =>
-    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/create-branch`, {
+	  createWorktreeBranch: (worktreeId, branchName) =>
+	    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/create-branch`, {
+	      method: 'POST',
+	      body: JSON.stringify({ branchName }),
+	    }),
+  handoffWorktree: (worktreeId, payload = {}) =>
+    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/handoff`, {
       method: 'POST',
-      body: JSON.stringify({ branchName }),
+      body: JSON.stringify(payload),
     }),
-  deleteWorktree: (worktreeId, force = false) =>
+  runWorktreeSetup: (worktreeId, payload = {}) =>
+    apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/run-setup`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+	  deleteWorktree: (worktreeId, force = false) =>
     apiFetch(`/api/worktrees/${encodeURIComponent(worktreeId)}${force ? '?force=true' : ''}`, {
       method: 'DELETE',
     }),
@@ -132,22 +142,6 @@ export const api = {
   deleteAgent: (agentId) =>
     apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, {
       method: 'DELETE',
-    }),
-  uploadAgentKnowledge: (agentId, formData) =>
-    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge/upload`, {
-      method: 'POST',
-      body: formData,
-      headers: {},
-    }),
-  agentKnowledge: (agentId) =>
-    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge`),
-  deleteAgentKnowledgeSource: (agentId, sourceId) =>
-    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(sourceId)}`, {
-      method: 'DELETE',
-    }),
-  reindexAgentKnowledgeSource: (agentId, sourceId) =>
-    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(sourceId)}/reindex`, {
-      method: 'POST',
     }),
   sessionAgent: (sessionId, provider = 'claude') =>
     apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/agent?provider=${encodeURIComponent(provider)}`),
@@ -214,10 +208,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filePath, projectName }),
     }),
-  saveFile: (projectName, filePath, content) =>
+  /**
+   * @param {string} projectName
+   * @param {string} filePath
+   * @param {string} content
+   * @param {string | null} [baseHash]
+   */
+  saveFile: (projectName, filePath, content, baseHash = null) =>
     apiFetch(`/api/projects/${projectName}/file`, {
       method: 'PUT',
-      body: JSON.stringify({ filePath, content }),
+      body: JSON.stringify({ filePath, content, baseHash }),
     }),
   getFiles: (projectName, options = {}) =>
     apiFetch(`/api/projects/${projectName}/files`, options),

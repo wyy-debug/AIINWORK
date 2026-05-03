@@ -5,9 +5,18 @@ import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
+import RuntimeSettingsTab from '../view/tabs/RuntimeSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
-import type { SettingsProps } from '../types/types';
+import type { AgentCategory, SettingsProps } from '../types/types';
 import { cn } from '../../../lib/utils';
+
+const getInitialAgentCategory = (tab: string): AgentCategory => {
+  if (tab === 'mcp') return 'mcp';
+  if (tab === 'hub' || tab === 'repository') return 'repository';
+  if (tab === 'permissions') return 'permissions';
+  if (tab === 'model' || tab === 'tools') return 'model';
+  return 'model';
+};
 
 function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
@@ -86,6 +95,10 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 />
               )}
 
+              {activeTab === 'runtime' && (
+                <RuntimeSettingsTab />
+              )}
+
               {activeTab === 'agents' && (
                 <AgentsSettingsTab
                   claudePermissions={claudePermissions}
@@ -97,6 +110,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   geminiPermissionMode={geminiPermissionMode}
                   onGeminiPermissionModeChange={setGeminiPermissionMode}
                   projects={projects}
+                  initialCategory={getInitialAgentCategory(initialTab)}
                 />
               )}
             </div>

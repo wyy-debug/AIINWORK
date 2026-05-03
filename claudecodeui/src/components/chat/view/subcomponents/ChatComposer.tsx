@@ -31,6 +31,8 @@ import {
   CloudIcon,
   PaperclipIcon,
   ShieldIcon,
+  BrainCircuitIcon,
+  RouteIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -46,7 +48,15 @@ import {
 } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../../types/agent';
-import type { AgentRuntimeDiagnostics, PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
+import type {
+  AgentRuntimeDiagnostics,
+  PendingPermissionRequest,
+  PermissionMode,
+  Provider,
+  SubagentActivitySummary,
+} from '../../types/types';
+import { ARGUS_DEFAULT_PERMISSION_MODE } from '../../utils/chatStorage';
+import { normalizeContextBudget } from '../../utils/contextBudget';
 
 import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
 import CommandMenu from './CommandMenu';
@@ -100,7 +110,8 @@ interface ChatComposerProps {
   onClearSkillNames: () => void;
   showRuntimeDiagnostics: boolean;
   agentRuntimeDiagnostics: AgentRuntimeDiagnostics | null;
-  tokenBudget: { used?: number; total?: number } | null;
+  subagentActivity?: SubagentActivitySummary;
+  tokenBudget: Record<string, unknown> | null;
   permissionMode: PermissionMode | string;
   onPermissionModeChange: (mode: PermissionMode) => void;
   slashCommandsCount: number;
@@ -178,6 +189,7 @@ export default function ChatComposer({
   onClearSkillNames,
   showRuntimeDiagnostics,
   agentRuntimeDiagnostics,
+  subagentActivity,
   tokenBudget,
   slashCommandsCount,
   onToggleCommandMenu,
@@ -267,6 +279,7 @@ export default function ChatComposer({
     () => new Set(selectedSkillNames.map((name) => name.toLowerCase())),
     [selectedSkillNames],
   );
+  const contextBudget = useMemo(() => normalizeContextBudget(tokenBudget), [tokenBudget]);
   const installedSkillKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const skill of installedSkills) {
@@ -279,6 +292,51 @@ export default function ChatComposer({
   const normalizedSkillSearch = skillSearch.trim().toLowerCase();
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null;
   const selectedMcpBindings = selectedAgentAppBindings.filter((binding) => binding.app.trim().startsWith('MCP: '));
+  const openMythosRuntime = agentRuntimeDiagnostics?.openMythosRuntime || null;
+  const openMythosDispatchConfirmation = openMythosRuntime?.dispatchConfirmation;
+  const openMythosSingleAgentOverride = openMythosDispatchConfirmation?.mode === 'single-agent';
+  const openMythosAutoDispatchConfigured = openMythosRuntime
+    ? openMythosRuntime.configuredAutoDispatchSubagents
+      ?? (openMythosSingleAgentOverride ? true : openMythosRuntime.autoDispatchSubagents !== false)
+    : false;
+  const openMythosAutoDispatchEffective = openMythosRuntime
+    ? openMythosRuntime.effectiveAutoDispatchSubagents
+      ?? (openMythosSingleAgentOverride ? false : openMythosAutoDispatchConfigured)
+    : false;
+  const openMythosDispatchPlan = openMythosRuntime?.runtimeCard?.dispatchPlan || [];
+  const openMythosWorkerLabels = openMythosDispatchPlan
+    .map((task) => task.label || task.kind || 'worker')
+    .filter((label): label is string => typeof label === 'string' && label.trim().length > 0)
+    .slice(0, 3);
+  const openMythosHint = openMythosRuntime
+    ? openMythosDispatchPlan.length > 0
+      ? {
+        tone: 'active' as const,
+        title: `OpenMythos 将派发 ${openMythosDispatchPlan.length} 个 worker`,
+        description: openMythosWorkerLabels.length > 0
+          ? openMythosWorkerLabels.join('、')
+          : '已生成自动派发计划，Coordinator 会优先执行。',
+      }
+      : openMythosSingleAgentOverride && openMythosAutoDispatchConfigured
+        ? {
+          tone: 'standby' as const,
+          title: 'OpenMythos 自动派发已开启',
+          description: '当前消息未生成或未确认 worker 计划，本轮按单 Agent 执行。',
+        }
+        : openMythosAutoDispatchEffective || openMythosAutoDispatchConfigured
+        ? {
+          tone: 'standby' as const,
+          title: 'OpenMythos 自动派发已开启',
+          description: `最低触发强度 ${openMythosRuntime.autoDispatchMinEffort || 'medium'}，当前消息暂未生成 worker 计划。`,
+        }
+        : openMythosRuntime.enabled
+          ? {
+            tone: 'muted' as const,
+            title: 'OpenMythos 运行时已开启',
+            description: '自动派发子智能体当前关闭，可在运行时设置中开启。',
+          }
+          : null
+    : null;
   const filteredInstalledSkills = useMemo(() => {
     const matches = installedSkills.filter((skill) => (
       !normalizedSkillSearch
@@ -338,7 +396,7 @@ export default function ChatComposer({
     permissionMode === 'acceptEdits'
     || permissionMode === 'bypassPermissions'
     || permissionMode === 'plan'
-  ) ? permissionMode : 'default';
+  ) ? permissionMode : ARGUS_DEFAULT_PERMISSION_MODE;
   const permissionModeOptions: Array<{
     id: PermissionMode;
     label: string;
@@ -583,7 +641,7 @@ export default function ChatComposer({
               <span
                 key={`${binding.slot}:${binding.app}`}
                 className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 font-medium text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300"
-                title={`${binding.slot} 已绑定 ${binding.app}。运行时由 MTL-Code 原生 MCP 配置发现工具。`}
+                title={`${binding.slot} 已绑定 ${binding.app}。运行时由 Argus 原生 MCP 配置发现工具。`}
               >
                 <WrenchIcon className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{binding.app}</span>
@@ -701,6 +759,7 @@ export default function ChatComposer({
           <div className="absolute bottom-full left-0 right-0 z-50 mb-3">
             <AgentRuntimeDiagnosticsPanel
               diagnostics={agentRuntimeDiagnostics}
+              contextBudget={contextBudget}
               onClose={() => setIsDiagnosticsOpen(false)}
             />
           </div>
@@ -745,7 +804,7 @@ export default function ChatComposer({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">本对话默认</span>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">不绑定 Agent，使用当前 MTL-Code 模型。</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">不绑定 Agent，使用当前 Argus 模型。</span>
                 </span>
               </button>
 
@@ -1079,6 +1138,59 @@ export default function ChatComposer({
             </PromptInputHeader>
           )}
 
+          {subagentActivity && subagentActivity.total > 0 && (
+            <PromptInputHeader>
+              <div className="mx-1 flex items-center gap-3 rounded-xl border border-blue-200/70 bg-blue-50/85 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background/85 text-blue-600 dark:text-blue-300">
+                  {subagentActivity.running > 0 || subagentActivity.outputting > 0
+                    ? <Loader2Icon className="h-4 w-4 animate-spin" />
+                    : <BotIcon className="h-4 w-4" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold text-foreground">
+                    Subagent 状态：共 {subagentActivity.total} 个
+                    {subagentActivity.latestLabel ? ` · ${subagentActivity.latestLabel}` : ''}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
+                    <span className="rounded-md bg-background/70 px-2 py-0.5 text-foreground">运行中 {subagentActivity.running}</span>
+                    <span className="rounded-md bg-background/70 px-2 py-0.5 text-foreground">已结束 {subagentActivity.completed}</span>
+                    <span className="rounded-md bg-background/70 px-2 py-0.5 text-foreground">输出中 {subagentActivity.outputting}</span>
+                  </div>
+                </div>
+              </div>
+            </PromptInputHeader>
+          )}
+
+          {openMythosHint && (
+            <PromptInputHeader>
+              <div
+                className={cn(
+                  'mx-1 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs',
+                  openMythosHint.tone === 'active'
+                    ? 'border-primary/25 bg-primary/8 text-primary'
+                    : 'border-border/70 bg-muted/35 text-muted-foreground',
+                )}
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background/80 text-primary">
+                  {openMythosHint.tone === 'active'
+                    ? <RouteIcon className="h-4 w-4" />
+                    : <BrainCircuitIcon className="h-4 w-4" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold text-foreground">{openMythosHint.title}</div>
+                  <div className="mt-0.5 truncate">{openMythosHint.description}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsDiagnosticsOpen(true)}
+                  className="shrink-0 rounded-md border border-border/70 bg-background/70 px-2 py-1 font-medium text-foreground transition-colors hover:bg-muted"
+                >
+                  详情
+                </button>
+              </div>
+            </PromptInputHeader>
+          )}
+
           <input {...getInputProps({ accept: 'image/*' })} />
           <input
             ref={fileInputRef}
@@ -1236,11 +1348,11 @@ export default function ChatComposer({
               </div>
             )}
 
-            <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 200000} />
+            <TokenUsagePie budget={contextBudget} />
 
             {showRuntimeDiagnostics && (
               <PromptInputButton
-                tooltip={{ content: agentRuntimeDiagnostics ? '查看 Agent 运行诊断' : '暂无 Agent 运行诊断' }}
+                tooltip={{ content: agentRuntimeDiagnostics ? '查看运行诊断' : '暂无运行诊断' }}
                 onClick={() => setIsDiagnosticsOpen((previous) => !previous)}
                 className={agentRuntimeDiagnostics ? 'text-primary' : ''}
               >

@@ -27,6 +27,7 @@ export function getMacroDefines(): Record<string, string> {
  *   - scripts/dev.ts (bun run dev)
  */
 export const DEFAULT_BUILD_FEATURES = [
+    'COORDINATOR_MODE',            // Compiled in; runtime activation is gated by MTL_CODE_COORDINATOR_MODE.
     'BUDDY',                       // 陪伴宠物角色（Squirtle Waddles）
     'TRANSCRIPT_CLASSIFIER',       // 对话分类器，用于标注会话类型
     'BRIDGE_MODE',                 // Remote Control / Bridge 模式，远程控制会话

@@ -30,6 +30,32 @@ export type MessageKind =
   | 'task_notification'
   | 'context_compaction';
 
+export type ContextBudgetBreakdown = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+};
+
+export type ContextBudgetSection = {
+  used: number;
+  total: number;
+  percent: number;
+  breakdown: ContextBudgetBreakdown;
+};
+
+export type ContextBudget = {
+  current: ContextBudgetSection;
+  cumulative: ContextBudgetSection;
+  window: {
+    tokens: number;
+    model: string | null;
+    modelProfileId: string | null;
+    source: string;
+  };
+  updatedAt: string;
+};
+
 /**
  * Provider-neutral message event emitted over REST and realtime transports.
  *
@@ -73,6 +99,7 @@ export type NormalizedMessage = {
   preTokens?: number;
   tokensSaved?: number;
   compactedToolIds?: unknown;
+  contextBudget?: ContextBudget;
   tokenBudget?: unknown;
   subagentTools?: unknown;
   toolUseResult?: unknown;

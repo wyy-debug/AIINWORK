@@ -2,7 +2,6 @@ import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
 
-import { buildAgentKnowledgeContext } from './agent-rag-service.js';
 import { listInstalledSkills } from './agent-skill-service.js';
 
 const UI_DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
@@ -22,7 +21,7 @@ const DEFAULT_AGENT_CHANNELS = [
     id: 'chat',
     type: 'chat',
     name: '应用内对话',
-    description: '在 MTL-Code 中使用你的智能体',
+    description: '在 Argus 中使用你的智能体',
     enabled: true,
   },
 ];
@@ -49,7 +48,7 @@ const DEFAULT_AGENT_CONFIGS = [
     },
     repository: 'seed/default/task-manager',
     systemPrompt:
-      '你是任务管理 Agent。优先澄清目标、拆解步骤、维护上下文，并在工具可用时同步日历、项目追踪器和知识库。输出要清晰、可执行；外部应用未连接时先询问用户。',
+      '你是任务管理 Agent。优先澄清目标、拆解步骤、维护上下文，并在工具可用时同步日历和项目追踪器。输出要清晰、可执行；外部应用未连接时先询问用户。',
     appBindings: [],
     skills: ['需求拆解', '会议纪要', '风险提醒', '状态周报'],
     tools: ['Read', 'TodoRead', 'TodoWrite', 'Task'],
@@ -246,34 +245,6 @@ function normalizeChannels(value) {
     .slice(0, 12);
 }
 
-function normalizeKnowledgeSources(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((source) => {
-      const item = source && typeof source === 'object' ? source : {};
-      const name = normalizeString(item.name, '', 160);
-      if (!name) return null;
-      const id = sanitizeAgentId(item.id || name, `knowledge-${Date.now()}`);
-      const type = item.type === 'folder' ? 'folder' : 'file';
-      const status = ['mock', 'pending', 'indexed', 'failed'].includes(item.status)
-        ? item.status
-        : 'pending';
-      return {
-        id,
-        type,
-        name,
-        path: normalizeString(item.path, '', 1000),
-        status,
-        storageKey: normalizeString(item.storageKey, id, 160),
-        fileCount: normalizePositiveInteger(item.fileCount, 0, 10000),
-        chunkCount: normalizePositiveInteger(item.chunkCount, 0, 10000),
-        addedAt: normalizeString(item.addedAt, '', 80),
-      };
-    })
-    .filter(Boolean)
-    .slice(0, 80);
-}
-
 function normalizeMemoryConfig(value, agentId) {
   const source = value && typeof value === 'object' ? value : {};
   return {
@@ -355,7 +326,6 @@ export function normalizeAgentConfig(value, existing = null) {
     channels: normalizeChannels(source.channels ?? existing?.channels),
     appBindings: normalizeAppBindings(source.appBindings ?? existing?.appBindings),
     skills: normalizeStringArray(source.skills ?? existing?.skills, 60, 120),
-    knowledgeSources: normalizeKnowledgeSources(source.knowledgeSources ?? existing?.knowledgeSources),
     memory: normalizeMemoryConfig(source.memory ?? existing?.memory, id),
     tools: normalizeStringArray(source.tools ?? existing?.tools, 80, 120),
     guardrails: normalizeStringArray(source.guardrails ?? existing?.guardrails, 40, 240),
@@ -455,7 +425,7 @@ export async function deleteAgentConfig(agentId) {
 
 async function buildAgentSystemPromptResult(agent, options = {}) {
   const lines = [
-    `You are running with the selected MTL-Code Agent profile: ${agent.name} (${agent.id}).`,
+    `You are running with the selected Argus Agent profile: ${agent.name} (${agent.id}).`,
     '',
     'Agent responsibility:',
     agent.description,
@@ -478,20 +448,6 @@ async function buildAgentSystemPromptResult(agent, options = {}) {
     );
   }
 
-  if (agent.knowledgeSources.length > 0) {
-    lines.push(
-      '',
-      'Configured knowledge sources:',
-      ...agent.knowledgeSources.map((source) => `- ${source.name} (${source.type}, ${source.status}, ${source.chunkCount || 0} chunks)`),
-      'Only rely on knowledge sources when their content is actually available through the retrieval/indexing layer.',
-    );
-  }
-
-  const knowledgeContext = await buildAgentKnowledgeContext(agent, options.query || '');
-  if (knowledgeContext.prompt) {
-    lines.push('', knowledgeContext.prompt);
-  }
-
   if (agent.memory?.enabled) {
     lines.push(
       '',
@@ -507,16 +463,11 @@ async function buildAgentSystemPromptResult(agent, options = {}) {
 
   lines.push(
     '',
-    'Preserve the default MTL-Code coding, safety, workspace, and tool-use behavior. This Agent profile narrows intent and context; it does not grant extra permissions by itself.',
+    'Preserve the default Argus coding, safety, workspace, and tool-use behavior. This Agent profile narrows intent and context; it does not grant extra permissions by itself.',
   );
 
   return {
     prompt: lines.filter((line) => line !== undefined && line !== null).join('\n'),
-    knowledgeDiagnostics: {
-      ragExcerptCount: knowledgeContext.excerptCount,
-      ragPromptLength: knowledgeContext.promptLength,
-      ragExcerpts: knowledgeContext.excerpts,
-    },
   };
 }
 
@@ -609,7 +560,6 @@ export async function resolveAgentRuntime(agentId, options = {}) {
   return {
     agent: runtimeAgent,
     appendSystemPrompt: systemPromptResult.prompt,
-    knowledgeDiagnostics: systemPromptResult.knowledgeDiagnostics,
     model,
     contextWindowTokens: runtimeSettings.contextWindowTokens,
   };

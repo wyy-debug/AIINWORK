@@ -475,6 +475,18 @@ export function writeFileSyncAndFlush_DEPRECATED(
       throw fallbackError
     }
   }
+
+  const persistedContent = fs.readFileSync(targetPath, {
+    encoding: options.encoding,
+  })
+  if (persistedContent !== content) {
+    const verificationError = new Error(
+      `File write verification failed for ${targetPath}`,
+    )
+    logForDebugging(verificationError.message, { level: 'error' })
+    logEvent('tengu_file_write_verify_error', {})
+    throw verificationError
+  }
 }
 
 export function getDesktopPath(): string {

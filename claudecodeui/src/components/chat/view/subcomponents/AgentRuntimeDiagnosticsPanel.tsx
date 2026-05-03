@@ -13,9 +13,14 @@ import {
 
 import type { AgentAppBinding } from '../../../../types/agent';
 import type { AgentRuntimeDiagnostics } from '../../types/types';
+import {
+  formatTokenCount,
+  type ContextBudget,
+} from '../../utils/contextBudget';
 
 type AgentRuntimeDiagnosticsPanelProps = {
   diagnostics: AgentRuntimeDiagnostics | null;
+  contextBudget?: ContextBudget | null;
   onClose: () => void;
 };
 
@@ -175,6 +180,28 @@ function OpenMythosRuntimeSection({
   const expertRoutes = card?.expertRoutes?.map((route) => (
     `${route.label || route.kind || 'expert'}${route.required ? ' (required)' : ''}${route.reason ? `: ${route.reason}` : ''}`
   ));
+  const dispatchPlan = card?.dispatchPlan?.map((task) => (
+    `${task.label || task.kind || 'worker'}${task.required ? ' (必需)' : ''}${task.description ? `: ${task.description}` : ''}`
+  ));
+  const configuredAutoDispatchSubagents = runtime
+    ? runtime.configuredAutoDispatchSubagents
+      ?? (runtime.dispatchConfirmation?.mode === 'single-agent'
+        ? true
+        : runtime.autoDispatchSubagents !== false)
+    : false;
+  const effectiveAutoDispatchSubagents = runtime
+    ? runtime.effectiveAutoDispatchSubagents
+      ?? (runtime.dispatchConfirmation?.mode === 'single-agent'
+        ? false
+        : configuredAutoDispatchSubagents)
+    : false;
+  const autoDispatchStatus = !runtime
+    ? EMPTY_TEXT
+    : configuredAutoDispatchSubagents
+      ? effectiveAutoDispatchSubagents
+        ? '开启'
+        : '设置开启，本轮单 Agent'
+      : '关闭';
 
   return (
     <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
@@ -192,6 +219,9 @@ function OpenMythosRuntimeSection({
         <Field label="阶段适配" value={formatBoolean(runtime?.phaseAdapter)} />
         <Field label="专家路由" value={formatBoolean(runtime?.expertRouting)} />
         <Field label="缓存诊断" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
+        <Field label="自动派发" value={autoDispatchStatus} />
+        <Field label="最低派发强度" value={formatText(runtime?.autoDispatchMinEffort)} />
+        <Field label="最大 worker 数" value={formatNumber(runtime?.autoDispatchMaxWorkers)} />
         <Field label="最低 effort" value={formatText(runtime?.minEffort)} />
         <Field label="最高 effort" value={formatText(runtime?.maxEffort)} />
         <Field label="来源" value={runtime ? 'settings/env' : EMPTY_TEXT} />
@@ -216,11 +246,13 @@ function OpenMythosRuntimeSection({
           <div className="rounded-lg border border-border bg-card/70 p-3">
             <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">专家 / 上下文账本</div>
             <StringBadges values={expertRoutes} />
+            <div className="mt-3 text-[11px] font-medium uppercase text-muted-foreground">自动派发计划</div>
+            <div className="mt-2">
+              <StringBadges values={dispatchPlan} />
+            </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <Field label="compactBoundary" value={formatNumber(contextCache?.compactBoundaryCount)} />
               <Field label="microcompact" value={formatNumber(contextCache?.microcompactBoundaryCount)} />
-              <Field label="RAG excerpts" value={formatNumber(contextCache?.ragExcerptCount)} />
-              <Field label="RAG prompt" value={formatNumber(contextCache?.ragPromptLength)} />
               <Field label="skill prompt" value={formatNumber(contextCache?.skillPromptLength)} />
               <Field label="append prompt" value={formatNumber(contextCache?.appendSystemPromptLength)} />
             </div>
@@ -239,6 +271,9 @@ function OpenMythosRuntimeSection({
         <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
           稳定重注入 {runtime?.stableReinjection ? '开启' : '关闭'}
         </span>
+        <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+          自动派发 {autoDispatchStatus}
+        </span>
       </div>
     </section>
   );
@@ -246,10 +281,12 @@ function OpenMythosRuntimeSection({
 
 export default function AgentRuntimeDiagnosticsPanel({
   diagnostics,
+  contextBudget,
   onClose,
 }: AgentRuntimeDiagnosticsPanelProps) {
   const permissions = diagnostics?.permissions;
   const hasDiagnostics = Boolean(diagnostics);
+  const contextWindow = contextBudget?.window.tokens ?? diagnostics?.contextWindowTokens;
 
   return (
     <div className="rounded-xl border border-border bg-card text-card-foreground shadow-xl">
@@ -259,9 +296,9 @@ export default function AgentRuntimeDiagnosticsPanel({
             <BracesIcon className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">Agent 运行诊断</h3>
+            <h3 className="text-sm font-semibold text-foreground">运行诊断</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              只显示最近一次发送给后端的 Agent / Skill / MCP / OpenMythos 运行配置。
+              只显示最近一次发送给后端的 Argus / Skill / MCP / OpenMythos 运行配置。
             </p>
           </div>
         </div>
@@ -277,7 +314,7 @@ export default function AgentRuntimeDiagnosticsPanel({
 
       {!hasDiagnostics ? (
         <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-          还没有运行诊断。发送第一条 Agent 或 Skill 消息后，这里会显示后端实际收到的配置。
+          还没有运行诊断。发送第一条消息后，这里会显示后端实际收到的运行配置。
         </div>
       ) : (
         <div className="max-h-[420px] overflow-y-auto px-4 py-3">
@@ -286,8 +323,11 @@ export default function AgentRuntimeDiagnosticsPanel({
             <Field label="Agent 名称" value={formatText(diagnostics?.agentName)} />
             <Field label="模型" value={formatText(diagnostics?.model)} />
             <Field label="模型 Profile" value={formatText(diagnostics?.modelProfileId)} />
-            <Field label="上下文 tokens" value={formatNumber(diagnostics?.contextWindowTokens)} />
-              <Field label="Provider" value={formatText(diagnostics?.provider)} />
+            <Field label="上下文窗口" value={contextWindow ? formatTokenCount(contextWindow) : EMPTY_TEXT} />
+            <Field label="当前占用" value={contextBudget ? `${formatTokenCount(contextBudget.current.used)} (${contextBudget.current.percent.toFixed(2)}%)` : EMPTY_TEXT} />
+            <Field label="累计消耗" value={contextBudget ? formatTokenCount(contextBudget.cumulative.used) : EMPTY_TEXT} />
+            <Field label="窗口来源" value={formatText(contextBudget?.window.source)} />
+            <Field label="Provider" value={formatText(diagnostics?.provider)} />
             <Field label="Session ID" value={formatText(diagnostics?.sessionId)} />
             <Field label="Project Path" value={formatText(diagnostics?.projectPath)} />
             <Field label="追加 Prompt 长度" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
@@ -313,7 +353,7 @@ export default function AgentRuntimeDiagnosticsPanel({
                   </div>
                   <BindingBadges bindings={diagnostics?.mcpBindings} />
                   <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    MCP 工具列表由 MTL-Code 原生 runtime 在会话启动后发现；这里显示的是已绑定的配置引用。
+                    MCP 工具列表由 Argus 原生 runtime 在会话启动后发现；这里显示的是已绑定的配置引用。
                   </p>
                   {Array.isArray(diagnostics?.mcpDiagnosticsSummary) && diagnostics.mcpDiagnosticsSummary.length > 0 && (
                     <div className="mt-2 space-y-1">
@@ -352,36 +392,6 @@ export default function AgentRuntimeDiagnosticsPanel({
               </div>
             </section>
           </div>
-
-          <section className="mt-3 rounded-lg border border-border bg-background/60 p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-              <DatabaseIcon className="h-4 w-4 text-primary" />
-              RAG / 知识源
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="RAG 摘要数" value={formatNumber(diagnostics?.ragExcerptCount)} />
-              <Field label="RAG prompt 长度" value={formatNumber(diagnostics?.ragPromptLength)} />
-            </div>
-            {Array.isArray(diagnostics?.ragExcerpts) && diagnostics.ragExcerpts.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {diagnostics.ragExcerpts.map((excerpt) => (
-                  <span
-                    key={`${excerpt.label}:${excerpt.sourceName}:${excerpt.relativePath}`}
-                    className="inline-flex max-w-[260px] items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs"
-                    title={`${excerpt.sourceName || ''} / ${excerpt.relativePath || ''}`}
-                  >
-                    <span className="font-medium text-foreground">{excerpt.label || 'K'}</span>
-                    <span className="truncate text-muted-foreground">{excerpt.sourceName || excerpt.relativePath || 'knowledge'}</span>
-                    {typeof excerpt.chars === 'number' && <span className="shrink-0 text-muted-foreground">{excerpt.chars} 字符</span>}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-xs text-muted-foreground">
-                本次没有注入 RAG 摘要，或当前 Agent 没有可用的已索引知识源。
-              </p>
-            )}
-          </section>
 
           <section className="mt-3 rounded-lg border border-border bg-background/60 p-3">
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">

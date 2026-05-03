@@ -3,10 +3,10 @@
  * Single source of truth for all supported AI models
  */
 
-export const MTL_CODE_MODEL = { value: "mtlcode", label: "MTLCode" };
+export const MTL_CODE_MODEL = { value: "mtlcode", label: "Argus" };
 
 /**
- * MTL-Code Models
+ * Argus Models
  *
  * Chat surfaces keep one sentinel entry. The settings page now manages multiple
  * concrete model profiles and writes the active one into ~/.mtl-code/settings.json.

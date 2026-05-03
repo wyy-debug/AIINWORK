@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * MTL-Code UI CLI
+ * Argus CLI
  *
- * Provides command-line utilities for managing MTL-Code UI
+ * Provides command-line utilities for managing Argus
  *
  * Commands:
  *   (no args)     - Start the server (default)
@@ -102,7 +102,7 @@ function getInstallDir() {
 
 // Show status command
 function showStatus() {
-    console.log(`\n${c.bright('MTL-Code UI - Status')}\n`);
+    console.log(`\n${c.bright('Argus - Status')}\n`);
     console.log(c.dim('═'.repeat(60)));
 
     // Version info
@@ -133,8 +133,8 @@ function showStatus() {
     console.log(`       MTL_CODE_CLI_PATH: ${c.dim(resolveMtlCodeCliPath())}`);
     console.log(`       CONTEXT_WINDOW: ${c.dim(process.env.CONTEXT_WINDOW || '200000 (default)')}`);
 
-    // MTL-Code projects folders
-    console.log(`\n${c.info('[INFO]')} MTL-Code Projects Folders:`);
+    // Argus projects folders
+    console.log(`\n${c.info('[INFO]')} Argus Projects Folders:`);
     for (const projectsPath of [
         path.join(getMtlCodeHomeDir(), 'projects'),
         path.join(getLegacyClaudeHomeDir(), 'projects')
@@ -162,14 +162,14 @@ function showStatus() {
 function showHelp() {
     console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
-║              MTL-Code UI - Command Line Tool               ║
+║              Argus - Command Line Tool               ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 Usage:
   mtl-code-ui [command] [options]
 
 Commands:
-  start          Start the MTL-Code UI server (default)
+  start          Start the Argus server (default)
   sandbox        Manage Docker sandbox environments
   status         Show configuration and data locations
   update         Update to the latest version
@@ -192,8 +192,8 @@ Environment Variables:
   SERVER_PORT         Set server port (default: 3001)
   PORT                Set server port (default: 3001) (LEGACY)
   DATABASE_PATH       Set custom database location
-  MTL_CODE_CLI_PATH   Set custom MTL-Code CLI path
-  CLAUDE_CLI_PATH     Legacy fallback for custom MTL-Code CLI path
+  MTL_CODE_CLI_PATH   Set custom Argus CLI path
+  CLAUDE_CLI_PATH     Legacy fallback for custom Argus CLI path
   CONTEXT_WINDOW      Set context window size (default: 200000)
 
 Documentation:
@@ -336,7 +336,7 @@ function parseSandboxArgs(args) {
 
 function showSandboxHelp() {
     console.log(`
-${c.bright('MTL-Code UI Sandbox')} — Run MTL-Code UI inside Docker Sandboxes
+${c.bright('Argus Sandbox')} — Run Argus inside Docker Sandboxes
 
 Usage:
   mtl-code-ui sandbox <workspace>            Create and start a sandbox
@@ -348,7 +348,7 @@ Subcommands:
   ${c.bright('start')}        Restart a stopped sandbox and re-launch the web UI
   ${c.bright('stop')}         Stop a sandbox (preserves state)
   ${c.bright('rm')}           Remove a sandbox
-  ${c.bright('logs')}         Show MTL-Code UI server logs
+  ${c.bright('logs')}         Show Argus server logs
   ${c.bright('help')}         Show this help
 
 Options:
@@ -371,7 +371,7 @@ Prerequisites:
   1. Install sbx CLI: https://docs.docker.com/ai/sandboxes/get-started/
   2. Authenticate and store your API key:
        sbx login
-       sbx secret set -g anthropic   # for MTL-Code/Anthropic provider
+       sbx secret set -g anthropic   # for Argus/Anthropic provider
        sbx secret set -g openai      # for Codex
        sbx secret set -g google      # for Gemini
 
@@ -470,7 +470,7 @@ async function sandboxCommand(args) {
             restartRun.unref();
             await new Promise(resolve => setTimeout(resolve, 5000));
 
-            console.log(`${c.info('▶')} Launching MTL-Code UI web server...`);
+            console.log(`${c.info('▶')} Launching Argus web server...`);
             sbx(['exec', opts.name, 'bash', '-c', 'mtl-code-ui start --port 3001 &']);
 
             console.log(`${c.info('▶')} Forwarding port ${opts.port} → 3001...`);
@@ -493,7 +493,7 @@ async function sandboxCommand(args) {
                 }
             }
 
-            console.log(`\n${c.ok('✔')} ${c.bright('MTL-Code UI is ready!')}`);
+            console.log(`\n${c.ok('✔')} ${c.bright('Argus is ready!')}`);
             console.log(`  ${c.info('→')} ${c.bright(`http://localhost:${opts.port}`)}\n`);
             break;
         }
@@ -526,7 +526,7 @@ async function sandboxCommand(args) {
                 }
             } catch { /* sbx secret ls not available, skip check */ }
 
-            console.log(`\n${c.bright('MTL-Code UI Sandbox')}`);
+            console.log(`\n${c.bright('Argus Sandbox')}`);
             console.log(c.dim('─'.repeat(50)));
             console.log(`  Agent:     ${c.info(opts.agent)} ${c.dim(`(${secret} credentials)`)}`);
             console.log(`  Workspace: ${c.dim(workspace)}`);
@@ -568,8 +568,8 @@ async function sandboxCommand(args) {
                 }
             }
 
-            // Step 3: Start MTL-Code UI inside the sandbox
-            console.log(`${c.info('▶')} Launching MTL-Code UI web server...`);
+            // Step 3: Start Argus inside the sandbox
+            console.log(`${c.info('▶')} Launching Argus web server...`);
             sbx(['exec', opts.name, 'bash', '-c', 'mtl-code-ui start --port 3001 &']);
 
             // Step 4: Forward port
@@ -594,7 +594,7 @@ async function sandboxCommand(args) {
             }
 
             // Done
-            console.log(`\n${c.ok('✔')} ${c.bright('MTL-Code UI is ready!')}`);
+            console.log(`\n${c.ok('✔')} ${c.bright('Argus is ready!')}`);
             console.log(`  ${c.info('→')} Open ${c.bright(`http://localhost:${opts.port}`)}`);
             console.log(`\n${c.dim('  Manage with:')}`);
             console.log(`  ${c.dim('$')} sbx ls`);

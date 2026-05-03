@@ -14,6 +14,7 @@ export type OpenMythosRuntimeCard = {
   routes: string[]
   phasePlan: OpenMythosPhase[]
   expertRoutes: OpenMythosExpertRoute[]
+  dispatchPlan: OpenMythosDispatchTask[]
   remainingBudget?: number
 }
 
@@ -27,6 +28,9 @@ export type OpenMythosRuntimeConfig = {
   phaseAdapter: boolean
   expertRouting: boolean
   contextCacheDiagnostics: boolean
+  autoDispatchSubagents: boolean
+  autoDispatchMinEffort: OpenMythosEffortLevel
+  autoDispatchMaxWorkers: number
   minEffort: OpenMythosEffortLevel
   maxEffort: OpenMythosEffortLevel
 }
@@ -46,6 +50,15 @@ export type OpenMythosExpertRoute = {
   required: boolean
 }
 
+export type OpenMythosDispatchTask = {
+  kind: OpenMythosExpertRoute['kind'] | 'implementation'
+  label: string
+  reason: string
+  required: boolean
+  description: string
+  prompt: string
+}
+
 export type OpenMythosContextCacheDiagnostics = {
   compactBoundaryCount?: number
   microcompactBoundaryCount?: number
@@ -60,6 +73,7 @@ export type OpenMythosRuntimeState = {
   phase: OpenMythosPhase
   turnCount: number
   remainingBudget: number
+  hardDispatchAttempted: boolean
   loopControl: OpenMythosLoopControl
   stableReinjection: boolean
   phaseAdapter: boolean
@@ -70,7 +84,7 @@ export type OpenMythosRuntimeState = {
 
 type OpenMythosEffortLevel = Extract<
   EffortLevel,
-  'low' | 'medium' | 'high' | 'xhigh'
+  'low' | 'medium' | 'high' | 'xhigh' | 'max'
 >
 
 type Signal = {
@@ -86,6 +100,7 @@ const OPENMYTHOS_EFFORT_LEVELS = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ] as const satisfies readonly OpenMythosEffortLevel[]
 
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
@@ -98,8 +113,11 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
+  autoDispatchSubagents: true,
+  autoDispatchMinEffort: 'medium',
+  autoDispatchMaxWorkers: 3,
   minEffort: 'low',
-  maxEffort: 'xhigh',
+  maxEffort: 'max',
 }
 
 const HIGH_RISK_SIGNALS: Signal[] = [
@@ -243,6 +261,18 @@ export function getOpenMythosRuntimeConfig(): OpenMythosRuntimeConfig {
     contextCacheDiagnostics: readBooleanEnvDefaultTrue(
       process.env.MTL_CODE_OPENMYTHOS_CONTEXT_CACHE_DIAGNOSTICS,
     ),
+    autoDispatchSubagents: readBooleanEnvDefaultTrue(
+      process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH,
+    ),
+    autoDispatchMinEffort: readEffortBound(
+      process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT,
+      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort,
+    ),
+    autoDispatchMaxWorkers: readPositiveInteger(
+      process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MAX_WORKERS,
+      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers,
+      8,
+    ),
     minEffort: normalizedMinEffort,
     maxEffort: normalizedMaxEffort,
   }
@@ -276,6 +306,7 @@ export function buildOpenMythosRuntimeCard(
   if (isEnvTruthy(process.env.MTL_CODE_SIMPLE)) return null
 
   const normalized = input.replace(/\s+/g, ' ').trim()
+  const isTaskNotification = isOpenMythosTaskNotificationInput(normalized)
   const goal = truncate(normalized, 260)
   const signals = [
     ...HIGH_RISK_SIGNALS,
@@ -289,13 +320,13 @@ export function buildOpenMythosRuntimeCard(
     Math.min(3, Math.floor(normalized.length / 600))
 
   const inferredEffort =
-    score >= 8 ? 'xhigh' : score >= 4 ? 'high' : score >= 2 ? 'medium' : 'low'
+    score >= 10 ? 'max' : score >= 8 ? 'xhigh' : score >= 4 ? 'high' : score >= 2 ? 'medium' : 'low'
   const effort = clampEffort(
     inferredEffort,
     config.minEffort,
     config.maxEffort,
   )
-  const loopBudget = effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2
+  const loopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2
 
   const reasons = unique(signals.map(s => s.reason)).slice(0, 4)
   if (reasons.length === 0) {
@@ -332,6 +363,16 @@ export function buildOpenMythosRuntimeCard(
   const phasePlan: OpenMythosPhase[] = config.phaseAdapter
     ? buildPhasePlan(effort)
     : ['implement', 'finalize']
+  const dispatchPlan = buildDispatchPlan({
+    autoDispatchSubagents: config.autoDispatchSubagents,
+    minEffort: config.autoDispatchMinEffort,
+    maxWorkers: config.autoDispatchMaxWorkers,
+    goal,
+    effort,
+    signals,
+    expertRoutes,
+    isTaskNotification,
+  })
 
   return {
     goal,
@@ -344,6 +385,7 @@ export function buildOpenMythosRuntimeCard(
     routes,
     phasePlan,
     expertRoutes,
+    dispatchPlan,
     remainingBudget: loopBudget,
   }
 }
@@ -359,6 +401,7 @@ export function createOpenMythosRuntimeState(
     phase: getOpenMythosPhase(card, turnCount),
     turnCount,
     remainingBudget: getRemainingBudget(card.loopBudget, turnCount),
+    hardDispatchAttempted: false,
     loopControl: config.loopControl,
     stableReinjection: config.stableReinjection,
     phaseAdapter: config.phaseAdapter,
@@ -408,6 +451,16 @@ export function formatOpenMythosRuntimeReminder(
         .map(route => `${route.label}${route.required ? ' (required)' : ''}: ${route.reason}`)
         .join('; ')
     : 'disabled'
+  const dispatchPlan = card.dispatchPlan.length > 0
+    ? card.dispatchPlan
+        .map((task, index) => `${index + 1}. Agent({ subagent_type: "worker", description: ${JSON.stringify(task.description)}, prompt: ${JSON.stringify(task.prompt)} })`)
+        .join('\n')
+    : 'disabled'
+  const coordinatorInstruction = state?.hardDispatchAttempted
+    ? '- Coordinator instruction: OpenMythos worker dispatch was already attempted for this runtime turn. Do not launch the same worker plan again; synthesize current worker notifications or proceed locally.'
+    : card.dispatchPlan.length > 0
+      ? '- Coordinator instruction: before direct implementation or long analysis, launch every worker in the auto-dispatch plan with the Agent tool, then report briefly that workers are running and wait for task notifications.'
+      : '- Coordinator instruction: no automatic worker dispatch is required for this turn.'
   const contextCache = state?.contextCache
   const contextCacheLine = contextCache
     ? `- Context cache ledger: compact boundaries=${contextCache.compactBoundaryCount ?? 0}; microcompact boundaries=${contextCache.microcompactBoundaryCount ?? 0}; RAG excerpts=${contextCache.ragExcerptCount ?? 0}; RAG prompt chars=${contextCache.ragPromptLength ?? 0}; tool summaries=${contextCache.toolSummaryCount ?? 0}.`
@@ -425,9 +478,12 @@ export function formatOpenMythosRuntimeReminder(
       card.routes.length > 0 ? card.routes.join(' ') : 'disabled'
     }`,
     `- Expert routes: ${expertRoutes}`,
+    `- Auto-dispatch worker plan: ${dispatchPlan}`,
+    coordinatorInstruction,
     phase === 'orient' || phase === 'plan'
       ? '- Phase guard: read, inspect, and plan only. Do not write files or run mutating tools until implement/verify/finalize.'
       : '- Phase guard: write tools are allowed only when they are the smallest safe change and verification remains visible.',
+    '- User-facing output guard: do not narrate internal agent-control failures, self-control problems, or fallback plans that ask the user to replace whole files manually. If worker dispatch or tool execution fails, continue locally when possible and report a concise actionable status.',
     contextCacheLine,
   ].join('\n')
 }
@@ -468,6 +524,16 @@ function readEffortBound(
     : fallback
 }
 
+function readPositiveInteger(
+  value: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(value ?? '', 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
 function normalizeEffortBounds(
   minEffort: OpenMythosEffortLevel,
   maxEffort: OpenMythosEffortLevel,
@@ -504,6 +570,13 @@ function unique(values: string[]): string[] {
   return [...new Set(values)]
 }
 
+function effortMeetsMinimum(
+  effort: OpenMythosEffortLevel,
+  minimum: OpenMythosEffortLevel,
+): boolean {
+  return OPENMYTHOS_EFFORT_LEVELS.indexOf(effort) >= OPENMYTHOS_EFFORT_LEVELS.indexOf(minimum)
+}
+
 function getRemainingBudget(loopBudget: number, turnCount: number): number {
   return Math.max(0, loopBudget - Math.max(0, turnCount - 1))
 }
@@ -517,6 +590,8 @@ function buildPhasePlan(effort: OpenMythosEffortLevel): OpenMythosPhase[] {
     case 'high':
       return ['orient', 'plan', 'implement', 'verify', 'finalize']
     case 'xhigh':
+      return ['orient', 'plan', 'implement', 'verify', 'finalize']
+    case 'max':
       return ['orient', 'plan', 'implement', 'verify', 'finalize']
   }
 }
@@ -546,4 +621,71 @@ function selectExpertRoutes(
   }
 
   return [...routed.values()].slice(0, 5)
+}
+
+function buildDispatchPlan({
+  autoDispatchSubagents,
+  minEffort,
+  maxWorkers,
+  goal,
+  effort,
+  signals,
+  expertRoutes,
+  isTaskNotification,
+}: {
+  autoDispatchSubagents: boolean
+  minEffort: OpenMythosEffortLevel
+  maxWorkers: number
+  goal: string
+  effort: OpenMythosEffortLevel
+  signals: Signal[]
+  expertRoutes: OpenMythosExpertRoute[]
+  isTaskNotification: boolean
+}): OpenMythosDispatchTask[] {
+  if (!autoDispatchSubagents) return []
+  if (isTaskNotification) return []
+  if (!isEnvTruthy(process.env.MTL_CODE_COORDINATOR_MODE)) return []
+  if (!effortMeetsMinimum(effort, minEffort)) return []
+
+  const tasks = expertRoutes
+    .filter(route => route.kind !== 'local')
+    .map(route => routeToDispatchTask(route, goal))
+
+  const hasImplementationSignal = signals.some(signal => signal.reason === 'implementation requested')
+  if (hasImplementationSignal && tasks.length === 0) {
+    tasks.push(routeToDispatchTask({
+      kind: 'implementation',
+      label: 'Implementation worker',
+      reason: 'implementation requested',
+      required: true,
+    }, goal))
+  }
+
+  return tasks.slice(0, Math.max(1, maxWorkers))
+}
+
+function isOpenMythosTaskNotificationInput(input: string): boolean {
+  return /<task-notification\b/i.test(input)
+}
+
+function routeToDispatchTask(
+  route: Omit<OpenMythosDispatchTask, 'description' | 'prompt'>,
+  goal: string,
+): OpenMythosDispatchTask {
+  const description = truncate(`${route.label}: ${goal}`, 80)
+  const prompt = [
+    'You are an Argus worker selected by OpenMythos auto-dispatch.',
+    `User goal: ${goal}`,
+    `Route: ${route.label}.`,
+    `Reason: ${route.reason}.`,
+    route.required ? 'This route is required for a safe answer.' : 'This route is helpful if it materially improves the answer.',
+    'Work autonomously. Read the relevant project files, inspect evidence, and only make edits when the task explicitly requires implementation and the change is clearly within your assigned route.',
+    'Do not revert unrelated user changes. Report concrete files, findings, edits, and verification results back to the coordinator.',
+  ].join('\n')
+
+  return {
+    ...route,
+    description,
+    prompt,
+  }
 }

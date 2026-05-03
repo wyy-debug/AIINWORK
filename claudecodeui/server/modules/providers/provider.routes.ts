@@ -455,7 +455,7 @@ const inspectProviderMcpServer = async (
   checks.push({
     id: 'tools',
     status: 'warn',
-    message: 'Configuration is bound. Tool listing is discovered by the MTL-Code provider runtime after a session starts.',
+    message: 'Configuration is bound. Tool listing is discovered by the Argus provider runtime after a session starts.',
     detail: 'v1 does not expose a separate MCP tool-list API.',
   });
 
@@ -593,8 +593,8 @@ const diagnoseProviderMcpServer = async (
     id: 'runtime-tools',
     status: manifestTools.length > 0 ? 'pass' : 'warn',
     message: manifestTools.length > 0
-      ? 'manifest 中声明了可用工具；实际工具列表仍由 MTL-Code runtime 会话启动后发现。'
-      : '未找到独立 tool-list API；工具列表将在会话启动后由 MTL-Code runtime 发现。',
+      ? 'manifest 中声明了可用工具；实际工具列表仍由 Argus runtime 会话启动后发现。'
+      : '未找到独立 tool-list API；工具列表将在会话启动后由 Argus runtime 发现。',
     detail: manifestTools.join(', ') || 'runtime discovery',
   });
 
@@ -633,7 +633,7 @@ const diagnoseProviderMcpServer = async (
     runtimeToolsStatus: {
       status: runtimeToolsCheck?.status || 'warn',
       tools: manifestTools,
-      message: runtimeToolsCheck?.message || 'Tool listing is discovered by the MTL-Code runtime after a session starts.',
+      message: runtimeToolsCheck?.message || 'Tool listing is discovered by the Argus runtime after a session starts.',
     },
     safeMessages,
     requiredFields,

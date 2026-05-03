@@ -13,14 +13,14 @@
     "untitledSession": "無題のセッション",
     "newSession": "新しいセッション",
     "codexSession": "Codexセッション",
-    "fetchingProjects": "MTL-Codeのプロジェクトとセッションを取得しています",
+    "fetchingProjects": "Argusのプロジェクトとセッションを取得しています",
     "projects": "プロジェクト",
     "noMatchingProjects": "一致するプロジェクトがありません",
     "tryDifferentSearch": "検索語を変えてお試しください",
-    "runMTL-CodeCli": "プロジェクトディレクトリでMTL-Code CLIを実行して始めましょう"
+    "runClaudeCli": "プロジェクトディレクトリでArgus CLIを実行して始めましょう"
   },
   "app": {
-    "title": "MTL-Code UI",
+    "title": "Argus",
     "subtitle": "AIコーディングアシスタント"
   },
   "sessions": {

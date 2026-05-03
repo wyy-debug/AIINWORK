@@ -1,7 +1,7 @@
 import type { McpFormState, McpProvider, McpScope, McpTransport } from './types';
 
 export const MCP_PROVIDER_NAMES: Record<McpProvider, string> = {
-  claude: 'MTL-Code',
+  claude: 'Argus',
   cursor: 'Cursor',
   codex: 'Codex',
   gemini: 'Gemini',

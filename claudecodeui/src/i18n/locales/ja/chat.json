@@ -15,7 +15,7 @@
     "user": "U",
     "error": "エラー",
     "tool": "ツール",
-    "claude": "MTL-Code",
+    "claude": "Argus",
     "cursor": "Cursor",
     "codex": "Codex"
   },
@@ -54,8 +54,8 @@
   "interactive": {
     "title": "インタラクティブプロンプト",
     "waiting": "CLIでの応答を待っています",
-    "instruction": "MTL-Codeが実行されているターミナルでオプションを選択してください。",
-    "selectedOption": "✓ MTL-Codeがオプション{{number}}を選択しました",
+    "instruction": "Argusが実行されているターミナルでオプションを選択してください。",
+    "selectedOption": "✓ Argusがオプション{{number}}を選択しました",
     "instructionDetail": "CLIでは、矢印キーまたは番号を入力してオプションを選択します。"
   },
   "thinking": {
@@ -82,7 +82,7 @@
     "title": "実装プラン"
   },
   "usageLimit": {
-    "resetAt": "MTL-Codeの使用制限に達しました。制限は**{{time}} {{timezone}}** - {{date}}にリセットされます"
+    "resetAt": "Argusの使用制限に達しました。制限は**{{time}} {{timezone}}** - {{date}}にリセットされます"
   },
   "codex": {
     "permissionMode": "権限モード",
@@ -118,14 +118,14 @@
   "thinkingMode": {
     "selector": {
       "title": "思考モード",
-      "description": "拡張思考によりMTL-Codeがより多くの選択肢を検討できます",
+      "description": "拡張思考によりArgusがより多くの選択肢を検討できます",
       "active": "有効",
       "tip": "高い思考モードは時間がかかりますが、より深い分析が得られます"
     },
     "modes": {
       "none": {
         "name": "標準",
-        "description": "通常のMTL-Codeの応答",
+        "description": "通常のArgusの応答",
         "prefix": ""
       },
       "think": {
@@ -161,7 +161,7 @@
       "cursorEditor": "AIコードエディタ"
     },
     "readyPrompt": {
-      "claude": "{{model}}でMTL-Codeを使用する準備ができました。下にメッセージを入力してください。",
+      "claude": "{{model}}でArgusを使用する準備ができました。下にメッセージを入力してください。",
       "cursor": "{{model}}でCursorを使用する準備ができました。下にメッセージを入力してください。",
       "codex": "{{model}}でCodexを使用する準備ができました。下にメッセージを入力してください。",
       "default": "上からプロバイダーを選択して開始してください"
@@ -203,10 +203,10 @@
     },
     "loading": "ターミナルを読み込んでいます...",
     "connecting": "シェルに接続しています...",
-    "startSession": "新しいMTL-Codeセッションを開始",
+    "startSession": "新しいArgusセッションを開始",
     "resumeSession": "セッションを再開: {{displayName}}...",
     "runCommand": "{{projectName}}で{{command}}を実行",
-    "startCli": "{{projectName}}でMTL-Code CLIを起動しています",
+    "startCli": "{{projectName}}でArgus CLIを起動しています",
     "defaultCommand": "コマンド"
   },
   "claudeStatus": {

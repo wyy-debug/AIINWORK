@@ -18,6 +18,7 @@ export type AgentsSettingsTabProps = {
   geminiPermissionMode: GeminiPermissionMode;
   onGeminiPermissionModeChange: (value: GeminiPermissionMode) => void;
   projects: SettingsProject[];
+  initialCategory?: AgentCategory;
 };
 
 export type AgentCategoryTabsSectionProps = {

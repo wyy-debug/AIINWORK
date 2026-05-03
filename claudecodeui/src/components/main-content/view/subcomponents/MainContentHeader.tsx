@@ -70,6 +70,7 @@ export default function MainContentHeader({
                 activeTab={activeTab}
                 setActiveTab={setActiveTab}
                 shouldShowTasksTab={shouldShowTasksTab}
+                selectedProject={selectedProject}
               />
             )}
           </div>

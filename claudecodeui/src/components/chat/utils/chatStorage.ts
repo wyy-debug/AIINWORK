@@ -1,6 +1,15 @@
 import type { ClaudeSettings } from '../types/types';
 
 export const CLAUDE_SETTINGS_KEY = 'claude-settings';
+export const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
+
+const ARGUS_STALE_EXACT_TOOL_DENIES = new Set([
+  'Bash',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'Write',
+]);
 
 export const safeLocalStorage = {
   setItem: (key: string, value: string) => {
@@ -43,35 +52,47 @@ export const safeLocalStorage = {
   },
 };
 
+const toArgusPermissionMode = (value: unknown): ClaudeSettings['permissionMode'] => (
+  value === 'default'
+  || value === 'acceptEdits'
+  || value === 'bypassPermissions'
+  || value === 'plan'
+    ? value
+    : ARGUS_DEFAULT_PERMISSION_MODE
+);
+
+const normalizeToolList = (value: unknown): string[] => (
+  Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+);
+
+export function normalizeArgusClaudeSettings(value: unknown): ClaudeSettings {
+  const parsed = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const projectSortOrder = parsed.projectSortOrder === 'date' ? 'date' : 'name';
+  const disallowedTools = normalizeToolList(parsed.disallowedTools)
+    .filter((tool) => !ARGUS_STALE_EXACT_TOOL_DENIES.has(tool));
+
+  return {
+    ...parsed,
+    allowedTools: normalizeToolList(parsed.allowedTools),
+    disallowedTools,
+    skipPermissions: Boolean(parsed.skipPermissions),
+    permissionMode: toArgusPermissionMode(parsed.permissionMode),
+    projectSortOrder,
+  } as ClaudeSettings;
+}
+
 export function getClaudeSettings(): ClaudeSettings {
   const raw = safeLocalStorage.getItem(CLAUDE_SETTINGS_KEY);
   if (!raw) {
-    return {
-      allowedTools: [],
-      disallowedTools: [],
-      skipPermissions: false,
-      permissionMode: 'default',
-      projectSortOrder: 'name',
-    };
+    return normalizeArgusClaudeSettings(null);
   }
 
   try {
     const parsed = JSON.parse(raw);
-    return {
-      ...parsed,
-      allowedTools: Array.isArray(parsed.allowedTools) ? parsed.allowedTools : [],
-      disallowedTools: Array.isArray(parsed.disallowedTools) ? parsed.disallowedTools : [],
-      skipPermissions: Boolean(parsed.skipPermissions),
-      permissionMode: parsed.permissionMode || 'default',
-      projectSortOrder: parsed.projectSortOrder || 'name',
-    };
+    return normalizeArgusClaudeSettings(parsed);
   } catch {
-    return {
-      allowedTools: [],
-      disallowedTools: [],
-      skipPermissions: false,
-      permissionMode: 'default',
-      projectSortOrder: 'name',
-    };
+    return normalizeArgusClaudeSettings(null);
   }
 }

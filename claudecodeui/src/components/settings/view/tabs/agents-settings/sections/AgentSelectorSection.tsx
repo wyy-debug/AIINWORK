@@ -4,7 +4,7 @@ import type { AgentProvider } from '../../../../types/types';
 import type { AgentSelectorSectionProps } from '../types';
 
 const AGENT_NAMES: Record<AgentProvider, string> = {
-  claude: 'MTLCode',
+  claude: 'Argus',
   cursor: 'Cursor',
   codex: 'Codex',
   gemini: 'Gemini',

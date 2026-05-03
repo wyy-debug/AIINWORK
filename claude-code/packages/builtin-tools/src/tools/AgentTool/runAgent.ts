@@ -716,6 +716,7 @@ export async function* runAgent({
     shareSetResponseLength: true, // Both sync and async contribute to response metrics
     criticalSystemReminder_EXPERIMENTAL:
       agentDefinition.criticalSystemReminder_EXPERIMENTAL,
+    openMythosRuntimeState: undefined,
     contentReplacementState,
   })
 

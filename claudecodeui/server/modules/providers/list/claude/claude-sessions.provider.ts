@@ -1,4 +1,5 @@
 import { getSessionMessages } from '@/projects.js';
+import { sessionAgentBindingsDb } from '@/database/db.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
@@ -18,6 +19,7 @@ type ClaudeHistoryResult =
       messages?: AnyRecord[];
       total?: number;
       hasMore?: boolean;
+      tokenUsage?: unknown;
     };
 
 const loadClaudeSessionMessages = getSessionMessages as unknown as (
@@ -25,6 +27,7 @@ const loadClaudeSessionMessages = getSessionMessages as unknown as (
   sessionId: string,
   limit: number | null,
   offset: number,
+  options?: { modelProfileId?: string | null },
 ) => Promise<ClaudeHistoryResult>;
 
 /**
@@ -43,7 +46,24 @@ const INTERNAL_CONTENT_PREFIXES = [
 ] as const;
 
 function isInternalContent(content: string): boolean {
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
+  const trimmed = content.trimStart();
+  return INTERNAL_CONTENT_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+    || isTaskNotificationContent(trimmed);
+}
+
+function isTaskNotificationContent(content: string): boolean {
+  const trimmed = content.trimStart();
+  return /^<task-notification\b/i.test(trimmed)
+    || /^&lt;task-notification\b/i.test(trimmed);
+}
+
+function isInternalAgentFailureNarration(content: string): boolean {
+  const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
+  return normalized.includes('i literally cannot stop myself')
+    || normalized.includes('pathological at this point')
+    || normalized.includes('every single agent i launch')
+    || normalized.includes('provide the user with the complete updated code')
+    || normalized.includes('they can replace their existing file with the new version');
 }
 
 function isCompactBoundaryRecord(raw: AnyRecord): boolean {
@@ -266,6 +286,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         let partIndex = 0;
         for (const part of raw.message.content) {
           if (part.type === 'text' && part.text) {
+            if (isInternalAgentFailureNarration(part.text)) {
+              partIndex++;
+              continue;
+            }
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
@@ -299,6 +323,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           partIndex++;
         }
       } else if (typeof raw.message.content === 'string') {
+        if (isInternalAgentFailureNarration(raw.message.content)) {
+          return messages;
+        }
         messages.push(createNormalizedMessage({
           id: baseId,
           sessionId,
@@ -330,7 +357,11 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
     let result: ClaudeHistoryResult;
     try {
-      result = await loadClaudeSessionMessages(projectName, sessionId, limit, offset);
+      const modelProfileId = sessionAgentBindingsDb
+        .getBinding(sessionId, PROVIDER)
+        ?.configuration
+        ?.modelProfileId || null;
+      result = await loadClaudeSessionMessages(projectName, sessionId, limit, offset, { modelProfileId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
@@ -402,6 +433,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       hasMore,
       offset,
       limit,
+      tokenUsage: Array.isArray(result) ? undefined : result.tokenUsage,
     };
   }
 }

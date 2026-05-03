@@ -33,22 +33,6 @@ export interface AgentTriggerRules {
   confidenceThreshold: number;
 }
 
-export type AgentKnowledgeSourceType = 'file' | 'folder';
-
-export type AgentKnowledgeSourceStatus = 'mock' | 'pending' | 'indexed' | 'failed';
-
-export interface AgentKnowledgeSource {
-  id: string;
-  type: AgentKnowledgeSourceType;
-  name: string;
-  path?: string;
-  status: AgentKnowledgeSourceStatus;
-  storageKey?: string;
-  fileCount?: number;
-  chunkCount?: number;
-  addedAt?: string;
-}
-
 export interface AgentMemoryConfig {
   enabled: boolean;
   namespace: string;
@@ -69,7 +53,6 @@ export interface AgentConfig {
   channels: AgentChannel[];
   appBindings: AgentAppBinding[];
   skills: string[];
-  knowledgeSources: AgentKnowledgeSource[];
   memory: AgentMemoryConfig;
   tools: string[];
   guardrails: string[];

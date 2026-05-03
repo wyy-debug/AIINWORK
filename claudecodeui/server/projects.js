@@ -2,11 +2,11 @@
  * PROJECT DISCOVERY AND MANAGEMENT SYSTEM
  * ========================================
  * 
- * This module manages project discovery for both MTL-Code and Cursor CLI sessions.
+ * This module manages project discovery for both Argus and Cursor CLI sessions.
  * 
  * ## Architecture Overview
  * 
- * 1. **MTL-Code Projects** (stored in ~/.mtl-code/projects/, with ~/.claude/projects as legacy fallback)
+ * 1. **Argus Projects** (stored in ~/.mtl-code/projects/, with ~/.claude/projects as legacy fallback)
  *    - Each project is a directory named with the project path encoded (/ replaced with -)
  *    - Contains .jsonl files with conversation history including 'cwd' field
  *    - Project metadata stored in ~/.mtl-code/project-config.json
@@ -19,7 +19,7 @@
  * 
  * ## Project Discovery Strategy
  * 
- * 1. **MTL-Code Projects Discovery**:
+ * 1. **Argus Projects Discovery**:
  *    - Scan ~/.mtl-code/projects/ and legacy ~/.claude/projects/ directories for project folders
  *    - Extract actual project path from .jsonl files (cwd field)
  *    - Fall back to decoded directory name if no sessions exist
@@ -33,7 +33,7 @@
  * 3. **Manual Project Addition**:
  *    - Users can manually add project paths via UI
  *    - Stored in ~/.mtl-code/project-config.json with 'manuallyAdded' flag
- *    - Allows discovering Cursor sessions for projects without MTL-Code sessions
+ *    - Allows discovering Cursor sessions for projects without Argus sessions
  * 
  * ## Critical Limitations
  * 
@@ -66,6 +66,10 @@ import Database from 'better-sqlite3';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames, worktreeDispatchesDb } from './database/db.js';
+import {
+  buildContextBudgetFromJsonlEntries,
+  toContextBudgetResponse,
+} from './services/context-budget-service.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -399,7 +403,7 @@ async function saveProjectConfig(config) {
   const configDir = getMtlCodeHomeDir();
   const configPath = getProjectConfigPath(configDir);
 
-  // Ensure the MTL-Code directory exists
+  // Ensure the Argus directory exists
   try {
     await fs.mkdir(configDir, { recursive: true });
   } catch (error) {
@@ -570,7 +574,7 @@ async function getProjects(progressCallback = null) {
   let directories = [];
 
   try {
-    // First, get existing MTL-Code projects from the file system, with legacy Claude dirs included.
+    // First, get existing Argus projects from the file system, with legacy Claude dirs included.
     directories = (await listProviderProjectDirs())
       .filter(entry => !isStandaloneConversationProjectName(entry.name));
 
@@ -1213,7 +1217,7 @@ async function parseAgentTools(filePath) {
 }
 
 // Get messages for a specific session with pagination support
-async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
+async function getSessionMessages(projectName, sessionId, limit = null, offset = 0, options = {}) {
   const { projectDir } = await findProjectDir(projectName);
 
   try {
@@ -1287,10 +1291,23 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     );
 
     const total = sortedMessages.length;
+    const contextBudget = await buildContextBudgetFromJsonlEntries(sortedMessages, {
+      modelProfileId: options.modelProfileId,
+      contextWindowTokens: options.contextWindowTokens,
+      env: process.env,
+    });
+    const tokenUsage = toContextBudgetResponse(contextBudget);
 
     // If no limit is specified, return all messages (backward compatibility)
     if (limit === null) {
-      return sortedMessages;
+      return {
+        messages: sortedMessages,
+        total,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+        tokenUsage,
+      };
     }
 
     // Apply pagination - for recent messages, we need to slice from the end
@@ -1305,7 +1322,8 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       total,
       hasMore,
       offset,
-      limit
+      limit,
+      tokenUsage,
     };
   } catch (error) {
     console.error(`Error reading messages for session ${sessionId}:`, error);
@@ -1478,7 +1496,7 @@ async function addProjectManually(projectPath, displayName = null) {
   }
 
   // Allow adding projects even if the directory exists - this enables tracking
-  // existing MTL-Code or Cursor projects in the UI
+  // existing Argus or Cursor projects in the UI
 
   // Add to config as manually added project
   config[projectName] = {
@@ -2361,7 +2379,7 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
       }
     }
   } catch (error) {
-    console.warn('Error searching MTL-Code project conversations:', error.message);
+    console.warn('Error searching Argus project conversations:', error.message);
   }
 
   return { results, totalMatches, query: safeQuery };

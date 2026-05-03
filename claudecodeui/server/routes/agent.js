@@ -1125,7 +1125,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           } else {
             prBody += `Agent task: ${message}`;
           }
-          prBody += '\n\n---\n*This pull request was automatically created by MTL-Code UI Agent.*';
+          prBody += '\n\n---\n*This pull request was automatically created by Argus Agent.*';
 
           console.log(`📝 PR Title: ${prTitle}`);
 

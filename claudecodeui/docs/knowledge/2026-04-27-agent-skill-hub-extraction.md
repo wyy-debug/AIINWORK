@@ -4,13 +4,13 @@ Date: 2026-04-27
 
 ## Decision
 
-The remote repository service has been extracted from MTL-Code UI into:
+The remote repository service has been extracted from Argus into:
 
 ```text
 E:\AIINWORK\agent-skill-hub
 ```
 
-MTL-Code UI is now only a repository client. It can add HTTP(S) catalog URLs, like/pull/install items, upload to its local writable repository, and create runtime Agents from templates.
+Argus is now only a repository client. It can add HTTP(S) catalog URLs, like/pull/install items, upload to its local writable repository, and create runtime Agents from templates.
 
 The standalone Hub owns:
 
@@ -21,7 +21,7 @@ The standalone Hub owns:
 - admin review/publish/reject/delete
 - shared Hub storage
 
-## MTL-Code UI Changes
+## Argus Changes
 
 Removed embedded routes from `server/index.js`:
 

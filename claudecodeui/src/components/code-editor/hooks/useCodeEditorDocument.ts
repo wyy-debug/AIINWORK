@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+
 import { api } from '../../../utils/api';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
@@ -23,6 +24,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isBinary, setIsBinary] = useState(false);
+  const [baseHash, setBaseHash] = useState<string | null>(null);
   const fileProjectName = file.projectName ?? projectPath;
   const filePath = file.path;
   const fileName = file.name;
@@ -38,6 +40,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         // Check if file is binary by extension
         if (isBinaryFile(file.name)) {
           setIsBinary(true);
+          setBaseHash(null);
           setLoading(false);
           return;
         }
@@ -45,6 +48,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         // Diff payload may already include full old/new snapshots, so avoid disk read.
         if (file.diffInfo && fileDiffNewString !== undefined && fileDiffOldString !== undefined) {
           setContent(fileDiffNewString);
+          setBaseHash(null);
           setLoading(false);
           return;
         }
@@ -60,10 +64,12 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
 
         const data = await response.json();
         setContent(data.content);
+        setBaseHash(typeof data.baseHash === 'string' ? data.baseHash : null);
       } catch (error) {
         const message = getErrorMessage(error);
         console.error('Error loading file:', error);
         setContent(`// Error loading file: ${message}\n// File: ${fileName}\n// Path: ${filePath}`);
+        setBaseHash(null);
       } finally {
         setLoading(false);
       }
@@ -81,12 +87,15 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         throw new Error('Missing project identifier');
       }
 
-      const response = await api.saveFile(fileProjectName, filePath, content);
+      const response = await api.saveFile(fileProjectName, filePath, content, baseHash);
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type');
         if (contentType?.includes('application/json')) {
           const errorData = await response.json();
+          if (errorData.code === 'FILE_WRITE_CONFLICT') {
+            throw new Error('文件已在磁盘上被修改。请重新加载文件后再保存，避免覆盖其他改动。');
+          }
           throw new Error(errorData.error || `Save failed: ${response.status}`);
         }
 
@@ -95,7 +104,8 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
         throw new Error(`Save failed: ${response.status} ${response.statusText}`);
       }
 
-      await response.json();
+      const data = await response.json();
+      setBaseHash(typeof data.baseHash === 'string' ? data.baseHash : null);
 
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
@@ -106,7 +116,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     } finally {
       setSaving(false);
     }
-  }, [content, filePath, fileProjectName]);
+  }, [baseHash, content, filePath, fileProjectName]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([content], { type: 'text/plain' });

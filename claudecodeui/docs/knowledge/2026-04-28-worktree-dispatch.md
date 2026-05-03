@@ -2,7 +2,7 @@
 
 日期：2026-04-28
 
-MTL-Code UI 支持从 Git 项目里的某条会话派生本地 managed worktree。项目只提供仓库根目录和 base ref；真正的入口、上下文和绑定都来自源会话。目标是在独立 checkout 中继续处理同一任务，同时让父项目保持干净。
+Argus 支持从 Git 项目里的某条会话派生本地 managed worktree。项目只提供仓库根目录和 base ref；真正的入口、上下文和绑定都来自源会话。目标是在独立 checkout 中继续处理同一任务，同时让父项目保持干净。
 
 ## 运行形态
 
@@ -38,4 +38,4 @@ MTL-Code UI 支持从 Git 项目里的某条会话派生本地 managed worktree�
 
 - v1 不自动创建分支、merge、push 或打开 PR。
 - v1 不复制父项目未提交改动。
-- 项目普通会话仍使用默认 MTL-Code；派生 worktree 时沿用源会话已经保存的 Agent/Skill/MCP/模型绑定。
+- 项目普通会话仍使用默认 Argus；派生 worktree 时沿用源会话已经保存的 Agent/Skill/MCP/模型绑定。

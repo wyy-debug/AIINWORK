@@ -86,7 +86,7 @@ function TeamMcpFeatureCard() {
             rel="noopener noreferrer"
             className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary transition-colors hover:underline"
           >
-            Available with MTL-Code UI Pro
+            Available with Argus Pro
             <ExternalLink className="h-3 w-3" />
           </a>
         </div>
@@ -122,9 +122,9 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
   });
   const globalButtonLabel = 'Add Global MCP Server';
   const providerButtonLabel = `Add ${providerName} MCP Server`;
-  const globalAddDescription = 'Add Global MCP Server writes one common stdio or HTTP server to MTL-Code, Cursor, Codex, and Gemini.';
+  const globalAddDescription = 'Add Global MCP Server writes one common stdio or HTTP server to Argus, Cursor, Codex, and Gemini.';
   const providerAddDescription = `${providerButtonLabel} only changes ${providerName}.`;
-  const globalModalDescription = 'Adds this MCP server to every provider: MTL-Code, Cursor, Codex, and Gemini. '
+  const globalModalDescription = 'Adds this MCP server to every provider: Argus, Cursor, Codex, and Gemini. '
     + 'Only stdio and HTTP transports are supported because the same config must work across all providers.';
 
   return (

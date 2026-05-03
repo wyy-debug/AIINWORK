@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Bot,
   Box,
   CheckCircle2,
-  ChevronDown,
   FileText,
-  FileUp,
   Folder,
   FolderOpen,
-  FolderUp,
   Globe2,
   MessageSquare,
   NotebookTabs,
@@ -29,7 +26,6 @@ import type {
   AgentAppBinding,
   AgentChannel,
   AgentConfig,
-  AgentKnowledgeSource,
   AgentMemoryConfig,
   AgentStatus,
 } from '../../../types/agent';
@@ -48,7 +44,6 @@ type AgentConfigDashboardProps = {
 
 type BuilderModal = 'apps' | 'skills' | null;
 type BuilderView = 'builder' | 'memory';
-type UploadMode = 'file' | 'folder';
 type McpScope = 'user' | 'project';
 type McpTransport = 'stdio' | 'http' | 'sse';
 type MtlCodeSettingsConfig = {
@@ -153,7 +148,7 @@ function isImplementedAppBinding(app: string) {
 function formatSkillProvider(skill?: InstalledSkill | null) {
   if (!skill) return '未安装';
   if (skill.scope === 'project') return `项目 ${skill.provider}`;
-  if (skill.provider === 'mtl-code') return 'MTL-Code';
+  if (skill.provider === 'mtl-code') return 'Argus';
   if (skill.provider === 'codex') return 'Codex';
   if (skill.provider === 'claude') return 'Claude';
   return skill.provider;
@@ -171,7 +166,7 @@ const createDefaultChannels = (): AgentChannel[] => [
     id: 'chat',
     type: 'chat',
     name: '应用内对话',
-    description: '在 MTL-Code 中使用你的智能体',
+    description: '在 Argus 中使用你的智能体',
     enabled: true,
   },
 ];
@@ -193,14 +188,6 @@ function getShortName(name: string) {
   return Array.from(trimmed).slice(0, 2).join('');
 }
 
-function createKnowledgeId(name: string, index: number) {
-  return `${Date.now()}-${index}-${name}`
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80);
-}
-
 function withBuilderDefaults(agent: AgentConfig): AgentConfig {
   const id = agent.id || `agent-${Date.now()}`;
   const channels = agent.channels?.length
@@ -212,7 +199,7 @@ function withBuilderDefaults(agent: AgentConfig): AgentConfig {
           type: 'chat' as const,
           name: '应用内对话',
           description: channel.description === '自定义并分享你的智能体'
-            ? '在 MTL-Code 中使用你的智能体'
+            ? '在 Argus 中使用你的智能体'
             : channel.description,
         };
       }
@@ -237,7 +224,6 @@ function withBuilderDefaults(agent: AgentConfig): AgentConfig {
     skills: agent.skills || [],
     tools: agent.tools || [],
     guardrails: agent.guardrails || [],
-    knowledgeSources: agent.knowledgeSources || [],
     memory: agent.memory || createDefaultMemory(id),
     triggerRules: agent.triggerRules || {
       mode: 'manual',
@@ -831,7 +817,7 @@ function AppCatalogModal({
                             </div>
                           )}
                           <div className="mt-2 rounded-md border border-border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                            检测只验证 MCP Server 配置、启动命令或 URL 连通性。工具列表会在会话启动后由 MTL-Code 原生 runtime 发现；如果这里没有工具列表，不代表未绑定。
+                            检测只验证 MCP Server 配置、启动命令或 URL 连通性。工具列表会在会话启动后由 Argus 原生 runtime 发现；如果这里没有工具列表，不代表未绑定。
                           </div>
                         </div>
                       );
@@ -1283,10 +1269,6 @@ export default function AgentConfigDashboard({
   const [savingAgentId, setSavingAgentId] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<BuilderModal>(null);
   const [builderView, setBuilderView] = useState<BuilderView>('builder');
-  const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
-  const [isUploadingKnowledge, setIsUploadingKnowledge] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const selectedWorkspacePath = selectedProject?.fullPath || selectedProject?.path || '';
 
@@ -1317,7 +1299,7 @@ export default function AgentConfigDashboard({
       }
       setSettingsConfig(data?.config || null);
     } catch (settingsError) {
-      console.warn('Failed to load MTL-Code settings for Agent Builder:', settingsError);
+      console.warn('Failed to load Argus settings for Agent Builder:', settingsError);
       setSettingsConfig(null);
     }
   }, []);
@@ -1485,7 +1467,6 @@ export default function AgentConfigDashboard({
         channels: createDefaultChannels(),
         appBindings: [],
         skills: [],
-        knowledgeSources: [],
         memory: createDefaultMemory(id),
         tools: ['Read', 'TodoRead'],
         guardrails: [],
@@ -1647,96 +1628,6 @@ export default function AgentConfigDashboard({
     });
   }, []);
 
-  const handleKnowledgeUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>, mode: UploadMode) => {
-    const files = Array.from(event.target.files || []);
-    event.target.value = '';
-    if (files.length === 0 || !draftAgent) return;
-
-    const relativePaths = files.map((file) => (
-      (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-    ));
-    const optimisticSeen = new Set<string>();
-    const optimisticSources: AgentKnowledgeSource[] = [];
-    files.forEach((file, index) => {
-      const relativePath = relativePaths[index] || file.name;
-      const folderName = relativePath.split('/')[0] || file.name;
-      const name = mode === 'folder' ? folderName : file.name;
-      if (mode === 'folder' && optimisticSeen.has(name)) return;
-      optimisticSeen.add(name);
-      optimisticSources.push({
-        id: createKnowledgeId(name, index),
-        type: mode,
-        name,
-        path: relativePath,
-        status: 'pending',
-        addedAt: new Date().toISOString(),
-      });
-    });
-
-    setIsUploadingKnowledge(true);
-    setError(null);
-    setDraftAgent((previous) => (
-      previous
-        ? withBuilderDefaults({
-          ...previous,
-          knowledgeSources: [...optimisticSources, ...previous.knowledgeSources].slice(0, 80),
-        })
-        : previous
-    ));
-
-    try {
-      const formData = new FormData();
-      formData.append('mode', mode);
-      formData.append('relativePaths', JSON.stringify(relativePaths));
-      files.forEach((file, index) => {
-        formData.append('files', file, relativePaths[index] || file.name);
-      });
-
-      const response = await api.uploadAgentKnowledge(draftAgent.id, formData);
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || '上传 Agent 知识文件失败');
-      }
-
-      const nextAgent = applySettingsModelConfig(data.agent as AgentConfig);
-      setAgents((previous) => previous.map((agent) => (agent.id === nextAgent.id ? nextAgent : agent)));
-      setDraftAgent((previous) => (
-        previous
-          ? withBuilderDefaults({
-            ...previous,
-            knowledgeSources: nextAgent.knowledgeSources,
-          })
-          : nextAgent
-      ));
-    } catch (uploadError) {
-      const message = uploadError instanceof Error ? uploadError.message : '上传 Agent 知识文件失败';
-      setError(message);
-      setDraftAgent((previous) => (
-        previous
-          ? withBuilderDefaults({
-            ...previous,
-            knowledgeSources: previous.knowledgeSources.filter((source) => (
-              !optimisticSources.some((optimisticSource) => optimisticSource.id === source.id)
-            )),
-          })
-          : previous
-      ));
-    } finally {
-      setIsUploadingKnowledge(false);
-    }
-  }, [applySettingsModelConfig, draftAgent]);
-
-  const openUploadPicker = useCallback((mode: UploadMode) => {
-    setUploadMenuOpen(false);
-    if (mode === 'file') {
-      fileInputRef.current?.click();
-      return;
-    }
-    folderInputRef.current?.setAttribute('webkitdirectory', '');
-    folderInputRef.current?.setAttribute('directory', '');
-    folderInputRef.current?.click();
-  }, []);
-
   const deleteMemory = useCallback(() => {
     updateMemory({
       enabled: false,
@@ -1744,49 +1635,7 @@ export default function AgentConfigDashboard({
     });
     setBuilderView('builder');
   }, [updateMemory]);
-
-  const removeKnowledgeSource = useCallback(async (sourceId: string) => {
-    if (!draftAgent) return;
-    setError(null);
-    const previousSources = draftAgent.knowledgeSources;
-    setDraftAgent((previous) => (
-      previous
-        ? withBuilderDefaults({
-          ...previous,
-          knowledgeSources: previous.knowledgeSources.filter((source) => source.id !== sourceId),
-        })
-        : previous
-    ));
-
-    try {
-      const response = await api.deleteAgentKnowledgeSource(draftAgent.id, sourceId);
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || '删除知识源失败');
-      }
-      const nextAgent = applySettingsModelConfig(data.agent as AgentConfig);
-      setAgents((previous) => previous.map((agent) => (agent.id === nextAgent.id ? nextAgent : agent)));
-      setDraftAgent((previous) => (
-        previous
-          ? withBuilderDefaults({
-            ...previous,
-            knowledgeSources: nextAgent.knowledgeSources,
-          })
-          : nextAgent
-      ));
-    } catch (deleteError) {
-      const message = deleteError instanceof Error ? deleteError.message : '删除知识源失败';
-      setError(message);
-      setDraftAgent((previous) => (
-        previous
-          ? withBuilderDefaults({
-            ...previous,
-            knowledgeSources: previousSources,
-          })
-          : previous
-      ));
-    }
-  }, [applySettingsModelConfig, draftAgent]);
+
 
   if (builderView === 'memory' && draftAgent) {
     return (
@@ -1984,46 +1833,13 @@ export default function AgentConfigDashboard({
                   <Box className="h-4 w-4" />
                   添加技能
                 </Button>
-                <div className="relative">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-9 rounded-lg px-3"
-                    disabled={isUploadingKnowledge}
-                    onClick={() => setUploadMenuOpen((open) => !open)}
-                  >
-                    <FileUp className="h-4 w-4" />
-                    {isUploadingKnowledge ? '索引中' : '上传文件'}
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </Button>
-                  {uploadMenuOpen && (
-                    <div className="absolute left-0 top-full z-20 mt-2 w-36 rounded-lg border border-border bg-popover p-1 shadow-lg">
-                      <button
-                        type="button"
-                        onClick={() => openUploadPicker('file')}
-                        className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
-                      >
-                        <FileUp className="h-4 w-4" />
-                        上传文件
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openUploadPicker('folder')}
-                        className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
-                      >
-                        <FolderUp className="h-4 w-4" />
-                        上传文件夹
-                      </button>
-                    </div>
-                  )}
-                </div>
                 <Button type="button" variant="outline" className="h-9 rounded-lg px-3" onClick={() => setBuilderView('memory')}>
                   <NotebookTabs className="h-4 w-4 text-violet-500" />
                   记忆
                 </Button>
               </div>
 
-              {(draftAgent.appBindings.length > 0 || draftAgent.skills.length > 0 || draftAgent.knowledgeSources.length > 0) && (
+              {(draftAgent.appBindings.length > 0 || draftAgent.skills.length > 0) && (
                 <section className="mt-5 grid gap-3 md:grid-cols-3">
                   {draftAgent.appBindings.length > 0 && (
                     <div>
@@ -2066,24 +1882,6 @@ export default function AgentConfigDashboard({
                             </button>
                           );
                         })}
-                      </div>
-                    </div>
-                  )}
-                  {draftAgent.knowledgeSources.length > 0 && (
-                    <div>
-                      <div className="mb-2 text-xs font-medium text-muted-foreground">文件</div>
-                      <div className="flex flex-wrap gap-2">
-                        {draftAgent.knowledgeSources.map((source) => (
-                          <button
-                            key={source.id}
-                            type="button"
-                            onClick={() => void removeKnowledgeSource(source.id)}
-                            className="rounded-full border border-border bg-muted/30 px-3 py-1 text-xs text-foreground hover:bg-muted"
-                          >
-                            {source.name}
-                            {source.status === 'indexed' && source.chunkCount ? ` · ${source.chunkCount}` : ''}
-                          </button>
-                        ))}
                       </div>
                     </div>
                   )}
@@ -2157,20 +1955,7 @@ export default function AgentConfigDashboard({
                 </div>
               </section>
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => handleKnowledgeUpload(event, 'file')}
-              />
-              <input
-                ref={folderInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => handleKnowledgeUpload(event, 'folder')}
-              />
+
             </>
           )}
         </main>

@@ -25,7 +25,7 @@ import {
 } from 'src/services/analytics/index.js'
 import { ImageSizeError } from './utils/imageValidation.js'
 import { ImageResizeError } from './utils/imageResizer.js'
-import { findToolByName, type ToolUseContext } from './Tool.js'
+import { findToolByName, toolMatchesName, type ToolUseContext } from './Tool.js'
 import type { PermissionDecision } from './types/permissions.js'
 import { asSystemPrompt, type SystemPrompt } from './utils/systemPromptType.js'
 import type {
@@ -49,6 +49,7 @@ import {
   createUserInterruptionMessage,
   normalizeMessagesForAPI,
   createSystemMessage,
+  createAssistantMessage,
   createAssistantAPIErrorMessage,
   getMessagesAfterCompactBoundary,
   createToolUseSummaryMessage,
@@ -89,6 +90,7 @@ import {
 } from './utils/tokens.js'
 import { ESCALATED_MAX_TOKENS } from './utils/context.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from './services/analytics/growthbook.js'
+import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
 import { SLEEP_TOOL_NAME } from '@mtl-code/builtin-tools/tools/SleepTool/prompt.js'
 import { executePostSamplingHooks } from './utils/hooks/postSamplingHooks.js'
 import { executeStopFailureHooks } from './utils/hooks.js'
@@ -122,6 +124,11 @@ import {
   type OpenMythosContextCacheDiagnostics,
   type OpenMythosRuntimeState,
 } from './utils/openmythosRuntime.js'
+import {
+  formatOpenMythosHardDispatchMessage,
+  runOpenMythosHardDispatch,
+  shouldRunOpenMythosHardDispatch,
+} from './utils/openmythosHardDispatch.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -244,6 +251,17 @@ function createOpenMythosCanUseTool(
     toolUseID,
     forceDecision,
   ) => {
+    if (toolMatchesName(tool, AGENT_TOOL_NAME)) {
+      return canUseTool(
+        tool,
+        input,
+        toolUseContext,
+        assistantMessage,
+        toolUseID,
+        forceDecision,
+      )
+    }
+
     const parsedInput = tool.inputSchema.safeParse(input)
     if (parsedInput.success && !tool.isReadOnly(parsedInput.data)) {
       return {
@@ -700,6 +718,36 @@ async function* queryLoop(
       canUseTool,
       openMythosRuntimeState,
     )
+    if (
+      openMythosRuntimeState &&
+      shouldRunOpenMythosHardDispatch(openMythosRuntimeState, toolUseContext)
+    ) {
+      const hardDispatchParentMessage = createAssistantMessage({ content: '' })
+      const hardDispatchResult = await runOpenMythosHardDispatch({
+        state: openMythosRuntimeState,
+        toolUseContext,
+        canUseTool: activeCanUseTool,
+        assistantMessage: hardDispatchParentMessage,
+      })
+
+      if (hardDispatchResult.launched.length > 0) {
+        const hardDispatchMessage = createAssistantMessage({
+          content: formatOpenMythosHardDispatchMessage(hardDispatchResult),
+        })
+        yield hardDispatchMessage
+        messagesForQuery = [...messagesForQuery, hardDispatchMessage]
+        toolUseContext = {
+          ...toolUseContext,
+          messages: messagesForQuery,
+          openMythosRuntimeState,
+          criticalSystemReminder_EXPERIMENTAL:
+            formatOpenMythosRuntimeReminder(
+              openMythosRuntimeState.card,
+              openMythosRuntimeState,
+            ),
+        }
+      }
+    }
     const effectiveMaxTurns =
       maxTurns ??
       (shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)
