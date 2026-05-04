@@ -32,6 +32,7 @@ import {
   PaperclipIcon,
   ShieldIcon,
   SquareIcon,
+  CopyIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -111,6 +112,7 @@ interface ChatComposerProps {
   agentRuntimeDiagnostics: AgentRuntimeDiagnostics | null;
   subagentActivity?: SubagentActivitySummary;
   onStopSubagents?: (taskIds?: string[]) => void;
+  onReuseSubagentObjective?: (text: string) => void;
   tokenBudget: Record<string, unknown> | null;
   permissionMode: PermissionMode | string;
   onPermissionModeChange: (mode: PermissionMode) => void;
@@ -191,6 +193,7 @@ export default function ChatComposer({
   agentRuntimeDiagnostics,
   subagentActivity,
   onStopSubagents,
+  onReuseSubagentObjective,
   tokenBudget,
   slashCommandsCount,
   onToggleCommandMenu,
@@ -253,6 +256,7 @@ export default function ChatComposer({
   const [permissionMenuPosition, setPermissionMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
   const [isSkillMenuOpen, setIsSkillMenuOpen] = useState(false);
   const [isSubagentDetailsOpen, setIsSubagentDetailsOpen] = useState(false);
+  const [isSubagentManagerOpen, setIsSubagentManagerOpen] = useState(false);
   const [skillSearch, setSkillSearch] = useState('');
   const [skillMenuNotice, setSkillMenuNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [skillMenuPosition, setSkillMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
@@ -409,11 +413,16 @@ export default function ChatComposer({
   };
 
   const activeSubagentItems = subagentActivity?.items || [];
+  const subagentHistoryItems = subagentActivity?.historyItems || [];
   const primarySubagent = activeSubagentItems[0] || null;
   const stoppableSubagentIds = activeSubagentItems
     .map((item) => item.taskId)
     .filter((taskId): taskId is string => Boolean(taskId && taskId.trim()));
   const canStopSubagents = Boolean(onStopSubagents && stoppableSubagentIds.length > 0);
+  const hasSubagentHistory = subagentHistoryItems.length > 0;
+  const visibleManagerItems = isSubagentManagerOpen
+    ? subagentHistoryItems
+    : activeSubagentItems;
   const formatSubagentElapsed = (elapsedMs?: number) => {
     if (!Number.isFinite(elapsedMs || NaN)) return '';
     const totalSeconds = Math.max(0, Math.floor((elapsedMs || 0) / 1000));
@@ -421,6 +430,10 @@ export default function ChatComposer({
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${minutes}m ${seconds}s`;
+  };
+  const copySubagentEvidence = (text?: string) => {
+    if (!text?.trim()) return;
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
   };
 
   useEffect(() => {
@@ -1115,7 +1128,7 @@ export default function ChatComposer({
             </PromptInputHeader>
           )}
 
-          {subagentActivity && subagentActivity.total > 0 && (
+          {subagentActivity && (subagentActivity.total > 0 || hasSubagentHistory) && (
             <PromptInputHeader>
               <div className="mx-1 rounded-xl border border-border/70 bg-background/95 px-2.5 py-2 text-xs shadow-sm">
                 <div className="flex min-w-0 items-center gap-2">
@@ -1152,6 +1165,23 @@ export default function ChatComposer({
                       )}
                     />
                   </button>
+                  {hasSubagentHistory ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSubagentManagerOpen((value) => !value);
+                        setIsSubagentDetailsOpen(true);
+                      }}
+                      className={cn(
+                        'inline-flex h-7 shrink-0 items-center rounded-md border px-2 text-[11px] font-medium transition-colors',
+                        isSubagentManagerOpen
+                          ? 'border-primary/30 bg-primary/10 text-primary'
+                          : 'border-border bg-background text-muted-foreground hover:bg-muted',
+                      )}
+                    >
+                      {isSubagentManagerOpen ? '运行中' : '管理'}
+                    </button>
+                  ) : null}
                   {canStopSubagents ? (
                     <button
                       type="button"
@@ -1167,48 +1197,106 @@ export default function ChatComposer({
 
                 {isSubagentDetailsOpen && (
                   <div className="mt-2 space-y-1.5 border-t border-border/60 pt-2">
-                    {activeSubagentItems.map((item) => (
-                      <div
-                        key={item.taskId || item.id || item.label}
-                        className="flex min-w-0 items-start gap-2 rounded-lg bg-muted/45 px-2.5 py-2"
-                      >
-                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
-                          {item.outputting ? <Loader2Icon className="h-3 w-3 animate-spin" /> : <BotIcon className="h-3 w-3" />}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className="truncate font-medium text-foreground">{item.label}</span>
-                            <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                              {subagentRuntimeStatusLabel[item.runtimeStatus || 'RUNNING'] || item.runtimeStatus || '运行中'}
-                            </span>
-                          </div>
-                          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                            {item.objective || item.activeToolLabel || '后台任务运行中'}
-                          </div>
-                          {(item.lastTool || item.lastToolSummary || item.stopReason) && (
-                            <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
-                              {item.stopReason
-                                ? `阻塞原因：${item.stopReason}`
-                                : `${item.lastTool || '最近输出'}${item.lastToolSummary ? ` · ${item.lastToolSummary}` : ''}`}
-                            </div>
-                          )}
-                        </div>
-                        {item.taskId && onStopSubagents ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (item.taskId) {
-                                onStopSubagents([item.taskId]);
-                              }
-                            }}
-                            className="mt-0.5 inline-flex h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-red-600"
-                            title="停止这个后台 Agent"
-                          >
-                            <XIcon className="h-3.5 w-3.5" />
-                          </button>
-                        ) : null}
+                    {isSubagentManagerOpen ? (
+                      <div className="mb-1 flex items-center justify-between px-1 text-[11px] text-muted-foreground">
+                        <span>后台 Agent 管理</span>
+                        <span>运行 {subagentActivity.running} · 历史 {subagentHistoryItems.length}</span>
                       </div>
-                    ))}
+                    ) : null}
+                    {visibleManagerItems.length === 0 ? (
+                      <div className="rounded-lg bg-muted/40 px-2.5 py-2 text-[11px] text-muted-foreground">
+                        暂无运行中的后台 Agent。
+                      </div>
+                    ) : (
+                      visibleManagerItems.map((item) => {
+                        const statusKey = item.runtimeStatus || (item.status === 'blocked' ? 'BLOCKED' : item.status === 'completed' ? 'DONE' : 'RUNNING');
+                        const terminal = Boolean(item.terminal);
+                        const evidenceText = [item.evidence, item.resultSummary, item.nextAction, item.blockers]
+                          .filter(Boolean)
+                          .join('\n\n');
+                        return (
+                          <div
+                            key={item.taskId || item.id || item.label}
+                            className={cn(
+                              'flex min-w-0 items-start gap-2 rounded-lg px-2.5 py-2',
+                              terminal ? 'bg-muted/30' : 'bg-muted/45',
+                            )}
+                          >
+                            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
+                              {item.outputting && !terminal ? <Loader2Icon className="h-3 w-3 animate-spin" /> : <BotIcon className="h-3 w-3" />}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="truncate font-medium text-foreground">{item.label}</span>
+                                <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  {subagentRuntimeStatusLabel[statusKey || 'RUNNING'] || statusKey || '运行中'}
+                                </span>
+                                {typeof item.currentStep === 'number' && typeof item.maxSteps === 'number' ? (
+                                  <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                    {item.currentStep}/{item.maxSteps}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                                {item.objective || item.activeToolLabel || '后台任务运行中'}
+                              </div>
+                              {(item.lastTool || item.lastToolSummary || item.stopReason || item.resultSummary || item.nextAction) && (
+                                <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                                  {item.stopReason
+                                    ? `阻塞原因：${item.stopReason}`
+                                    : item.resultSummary || item.nextAction || `${item.lastTool || '最近输出'}${item.lastToolSummary ? ` · ${item.lastToolSummary}` : ''}`}
+                                </div>
+                              )}
+                              {item.blockers ? (
+                                <div className="mt-1 line-clamp-2 text-[11px] text-amber-700 dark:text-amber-300">
+                                  {item.blockers}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="mt-0.5 flex shrink-0 items-center gap-1">
+                              {evidenceText ? (
+                                <button
+                                  type="button"
+                                  onClick={() => copySubagentEvidence(evidenceText)}
+                                  className="inline-flex h-6 items-center justify-center rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                                  title="复制证据"
+                                >
+                                  <CopyIcon className="h-3.5 w-3.5" />
+                                </button>
+                              ) : null}
+                              {terminal && onReuseSubagentObjective && (item.objective || item.label) ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onReuseSubagentObjective(item.objective || item.label);
+                                    setIsSubagentManagerOpen(false);
+                                    setIsSubagentDetailsOpen(false);
+                                  }}
+                                  className="inline-flex h-6 items-center justify-center rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-primary"
+                                  title="重新派发"
+                                >
+                                  重新
+                                </button>
+                              ) : null}
+                              {!terminal && item.taskId && onStopSubagents ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (item.taskId) {
+                                      onStopSubagents([item.taskId]);
+                                    }
+                                  }}
+                                  className="inline-flex h-6 items-center justify-center rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-red-600"
+                                  title="停止这个后台 Agent"
+                                >
+                                  <XIcon className="h-3.5 w-3.5" />
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 )}
               </div>

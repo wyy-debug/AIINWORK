@@ -1,133 +1,154 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
-  cancelSubagentRecord,
-  clearSubagentRegistryForTests,
-  completeSubagentRecord,
-  countRunningSubagents,
-  getSubagentRecord,
-  hasRunningSubagentForObjective,
-  listSubagentRecords,
   parseSubagentProtocolResult,
-  registerSubagentRecord,
-  updateSubagentRuntimeRecord,
-} from '../subagentRegistry'
+  SubagentManager,
+} from '../subagentRegistry.js'
 
-describe('subagentRegistry', () => {
-  beforeEach(() => {
-    clearSubagentRegistryForTests()
-  })
+const tempDirs: string[] = []
 
-  test('registers and lists running records by session', () => {
-    registerSubagentRecord({
-      taskId: 'task-1',
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function statePath(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'mtl-subagents-'))
+  tempDirs.push(dir)
+  return join(dir, 'subagents.v1.json')
+}
+
+describe('SubagentManager', () => {
+  test('persists records and restores stale running tasks as interrupted', () => {
+    const filePath = statePath()
+    const manager = new SubagentManager(filePath)
+
+    manager.register({
+      taskId: 'agent-1',
+      agentId: 'agent-1',
       sessionId: 'session-a',
-      objective: 'Read skill file',
-      selectedAgent: { agentType: 'worker' } as any,
-    })
-    registerSubagentRecord({
-      taskId: 'task-2',
-      sessionId: 'session-b',
-      objective: 'Fetch crash URL',
-      selectedAgent: { agentType: 'worker' } as any,
+      objective: 'Fetch crash page',
+      prompt: 'Fetch the page and report evidence.',
+      stepBudget: 15,
     })
 
-    expect(countRunningSubagents('session-a')).toBe(1)
-    expect(countRunningSubagents('session-b')).toBe(1)
-    expect(hasRunningSubagentForObjective('Read skill file', 'session-a')).toBe(true)
-    expect(hasRunningSubagentForObjective('Read skill file', 'session-b')).toBe(false)
-    expect(listSubagentRecords({ runningOnly: true })).toHaveLength(2)
-  })
+    const restored = new SubagentManager(filePath)
+    const record = restored.get('agent-1')
 
-  test('runtime terminal status marks a record blocked', () => {
-    registerSubagentRecord({
-      taskId: 'task-1',
-      sessionId: 'session-a',
-      objective: 'Read skill file',
-      selectedAgent: { agentType: 'worker' } as any,
-    })
-
-    updateSubagentRuntimeRecord('task-1', {
-      objective: 'Read skill file',
-      runtimeStatus: 'BLOCKED',
-      stopReason: 'Repeated identical file read.',
-      currentStep: 2,
-      maxSteps: 15,
-      remainingSteps: 13,
-      startedAt: Date.now() - 1_000,
-      elapsedMs: 1_000,
-      lastTool: 'Read',
-      recentActions: ['Read SKILL.md'],
-    })
-
-    const record = getSubagentRecord('task-1')
-    expect(record?.status).toBe('blocked')
+    expect(record?.status).toBe('interrupted')
     expect(record?.runtimeStatus).toBe('BLOCKED')
-    expect(record?.stopReason).toContain('Repeated')
-    expect(typeof record?.endedAt).toBe('number')
+    expect(record?.hasLiveHandle).toBe(false)
+    expect(restored.countRunning('session-a')).toBe(0)
   })
 
-  test('parses structured completion protocol', () => {
-    const protocol = parseSubagentProtocolResult(`### STATUS
-DONE
-
-### SUMMARY
-Crash page requires login.
-
-### EVIDENCE
-- HTTP 401
-
-### NEXT_ACTION
-Ask user for exported data.`)
-
-    expect(protocol.status).toBe('DONE')
-    expect(protocol.summary).toBe('Crash page requires login.')
-    expect(protocol.evidence).toContain('401')
-    expect(protocol.nextAction).toContain('exported data')
-  })
-
-  test('complete and cancel produce terminal records', () => {
-    registerSubagentRecord({
-      taskId: 'task-1',
-      sessionId: 'session-a',
-      objective: 'Analyze crash',
-      selectedAgent: { agentType: 'worker' } as any,
+  test('parses structured terminal results into canonical fields', () => {
+    const filePath = statePath()
+    const manager = new SubagentManager(filePath)
+    manager.register({
+      taskId: 'agent-2',
+      agentId: 'agent-2',
+      objective: 'Review auth migration',
     })
 
-    completeSubagentRecord({
-      agentId: 'task-1',
+    const record = manager.complete({
+      agentId: 'agent-2',
       content: [
         {
           type: 'text',
-          text: `### STATUS
-NEED_PARENT_INPUT
-
-### SUMMARY
-CrashSight requires login.
-
-### EVIDENCE
-No public crash payload was available.
-
-### NEXT_ACTION
-Provide exported crash data.`,
+          text: [
+            '### STATUS',
+            'DONE',
+            '### SUMMARY',
+            'Migration is safe after backfill validation.',
+            '### EVIDENCE',
+            'Checked migration and tests.',
+            '### NEXT_ACTION',
+            'Run CI.',
+            '### CHANGES',
+            'No file changes.',
+            '### BLOCKERS',
+            'None.',
+          ].join('\n'),
         },
       ],
-      usage: { input_tokens: 0, output_tokens: 0 },
-      totalDurationMs: 1,
-      totalTokens: 0,
-      totalToolUseCount: 0,
+      totalDurationMs: 42,
+      totalTokens: 123,
+      totalToolUseCount: 2,
     } as any)
 
-    expect(getSubagentRecord('task-1')?.status).toBe('need_parent_input')
-    expect(getSubagentRecord('task-1')?.resultSummary).toContain('CrashSight')
+    expect(record?.status).toBe('completed')
+    expect(record?.resultSummary).toBe('Migration is safe after backfill validation.')
+    expect(record?.evidence).toBe('Checked migration and tests.')
+    expect(record?.nextAction).toBe('Run CI.')
+    expect(record?.changes).toBe('No file changes.')
+    expect(record?.blockers).toBe('None.')
+    expect(record?.events.at(-1)?.type).toBe('completed')
+  })
 
-    registerSubagentRecord({
-      taskId: 'task-2',
+  test('tracks running objective dedupe by session', () => {
+    const manager = new SubagentManager(statePath())
+    manager.register({
+      taskId: 'agent-3',
       sessionId: 'session-a',
-      objective: 'Fetch URL',
-      selectedAgent: { agentType: 'worker' } as any,
+      objective: 'Read SKILL.md',
     })
-    cancelSubagentRecord('task-2', 'User stopped it.')
-    expect(getSubagentRecord('task-2')?.status).toBe('cancelled')
-    expect(getSubagentRecord('task-2')?.runtimeStatus).toBe('BLOCKED')
+
+    expect(manager.hasRunningForObjective('read skill.md', 'session-a')).toBe(true)
+    expect(manager.hasRunningForObjective('read skill.md', 'session-b')).toBe(false)
+  })
+
+  test('records typed runtime and usage events', () => {
+    const manager = new SubagentManager(statePath())
+    manager.register({
+      taskId: 'agent-4',
+      agentId: 'agent-4',
+      objective: 'Fetch crash page',
+    })
+
+    manager.updateRuntime('agent-4', {
+      objective: 'Fetch crash page',
+      runtimeStatus: 'RUNNING',
+      startedAt: 1,
+      elapsedMs: 10,
+      lastTool: 'WebFetch',
+      lastInput: 'https://example.test/crash',
+      currentStep: 1,
+      maxSteps: 15,
+      remainingSteps: 14,
+      recentActions: [],
+    })
+    manager.updateRuntime('agent-4', {
+      objective: 'Fetch crash page',
+      runtimeStatus: 'RUNNING',
+      startedAt: 1,
+      elapsedMs: 20,
+      lastTool: 'WebFetch',
+      lastInput: 'https://example.test/crash',
+      lastToolSummary: 'HTTP 401, login required',
+      currentStep: 2,
+      maxSteps: 15,
+      remainingSteps: 13,
+      recentActions: ['WebFetch https://example.test/crash'],
+    })
+    manager.recordUsage('agent-4', {
+      totalTokens: 321,
+      toolUses: 2,
+    })
+
+    const events = manager.get('agent-4')?.events.map(event => event.type)
+    expect(events).toContain('tool_started')
+    expect(events).toContain('tool_completed')
+    expect(events).toContain('token_usage')
+  })
+})
+
+describe('parseSubagentProtocolResult', () => {
+  test('accepts DONE, BLOCKED, and NEED_PARENT_INPUT status headers', () => {
+    expect(parseSubagentProtocolResult('### STATUS\nDONE').status).toBe('DONE')
+    expect(parseSubagentProtocolResult('### STATUS\nBLOCKED').status).toBe('BLOCKED')
+    expect(parseSubagentProtocolResult('### STATUS\nNEED_PARENT_INPUT').status).toBe('NEED_PARENT_INPUT')
   })
 })

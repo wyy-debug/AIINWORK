@@ -3,15 +3,22 @@ import { isTerminalTaskStatus } from 'src/Task.js'
 import { buildTool, type ToolDef } from 'src/Tool.js'
 import { stopTask } from 'src/tasks/stopTask.js'
 import {
+  isLocalAgentTask,
+  queuePendingMessage,
+} from 'src/tasks/LocalAgentTask/LocalAgentTask.js'
+import {
   cancelSubagentRecord,
   getSubagentRecord,
   listSubagentRecords,
   type SubagentRegistryRecord,
 } from 'src/tasks/subagentRegistry.js'
 import type { TaskState } from 'src/tasks/types.js'
+import { asAgentId } from 'src/types/ids.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
 import { jsonStringify } from 'src/utils/slowOperations.js'
 import { sleep } from 'src/utils/sleep.js'
+import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
+import { appendSubagentContinuationContract } from '../AgentTool/subagentRuntimeGuard.js'
 
 const ID_FIELDS = ['task_id', 'agent_id', 'id'] as const
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000
@@ -21,6 +28,8 @@ export const AGENT_LIST_TOOL_NAME = 'AgentList'
 export const AGENT_WAIT_TOOL_NAME = 'AgentWait'
 export const AGENT_RESULT_TOOL_NAME = 'AgentResult'
 export const AGENT_CANCEL_TOOL_NAME = 'AgentCancel'
+export const AGENT_SEND_INPUT_TOOL_NAME = 'AgentSendInput'
+export const AGENT_RESUME_TOOL_NAME = 'AgentResume'
 
 const optionalIdSchema = {
   task_id: z.string().optional().describe('Subagent task id'),
@@ -63,6 +72,24 @@ const cancelInputSchema = lazySchema(() =>
 )
 type CancelInputSchema = ReturnType<typeof cancelInputSchema>
 
+const sendInputSchema = lazySchema(() =>
+  z.strictObject({
+    ...optionalIdSchema,
+    message: z.string().describe('Concrete input for the subagent'),
+    summary: z.string().optional().describe('Short summary for UI display'),
+    interrupt: z.boolean().optional().describe('Replace queued input if supported'),
+  }),
+)
+type SendInputSchema = ReturnType<typeof sendInputSchema>
+
+const resumeInputSchema = lazySchema(() =>
+  z.strictObject({
+    ...optionalIdSchema,
+    message: z.string().optional().describe('Optional continuation prompt'),
+  }),
+)
+type ResumeInputSchema = ReturnType<typeof resumeInputSchema>
+
 const outputSchema = lazySchema(() =>
   z.object({
     status: z.string(),
@@ -70,6 +97,7 @@ const outputSchema = lazySchema(() =>
     records: z.array(z.any()).optional(),
     record: z.any().optional(),
     message: z.string().optional(),
+    outputFile: z.string().optional(),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -144,6 +172,20 @@ function toolResult(data: Output, toolUseID: string) {
 function renderControlToolUseMessage(input: Record<string, unknown>): string {
   const id = normalizeId(input)
   return id ? ` ${id}` : ''
+}
+
+function isOpenEndedSubagentProbe(content: string): boolean {
+  const normalized = content.trim().replace(/\s+/g, ' ').toLowerCase()
+  if (!normalized || normalized.length > 180) return false
+  if (
+    /\b(done|blocked|need_parent_input|stop condition|if .* complete|if .* blocked)\b/.test(normalized) ||
+    /如果|若已|完成目标|阻塞|缺少输入/.test(normalized)
+  ) {
+    return false
+  }
+  return /progress|status|finish|finished|complete|completed|result|wait|waiting|check result|进度|状态|完成|结果|等等|等待/.test(
+    normalized,
+  )
 }
 
 export const AgentListTool = buildTool({
@@ -352,3 +394,124 @@ export const AgentCancelTool = buildTool({
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
 } satisfies ToolDef<CancelInputSchema, Output>)
+
+export const AgentSendInputTool = buildTool({
+  name: AGENT_SEND_INPUT_TOOL_NAME,
+  aliases: ['agent_send_input', 'send_input'],
+  searchHint: 'send concrete input to a running subagent',
+  maxResultSizeChars: 100_000,
+  get inputSchema(): SendInputSchema {
+    return sendInputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  async description() {
+    return 'Send concrete input to a subagent. Do not use this for progress polling.'
+  },
+  async prompt() {
+    return 'Send concrete new instructions to a subagent. For status/results, use AgentWait or AgentResult.'
+  },
+  isReadOnly() {
+    return true
+  },
+  async validateInput(input) {
+    const taskId = normalizeId(input)
+    if (!taskId) {
+      return { result: false, message: 'Missing required parameter: task_id', errorCode: 1 }
+    }
+    if (isOpenEndedSubagentProbe(input.message)) {
+      return {
+        result: false,
+        message:
+          'Refused open-ended subagent polling. Use AgentWait/AgentResult for status, or include DONE/BLOCKED/NEED_PARENT_INPUT stop conditions.',
+        errorCode: 3,
+      }
+    }
+    return { result: true }
+  },
+  async call(input, context, canUseTool, assistantMessage) {
+    const taskId = normalizeId(input)!
+    const agentId = asAgentId(taskId)
+    const message = appendSubagentContinuationContract(input.message)
+    const task = context.getAppState().tasks?.[taskId] as TaskState | undefined
+    if (isLocalAgentTask(task) && task.status === 'running') {
+      queuePendingMessage(
+        agentId,
+        message,
+        context.setAppStateForTasks ?? context.setAppState,
+      )
+      return {
+        data: {
+          status: 'queued',
+          message: `Message queued for subagent ${taskId}.`,
+          record: getSubagentRecord(taskId),
+        },
+      }
+    }
+    await resumeAgentBackground({
+      agentId,
+      prompt: message,
+      toolUseContext: context,
+      canUseTool,
+      invokingRequestId: assistantMessage?.requestId as string | undefined,
+    })
+    return {
+      data: {
+        status: 'resumed',
+        message: `Subagent ${taskId} was resumed with the provided input.`,
+        record: getSubagentRecord(taskId),
+      },
+    }
+  },
+  renderToolUseMessage: renderControlToolUseMessage,
+  mapToolResultToToolResultBlockParam: toolResult,
+} satisfies ToolDef<SendInputSchema, Output>)
+
+export const AgentResumeTool = buildTool({
+  name: AGENT_RESUME_TOOL_NAME,
+  aliases: ['agent_resume', 'resume_agent'],
+  searchHint: 'resume an interrupted subagent',
+  maxResultSizeChars: 100_000,
+  get inputSchema(): ResumeInputSchema {
+    return resumeInputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  async description() {
+    return 'Resume a stopped or interrupted subagent from its transcript.'
+  },
+  async prompt() {
+    return 'Resume a subagent only when the parent has concrete new work for it.'
+  },
+  async validateInput(input) {
+    const taskId = normalizeId(input)
+    if (!taskId) {
+      return { result: false, message: 'Missing required parameter: task_id', errorCode: 1 }
+    }
+    return { result: true }
+  },
+  async call(input, context, canUseTool, assistantMessage) {
+    const taskId = normalizeId(input)!
+    const prompt = input.message
+      ? appendSubagentContinuationContract(input.message)
+      : appendSubagentContinuationContract('Resume the assigned objective. If it is complete, return DONE. If blocked, return BLOCKED or NEED_PARENT_INPUT.')
+    await resumeAgentBackground({
+      agentId: asAgentId(taskId),
+      prompt,
+      toolUseContext: context,
+      canUseTool,
+      invokingRequestId: assistantMessage?.requestId as string | undefined,
+    })
+    return {
+      data: {
+        status: 'resumed',
+        message: `Subagent ${taskId} resumed.`,
+        record: getSubagentRecord(taskId),
+      },
+    }
+  },
+  renderToolUseMessage: renderControlToolUseMessage,
+  mapToolResultToToolResultBlockParam: toolResult,
+} satisfies ToolDef<ResumeInputSchema, Output>)

@@ -6,7 +6,7 @@
  * one of these role-specific worker types when launching a plan.
  *
  * Workers get the full standard tool set minus internal orchestration
- * tools like TeamCreate and SendMessage, so they can research,
+ * tools like TeamCreate and legacy SendMessage, so they can research,
  * implement, and verify autonomously.
  */
 import { ASYNC_AGENT_ALLOWED_TOOLS } from '../constants/tools.js'
@@ -62,10 +62,14 @@ Guidelines:
 - NEVER create documentation files unless explicitly instructed.
 
 Final output contract:
+### STATUS
+One of DONE, BLOCKED, or NEED_PARENT_INPUT.
 ### SUMMARY
 One paragraph with the result.
 ### EVIDENCE
 Bullet list of concrete files, commands, or observations.
+### NEXT_ACTION
+One concrete next step for the parent, or "None."
 ### CHANGES
 Bullet list of files changed, or "None."
 ### RISKS

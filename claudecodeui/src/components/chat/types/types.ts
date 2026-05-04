@@ -56,14 +56,28 @@ export type SubagentRegistryStatus =
   | 'failed'
   | 'cancelled'
   | 'blocked'
-  | 'need_parent_input';
+  | 'need_parent_input'
+  | 'interrupted';
+
+export interface SubagentEventV1 {
+  id?: string;
+  taskId?: string;
+  type?: string;
+  timestamp?: number;
+  message?: string;
+  toolName?: string;
+  summary?: string;
+}
 
 export interface SubagentRegistryRecord {
   taskId?: string;
   agentId?: string;
   parentToolUseId?: string;
+  parentSessionId?: string;
   sessionId?: string;
+  userTurnId?: string;
   objective?: string;
+  role?: string;
   agentType?: string;
   status?: SubagentRegistryStatus;
   runtimeStatus?: SubagentRuntimeStatus;
@@ -80,24 +94,36 @@ export interface SubagentRegistryRecord {
   resultSummary?: string;
   evidence?: string;
   nextAction?: string;
+  changes?: string;
+  blockers?: string;
   recentActions?: string[];
+  events?: SubagentEventV1[];
 }
 
 export interface SubagentActivityItem {
   id?: string;
   taskId?: string;
   label: string;
+  status?: SubagentRegistryStatus;
   runtimeStatus?: SubagentRuntimeStatus;
   objective?: string;
+  role?: string;
   currentStep?: number;
   maxSteps?: number;
   remainingSteps?: number;
+  startedAt?: number;
+  endedAt?: number;
   lastTool?: string;
   lastToolSummary?: string;
   stopReason?: string;
+  resultSummary?: string;
+  evidence?: string;
+  nextAction?: string;
+  blockers?: string;
   elapsedMs?: number;
   activeToolLabel?: string;
   outputting?: boolean;
+  terminal?: boolean;
 }
 
 export interface SubagentActivitySummary {
@@ -119,6 +145,7 @@ export interface SubagentActivitySummary {
   lastToolSummary?: string;
   stopReason?: string;
   items: SubagentActivityItem[];
+  historyItems: SubagentActivityItem[];
 }
 
 export interface ChatMessage {

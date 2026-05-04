@@ -100,6 +100,12 @@ async function run() {
       logStep('composer not visible; skipped composer/model checks for this auth or empty-state target');
     }
 
+    const visibleText = await page.locator('body').innerText().catch(() => '');
+    if (/internal ID|Async agent launched successfully|output_file|agentId:/i.test(visibleText)) {
+      throw new Error('Subagent internal control text is visible in the UI');
+    }
+    logStep('subagent internal control text is hidden');
+
     if (errors.length > 0) {
       throw new Error(`Browser console/page errors:\n${errors.join('\n')}`);
     }

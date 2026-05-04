@@ -119,6 +119,7 @@ import {
 } from './agentToolUtils.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import {
+  AGENT_SPAWN_TOOL_NAME,
   AGENT_TOOL_NAME,
   LEGACY_AGENT_TOOL_NAME,
   ONE_SHOT_BUILTIN_AGENT_TYPES,
@@ -499,12 +500,14 @@ export const outputSchema = lazySchema(() => {
 
   const asyncOutputSchema = z.object({
     status: z.literal('async_launched'),
-    agentId: z.string().describe('The ID of the async agent'),
+    agentId: z
+      .string()
+      .describe('The subagent task id. Use AgentWait/AgentResult for status/result. Do not mention this id to the user unless asked.'),
     description: z.string().describe('The description of the task'),
     prompt: z.string().describe('The prompt for the agent'),
     outputFile: z
       .string()
-      .describe('Path to the output file for checking agent progress'),
+      .describe('Internal transcript path. Do not read or poll it unless explicitly requested; use AgentWait/AgentResult instead.'),
     canReadOutputFile: z
       .boolean()
       .optional()
@@ -2126,7 +2129,7 @@ The agent is now running and will receive instructions via mailbox.`,
         content: [
           {
             type: 'text',
-            text: `Remote agent launched in CCR.\ntaskId: ${r.taskId}\nsession_url: ${r.sessionUrl}\noutput_file: ${r.outputFile}\nThe agent is running remotely. You will be notified automatically when it completes.\nDo not narrate this launch or progress to the user. Do not poll, wait aloud, or launch another agent for the same objective. End this turn now unless you have useful non-overlapping work to do.`,
+            text: `Remote agent launched in CCR.\ntask_id: ${r.taskId}\nsession_url: ${r.sessionUrl}\nThe agent is running remotely. Use AgentWait or AgentResult for status/result. Do not narrate this launch or progress to the user. Do not poll, wait aloud, or launch another agent for the same objective. End this turn now unless you have useful non-overlapping work to do.`,
           },
         ],
       }
@@ -2194,10 +2197,13 @@ The agent is now running and will receive instructions via mailbox.`,
           ...contentOrMarker,
           {
             type: 'text',
-            text: `agentId: ${data.agentId} (use SendMessage with to: '${data.agentId}' to continue this agent)${worktreeInfoText}
+            text: `<subagent-result-metadata>
+task_id: ${data.agentId}
+instruction: Use AgentResult for a structured final result and AgentSendInput only for concrete new instructions with DONE/BLOCKED/NEED_PARENT_INPUT stop conditions. Do not use SendMessage for progress polling and do not mention this task id to the user unless asked.${worktreeInfoText}
 <usage>total_tokens: ${data.totalTokens}
 tool_uses: ${data.totalToolUseCount}
-duration_ms: ${data.totalDurationMs}</usage>`,
+duration_ms: ${data.totalDurationMs}</usage>
+</subagent-result-metadata>`,
           },
         ],
       }
@@ -2215,6 +2221,24 @@ duration_ms: ${data.totalDurationMs}</usage>`,
   renderToolUseErrorMessage,
   renderGroupedToolUse: renderGroupedAgentToolUse,
 } satisfies ToolDef<InputSchema, Output, Progress>)
+
+export const AgentSpawnTool = {
+  ...AgentTool,
+  name: AGENT_SPAWN_TOOL_NAME,
+  aliases: [
+    'agent_spawn',
+    'spawn_agent',
+    'delegate_to_agent',
+    AGENT_TOOL_NAME,
+    LEGACY_AGENT_TOOL_NAME,
+  ],
+  userFacingName() {
+    return AGENT_SPAWN_TOOL_NAME
+  },
+  async description() {
+    return 'Spawn a managed subagent through the Subagent Runtime'
+  },
+} satisfies typeof AgentTool
 
 function resolveTeamName(
   input: { team_name?: string },

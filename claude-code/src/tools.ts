@@ -1,10 +1,12 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { toolMatchesName, type Tool, type Tools } from './Tool.js'
-import { AgentTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
+import { AgentSpawnTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
 import {
   AgentCancelTool,
   AgentListTool,
   AgentResultTool,
+  AgentResumeTool,
+  AgentSendInputTool,
   AgentWaitTool,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { SkillTool } from '@mtl-code/builtin-tools/tools/SkillTool/SkillTool.js'
@@ -204,11 +206,13 @@ export function getToolsForDefaultPreset(): string[] {
  */
 export function getAllBaseTools(): Tools {
   return [
-    AgentTool,
+    AgentSpawnTool,
     AgentListTool,
     AgentWaitTool,
     AgentResultTool,
     AgentCancelTool,
+    AgentSendInputTool,
+    AgentResumeTool,
     TaskOutputTool,
     BashTool,
     // Ant-native builds have bfs/ugrep embedded in the bun binary (same ARGV0
@@ -304,13 +308,15 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
           AgentWaitTool,
           AgentResultTool,
           AgentCancelTool,
+          AgentSendInputTool,
+          AgentResumeTool,
           getSendMessageTool(),
         )
       }
       return filterToolsByDenyRules(replSimple, permissionContext)
     }
     const simpleTools: Tool[] = [BashTool, FileReadTool, FileEditTool]
-    // When coordinator mode is also active, include AgentTool and TaskStopTool
+    // When coordinator mode is also active, include AgentSpawn and TaskStopTool
     // so the coordinator gets Task+TaskStop (via useMergedTools filtering) and
     // workers get Bash/Read/Edit (via filterToolsForAgent filtering).
     if (
@@ -318,12 +324,14 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       coordinatorModeModule?.isCoordinatorMode()
     ) {
       simpleTools.push(
-        AgentTool,
+        AgentSpawnTool,
         TaskStopTool,
         AgentListTool,
         AgentWaitTool,
         AgentResultTool,
         AgentCancelTool,
+        AgentSendInputTool,
+        AgentResumeTool,
         getSendMessageTool(),
       )
     }

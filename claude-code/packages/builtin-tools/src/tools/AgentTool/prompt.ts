@@ -8,7 +8,7 @@ import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
-import { AGENT_TOOL_NAME } from './constants.js'
+import { AGENT_SPAWN_TOOL_NAME } from './constants.js'
 import { isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 
@@ -88,9 +88,9 @@ Fork yourself (omit \`subagent_type\`) when the intermediate tool output isn't w
 
 Forks are cheap because they share your prompt cache. Don't set \`model\` on a fork \u2014 a different model can't reuse the parent's cache. Pass a short \`name\` (one or two words, lowercase) so the user can see the fork in the teams panel and steer it mid-run.
 
-**Don't peek.** The tool result includes an \`output_file\` path — do not Read or tail it unless the user explicitly asks for a progress check. You get a completion notification; trust it. Reading the transcript mid-flight pulls the fork's tool noise into your context, which defeats the point of forking.
+**Don't peek.** Background agent control data is runtime-only. Do not Read or tail transcripts unless the user explicitly asks for raw logs. You get a completion notification; trust it. Pulling the transcript mid-flight drags the fork's tool noise into your context, which defeats the point of forking.
 
-**Don't race.** After launching, you know nothing about what the fork found. Never fabricate or predict fork results in any format — not as prose, summary, or structured output. The notification arrives as a user-role message in a later turn; it is never something you write yourself. If the user asks a follow-up before the notification lands, tell them the fork is still running — give status, not a guess.
+**Don't race.** After launching, you know nothing about what the fork found. Never fabricate or predict fork results in any format — not as prose, summary, or structured output. The notification arrives as a user-role message in a later turn; it is never something you write yourself. If the user asks a follow-up before the notification lands, use AgentWait/AgentResult once; if nothing is ready, give one concise status and stop.
 
 **Writing a fork prompt.** Since the fork inherits your context, the prompt is a *directive* — what to do, not what the situation is. Be specific about scope: what's in, what's out, what another agent is handling. Don't re-explain background.
 `
@@ -117,7 +117,7 @@ ${forkEnabled ? 'For fresh agents, terse' : 'Terse'} command-style prompts produ
 <example>
 user: "What's left on this branch before we can ship?"
 assistant: <thinking>Forking this \u2014 it's a survey question. I want the punch list, not the git output in my context.</thinking>
-${AGENT_TOOL_NAME}({
+${AGENT_SPAWN_TOOL_NAME}({
   name: "ship-audit",
   description: "Branch ship-readiness audit",
   prompt: "Audit what's left before this branch can ship. Check: uncommitted changes, commits ahead of main, whether tests exist, whether the GrowthBook gate is wired up, whether CI-relevant files changed. Report a punch list \u2014 done vs. missing. Under 200 words."
@@ -135,7 +135,7 @@ user: "so is the gate wired up or not"
 <commentary>
 User asks mid-wait. The audit fork was launched to answer exactly this, and it hasn't returned. The coordinator does not have this answer. Give status, not a fabricated result.
 </commentary>
-assistant: Still waiting on the audit \u2014 that's one of the things it's checking. Should land shortly.
+assistant: I checked once; the audit is still running. I will continue when the result arrives.
 </example>
 
 <example>
@@ -144,7 +144,7 @@ assistant: <thinking>I'll ask the code-reviewer agent — it won't see my analys
 <commentary>
 A subagent_type is specified, so the agent starts fresh. It needs full context in the prompt. The briefing explains what to assess and why.
 </commentary>
-${AGENT_TOOL_NAME}({
+${AGENT_SPAWN_TOOL_NAME}({
   name: "migration-review",
   description: "Independent migration review",
   subagent_type: "code-reviewer",
@@ -175,7 +175,7 @@ function isPrime(n) {
 <commentary>
 Since a significant piece of code was written and the task was completed, now use the test-runner agent to run the tests
 </commentary>
-assistant: Uses the ${AGENT_TOOL_NAME} tool to launch the test-runner agent
+assistant: Uses the ${AGENT_SPAWN_TOOL_NAME} tool to launch the test-runner agent
 </example>
 
 <example>
@@ -183,7 +183,7 @@ user: "Hello"
 <commentary>
 Since the user is greeting, use the greeting-responder agent to respond with a friendly joke
 </commentary>
-assistant: "I'm going to use the ${AGENT_TOOL_NAME} tool to launch the greeting-responder agent"
+assistant: "I'm going to use the ${AGENT_SPAWN_TOOL_NAME} tool to launch the greeting-responder agent"
 </example>
 `
 
@@ -201,14 +201,14 @@ ${effectiveAgents.map(agent => formatAgentLine(agent)).join('\n')}`
   // Shared core prompt used by both coordinator and non-coordinator modes
   const shared = `Launch a new agent to handle complex, multi-step tasks autonomously.
 
-The ${AGENT_TOOL_NAME} tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
+The ${AGENT_SPAWN_TOOL_NAME} tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
 
 ${agentListSection}
 
 ${
   forkEnabled
-    ? `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type to use a specialized agent, or omit it to fork yourself — a fork inherits your full conversation context.`
-    : `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
+    ? `When using the ${AGENT_SPAWN_TOOL_NAME} tool, specify a subagent_type to use a specialized agent, or omit it to fork yourself — a fork inherits your full conversation context.`
+    : `When using the ${AGENT_SPAWN_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
 }`
 
   // Coordinator mode gets the slim prompt -- the coordinator system prompt
@@ -232,10 +232,10 @@ ${
   const whenNotToUseSection = forkEnabled
     ? ''
     : `
-When NOT to use the ${AGENT_TOOL_NAME} tool:
-- If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
+When NOT to use the ${AGENT_SPAWN_TOOL_NAME} tool:
+- If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead of the ${AGENT_SPAWN_TOOL_NAME} tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use ${contentSearchHint} instead, to find the match more quickly
-- If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
+- If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${AGENT_SPAWN_TOOL_NAME} tool, to find the match more quickly
 - Other tasks that are not related to the agent descriptions above
 `
 
@@ -268,12 +268,12 @@ Usage notes:
 - **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.`
       : ''
   }
-- To inspect background agents, prefer AgentList, AgentWait, and AgentResult. Use ${SEND_MESSAGE_TOOL_NAME} only when you have concrete new instructions for a spawned agent; do not use it for progress polling.
+- Spawn delegate work with AgentSpawn. To inspect background agents, prefer AgentList, AgentWait, and AgentResult. Use AgentSendInput only when you have concrete new instructions for a spawned agent; do not use ${SEND_MESSAGE_TOOL_NAME} for progress polling.
 - When continuing a spawned agent, include a clear stop condition. Do not only ask for progress; tell it to return DONE when the objective is satisfied, NEED_PARENT_INPUT when blocked on parent input, or BLOCKED when it cannot make progress. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
 - The agent's outputs should generally be trusted
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ", since it is not aware of the user's intent"}
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
+- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple AgentSpawn tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
 - You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${
     process.env.USER_TYPE === 'ant'
       ? `\n- You can set \`isolation: "remote"\` to run the agent in a remote CCR environment. This is always a background task; you'll be notified when it completes. Use for long-running tasks that need a fresh sandbox.`

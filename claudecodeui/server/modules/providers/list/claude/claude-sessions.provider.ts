@@ -190,6 +190,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         lastToolName: raw.last_tool_name,
         subagentRuntime: raw.subagent_runtime,
         subagentRecord: raw.subagent_record,
+        subagentSnapshot: raw.subagent_snapshot,
+        subagentEvents: raw.subagent_events,
       })];
     }
 
@@ -205,6 +207,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         status: normalizeTaskStatus(raw.status),
         summary: typeof raw.summary === 'string' ? raw.summary : undefined,
         usage: raw.usage,
+        subagentRecord: raw.subagent_record,
+        subagentEvents: raw.subagent_events,
       })];
     }
 

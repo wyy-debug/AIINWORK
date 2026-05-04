@@ -30,7 +30,10 @@ import type { z } from 'zod/v4'
 import { CLI_SYSPROMPT_PREFIXES } from '../constants/system.js'
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js'
 import type { Tool, ToolPermissionContext, Tools } from '../Tool.js'
-import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import {
+  AGENT_SPAWN_TOOL_NAME,
+  AGENT_TOOL_NAME,
+} from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
 import type { AgentDefinition } from '@mtl-code/builtin-tools/tools/AgentTool/loadAgentsDir.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '@mtl-code/builtin-tools/tools/ExitPlanModeTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskOutputTool/constants.js'
@@ -87,6 +90,7 @@ export type SystemPromptBlock = {
 const SWARM_FIELDS_BY_TOOL: Record<string, string[]> = {
   [EXIT_PLAN_MODE_V2_TOOL_NAME]: ['launchSwarm', 'teammateCount'],
   [AGENT_TOOL_NAME]: ['name', 'team_name', 'mode'],
+  [AGENT_SPAWN_TOOL_NAME]: ['name', 'team_name', 'mode'],
 }
 
 /**

@@ -104,6 +104,8 @@ export type NormalizedMessage = {
   subagentTools?: unknown;
   subagentRuntime?: unknown;
   subagentRecord?: unknown;
+  subagentSnapshot?: unknown;
+  subagentEvents?: unknown;
   toolUseResult?: unknown;
   sequence?: number;
   rowid?: number;

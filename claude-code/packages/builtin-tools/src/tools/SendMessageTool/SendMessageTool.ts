@@ -151,7 +151,7 @@ function isOpenEndedSubagentProbe(content: string): boolean {
   const normalized = content.trim().replace(/\s+/g, ' ').toLowerCase()
   if (!normalized || normalized.length > 160) return false
   if (
-    /\b(status|done|blocked|need_parent_input)\b/.test(normalized) ||
+    /\b(done|blocked|need_parent_input)\b/.test(normalized) ||
     /\bif\b|already have|already got|summarize and end|need parent input/.test(
       normalized,
     ) ||
@@ -892,13 +892,13 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Message queued for delivery to ${input.to} at its next tool round.`,
+                  message: `Message queued for subagent ${input.to}. Use AgentWait or AgentResult for status/result instead of polling.`,
                 },
               }
             }
             // task exists but stopped — auto-resume
             try {
-              const result = await resumeAgentBackground({
+              await resumeAgentBackground({
                 agentId,
                 prompt: subagentMessage,
                 toolUseContext: context,
@@ -910,7 +910,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Agent "${input.to}" was stopped (${task.status}); resumed it in the background with your message. You'll be notified when it finishes. Output: ${result.outputFile}`,
+                  message: `Subagent "${input.to}" was stopped (${task.status}) and has been resumed. Use AgentWait or AgentResult to retrieve its structured result.`,
                 },
               }
             } catch (e) {
@@ -927,7 +927,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
             // (toAgentId validates the createAgentId format, so teammate names
             // never reach this block).
             try {
-              const result = await resumeAgentBackground({
+              await resumeAgentBackground({
                 agentId,
                 prompt: subagentMessage,
                 toolUseContext: context,
@@ -939,7 +939,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Agent "${input.to}" had no active task; resumed from transcript in the background with your message. You'll be notified when it finishes. Output: ${result.outputFile}`,
+                  message: `Subagent "${input.to}" had no active task and has been resumed from transcript. Use AgentWait or AgentResult to retrieve its structured result.`,
                 },
               }
             } catch (e) {

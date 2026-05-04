@@ -72,6 +72,8 @@ export interface NormalizedMessage {
   subagentTools?: unknown[];
   subagentRuntime?: unknown;
   subagentRecord?: unknown;
+  subagentSnapshot?: unknown;
+  subagentEvents?: unknown;
   lastToolName?: string;
   taskId?: string;
   usage?: unknown;

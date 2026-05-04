@@ -7,11 +7,13 @@
 // =============================================================================
 
 // Core tools
-export { AgentTool } from './tools/AgentTool/AgentTool.js'
+export { AgentSpawnTool, AgentTool } from './tools/AgentTool/AgentTool.js'
 export {
   AgentCancelTool,
   AgentListTool,
+  AgentResumeTool,
   AgentResultTool,
+  AgentSendInputTool,
   AgentWaitTool,
 } from './tools/AgentControlTool/AgentControlTools.js'
 export { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'

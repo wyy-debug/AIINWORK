@@ -4,12 +4,17 @@ import { TASK_OUTPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskOutputT
 import {
   AGENT_CANCEL_TOOL_NAME,
   AGENT_LIST_TOOL_NAME,
+  AGENT_RESUME_TOOL_NAME,
   AGENT_RESULT_TOOL_NAME,
+  AGENT_SEND_INPUT_TOOL_NAME,
   AGENT_WAIT_TOOL_NAME,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '@mtl-code/builtin-tools/tools/ExitPlanModeTool/constants.js'
 import { ENTER_PLAN_MODE_TOOL_NAME } from '@mtl-code/builtin-tools/tools/EnterPlanModeTool/constants.js'
-import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import {
+  AGENT_SPAWN_TOOL_NAME,
+  AGENT_TOOL_NAME,
+} from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AskUserQuestionTool/prompt.js'
 import { TASK_STOP_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskStopTool/prompt.js'
 import { FILE_READ_TOOL_NAME } from '@mtl-code/builtin-tools/tools/FileReadTool/prompt.js'
@@ -45,10 +50,12 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   AGENT_WAIT_TOOL_NAME,
   AGENT_RESULT_TOOL_NAME,
   AGENT_CANCEL_TOOL_NAME,
+  AGENT_SEND_INPUT_TOOL_NAME,
+  AGENT_RESUME_TOOL_NAME,
   EXIT_PLAN_MODE_V2_TOOL_NAME,
   ENTER_PLAN_MODE_TOOL_NAME,
   // Allow Agent tool for agents when user is ant (enables nested agents)
-  ...(process.env.USER_TYPE === 'ant' ? [] : [AGENT_TOOL_NAME]),
+  ...(process.env.USER_TYPE === 'ant' ? [] : [AGENT_TOOL_NAME, AGENT_SPAWN_TOOL_NAME]),
   ASK_USER_QUESTION_TOOL_NAME,
   TASK_STOP_TOOL_NAME,
   // Prevent recursive workflow execution inside subagents.
@@ -114,6 +121,7 @@ export const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS = new Set([
  */
 export const COORDINATOR_MODE_ALLOWED_TOOLS = new Set([
   AGENT_TOOL_NAME,
+  AGENT_SPAWN_TOOL_NAME,
   AGENT_LIST_TOOL_NAME,
   AGENT_WAIT_TOOL_NAME,
   AGENT_RESULT_TOOL_NAME,

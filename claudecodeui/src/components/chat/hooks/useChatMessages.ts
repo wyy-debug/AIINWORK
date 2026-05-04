@@ -30,6 +30,14 @@ function isInternalAgentFailureNarration(content: string): boolean {
     || normalized.includes('they can replace their existing file with the new version');
 }
 
+function isSubagentToolName(toolName?: string): boolean {
+  const normalized = (toolName || '').trim().toLowerCase();
+  return normalized === 'agent'
+    || normalized === 'task'
+    || normalized === 'agentspawn'
+    || normalized === 'agent_spawn';
+}
+
 function isAgentOrchestrationChatter(content: string): boolean {
   const text = content.replace(/\s+/g, ' ').trim();
   if (!text || text.length > 1200) return false;
@@ -41,6 +49,10 @@ function isAgentOrchestrationChatter(content: string): boolean {
     || /(智能体|子代理|后台任务|代理)/.test(text);
   const mentionsWaiting = /\b(waiting|wait|launched|launch|check(?:ing)?|monitoring|sent messages|please wait|running|complete|completed|output file)\b/i.test(text)
     || /(等待|已启动|启动了|检查|运行中|后台|完成|稍候)/.test(text);
+
+  if (/\b(agentid|agent id|internal id|output_file|output file)\b/i.test(text)) {
+    return true;
+  }
 
   if (mentionsAgent && mentionsWaiting) return true;
 
@@ -140,7 +152,7 @@ function toSubagentRegistryRecord(value: unknown): SubagentRegistryRecord | unde
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const status = typeof record.status === 'string'
-    && ['running', 'completed', 'failed', 'cancelled', 'blocked', 'need_parent_input'].includes(record.status)
+    && ['running', 'completed', 'failed', 'cancelled', 'blocked', 'need_parent_input', 'interrupted'].includes(record.status)
     ? record.status as SubagentRegistryStatus
     : undefined;
   const runtimeStatus = typeof record.runtimeStatus === 'string'
@@ -152,7 +164,10 @@ function toSubagentRegistryRecord(value: unknown): SubagentRegistryRecord | unde
     agentId: typeof record.agentId === 'string' ? record.agentId : undefined,
     parentToolUseId: typeof record.parentToolUseId === 'string' ? record.parentToolUseId : undefined,
     sessionId: typeof record.sessionId === 'string' ? record.sessionId : undefined,
+    parentSessionId: typeof record.parentSessionId === 'string' ? record.parentSessionId : undefined,
+    userTurnId: typeof record.userTurnId === 'string' ? record.userTurnId : undefined,
     objective: typeof record.objective === 'string' ? record.objective : undefined,
+    role: typeof record.role === 'string' ? record.role : undefined,
     agentType: typeof record.agentType === 'string' ? record.agentType : undefined,
     status,
     runtimeStatus,
@@ -169,8 +184,13 @@ function toSubagentRegistryRecord(value: unknown): SubagentRegistryRecord | unde
     resultSummary: typeof record.resultSummary === 'string' ? record.resultSummary : undefined,
     evidence: typeof record.evidence === 'string' ? record.evidence : undefined,
     nextAction: typeof record.nextAction === 'string' ? record.nextAction : undefined,
+    changes: typeof record.changes === 'string' ? record.changes : undefined,
+    blockers: typeof record.blockers === 'string' ? record.blockers : undefined,
     recentActions: Array.isArray(record.recentActions)
       ? record.recentActions.filter((item): item is string => typeof item === 'string')
+      : undefined,
+    events: Array.isArray(record.events)
+      ? record.events.filter((item): item is any => Boolean(item && typeof item === 'object'))
       : undefined,
   };
 }
@@ -188,6 +208,7 @@ function runtimeStatusFromRegistry(record: SubagentRegistryRecord | undefined): 
     case 'blocked':
     case 'cancelled':
     case 'failed':
+    case 'interrupted':
       return 'BLOCKED';
     default:
       return undefined;
@@ -236,9 +257,26 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     runtimeStatus: SubagentRuntimeStatus;
     summary?: string;
   }>();
+  const taskNotificationByTaskId = new Map<string, {
+    taskId?: string;
+    runtimeStatus: SubagentRuntimeStatus;
+    summary?: string;
+  }>();
   for (const msg of messages) {
     if (msg.kind === 'task_notification' && msg.toolId) {
-      taskNotificationByToolId.set(msg.toolId, {
+      const notification = {
+        taskId: msg.taskId,
+        runtimeStatus: taskNotificationRuntimeStatus(msg.status),
+        summary: msg.summary || msg.content,
+      };
+      taskNotificationByToolId.set(msg.toolId, notification);
+      if (msg.taskId) {
+        taskNotificationByTaskId.set(msg.taskId, notification);
+      }
+      continue;
+    }
+    if (msg.kind === 'task_notification' && msg.taskId) {
+      taskNotificationByTaskId.set(msg.taskId, {
         taskId: msg.taskId,
         runtimeStatus: taskNotificationRuntimeStatus(msg.status),
         summary: msg.summary || msg.content,
@@ -251,8 +289,11 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         subagentProgressMap.set(msg.toolId, snapshot);
       }
       const registryRecord = toSubagentRegistryRecord(msg.subagentRecord);
+      const snapshotRecord = toSubagentRegistryRecord(msg.subagentSnapshot);
       if (registryRecord) {
         subagentRecordMap.set(msg.toolId, registryRecord);
+      } else if (snapshotRecord) {
+        subagentRecordMap.set(msg.toolId, snapshotRecord);
       }
       if (msg.taskId) {
         subagentTaskIdByToolId.set(msg.toolId, msg.taskId);
@@ -311,7 +352,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       case 'tool_use': {
         const tr = msg.toolResult || (msg.toolId ? toolResultMap.get(msg.toolId) : null);
-        const isSubagentContainer = msg.toolName === 'Task' || msg.toolName === 'Agent';
+        const isSubagentContainer = isSubagentToolName(msg.toolName);
 
         // Build child tools from subagentTools
         const childTools: SubagentChildTool[] = [];
@@ -338,15 +379,19 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const registryRecord = isSubagentContainer && msg.toolId
           ? subagentRecordMap.get(msg.toolId)
             || toSubagentRegistryRecord(msg.subagentRecord)
+            || toSubagentRegistryRecord(msg.subagentSnapshot)
             || toSubagentRegistryRecord((tr as NormalizedMessage | undefined)?.subagentRecord)
+            || toSubagentRegistryRecord((tr as NormalizedMessage | undefined)?.subagentSnapshot)
           : undefined;
         const runtimeSnapshot = isSubagentContainer && msg.toolId
           ? subagentProgressMap.get(msg.toolId)
             || toSubagentRuntimeSnapshot(msg.subagentRuntime)
             || toSubagentRuntimeSnapshot((tr as NormalizedMessage | undefined)?.subagentRuntime)
           : undefined;
-        const terminalNotification = isSubagentContainer && msg.toolId
-          ? taskNotificationByToolId.get(msg.toolId)
+        const terminalNotification = isSubagentContainer
+          ? (msg.toolId ? taskNotificationByToolId.get(msg.toolId) : undefined)
+            || (registryRecord?.taskId ? taskNotificationByTaskId.get(registryRecord.taskId) : undefined)
+            || (msg.taskId ? taskNotificationByTaskId.get(msg.taskId) : undefined)
           : undefined;
         const protocolStatus = isSubagentContainer ? parseProtocolStatus(toolResult) : undefined;
         const runtimeStatus = terminalNotification?.runtimeStatus
@@ -357,6 +402,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const isTerminalRuntimeStatus = runtimeStatus === 'DONE'
           || runtimeStatus === 'BLOCKED'
           || runtimeStatus === 'NEED_PARENT_INPUT';
+        const terminalStopReason = runtimeStatus === 'BLOCKED' || runtimeStatus === 'NEED_PARENT_INPUT'
+          ? (registryRecord?.stopReason || terminalNotification?.summary || runtimeSnapshot?.stopReason)
+          : (registryRecord?.stopReason || runtimeSnapshot?.stopReason);
 
         converted.push({
           id: msg.id,
@@ -388,7 +436,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
                 lastTool: registryRecord?.lastTool || runtimeSnapshot?.lastTool,
                 lastToolSummary: registryRecord?.lastToolSummary || runtimeSnapshot?.lastToolSummary,
                 runtimeStatus,
-                stopReason: terminalNotification?.summary || registryRecord?.stopReason || runtimeSnapshot?.stopReason,
+                stopReason: terminalStopReason,
                 registryRecord,
               }
             : undefined,

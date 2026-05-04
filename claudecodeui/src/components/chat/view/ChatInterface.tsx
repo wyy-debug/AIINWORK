@@ -143,13 +143,14 @@ function summarizeSubagentTool(tool: SubagentChildTool): string {
 function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySummary {
   let total = 0;
   let running = 0;
-  const completed = 0;
+  let completed = 0;
   let outputting = 0;
   let latestLabel = '';
   const runningLabels: string[] = [];
   const outputtingLabels: string[] = [];
   const activeToolLabels: string[] = [];
   const items: SubagentActivityItem[] = [];
+  const historyItems: SubagentActivityItem[] = [];
   let latestRuntimeState: ChatMessage['subagentState'] | undefined;
 
   for (const message of messages) {
@@ -161,9 +162,43 @@ function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySum
     const currentTool = state && state.currentToolIndex >= 0
       ? childTools[state.currentToolIndex] || null
       : null;
+    const registryRecord = state?.registryRecord;
     const isComplete = Boolean(state?.isComplete || message.toolResult);
+    const runtimeStatus = state?.runtimeStatus;
+    const terminal = isComplete
+      || runtimeStatus === 'DONE'
+      || runtimeStatus === 'BLOCKED'
+      || runtimeStatus === 'NEED_PARENT_INPUT'
+      || Boolean(registryRecord?.status && registryRecord.status !== 'running');
 
-    if (isComplete) {
+    const item: SubagentActivityItem = {
+      id: typeof message.id === 'string' ? message.id : undefined,
+      taskId: state?.taskId || registryRecord?.taskId,
+      label,
+      status: registryRecord?.status,
+      runtimeStatus,
+      objective: state?.objective || registryRecord?.objective,
+      role: registryRecord?.role,
+      currentStep: state?.currentStep ?? registryRecord?.currentStep,
+      maxSteps: state?.maxSteps ?? registryRecord?.maxSteps,
+      remainingSteps: state?.remainingSteps ?? registryRecord?.remainingSteps,
+      startedAt: state?.startedAt ?? registryRecord?.startedAt,
+      endedAt: registryRecord?.endedAt,
+      elapsedMs: state?.elapsedMs,
+      lastTool: state?.lastTool || registryRecord?.lastTool,
+      lastToolSummary: state?.lastToolSummary || registryRecord?.lastToolSummary,
+      stopReason: state?.stopReason || registryRecord?.stopReason,
+      resultSummary: registryRecord?.resultSummary,
+      evidence: registryRecord?.evidence,
+      nextAction: registryRecord?.nextAction,
+      blockers: registryRecord?.blockers,
+      terminal,
+    };
+
+    historyItems.push(item);
+
+    if (terminal) {
+      completed += 1;
       continue;
     }
 
@@ -203,18 +238,7 @@ function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySum
 
     latestLabel = label || latestLabel;
     items.push({
-      id: typeof message.id === 'string' ? message.id : undefined,
-      taskId: state?.taskId,
-      label,
-      runtimeStatus: state?.runtimeStatus,
-      objective: state?.objective,
-      currentStep: state?.currentStep,
-      maxSteps: state?.maxSteps,
-      remainingSteps: state?.remainingSteps,
-      elapsedMs: state?.elapsedMs,
-      lastTool: state?.lastTool,
-      lastToolSummary: state?.lastToolSummary,
-      stopReason: state?.stopReason,
+      ...item,
       activeToolLabel,
       outputting: hasLiveChildOutput,
     });
@@ -239,6 +263,7 @@ function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySum
     lastToolSummary: latestRuntimeState?.lastToolSummary,
     stopReason: latestRuntimeState?.stopReason,
     items,
+    historyItems: historyItems.slice(-30).reverse(),
   };
 }
 
@@ -1324,6 +1349,15 @@ function ChatInterface({
     setPendingPermissionRequests,
   });
 
+  const handleReuseSubagentObjective = useCallback((text: string) => {
+    const prompt = text.trim();
+    if (!prompt) {
+      return;
+    }
+    setInput(prompt);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [setInput, textareaRef]);
+
   const applyConversationDraft = useCallback(
     (payload: ConversationDraftPayload | null) => {
       if (!payload || appliedConversationDraftKeyRef.current === payload.id) {
@@ -1608,6 +1642,7 @@ function ChatInterface({
           agentRuntimeDiagnostics={agentRuntimeDiagnostics}
           subagentActivity={subagentActivity}
           onStopSubagents={handleStopSubagents}
+          onReuseSubagentObjective={handleReuseSubagentObjective}
           tokenBudget={tokenBudget}
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}

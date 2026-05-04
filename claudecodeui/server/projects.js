@@ -1273,10 +1273,22 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       }
     }
 
-    // Collect agentIds from Task tool results
+    const hasCanonicalSubagentState = (message) => Boolean(
+      message.subagentSnapshot
+      || message.subagent_snapshot
+      || message.subagentRecord
+      || message.subagent_record
+      || message.subagentRuntime
+      || message.subagent_runtime
+      || message.subagentEvents
+      || message.subagent_events
+    );
+
+    // Collect legacy agentIds from old Task tool results only when the
+    // canonical Subagent Manager snapshot is not present.
     const agentIds = new Set();
     for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
+      if (!hasCanonicalSubagentState(message) && message.toolUseResult?.agentId) {
         agentIds.add(message.toolUseResult.agentId);
       }
     }
@@ -1291,9 +1303,11 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       }
     }
 
-    // Attach agent tools to their parent Task messages
+    // Attach legacy agent tools to old parent Task messages. New sessions use
+    // subagentSnapshot/subagentEvents and should not be inferred from text or
+    // agent-*.jsonl side files.
     for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
+      if (!hasCanonicalSubagentState(message) && message.toolUseResult?.agentId) {
         const agentId = message.toolUseResult.agentId;
         const agentInfo = agentToolsCache.get(agentId);
         if (agentInfo?.tools && agentInfo.tools.length > 0) {

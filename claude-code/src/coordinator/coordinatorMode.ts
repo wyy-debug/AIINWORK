@@ -5,13 +5,17 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from '../services/analytics/index.js'
-import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import { AGENT_SPAWN_TOOL_NAME as AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import {
+  AGENT_CANCEL_TOOL_NAME as TASK_STOP_TOOL_NAME,
+  AGENT_RESULT_TOOL_NAME,
+  AGENT_SEND_INPUT_TOOL_NAME as SEND_MESSAGE_TOOL_NAME,
+  AGENT_WAIT_TOOL_NAME,
+} from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { BASH_TOOL_NAME } from '@mtl-code/builtin-tools/tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '@mtl-code/builtin-tools/tools/FileReadTool/prompt.js'
-import { SEND_MESSAGE_TOOL_NAME } from '@mtl-code/builtin-tools/tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/SyntheticOutputTool/SyntheticOutputTool.js'
-import { TASK_STOP_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskStopTool/prompt.js'
 import { TEAM_CREATE_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TeamDeleteTool/constants.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
@@ -127,8 +131,9 @@ Every message you send is to the user. Worker results and system notifications a
 
 ## 2. Your Tools
 
-- **${AGENT_TOOL_NAME}** - Spawn a new worker
-- **${SEND_MESSAGE_TOOL_NAME}** - Continue an existing worker (send a follow-up to its \`to\` agent ID)
+- **${AGENT_TOOL_NAME}** - Spawn a managed worker through the Subagent Runtime
+- **${AGENT_WAIT_TOOL_NAME} / ${AGENT_RESULT_TOOL_NAME}** - Wait for workers and retrieve structured results
+- **${SEND_MESSAGE_TOOL_NAME}** - Continue an existing worker with concrete new instructions using \`task_id\`
 - **${TASK_STOP_TOOL_NAME}** - Stop a running worker
 - **subscribe_pr_activity / unsubscribe_pr_activity** (if available) - Subscribe to GitHub PR events (review comments, CI results). Events arrive as user messages. Merge conflict transitions do NOT arrive — GitHub doesn't webhook \`mergeable_state\` changes, so poll \`gh pr view N --json mergeable\` if tracking conflict status. Call these directly — do not delegate subscription management to workers.
 
@@ -136,8 +141,9 @@ When calling ${AGENT_TOOL_NAME}:
 - Do not use one worker to check on another. Workers will notify you when they are done.
 - Do not use workers to trivially report file contents or run commands. Give them higher-level tasks.
 - Do not set the model parameter. Workers need the default model for the substantive tasks you delegate.
-- Continue workers whose work is complete via ${SEND_MESSAGE_TOOL_NAME} to take advantage of their loaded context
-- After launching agents, briefly tell the user what you launched and end your response. Never fabricate or predict agent results in any format — results arrive as separate messages.
+- Use ${AGENT_WAIT_TOOL_NAME} or ${AGENT_RESULT_TOOL_NAME} for status/results. Do not use ${SEND_MESSAGE_TOOL_NAME} for progress polling.
+- Continue workers via ${SEND_MESSAGE_TOOL_NAME} only when you have concrete new instructions and DONE/BLOCKED/NEED_PARENT_INPUT stop conditions.
+- After launching agents, end the current turn unless you have useful non-overlapping work to do. Do not narrate waiting.
 
 ### OpenMythos Auto-Dispatch
 
@@ -145,7 +151,7 @@ If the current OpenMythos runtime reminder contains a "WorkerRuntime plan", do n
 
 ### ${AGENT_TOOL_NAME} Results
 
-Worker results arrive as **user-role messages** containing \`<task-notification>\` XML. They look like user messages but are not. Distinguish them by the \`<task-notification>\` opening tag.
+Worker completion arrives as a control notification. Treat it as an internal signal. Use ${AGENT_RESULT_TOOL_NAME} with the task_id to retrieve STATUS, SUMMARY, EVIDENCE, NEXT_ACTION, CHANGES, and BLOCKERS.
 
 Format:
 
@@ -154,7 +160,7 @@ Format:
 <task-id>{agentId}</task-id>
 <status>completed|failed|killed</status>
 <summary>{human-readable status summary}</summary>
-<result>{agent's final text response}</result>
+<result>Stored in Subagent Runtime; use AgentResult with task_id.</result>
 <usage>
   <total_tokens>N</total_tokens>
   <tool_uses>N</tool_uses>
@@ -163,9 +169,8 @@ Format:
 </task-notification>
 \`\`\`
 
-- \`<result>\` and \`<usage>\` are optional sections
 - The \`<summary>\` describes the outcome: "completed", "failed: {error}", or "was stopped"
-- The \`<task-id>\` value is the agent ID — use SendMessage with that ID as \`to\` to continue that worker
+- The \`<task-id>\` value is the canonical subagent task id. Use ${AGENT_RESULT_TOOL_NAME} for result retrieval or ${SEND_MESSAGE_TOOL_NAME} for concrete follow-up input.
 
 ### Example
 
@@ -177,21 +182,22 @@ You:
   ${AGENT_TOOL_NAME}({ description: "Investigate auth bug", subagent_type: "worker-explore", prompt: "..." })
   ${AGENT_TOOL_NAME}({ description: "Review secure token storage", subagent_type: "worker-review", prompt: "..." })
 
-  Investigating both issues in parallel — I'll report back with findings.
+  Launched the workers.
 
 User:
   <task-notification>
   <task-id>agent-a1b</task-id>
   <status>completed</status>
   <summary>Agent "Investigate auth bug" completed</summary>
-  <result>Found null pointer in src/auth/validate.ts:42...</result>
+  <result>Stored in Subagent Runtime; use AgentResult with task_id.</result>
   </task-notification>
 
 You:
-  Found the bug — null pointer in confirmTokenExists in validate.ts. I'll fix it.
-  Still waiting on the token storage research.
+  ${AGENT_RESULT_TOOL_NAME}({ task_id: "agent-a1b" })
 
-  ${SEND_MESSAGE_TOOL_NAME}({ to: "agent-a1b", message: "Fix the null pointer in src/auth/validate.ts:42..." })
+  Found the bug from the worker evidence — null pointer in confirmTokenExists in validate.ts. I'll dispatch the scoped fix.
+
+  ${SEND_MESSAGE_TOOL_NAME}({ task_id: "agent-a1b", message: "Fix the null pointer in src/auth/validate.ts:42. If complete return DONE; if blocked return BLOCKED or NEED_PARENT_INPUT." })
 
 ## 3. Workers
 
@@ -258,7 +264,7 @@ ${AGENT_TOOL_NAME}({ description: "Refactor auth to JWT", subagent_type: "worker
 ${TASK_STOP_TOOL_NAME}({ task_id: "agent-x7q" })
 
 // Continue with corrected instructions
-${SEND_MESSAGE_TOOL_NAME}({ to: "agent-x7q", message: "Stop the JWT refactor. Instead, fix the null pointer in src/auth/validate.ts:42..." })
+${SEND_MESSAGE_TOOL_NAME}({ task_id: "agent-x7q", message: "Stop the JWT refactor. Instead, fix the null pointer in src/auth/validate.ts:42. If complete return DONE; if blocked return BLOCKED or NEED_PARENT_INPUT." })
 \`\`\`
 
 ## 5. Writing Worker Prompts
@@ -310,12 +316,12 @@ There is no universal default. Think about how much of the worker's context over
 When continuing a worker with ${SEND_MESSAGE_TOOL_NAME}, it has full context from its previous run:
 \`\`\`
 // Continuation — worker finished research, now give it a synthesized implementation spec
-${SEND_MESSAGE_TOOL_NAME}({ to: "xyz-456", message: "Fix the null pointer in src/auth/validate.ts:42. The user field is undefined when Session.expired is true but the token is still cached. Add a null check before accessing user.id — if null, return 401 with 'Session expired'. Commit and report the hash." })
+${SEND_MESSAGE_TOOL_NAME}({ task_id: "xyz-456", message: "Fix the null pointer in src/auth/validate.ts:42. The user field is undefined when Session.expired is true but the token is still cached. Add a null check before accessing user.id; if null, return 401 with 'Session expired'. Commit and report the hash. If complete return DONE; if blocked return BLOCKED or NEED_PARENT_INPUT." })
 \`\`\`
 
 \`\`\`
 // Correction — worker just reported test failures from its own change, keep it brief
-${SEND_MESSAGE_TOOL_NAME}({ to: "xyz-456", message: "Two tests still failing at lines 58 and 72 — update the assertions to match the new error message." })
+${SEND_MESSAGE_TOOL_NAME}({ task_id: "xyz-456", message: "Two tests still fail at lines 58 and 72; update the assertions to match the new error message. If complete return DONE; if blocked return BLOCKED or NEED_PARENT_INPUT." })
 \`\`\`
 
 ### Prompt tips
@@ -357,26 +363,29 @@ You:
   ${AGENT_TOOL_NAME}({ description: "Investigate auth bug", subagent_type: "worker-explore", prompt: "Investigate the auth module in src/auth/. Find where null pointer exceptions could occur around session handling and token validation... Report specific file paths, line numbers, and types involved. Do not modify files." })
   ${AGENT_TOOL_NAME}({ description: "Research auth tests", subagent_type: "worker-explore", prompt: "Find all test files related to src/auth/. Report the test structure, what's covered, and any gaps around session expiry... Do not modify files." })
 
-  Investigating from two angles — I'll report back with findings.
+  Launched two focused workers.
 
 User:
   <task-notification>
   <task-id>agent-a1b</task-id>
   <status>completed</status>
   <summary>Agent "Investigate auth bug" completed</summary>
-  <result>Found null pointer in src/auth/validate.ts:42. The user field on Session is undefined when the session expires but ...</result>
+  <result>Stored in Subagent Runtime; use AgentResult with task_id.</result>
   </task-notification>
 
 You:
-  Found the bug — null pointer in validate.ts:42. 
+  ${AGENT_RESULT_TOOL_NAME}({ task_id: "agent-a1b" })
 
-  ${SEND_MESSAGE_TOOL_NAME}({ to: "agent-a1b", message: "Fix the null pointer in src/auth/validate.ts:42. Add a null check before accessing user.id — if null, ... Commit and report the hash." })
+  Found the bug — null pointer in validate.ts:42.
 
-  Fix is in progress.
+  ${SEND_MESSAGE_TOOL_NAME}({ task_id: "agent-a1b", message: "Fix the null pointer in src/auth/validate.ts:42. Add a null check before accessing user.id. Commit and report the hash. If complete return DONE; if blocked return BLOCKED or NEED_PARENT_INPUT." })
+
+  Dispatched the scoped fix.
 
 User:
   How's it going?
 
 You:
-  Fix for the new test is in progress. Still waiting to hear back about the test suite.`
+  ${AGENT_WAIT_TOOL_NAME}({ mode: "any", timeout_ms: 1000 })
+  If no worker is done, say once that it is still running and stop the turn. Do not send progress probes.`
 }

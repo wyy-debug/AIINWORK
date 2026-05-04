@@ -1,6 +1,7 @@
 import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import { getIsNonInteractiveSession, getSessionId } from '../bootstrap/state.js'
+import { getSubagentRecord } from '../tasks/subagentRegistry.js'
 import type { SdkWorkflowProgress } from '../types/tools.js'
 
 type TaskStartedEvent = {
@@ -29,6 +30,8 @@ type TaskProgressEvent = {
   summary?: string
   subagent_runtime?: unknown
   subagent_record?: unknown
+  subagent_snapshot?: unknown
+  subagent_events?: unknown
   // Delta batch of workflow state changes. Clients upsert by
   // `${type}:${index}` then group by phaseIndex to rebuild the phase tree,
   // same fold as collectFromEvents + groupByPhase in PhaseProgress.tsx.
@@ -53,6 +56,8 @@ type TaskNotificationSdkEvent = {
     tool_uses: number
     duration_ms: number
   }
+  subagent_record?: unknown
+  subagent_events?: unknown
 }
 
 // Mirrors notifySessionStateChanged. The CCR bridge already receives this
@@ -123,6 +128,7 @@ export function emitTaskTerminatedSdk(
     usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
   },
 ): void {
+  const record = getSubagentRecord(taskId)
   enqueueSdkEvent({
     type: 'system',
     subtype: 'task_notification',
@@ -132,5 +138,7 @@ export function emitTaskTerminatedSdk(
     output_file: opts?.outputFile ?? '',
     summary: opts?.summary ?? '',
     usage: opts?.usage,
+    subagent_record: record,
+    subagent_events: record?.events,
   })
 }

@@ -21,6 +21,7 @@ export function emitTaskProgress(params: {
   workflowProgress?: SdkWorkflowProgress[]
   subagentRuntime?: SubagentRuntimeSnapshot
 }): void {
+  const record = getSubagentRecord(params.taskId)
   enqueueSdkEvent({
     type: 'system',
     subtype: 'task_progress',
@@ -36,6 +37,8 @@ export function emitTaskProgress(params: {
     summary: params.summary,
     workflow_progress: params.workflowProgress,
     subagent_runtime: params.subagentRuntime,
-    subagent_record: getSubagentRecord(params.taskId),
+    subagent_record: record,
+    subagent_snapshot: record,
+    subagent_events: record?.events,
   })
 }

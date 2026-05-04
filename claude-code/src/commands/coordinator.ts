@@ -2,8 +2,8 @@
  * /coordinator — Toggle coordinator (multi-worker orchestration) mode.
  *
  * When enabled, the CLI becomes an orchestrator that dispatches tasks
- * to worker agents via Agent({ subagent_type: "worker" }).
- * The coordinator can only use Agent, SendMessage, and TaskStop.
+ * to worker agents via AgentSpawn({ subagent_type: "worker" }).
+ * The coordinator can use AgentSpawn, AgentWait, AgentResult, AgentSendInput, and AgentCancel.
  */
 import { feature } from 'bun:bundle'
 import type { ToolUseContext } from '../Tool.js'
@@ -46,11 +46,11 @@ const coordinator = {
           // Enable: set the env var
           process.env.MTL_CODE_COORDINATOR_MODE = '1'
           onDone(
-            'Coordinator mode enabled — use Agent(subagent_type: "worker") to dispatch tasks',
+            'Coordinator mode enabled - use AgentSpawn(subagent_type: "worker") to dispatch tasks',
             {
               display: 'system',
               metaMessages: [
-                '<system-reminder>\nCoordinator mode is now enabled. You are an orchestrator. Use Agent({ subagent_type: "worker" }) to spawn workers, SendMessage to continue them, TaskStop to stop them. Do not use other tools directly.\n</system-reminder>',
+                '<system-reminder>\nCoordinator mode is now enabled. You are an orchestrator. Use AgentSpawn({ subagent_type: "worker" }) to spawn workers, AgentWait/AgentResult to wait for or retrieve results, AgentSendInput only for concrete new instructions with DONE/BLOCKED/NEED_PARENT_INPUT stop conditions, and AgentCancel to stop them. Do not use other tools directly.\n</system-reminder>',
               ],
             },
           )

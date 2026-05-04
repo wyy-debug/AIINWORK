@@ -46,6 +46,7 @@ import {
   cancelSubagentRecord,
   completeSubagentRecord,
   failSubagentRecord,
+  recordSubagentUsage,
   registerSubagentRecord,
   updateSubagentRuntimeRecord,
 } from '../subagentRegistry.js'
@@ -340,7 +341,9 @@ export function enqueueAgentNotification({
   const toolUseIdLine = toolUseId
     ? `\n<${TOOL_USE_ID_TAG}>${toolUseId}</${TOOL_USE_ID_TAG}>`
     : ''
-  const resultSection = finalMessage ? `\n<result>${finalMessage}</result>` : ''
+  const resultSection = finalMessage
+    ? `\n<result>The subagent result is stored in the Subagent Runtime. Use AgentResult with task_id "${taskId}" to retrieve STATUS, SUMMARY, EVIDENCE, NEXT_ACTION, CHANGES, and BLOCKERS. Do not launch another agent for the same objective unless the user gives a new request.</result>`
+    : ''
   const usageSection = usage
     ? `\n<usage><total_tokens>${usage.totalTokens}</total_tokens><tool_uses>${usage.toolUses}</tool_uses><duration_ms>${usage.durationMs}</duration_ms></usage>`
     : ''
@@ -447,6 +450,10 @@ export function updateAgentProgress(
   setAppState: SetAppState,
 ): void {
   updateSubagentRuntimeRecord(taskId, progress.subagentRuntime)
+  recordSubagentUsage(taskId, {
+    totalTokens: progress.tokenCount,
+    toolUses: progress.toolUseCount,
+  })
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running') {
       return task
