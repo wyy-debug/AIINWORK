@@ -39,13 +39,14 @@ Automations stay implemented in backend/API storage but are hidden from default 
 - `/api/artifacts` remains the storage API for user-facing Results.
 - `/api/settings/argus-runtime` is retained as a compatibility endpoint, but the visible UI no longer exposes a separate coordinator toggle.
 - Saving OpenMythos runtime syncs `MTL_CODE_COORDINATOR_MODE` from `openMythosRuntime.enabled && openMythosRuntime.autoDispatchSubagents`.
+- When no OpenMythos setting exists, both `openMythosRuntime.enabled` and `autoDispatchSubagents` default to `false`, so Coordinator mode is not implicitly enabled.
 - Automations routes remain available for compatibility but are not linked from visible navigation.
 
 ## Argus Core Contract
 
 - `claude-code/scripts/defines.ts` compiles in `COORDINATOR_MODE`; actual activation is runtime-gated by `MTL_CODE_COORDINATOR_MODE`.
 - OpenMythos is the strategy layer. Coordinator/subagent execution is the execution layer.
-- When OpenMythos creates a `dispatchPlan`, the coordinator performs hard dispatch through the existing `Agent({ subagent_type: "worker" })` tool path.
+- When OpenMythos creates a confirmed `workerPlan`, WorkerRuntime launches role-specific workers through the existing `AgentTool.call()` async path.
 - Worker subagents must not inherit the parent OpenMythos runtime state. This keeps worker execution writable and prevents orient/plan read-only guards from blocking implementation workers.
 - `TaskStop` is idempotent for terminal tasks. Calling it on a completed, failed, or killed task returns a no-op success instead of a tool error.
 - User-facing chat must not render internal agent-control failure narration such as self-control/debug monologues or "replace the whole file manually" fallback text. The provider history adapter and `useChatMessages` filter known leaked internal narration, and OpenMythos reminds the coordinator to continue locally with concise actionable status instead.

@@ -16,6 +16,8 @@ This directory is the development entry point for `claudecodeui`, now branded as
 
 ## Current Notes
 
+- [2026-05-04-deepseek-tui-multi-agent-design.md](2026-05-04-deepseek-tui-multi-agent-design.md): DeepSeek-TUI sub-agent lifecycle analysis, Argus/OpenMythos multi-agent gaps, and WorkerPlan-based redesign path.
+- [2026-05-04-openmythos-worker-runtime-rewrite.md](2026-05-04-openmythos-worker-runtime-rewrite.md): current WorkerRuntime rewrite contract, WorkerPlan flow, role-specific workers, and dispatch invariants.
 - [2026-05-04-repository-update-summary.md](2026-05-04-repository-update-summary.md): repository update from `2d96cbc` to `4785f3d`, Argus Workbench/API/runtime changes, ContextBudget/RAG removal notes, and verification checklist.
 - [2026-05-03-file-write-guard-packaging.md](2026-05-03-file-write-guard-packaging.md): write guard, stale-save conflict handling, Argus CLI post-write verification, Windows installer output, packaging checks, and next hardening plan.
 - [2026-05-03-context-budget-alignment.md](2026-05-03-context-budget-alignment.md): unified ContextBudget contract for current context window usage, cumulative token consumption, DeepSeek 1M display, diagnostics, and packaging verification.

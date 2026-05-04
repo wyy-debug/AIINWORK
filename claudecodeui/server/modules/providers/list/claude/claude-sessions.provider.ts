@@ -431,6 +431,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       messages: normalized,
       total,
       hasMore,
+      nextOffset: limit === null ? total : offset + rawMessages.length,
       offset,
       limit,
       tokenUsage: Array.isArray(result) ? undefined : result.tokenUsage,

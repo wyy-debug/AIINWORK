@@ -81,10 +81,10 @@ import {
   shouldEnforceOpenMythosLoopBudget,
 } from './utils/openmythosRuntime.js'
 import {
-  formatOpenMythosHardDispatchMessage,
-  runOpenMythosHardDispatch,
-  shouldRunOpenMythosHardDispatch,
-} from './utils/openmythosHardDispatch.js'
+  formatOpenMythosWorkerRuntimeMessage,
+  runOpenMythosWorkerRuntime,
+  shouldRunOpenMythosWorkerRuntime,
+} from './utils/openmythosWorkerRuntime.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
 import {
@@ -713,20 +713,20 @@ export class QueryEngine {
 
     if (
       openMythosRuntimeState &&
-      shouldRunOpenMythosHardDispatch(
+      shouldRunOpenMythosWorkerRuntime(
         openMythosRuntimeState,
         processUserInputContext,
       )
     ) {
-      const hardDispatchParentMessage = createAssistantMessage({ content: '' })
-      const hardDispatchResult = await runOpenMythosHardDispatch({
+      const workerRuntimeParentMessage = createAssistantMessage({ content: '' })
+      const workerRuntimeResult = await runOpenMythosWorkerRuntime({
         state: openMythosRuntimeState,
         toolUseContext: processUserInputContext,
         canUseTool: wrappedCanUseTool,
-        assistantMessage: hardDispatchParentMessage,
+        assistantMessage: workerRuntimeParentMessage,
       })
 
-      if (hardDispatchResult.launched.length > 0) {
+      if (workerRuntimeResult.launched.length > 0) {
         if (!hasAcknowledgedInitialMessages && messagesToAck.length > 0) {
           hasAcknowledgedInitialMessages = true
           for (const msgToAck of messagesToAck) {
@@ -744,11 +744,11 @@ export class QueryEngine {
           }
         }
 
-        const hardDispatchMessage = createAssistantMessage({
-          content: formatOpenMythosHardDispatchMessage(hardDispatchResult),
+        const workerRuntimeMessage = createAssistantMessage({
+          content: formatOpenMythosWorkerRuntimeMessage(workerRuntimeResult),
         })
-        messages.push(hardDispatchMessage)
-        this.mutableMessages.push(hardDispatchMessage)
+        messages.push(workerRuntimeMessage)
+        this.mutableMessages.push(workerRuntimeMessage)
         if (persistSession) {
           await recordTranscript(messages)
           if (
@@ -759,7 +759,7 @@ export class QueryEngine {
           }
         }
 
-        yield* normalizeMessage(hardDispatchMessage)
+        yield* normalizeMessage(workerRuntimeMessage)
         processUserInputContext = {
           ...processUserInputContext,
           messages,

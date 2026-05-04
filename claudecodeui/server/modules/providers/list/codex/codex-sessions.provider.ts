@@ -311,6 +311,7 @@ export class CodexSessionsProvider implements IProviderSessions {
       messages: normalized,
       total,
       hasMore,
+      nextOffset: limit === null ? total : offset + rawMessages.length,
       offset,
       limit,
       tokenUsage,

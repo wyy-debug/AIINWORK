@@ -102,17 +102,30 @@ const MAX_CHAT_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_CHAT_FILES = 10;
 const MAX_CHAT_FILE_BYTES = 25 * 1024 * 1024;
 
-type OpenMythosDispatchTask = {
+type OpenMythosWorkerAssignment = {
+  assignmentId?: string;
   kind?: string;
+  role?: string;
   label?: string;
   reason?: string;
   required?: boolean;
   description?: string;
+  objective?: string;
+  prompt?: string;
+};
+
+type OpenMythosWorkerPlan = {
+  planId?: string;
+  goal?: string;
+  effort?: string;
+  status?: string;
+  assignments?: OpenMythosWorkerAssignment[];
 };
 
 type OpenMythosDispatchDecision = {
   openMythosAutoDispatch: boolean;
   openMythosDispatchConfirmed: boolean;
+  openMythosWorkerPlan?: OpenMythosWorkerPlan | null;
   previewFailed?: boolean;
 };
 
@@ -176,9 +189,10 @@ const resolveAgentInvocation = (
   };
 };
 
-const formatOpenMythosDispatchConfirmation = (tasks: OpenMythosDispatchTask[]) => {
+const formatOpenMythosDispatchConfirmation = (workerPlan: OpenMythosWorkerPlan) => {
+  const tasks = workerPlan.assignments || [];
   const lines = tasks.slice(0, 5).map((task, index) => {
-    const label = task.label || task.kind || `Worker ${index + 1}`;
+    const label = task.label || task.role || task.kind || `Worker ${index + 1}`;
     const reason = task.reason || task.description || '复杂任务需要并行检查';
     const required = task.required ? '，必需' : '';
     return `${index + 1}. ${label}${required}: ${reason}`;
@@ -228,18 +242,30 @@ const previewOpenMythosDispatch = async ({
     }
 
     const payload = await response.json();
-    const dispatchPlan = Array.isArray(payload?.dispatchPlan)
-      ? payload.dispatchPlan.filter(Boolean) as OpenMythosDispatchTask[]
+    const workerPlan = payload?.workerPlan && typeof payload.workerPlan === 'object'
+      ? payload.workerPlan as OpenMythosWorkerPlan
+      : null;
+    const assignments = Array.isArray(workerPlan?.assignments)
+      ? workerPlan.assignments.filter(Boolean)
       : [];
 
-    if (!payload?.shouldConfirm || dispatchPlan.length === 0) {
+    if (!payload?.shouldConfirm || assignments.length === 0 || !workerPlan) {
       return defaultDecision;
     }
 
-    const confirmed = window.confirm(formatOpenMythosDispatchConfirmation(dispatchPlan));
+    const confirmed = window.confirm(formatOpenMythosDispatchConfirmation({
+      ...workerPlan,
+      assignments,
+    }));
     return {
       openMythosAutoDispatch: confirmed,
       openMythosDispatchConfirmed: confirmed,
+      openMythosWorkerPlan: confirmed
+        ? {
+          ...workerPlan,
+          assignments,
+        }
+        : null,
     };
   } catch (error) {
     console.warn('[OpenMythos] Dispatch preview failed; using single-agent mode for this turn.', error);
@@ -1073,6 +1099,7 @@ export function useChatComposerState({
             clientSessionId: sessionToActivate,
             openMythosAutoDispatch: openMythosDispatchDecision.openMythosAutoDispatch,
             openMythosDispatchConfirmed: openMythosDispatchDecision.openMythosDispatchConfirmed,
+            openMythosWorkerPlan: openMythosDispatchDecision.openMythosWorkerPlan || null,
             openMythosDispatchPreviewFailed: Boolean(openMythosDispatchDecision.previewFailed),
           },
         });

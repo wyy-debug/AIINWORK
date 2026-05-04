@@ -85,7 +85,7 @@ const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic
 const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const OPENMYTHOS_LOOP_CONTROLS = ['advisory', 'enforced'] as const;
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
-  enabled: true,
+  enabled: false,
   adaptiveEffort: true,
   taskCard: true,
   routingHints: true,
@@ -94,7 +94,7 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
-  autoDispatchSubagents: true,
+  autoDispatchSubagents: false,
   autoDispatchMinEffort: 'medium',
   autoDispatchMaxWorkers: 3,
   minEffort: 'low',

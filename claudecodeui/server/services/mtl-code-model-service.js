@@ -1,5 +1,6 @@
 import os from 'os';
 import path from 'path';
+import crypto from 'crypto';
 
 import {
   readJsonConfig,
@@ -50,7 +51,7 @@ export const OPENMYTHOS_RUNTIME_ENV_KEYS = {
 };
 
 export const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG = Object.freeze({
-  enabled: true,
+  enabled: false,
   adaptiveEffort: true,
   taskCard: true,
   routingHints: true,
@@ -59,7 +60,7 @@ export const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG = Object.freeze({
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
-  autoDispatchSubagents: true,
+  autoDispatchSubagents: false,
   autoDispatchMinEffort: 'medium',
   autoDispatchMaxWorkers: 3,
   minEffort: 'low',
@@ -86,10 +87,21 @@ const readPositiveIntegerEnv = (env, key) => {
   return Number.isFinite(value) && value > 0 ? value : null;
 };
 
-const readBooleanEnvDefaultTrue = (env, key) => {
+const readBooleanEnv = (env, key, fallback) => {
   const value = readStringEnv(env, key).toLowerCase();
-  return value !== '0' && value !== 'false' && value !== 'off';
+  if (!value) {
+    return fallback;
+  }
+  if (['1', 'true', 'yes', 'on'].includes(value)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(value)) {
+    return false;
+  }
+  return fallback;
 };
+
+const readBooleanEnvDefaultTrue = (env, key) => readBooleanEnv(env, key, true);
 
 function normalizeOpenMythosBoolean(value, fallback) {
   if (typeof value === 'boolean') {
@@ -160,17 +172,17 @@ export function normalizeOpenMythosRuntimeConfig(value, fallback = DEFAULT_OPENM
 
 export function readOpenMythosRuntimeConfig(settings = {}, env = {}) {
   const envConfig = normalizeOpenMythosRuntimeConfig({
-    enabled: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.enabled),
-    adaptiveEffort: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.adaptiveEffort),
-    taskCard: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.taskCard),
-    routingHints: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.routingHints),
+    enabled: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.enabled, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.enabled),
+    adaptiveEffort: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.adaptiveEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.adaptiveEffort),
+    taskCard: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.taskCard, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.taskCard),
+    routingHints: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.routingHints, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.routingHints),
     loopControl: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.loopControl)
       || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.loopControl,
-    stableReinjection: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.stableReinjection),
-    phaseAdapter: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter),
-    expertRouting: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting),
-    contextCacheDiagnostics: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics),
-    autoDispatchSubagents: readBooleanEnvDefaultTrue(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchSubagents),
+    stableReinjection: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.stableReinjection, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.stableReinjection),
+    phaseAdapter: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
+    expertRouting: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
+    contextCacheDiagnostics: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
+    autoDispatchSubagents: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchSubagents, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchSubagents),
     autoDispatchMinEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMinEffort)
       || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort,
     autoDispatchMaxWorkers: readPositiveIntegerEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMaxWorkers)
@@ -211,6 +223,7 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
   if (!normalizedConfig.enabled || !prompt) {
     return null;
   }
+  const isTaskNotification = /<task-notification\b/i.test(prompt);
 
   const signals = [
     {
@@ -291,12 +304,13 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
   const expertRoutes = normalizedConfig.expertRouting
     ? buildOpenMythosExpertRoutes(signals, effort)
     : [];
-  const dispatchPlan = buildOpenMythosDispatchPlan({
+  const workerPlan = buildOpenMythosWorkerPlan({
     config: normalizedConfig,
     goal: prompt.length <= 260 ? prompt : `${prompt.slice(0, 259)}...`,
     effort,
     signals,
     expertRoutes,
+    isTaskNotification,
   });
 
   return {
@@ -315,7 +329,7 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
         : 'Use the smallest safe change and keep verification visible.',
     ],
     expertRoutes,
-    dispatchPlan,
+    workerPlan,
   };
 }
 
@@ -364,9 +378,9 @@ function effortMeetsMinimum(effort, minimum) {
   return OPENMYTHOS_EFFORT_LEVELS.indexOf(effort) >= OPENMYTHOS_EFFORT_LEVELS.indexOf(minimum);
 }
 
-function buildOpenMythosDispatchPlan({ config, goal, effort, signals, expertRoutes }) {
-  if (!config.autoDispatchSubagents || !effortMeetsMinimum(effort, config.autoDispatchMinEffort)) {
-    return [];
+function buildOpenMythosWorkerPlan({ config, goal, effort, signals, expertRoutes, isTaskNotification }) {
+  if (isTaskNotification || !config.autoDispatchSubagents || !effortMeetsMinimum(effort, config.autoDispatchMinEffort)) {
+    return null;
   }
 
   const tasks = expertRoutes
@@ -374,7 +388,7 @@ function buildOpenMythosDispatchPlan({ config, goal, effort, signals, expertRout
     .map((route) => toDispatchTask(route, goal));
 
   const hasImplementationSignal = signals.some((signal) => signal.reason === 'implementation requested');
-  if (hasImplementationSignal && tasks.length === 0) {
+  if (hasImplementationSignal && !tasks.some((task) => task.kind === 'implementation')) {
     tasks.push(toDispatchTask({
       kind: 'implementation',
       label: 'Implementation worker',
@@ -383,29 +397,96 @@ function buildOpenMythosDispatchPlan({ config, goal, effort, signals, expertRout
     }, goal));
   }
 
-  return tasks.slice(0, Math.max(1, config.autoDispatchMaxWorkers));
+  const assignments = tasks
+    .slice(0, Math.max(1, config.autoDispatchMaxWorkers))
+    .map((task, index) => toWorkerAssignment(task, goal, index));
+  if (assignments.length === 0) {
+    return null;
+  }
+
+  return {
+    planId: stableOpenMythosId('owp', [
+      goal,
+      effort,
+      config.autoDispatchMinEffort,
+      String(config.autoDispatchMaxWorkers),
+      ...assignments.map((assignment) => `${assignment.kind}:${assignment.role}:${assignment.label}`),
+    ]),
+    goal,
+    effort,
+    status: 'previewed',
+    dispatchPolicy: {
+      maxWorkers: config.autoDispatchMaxWorkers,
+      minEffort: config.autoDispatchMinEffort,
+      requiresUserConfirmation: true,
+    },
+    assignments,
+  };
 }
 
 function toDispatchTask(route, goal) {
   const description = `${route.label}: ${goal}`.length <= 80
     ? `${route.label}: ${goal}`
     : `${route.label}: ${goal}`.slice(0, 79) + '...';
+  const role = routeToWorkerRole(route.kind);
+  const objective = `${route.label}: ${goal}`;
   return {
     kind: route.kind,
+    role,
     label: route.label,
     reason: route.reason,
     required: Boolean(route.required),
     description,
+    objective,
     prompt: [
-      'You are an Argus worker selected by OpenMythos auto-dispatch.',
+      'You are an Argus worker selected by OpenMythos WorkerRuntime.',
       `User goal: ${goal}`,
       `Route: ${route.label}.`,
       `Reason: ${route.reason}.`,
       route.required ? 'This route is required for a safe answer.' : 'This route is helpful if it materially improves the answer.',
-      'Work autonomously. Read relevant files, inspect evidence, and only edit when the task explicitly requires implementation within this route.',
-      'Do not revert unrelated user changes. Report concrete files, findings, edits, and verification results back to the coordinator.',
+      `Worker role: ${role}.`,
+      'Work autonomously within this route. Do not revert unrelated user changes.',
+      'End your final response with these exact Markdown headings: SUMMARY, EVIDENCE, CHANGES, RISKS, BLOCKERS.',
     ].join('\n'),
   };
+}
+
+function toWorkerAssignment(task, goal, index) {
+  return {
+    assignmentId: stableOpenMythosId('owa', [
+      goal,
+      String(index + 1),
+      task.kind,
+      task.role,
+      task.label,
+      task.reason,
+    ]),
+    kind: task.kind,
+    role: task.role,
+    label: task.label,
+    reason: task.reason,
+    required: task.required,
+    description: task.description,
+    objective: task.objective,
+    prompt: task.prompt,
+  };
+}
+
+function routeToWorkerRole(kind) {
+  if (kind === 'verification') return 'worker-verifier';
+  if (kind === 'architecture') return 'worker-plan';
+  if (kind === 'implementation') return 'worker-implementer';
+  if (['security', 'performance', 'frontend', 'git'].includes(kind)) return 'worker-review';
+  return 'worker-explore';
+}
+
+function stableOpenMythosId(prefix, parts) {
+  const hash = crypto
+    .createHash('sha256')
+    .update(parts.join('\0'))
+    .digest('hex')
+    .slice(0, 12);
+  return `${prefix}_${hash}`;
 }
 
 function uniqueStrings(values) {

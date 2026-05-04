@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   buildOpenMythosRuntimeCard,
   createOpenMythosRuntimeState,
@@ -12,11 +12,28 @@ import {
 
 const originalEnv = { ...process.env }
 
+beforeEach(() => {
+  process.env.MTL_CODE_OPENMYTHOS_RUNTIME = '1'
+  process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '1'
+  process.env.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '1'
+})
+
 afterEach(() => {
   process.env = { ...originalEnv }
 })
 
 describe('openmythos runtime card', () => {
+  test('is disabled by default without explicit runtime opt-in', () => {
+    delete process.env.MTL_CODE_OPENMYTHOS_RUNTIME
+    delete process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH
+
+    expect(getOpenMythosRuntimeConfig().enabled).toBe(false)
+    expect(getOpenMythosRuntimeConfig().autoDispatchSubagents).toBe(false)
+    expect(buildOpenMythosRuntimeCard('Implement auth migration')).toBeNull()
+    expect(shouldApplyAdaptiveEffort(undefined)).toBe(false)
+    expect(shouldAttachOpenMythosRuntimeCard()).toBe(false)
+  })
+
   test('classifies small conversational prompts as low effort', () => {
     const card = buildOpenMythosRuntimeCard('thanks, what branch am I on?')
 
@@ -24,7 +41,7 @@ describe('openmythos runtime card', () => {
     expect(card?.loopBudget).toBe(2)
     expect(card?.phasePlan).toEqual(['orient', 'finalize'])
     expect(card?.routes.join(' ')).toContain('Handle locally')
-    expect(card?.dispatchPlan).toEqual([])
+    expect(card?.workerPlan).toBeNull()
   })
 
   test('escalates risky implementation work and records routes', () => {
@@ -41,8 +58,10 @@ describe('openmythos runtime card', () => {
     expect(card?.routes.join(' ')).toContain('verification pass')
     expect(card?.riskScore).toBeGreaterThanOrEqual(8)
     expect(card?.expertRoutes.map(route => route.kind)).toContain('security')
-    expect(card?.dispatchPlan.map(task => task.kind)).toContain('security')
-    expect(card?.dispatchPlan.map(task => task.kind)).toContain('verification')
+    expect(card?.workerPlan?.assignments.map(task => task.kind)).toContain('security')
+    expect(card?.workerPlan?.assignments.map(task => task.kind)).toContain('verification')
+    expect(card?.workerPlan?.assignments.map(task => task.role)).toContain('worker-review')
+    expect(card?.workerPlan?.assignments.map(task => task.role)).toContain('worker-verifier')
     expect(card?.phasePlan).toEqual([
       'orient',
       'plan',
@@ -68,7 +87,7 @@ describe('openmythos runtime card', () => {
     expect(reminder).toContain('Adaptive effort:')
     expect(reminder).toContain('Current phase:')
     expect(reminder).toContain('Expert routes:')
-    expect(reminder).toContain('Auto-dispatch worker plan:')
+    expect(reminder).toContain('WorkerRuntime plan:')
   })
 
   test('creates enforced runtime state with read-only early phases', () => {
@@ -78,7 +97,7 @@ describe('openmythos runtime card', () => {
     const state = createOpenMythosRuntimeState(card)
 
     expect(state.loopControl).toBe('enforced')
-    expect(state.hardDispatchAttempted).toBe(false)
+    expect(state.workerRuntimeAttempted).toBe(false)
     expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(true)
     expect(state.phase).toBe('orient')
     expect(isOpenMythosReadOnlyPhase(state)).toBe(true)
@@ -134,18 +153,18 @@ describe('openmythos runtime card', () => {
   test('only dispatches workers in coordinator mode above the configured effort', () => {
     const prompt = 'Refactor multi-module architecture'
     let card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.dispatchPlan).toEqual([])
+    expect(card?.workerPlan).toBeNull()
 
     process.env.MTL_CODE_COORDINATOR_MODE = '1'
     card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.dispatchPlan.length).toBeGreaterThan(0)
+    expect(card?.workerPlan?.assignments.length).toBeGreaterThan(0)
     expect(formatOpenMythosRuntimeReminder(card!)).toContain(
-      'Coordinator instruction: before direct implementation',
+      'WorkerRuntime will start the worker plan',
     )
 
     process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT = 'high'
     card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.dispatchPlan).toEqual([])
+    expect(card?.workerPlan).toBeNull()
   })
 
   test('can disable auto-dispatch and cap worker count', () => {
@@ -154,14 +173,14 @@ describe('openmythos runtime card', () => {
     let card = buildOpenMythosRuntimeCard(
       'Implement an auth database migration with rollback tests and CI verification',
     )
-    expect(card?.dispatchPlan).toEqual([])
+    expect(card?.workerPlan).toBeNull()
 
     process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '1'
     process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MAX_WORKERS = '2'
     card = buildOpenMythosRuntimeCard(
       'Implement an auth database migration with rollback tests and CI verification plus frontend verification',
     )
-    expect(card?.dispatchPlan.length).toBeLessThanOrEqual(2)
+    expect(card?.workerPlan?.assignments.length).toBeLessThanOrEqual(2)
   })
 
   test('does not auto-dispatch again for worker task notifications', () => {
@@ -176,22 +195,22 @@ describe('openmythos runtime card', () => {
       </task-notification>
     `)
 
-    expect(card?.dispatchPlan).toEqual([])
+    expect(card?.workerPlan).toBeNull()
     expect(formatOpenMythosRuntimeReminder(card!)).toContain(
-      'no automatic worker dispatch is required',
+      'no automatic worker runtime dispatch is required',
     )
   })
 
-  test('reminder suppresses duplicate coordinator dispatch after hard dispatch', () => {
+  test('reminder suppresses duplicate coordinator dispatch after WorkerRuntime starts', () => {
     process.env.MTL_CODE_COORDINATOR_MODE = '1'
     const card = buildOpenMythosRuntimeCard('Refactor multi-module architecture')
     if (!card) throw new Error('expected runtime card')
     const state = createOpenMythosRuntimeState(card)
 
-    state.hardDispatchAttempted = true
+    state.workerRuntimeAttempted = true
 
     expect(formatOpenMythosRuntimeReminder(card, state)).toContain(
-      'worker dispatch was already attempted',
+      'WorkerRuntime already started this plan',
     )
   })
 

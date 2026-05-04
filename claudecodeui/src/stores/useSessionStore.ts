@@ -92,6 +92,7 @@ export interface SessionSlot {
   fetchedAt: number;
   total: number;
   hasMore: boolean;
+  loadedCount: number;
   offset: number;
   tokenUsage: unknown;
   contextBudget: unknown;
@@ -111,6 +112,7 @@ function createEmptySlot(): SessionSlot {
     fetchedAt: 0,
     total: 0,
     hasMore: false,
+    loadedCount: 0,
     offset: 0,
     tokenUsage: null,
     contextBudget: null,
@@ -150,6 +152,31 @@ function mergeMessagesById(base: NormalizedMessage[], incoming: NormalizedMessag
   const seen = new Set(base.map((message) => message.id));
   const extra = incoming.filter((message) => !seen.has(message.id));
   return extra.length === 0 ? base : [...base, ...extra];
+}
+
+function prependUniqueMessages(incoming: NormalizedMessage[], existing: NormalizedMessage[]): NormalizedMessage[] {
+  if (incoming.length === 0) return existing;
+  const seen = new Set(existing.map((message) => message.id));
+  const uniqueIncoming = incoming.filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+  return uniqueIncoming.length === 0 ? existing : [...uniqueIncoming, ...existing];
+}
+
+function readNextOffset(data: any, fallbackOffset: number, fallbackPageCount: number): number {
+  const explicitNextOffset = Number(data?.nextOffset);
+  if (Number.isFinite(explicitNextOffset) && explicitNextOffset >= fallbackOffset) {
+    return explicitNextOffset;
+  }
+
+  const responseOffset = Number(data?.offset);
+  if (Number.isFinite(responseOffset) && responseOffset > fallbackOffset) {
+    return responseOffset;
+  }
+
+  return fallbackOffset + fallbackPageCount;
 }
 
 function reassignSessionMessages(
@@ -321,11 +348,14 @@ export function useSessionStore() {
 
       const data = await response.json();
       const messages: NormalizedMessage[] = data.messages || [];
+      const requestOffset = opts.offset ?? 0;
+      const nextOffset = readNextOffset(data, requestOffset, messages.length);
 
       slot.serverMessages = messages;
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
-      slot.offset = (opts.offset ?? 0) + messages.length;
+      slot.offset = nextOffset;
+      slot.loadedCount = Math.min(slot.total || nextOffset, nextOffset);
       slot.fetchedAt = Date.now();
       slot.status = 'idle';
       slot.errorMessage = undefined;
@@ -379,11 +409,18 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const olderMessages: NormalizedMessage[] = data.messages || [];
+      const previousOffset = slot.offset;
+      const nextOffset = readNextOffset(data, previousOffset, olderMessages.length);
 
       // Prepend older messages (they're earlier in the conversation)
-      slot.serverMessages = [...olderMessages, ...slot.serverMessages];
+      slot.serverMessages = prependUniqueMessages(olderMessages, slot.serverMessages);
+      slot.total = data.total ?? slot.total;
       slot.hasMore = Boolean(data.hasMore);
-      slot.offset = slot.offset + olderMessages.length;
+      slot.offset = Math.max(previousOffset, nextOffset);
+      slot.loadedCount = Math.min(slot.total || slot.offset, slot.offset);
+      if (olderMessages.length === 0 || (slot.offset === previousOffset && slot.hasMore)) {
+        slot.hasMore = false;
+      }
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
       return slot;
@@ -453,6 +490,7 @@ export function useSessionStore() {
     toSlot.total = Math.max(toSlot.total, toSlot.serverMessages.length);
     toSlot.hasMore = toSlot.hasMore || fromSlot.hasMore;
     toSlot.offset = Math.max(toSlot.offset, fromSlot.offset);
+    toSlot.loadedCount = Math.max(toSlot.loadedCount, fromSlot.loadedCount, toSlot.offset);
     if (!toSlot.tokenUsage && fromSlot.tokenUsage) {
       toSlot.tokenUsage = fromSlot.tokenUsage;
     }
@@ -502,12 +540,15 @@ export function useSessionStore() {
       const data = await response.json();
 
       const messages: NormalizedMessage[] = data.messages || [];
+      const requestOffset = opts.offset ?? 0;
+      const nextOffset = opts.limit !== null && opts.limit !== undefined
+        ? readNextOffset(data, requestOffset, messages.length)
+        : messages.length;
       slot.serverMessages = messages;
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
-      slot.offset = opts.limit !== null && opts.limit !== undefined
-        ? (opts.offset ?? 0) + messages.length
-        : messages.length;
+      slot.offset = nextOffset;
+      slot.loadedCount = Math.min(slot.total || nextOffset, nextOffset);
       slot.fetchedAt = Date.now();
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;

@@ -54,11 +54,11 @@ Settings 里新增 Runtime 设置页，负责：
 
 `claude-code` 侧新增硬派发相关能力：
 
-- `claude-code/src/utils/openmythosHardDispatch.ts`
+- `claude-code/src/utils/openmythosWorkerRuntime.ts`
 - `claude-code/src/coordinator/coordinatorMode.ts`
 - `claude-code/src/coordinator/workerAgent.ts`
 
-OpenMythos 仍是策略层；Coordinator/Agent worker 是执行层。`dispatchPlan` 出现时，硬派发通过现有 `Agent({ subagent_type: "worker" })` 路径运行。Worker 不继承 parent OpenMythos runtime state，避免 orient/plan 阶段的只读限制阻塞实际实现。
+OpenMythos 仍是策略层；WorkerRuntime/Agent worker 是执行层。`workerPlan` 确认后通过现有 `AgentTool.call()` 路径启动角色化 worker。Worker 不继承 parent OpenMythos runtime state，避免 orient/plan 阶段的只读限制阻塞实际实现。
 
 ### Context Budget
 

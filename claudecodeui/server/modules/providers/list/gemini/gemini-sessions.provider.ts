@@ -220,6 +220,7 @@ export class GeminiSessionsProvider implements IProviderSessions {
       messages,
       total: normalized.length,
       hasMore: pageLimit === null ? false : start + pageLimit < normalized.length,
+      nextOffset: start + messages.length,
       offset: start,
       limit: pageLimit,
     };

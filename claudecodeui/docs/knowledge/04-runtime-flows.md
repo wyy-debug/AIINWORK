@@ -74,7 +74,7 @@ sequenceDiagram
   participant Runtime as Argus runtime
   participant Store as useSessionStore
 
-  Chat->>Settings: preview OpenMythos dispatchPlan
+  Chat->>Settings: preview OpenMythos workerPlan
   Settings-->>Chat: confirm or single-agent decision
   Chat->>WS: Argus command message
   WS->>Server: claude-command compatibility message
@@ -88,8 +88,8 @@ sequenceDiagram
 
 OpenMythos 自动派发确认流程：
 
-1. `useChatComposerState` 在真正发送前调用 `POST /api/settings/openmythos-dispatch-preview`。
-2. 后端使用 `buildOpenMythosRuntimePreview()` 和当前 `~/.mtl-code/settings.json` 生成 `dispatchPlan`。
+1. `useChatComposerState` 在真正发送前调用 `POST /api/settings/openmythos-dispatch-preview`；未配置时 OpenMythos 和自动派发默认关闭。
+2. 后端使用 `buildOpenMythosRuntimePreview()` 和当前 `~/.mtl-code/settings.json` 生成 `workerPlan`。
 3. 如果没有派发计划，本轮默认以单 Agent 执行，并把 `openMythosAutoDispatch: false` 放入 command options，避免 CLI 自己重新判断后意外派发。
 4. 如果存在派发计划，前端弹出中文确认：确定则发送 `openMythosDispatchConfirmed: true` 并允许自动派发；取消则发送 `openMythosAutoDispatch: false`。
 5. `server/claude-sdk.js` 根据 command options 注入 `MTL_CODE_OPENMYTHOS_AUTO_DISPATCH=0` 或 `MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED=1`，子进程最终以该单次决策为准。
@@ -366,7 +366,7 @@ Project/conversation separation:
 
 ## OpenMythos 自动派发流程
 
-OpenMythos 是策略层，Argus Coordinator/Subagent 是执行层。运行时不会在后端预创建 worker，而是在 Argus CLI 的隐藏运行时提醒里输出 `dispatchPlan`，再由 Coordinator 首轮调用现有 `Agent({ subagent_type: "worker" })`。
+OpenMythos 是策略层，WorkerRuntime 是执行层。UI 发送前预览并确认 `workerPlan`；确认后 Argus CLI 使用同一个 plan 通过现有 `AgentTool.call()` 启动角色化 worker。
 
 ```mermaid
 sequenceDiagram
@@ -378,11 +378,11 @@ sequenceDiagram
 
   UI->>API: 保存 openMythosRuntime
   API->>CLI: 注入 MTL_CODE_OPENMYTHOS_* 和 MTL_CODE_COORDINATOR_MODE
-  CLI->>CLI: 根据任务生成 runtimeCard 和 dispatchPlan
+  CLI->>CLI: 读取确认后的 runtimeCard 和 workerPlan
   CLI->>Coord: 追加 OpenMythos runtime reminder
-  Coord->>Worker: 首轮按 dispatchPlan 启动 worker
+  CLI->>Worker: WorkerRuntime 按 assignment 启动 worker
   Worker-->>Coord: <task-notification>
-  Coord->>Coord: 汇总 worker 结果，不重新生成 dispatchPlan
+  Coord->>Coord: 汇总 worker 结果，不重新生成 workerPlan
   Coord-->>UI: 合并 worker 结果并继续主会话
 ```
 
@@ -393,9 +393,9 @@ sequenceDiagram
 3. `MTL_CODE_COORDINATOR_MODE` 未开启时不自动派发。
 4. `autoDispatchMinEffort` 控制最低触发强度，默认 `medium`。
 5. `autoDispatchMaxWorkers` 控制最多 worker 数，默认 3。
-6. 诊断面板必须展示自动派发开关、最低派发强度、最大 worker 数和当前 `dispatchPlan`。
+6. 诊断面板必须展示自动派发开关、最低派发强度、最大 worker 数和当前 `workerPlan.assignments`。
 7. Chat 输入框上方必须在收到 `agent_runtime_debug` 后展示 OpenMythos 状态提示，让普通对话也能看到自动派发是否开启以及当前是否有 worker 计划。
-8. Worker 回传的 `<task-notification>` 是汇总输入，不是新的用户任务；OpenMythos 不得为它生成新的 `dispatchPlan`。
+8. Worker 回传的 `<task-notification>` 是汇总输入，不是新的用户任务；OpenMythos 不得为它生成新的 `workerPlan`。
 9. SDK/print 路径的硬派发在同一个 runtime state 里只允许尝试一次，避免 worker 完成后同一计划被重复启动。
 10. `<task-notification>` 是 coordinator/subagent 的内部控制消息，不应该作为用户蓝色气泡渲染。后端 `ClaudeSessionsProvider` 会在历史/实时归一化时过滤，前端 `useChatMessages` 也会兜底跳过。
 11. `useChatMessages` 会把带 `parentToolUseId` 的实时 child tool 归并回对应 `Task` / `Agent` 容器，并跳过这些内部 child 消息的主聊天渲染。

@@ -180,8 +180,8 @@ function OpenMythosRuntimeSection({
   const expertRoutes = card?.expertRoutes?.map((route) => (
     `${route.label || route.kind || 'expert'}${route.required ? ' (required)' : ''}${route.reason ? `: ${route.reason}` : ''}`
   ));
-  const dispatchPlan = card?.dispatchPlan?.map((task) => (
-    `${task.label || task.kind || 'worker'}${task.required ? ' (必需)' : ''}${task.description ? `: ${task.description}` : ''}`
+  const workerAssignments = card?.workerPlan?.assignments?.map((task) => (
+    `${task.label || task.role || task.kind || 'worker'}${task.required ? ' (必需)' : ''}${task.description ? `: ${task.description}` : ''}`
   ));
   const configuredAutoDispatchSubagents = runtime
     ? runtime.configuredAutoDispatchSubagents
@@ -248,7 +248,7 @@ function OpenMythosRuntimeSection({
             <StringBadges values={expertRoutes} />
             <div className="mt-3 text-[11px] font-medium uppercase text-muted-foreground">自动派发计划</div>
             <div className="mt-2">
-              <StringBadges values={dispatchPlan} />
+              <StringBadges values={workerAssignments} />
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <Field label="compactBoundary" value={formatNumber(contextCache?.compactBoundaryCount)} />

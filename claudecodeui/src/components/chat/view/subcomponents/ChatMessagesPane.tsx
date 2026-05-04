@@ -13,8 +13,7 @@ import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 
 interface ChatMessagesPaneProps {
   scrollContainerRef: RefObject<HTMLDivElement>;
-  onWheel: () => void;
-  onTouchMove: () => void;
+  onPreserveScrollForLayoutChange?: () => void;
   isLoadingSessionMessages: boolean;
   sessionLoadError?: string;
   chatMessages: ChatMessage[];
@@ -42,6 +41,7 @@ interface ChatMessagesPaneProps {
   visibleMessageCount: number;
   visibleMessages: ChatMessage[];
   isSessionRunning?: boolean;
+  loadMoreHistoryMessages: () => void;
   loadEarlierMessages: () => void;
   loadAllMessages: () => void;
   allMessagesLoaded: boolean;
@@ -80,6 +80,7 @@ type ProcessTraceGroupProps = {
   selectedProject: Project;
   provider: LLMProvider;
   getMessageKey: (message: ChatMessage) => string;
+  onPreserveScrollForLayoutChange?: () => void;
 };
 
 const parseTimestamp = (value: ChatMessage['timestamp']) => {
@@ -136,7 +137,8 @@ function areProcessTraceGroupPropsEqual(
     previous.showThinking === next.showThinking &&
     previous.selectedProject === next.selectedProject &&
     previous.provider === next.provider &&
-    previous.getMessageKey === next.getMessageKey
+    previous.getMessageKey === next.getMessageKey &&
+    previous.onPreserveScrollForLayoutChange === next.onPreserveScrollForLayoutChange
   );
 }
 
@@ -154,18 +156,26 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   selectedProject,
   provider,
   getMessageKey,
+  onPreserveScrollForLayoutChange,
 }: ProcessTraceGroupProps) {
   const [open, setOpen] = useState(active);
   const wasActiveRef = useRef(active);
 
+  const updateOpen = useCallback((nextOpen: boolean) => {
+    if (nextOpen !== open) {
+      onPreserveScrollForLayoutChange?.();
+    }
+    setOpen(nextOpen);
+  }, [onPreserveScrollForLayoutChange, open]);
+
   useEffect(() => {
     if (active) {
-      setOpen(true);
+      updateOpen(true);
     } else if (wasActiveRef.current) {
-      setOpen(false);
+      updateOpen(false);
     }
     wasActiveRef.current = active;
-  }, [active]);
+  }, [active, updateOpen]);
 
   const elapsed = useMemo(() => {
     if (messages.length === 0) return '1s';
@@ -200,7 +210,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
       className="chat-message assistant px-3 sm:px-0"
       data-message-key={groupKey}
     >
-      <Collapsible open={open} onOpenChange={setOpen} className="not-prose">
+      <Collapsible open={open} onOpenChange={updateOpen} className="not-prose">
         <div className="flex items-center gap-3 py-1">
           <CollapsibleTrigger className="group/process inline-flex min-w-0 items-center gap-2 rounded-full px-1 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
             <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 group-data-[state=open]/process:bg-primary" />
@@ -253,8 +263,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
 
 export default function ChatMessagesPane({
   scrollContainerRef,
-  onWheel,
-  onTouchMove,
+  onPreserveScrollForLayoutChange,
   isLoadingSessionMessages,
   sessionLoadError,
   chatMessages,
@@ -282,6 +291,7 @@ export default function ChatMessagesPane({
   visibleMessageCount,
   visibleMessages,
   isSessionRunning = false,
+  loadMoreHistoryMessages,
   loadEarlierMessages,
   loadAllMessages,
   allMessagesLoaded,
@@ -409,9 +419,7 @@ export default function ChatMessagesPane({
   return (
     <div
       ref={scrollContainerRef}
-      onWheel={onWheel}
-      onTouchMove={onTouchMove}
-      className="relative flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-0 py-3 [overflow-anchor:none] sm:space-y-4 sm:p-4"
+      className="relative flex-1 space-y-3 overflow-x-hidden overflow-y-scroll px-0 py-3 [overflow-anchor:none] [scrollbar-gutter:stable] sm:space-y-4 sm:p-4"
     >
       {isLoadingSessionMessages && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
@@ -470,10 +478,14 @@ export default function ChatMessagesPane({
                     <span>{t('session.loading.olderMessages')}</span>
                   </>
                 ) : totalMessages > 0 ? (
-                  <span>
+                  <button
+                    type="button"
+                    className="pointer-events-auto rounded-full px-1 text-muted-foreground transition-colors hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    onClick={loadMoreHistoryMessages}
+                  >
                     {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
                     <span>{t('session.messages.scrollToLoad')}</span>
-                  </span>
+                  </button>
                 ) : (
                   <span>{t('session.messages.scrollToLoad')}</span>
                 )}
@@ -553,6 +565,7 @@ export default function ChatMessagesPane({
                   selectedProject={selectedProject}
                   provider={provider}
                   getMessageKey={getMessageKey}
+                  onPreserveScrollForLayoutChange={onPreserveScrollForLayoutChange}
                 />
               );
             }

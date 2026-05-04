@@ -77,7 +77,7 @@
     "constraintsLabel": "Constraints",
     "acceptanceLabel": "Acceptance",
     "routesLabel": "Routes",
-    "dispatchPlanLabel": "Auto-dispatch plan",
+    "workerPlanLabel": "Worker plan",
     "requiredValue": "required",
     "noDispatchValue": "This prompt will not auto-dispatch workers",
     "emptyPreview": "Enter a prompt to preview the runtime card.",
