@@ -1,6 +1,12 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { toolMatchesName, type Tool, type Tools } from './Tool.js'
 import { AgentTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
+import {
+  AgentCancelTool,
+  AgentListTool,
+  AgentResultTool,
+  AgentWaitTool,
+} from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { SkillTool } from '@mtl-code/builtin-tools/tools/SkillTool/SkillTool.js'
 import { BashTool } from '@mtl-code/builtin-tools/tools/BashTool/BashTool.js'
 import { FileEditTool } from '@mtl-code/builtin-tools/tools/FileEditTool/FileEditTool.js'
@@ -199,6 +205,10 @@ export function getToolsForDefaultPreset(): string[] {
 export function getAllBaseTools(): Tools {
   return [
     AgentTool,
+    AgentListTool,
+    AgentWaitTool,
+    AgentResultTool,
+    AgentCancelTool,
     TaskOutputTool,
     BashTool,
     // Ant-native builds have bfs/ugrep embedded in the bun binary (same ARGV0
@@ -288,7 +298,14 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
         feature('COORDINATOR_MODE') &&
         coordinatorModeModule?.isCoordinatorMode()
       ) {
-        replSimple.push(TaskStopTool, getSendMessageTool())
+        replSimple.push(
+          TaskStopTool,
+          AgentListTool,
+          AgentWaitTool,
+          AgentResultTool,
+          AgentCancelTool,
+          getSendMessageTool(),
+        )
       }
       return filterToolsByDenyRules(replSimple, permissionContext)
     }
@@ -300,7 +317,15 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       feature('COORDINATOR_MODE') &&
       coordinatorModeModule?.isCoordinatorMode()
     ) {
-      simpleTools.push(AgentTool, TaskStopTool, getSendMessageTool())
+      simpleTools.push(
+        AgentTool,
+        TaskStopTool,
+        AgentListTool,
+        AgentWaitTool,
+        AgentResultTool,
+        AgentCancelTool,
+        getSendMessageTool(),
+      )
     }
     return filterToolsByDenyRules(simpleTools, permissionContext)
   }

@@ -245,7 +245,7 @@ When NOT to use the ${AGENT_TOOL_NAME} tool:
   const concurrencyNote =
     !listViaAttachment && getSubscriptionType() !== 'pro'
       ? `
-- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses`
+- Launch agents only for clearly independent work. If you truly need parallel delegation, launch a small bounded set in one message and stay within the runtime limits.`
       : ''
 
   // Non-coordinator gets the full prompt with all sections
@@ -260,11 +260,16 @@ Usage notes:
     !isInProcessTeammate() &&
     !forkEnabled
       ? `
-- You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
+- You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, proactively check on its progress, or write progress-only narration such as "waiting for the agent" / "let me check the agent". The UI already shows background status; only tell the user final results or useful non-overlapping work.
+- Treat background agents like Codex/DeepSeek-TUI delegate tasks: launch once, keep the parent turn quiet, and wait for the completion notification. Do not repeatedly say "waiting", "still running", "ready for data", or "let me try another agent".
+- The runtime enforces a small active subagent cap: by default one user request can launch at most 3 subagents, at most 2 can be active for that turn, and the session can have at most 3 running. If you hit the cap, do not work around it by renaming the same task. Consolidate existing results, stop redundant agents, or ask the user for the missing input.
+- If a background agent is blocked and needs user data, ask for it once with the minimum required fields. Do not repeatedly send "I'm ready", "please paste data", or "still waiting" messages.
+- Do not launch a second background agent for the same objective. If a matching agent is already running, wait for its completion notification or stop the redundant one before starting over.
 - **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.`
       : ''
   }
-- To continue a previously spawned agent, use ${SEND_MESSAGE_TOOL_NAME} with the agent's ID or name as the \`to\` field. The agent resumes with its full context preserved. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
+- To inspect background agents, prefer AgentList, AgentWait, and AgentResult. Use ${SEND_MESSAGE_TOOL_NAME} only when you have concrete new instructions for a spawned agent; do not use it for progress polling.
+- When continuing a spawned agent, include a clear stop condition. Do not only ask for progress; tell it to return DONE when the objective is satisfied, NEED_PARENT_INPUT when blocked on parent input, or BLOCKED when it cannot make progress. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
 - The agent's outputs should generally be trusted
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ", since it is not aware of the user's intent"}
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.

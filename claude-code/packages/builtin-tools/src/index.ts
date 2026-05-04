@@ -8,6 +8,12 @@
 
 // Core tools
 export { AgentTool } from './tools/AgentTool/AgentTool.js'
+export {
+  AgentCancelTool,
+  AgentListTool,
+  AgentResultTool,
+  AgentWaitTool,
+} from './tools/AgentControlTool/AgentControlTools.js'
 export { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
 export { BashTool } from './tools/BashTool/BashTool.js'
 export { BriefTool } from './tools/BriefTool/BriefTool.js'

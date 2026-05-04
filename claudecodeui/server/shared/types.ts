@@ -102,6 +102,8 @@ export type NormalizedMessage = {
   contextBudget?: ContextBudget;
   tokenBudget?: unknown;
   subagentTools?: unknown;
+  subagentRuntime?: unknown;
+  subagentRecord?: unknown;
   toolUseResult?: unknown;
   sequence?: number;
   rowid?: number;

@@ -12,6 +12,7 @@ import { normalizedToChatMessages } from './useChatMessages';
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
 const SCROLL_RESTORE_ATTEMPTS = 16;
+const AUTO_FILL_MAX_PAGES_PER_SESSION = 1;
 const EMPTY_STORE_MESSAGES: NormalizedMessage[] = [];
 
 type PendingViewSession = {
@@ -38,6 +39,7 @@ interface ScrollRestoreState {
   anchorKey?: string | null;
   anchorOffset?: number;
   attemptsLeft?: number;
+  fallbackMode?: 'height-diff' | 'top';
 }
 
 /* ------------------------------------------------------------------ */
@@ -138,12 +140,15 @@ export function useChatSessionState({
   const pendingScrollRestoreRef = useRef<ScrollRestoreState | null>(null);
   const pendingInitialScrollRef = useRef(true);
   const messagesOffsetRef = useRef(0);
-  const scrollPositionRef = useRef({ height: 0, top: 0 });
+  const scrollPositionRef = useRef<ScrollRestoreState>({ height: 0, top: 0 });
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const topIntentLoadFrameRef = useRef<number | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
   const autoFillFrameRef = useRef<number | null>(null);
+  const autoFillSessionKeyRef = useRef<string | null>(null);
+  const autoFillPagesRef = useRef(0);
   const touchStartYRef = useRef<number | null>(null);
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
   const suppressTopLoadUntilRef = useRef(0);
@@ -151,15 +156,20 @@ export function useChatSessionState({
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
 
-  const captureScrollRestoreState = useCallback((container: HTMLDivElement): ScrollRestoreState => {
+  const captureScrollRestoreState = useCallback((
+    container: HTMLDivElement,
+    fallbackMode: ScrollRestoreState['fallbackMode'] = 'height-diff',
+  ): ScrollRestoreState => {
     const containerRect = container.getBoundingClientRect();
-    const messageElements = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-message-key]'),
-    );
-    const anchor = messageElements.find((element) => {
+    const messageElements = container.querySelectorAll<HTMLElement>('[data-message-key]');
+    let anchor: HTMLElement | null = null;
+    for (const element of messageElements) {
       const rect = element.getBoundingClientRect();
-      return rect.bottom >= containerRect.top + 8;
-    });
+      if (rect.bottom >= containerRect.top + 8) {
+        anchor = element;
+        break;
+      }
+    }
 
     return {
       height: container.scrollHeight,
@@ -167,8 +177,13 @@ export function useChatSessionState({
       anchorKey: anchor?.dataset.messageKey || null,
       anchorOffset: anchor ? anchor.getBoundingClientRect().top - containerRect.top : undefined,
       attemptsLeft: SCROLL_RESTORE_ATTEMPTS,
+      fallbackMode,
     };
   }, []);
+
+  const updateScrollPositionSnapshot = useCallback((container: HTMLDivElement) => {
+    scrollPositionRef.current = captureScrollRestoreState(container, 'top');
+  }, [captureScrollRestoreState]);
 
   const restoreScrollPosition = useCallback((state: ScrollRestoreState) => {
     const container = scrollContainerRef.current;
@@ -187,8 +202,12 @@ export function useChatSessionState({
       }
     }
 
-    const newScrollHeight = container.scrollHeight;
-    container.scrollTop = Math.max(0, state.top + (newScrollHeight - state.height));
+    if (state.fallbackMode === 'height-diff') {
+      const newScrollHeight = container.scrollHeight;
+      container.scrollTop = Math.max(0, state.top + (newScrollHeight - state.height));
+    } else {
+      container.scrollTop = Math.max(0, state.top);
+    }
     return true;
   }, []);
 
@@ -342,29 +361,42 @@ export function useChatSessionState({
     [captureScrollRestoreState, hasMoreMessages, isLoadingMoreMessages, queueScrollRestore, selectedProject, selectedSession, sessionStore],
   );
 
-  const handleScroll = useCallback(async () => {
+  const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
     if (initialScrollTimerRef.current) {
       clearTimeout(initialScrollTimerRef.current);
       initialScrollTimerRef.current = null;
     }
-    if (Date.now() < suppressTopLoadUntilRef.current) return;
+    if (scrollFrameRef.current !== null) return;
 
-    const nearBottom = isNearBottom();
-    setIsUserScrolledUp(!nearBottom);
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const latestContainer = scrollContainerRef.current;
+      if (!latestContainer) return;
 
-    if (!allMessagesLoadedRef.current) {
-      const scrolledNearTop = container.scrollTop < 100;
-      if (!scrolledNearTop) { topLoadLockRef.current = false; return; }
-      if (topLoadLockRef.current) {
-        if (container.scrollTop > 20) topLoadLockRef.current = false;
-        return;
+      updateScrollPositionSnapshot(latestContainer);
+      if (Date.now() < suppressTopLoadUntilRef.current) return;
+
+      const nearBottom = isNearBottom();
+      setIsUserScrolledUp(!nearBottom);
+
+      if (!allMessagesLoadedRef.current) {
+        const scrolledNearTop = latestContainer.scrollTop < 100;
+        if (!scrolledNearTop) {
+          topLoadLockRef.current = false;
+          return;
+        }
+        if (topLoadLockRef.current) {
+          if (latestContainer.scrollTop > 20) topLoadLockRef.current = false;
+          return;
+        }
+        void loadOlderMessages(latestContainer).then((didLoad) => {
+          if (didLoad) topLoadLockRef.current = true;
+        });
       }
-      const didLoad = await loadOlderMessages(container);
-      if (didLoad) topLoadLockRef.current = true;
-    }
-  }, [isNearBottom, loadOlderMessages]);
+    });
+  }, [isNearBottom, loadOlderMessages, updateScrollPositionSnapshot]);
 
   const requestTopIntentLoad = useCallback((container: HTMLDivElement) => {
     if (!container || container.scrollTop > 2) return;
@@ -394,6 +426,9 @@ export function useChatSessionState({
     const restore = () => {
       if (pendingScrollRestoreRef.current !== state) return;
       restoreScrollPosition(state);
+      if (scrollContainerRef.current) {
+        updateScrollPositionSnapshot(scrollContainerRef.current);
+      }
       state.attemptsLeft = (state.attemptsLeft || 1) - 1;
 
       if (state.attemptsLeft > 0) {
@@ -406,7 +441,7 @@ export function useChatSessionState({
     };
 
     restore();
-  }, [chatMessages.length, restoreScrollPosition, scrollRestoreVersion]);
+  }, [chatMessages.length, restoreScrollPosition, scrollRestoreVersion, updateScrollPositionSnapshot]);
 
   // Reset scroll/pagination state on session change
   useEffect(() => {
@@ -424,10 +459,16 @@ export function useChatSessionState({
       window.cancelAnimationFrame(topIntentLoadFrameRef.current);
       topIntentLoadFrameRef.current = null;
     }
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
     if (autoFillFrameRef.current !== null) {
       window.cancelAnimationFrame(autoFillFrameRef.current);
       autoFillFrameRef.current = null;
     }
+    autoFillSessionKeyRef.current = null;
+    autoFillPagesRef.current = 0;
     touchStartYRef.current = null;
     setIsUserScrolledUp(false);
     setIsLoadingMoreMessages(false);
@@ -550,10 +591,11 @@ export function useChatSessionState({
       setIsLoadingSessionMessages(false);
     });
   }, [
+    currentSessionId,
     pendingViewSessionRef,
     resetStreamingState,
     selectedProject,
-    selectedSession?.id,
+    selectedSession,
     sendMessage,
     ws,
     sessionStore,
@@ -572,7 +614,7 @@ export function useChatSessionState({
           const container = scrollContainerRef.current;
           const wasNearBottom = isNearBottom();
           const restoreState = container && !wasNearBottom
-            ? captureScrollRestoreState(container)
+            ? captureScrollRestoreState(container, 'top')
             : null;
           suppressTopLoadUntilRef.current = Date.now() + 1200;
 
@@ -751,37 +793,25 @@ export function useChatSessionState({
 
     const container = scrollContainerRef.current;
     const shouldPreserveViewport = isUserScrolledUp || !isNearBottom();
-    const prevHeight = scrollPositionRef.current.height;
-    const prevTop = scrollPositionRef.current.top;
-    const newHeight = container.scrollHeight;
 
     if (shouldPreserveViewport) {
-      const heightDiff = newHeight - prevHeight;
-      if (prevHeight > 0 && heightDiff !== 0) {
-        container.scrollTop = Math.max(0, prevTop + heightDiff);
-      }
-      scrollPositionRef.current = {
-        height: container.scrollHeight,
-        top: container.scrollTop,
-      };
+      restoreScrollPosition(scrollPositionRef.current);
+      updateScrollPositionSnapshot(container);
       return;
     }
 
     if (autoScrollToBottom) {
       scrollToBottom();
     }
-    scrollPositionRef.current = {
-      height: container.scrollHeight,
-      top: container.scrollTop,
-    };
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isNearBottom, isUserScrolledUp, scrollToBottom, storeMessages]);
+    updateScrollPositionSnapshot(container);
+  }, [autoScrollToBottom, chatMessages, isLoadingMoreMessages, isNearBottom, isUserScrolledUp, restoreScrollPosition, scrollToBottom, updateScrollPositionSnapshot]);
 
   const preserveScrollForLayoutChange = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     if (isUserScrolledUp || !isNearBottom()) {
-      queueScrollRestore(captureScrollRestoreState(container));
+      queueScrollRestore(captureScrollRestoreState(container, 'top'));
       return;
     }
 
@@ -794,7 +824,13 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return;
     container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
   }, [handleScroll]);
 
   useEffect(() => {
@@ -838,6 +874,14 @@ export function useChatSessionState({
     if (isLoadingMoreMessages || isLoadingMoreRef.current || pendingScrollRestoreRef.current) return;
     if (isLoadingSessionMessages || searchScrollActiveRef.current) return;
 
+    const sessionKey = selectedSession?.id || currentSessionId || null;
+    if (!sessionKey) return;
+    if (autoFillSessionKeyRef.current !== sessionKey) {
+      autoFillSessionKeyRef.current = sessionKey;
+      autoFillPagesRef.current = 0;
+    }
+    if (autoFillPagesRef.current >= AUTO_FILL_MAX_PAGES_PER_SESSION) return;
+
     if (autoFillFrameRef.current !== null) {
       window.cancelAnimationFrame(autoFillFrameRef.current);
     }
@@ -848,6 +892,7 @@ export function useChatSessionState({
       if (!latestContainer || !hasMoreMessages || isLoadingMoreRef.current) return;
       const lacksScrollableHistory = latestContainer.scrollHeight <= latestContainer.clientHeight + 24;
       if (lacksScrollableHistory) {
+        autoFillPagesRef.current += 1;
         void loadOlderMessages(latestContainer);
       }
     });
@@ -858,7 +903,7 @@ export function useChatSessionState({
         autoFillFrameRef.current = null;
       }
     };
-  }, [chatMessages.length, hasMoreMessages, isLoadingMoreMessages, isLoadingSessionMessages, loadOlderMessages, visibleMessages.length]);
+  }, [chatMessages.length, currentSessionId, hasMoreMessages, isLoadingMoreMessages, isLoadingSessionMessages, loadOlderMessages, selectedSession?.id, visibleMessages.length]);
 
   useEffect(() => {
     const activeViewSessionId = selectedSession?.id || currentSessionId;

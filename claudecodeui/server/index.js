@@ -17,7 +17,7 @@ import { AppError, createNormalizedMessage } from '@/shared/utils.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
-import { queryClaudeSDK, abortClaudeSDKSession, sendClaudeSDKGuidance, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { queryClaudeSDK, abortClaudeSDKSession, sendClaudeSDKGuidance, stopClaudeSDKTask, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
@@ -2492,6 +2492,56 @@ async function applyAgentRuntimeToChatCommand(data) {
         workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
     });
     if (!runtime) {
+        if (sessionSkills.length > 0) {
+            const skillReferences = await resolveSkillReferences(sessionSkills, {
+                query: typeof data.command === 'string' ? data.command : '',
+                workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+            });
+            const appendSystemPrompt = skillReferences.prompt;
+            if (!appendSystemPrompt) {
+                return data;
+            }
+
+            if (allowSessionAgentBinding && concreteSessionId) {
+                sessionAgentBindingsDb.setAgent(concreteSessionId, provider, '', sessionConfiguration);
+            }
+
+            const options = {
+                ...(data.options || {}),
+                modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
+                sessionSkills,
+                runtimeDiagnostics: {
+                    type: 'skills',
+                    allowSessionAgentBinding,
+                    agentId: '',
+                    agentName: '',
+                    appBindings: [],
+                    mcpBindings: [],
+                    sessionSkills,
+                    effectiveSkills: sessionSkills,
+                    skillDetails: skillReferences.details,
+                    skillPromptLength: skillReferences.promptLength,
+                    mcpDiagnosticsSummary: [],
+                    appendSystemPromptLength: appendSystemPrompt.length,
+                    contextWindowTokens: data?.options?.contextWindowTokens || null,
+                    model: data?.options?.model || '',
+                    modelProfileId: sessionModelProfileId || '',
+                    openMythosRuntime,
+                },
+            };
+
+            if (data.type === 'claude-command') {
+                options.appendSystemPrompt = appendSystemPrompt;
+                return { ...data, options };
+            }
+
+            const command = typeof data.command === 'string' ? data.command : '';
+            return {
+                ...data,
+                command: [appendSystemPrompt, '', 'User task:', command].join('\n'),
+                options,
+            };
+        }
         return data;
     }
     const skillReferences = await resolveSkillReferences(runtime.agent.skills, {
@@ -2589,6 +2639,43 @@ function handleChatConnection(ws, request) {
                         sessionId: data.sessionId || null,
                         provider: 'claude'
                     }));
+                }
+            } else if (data.type === 'claude-stop-tasks') {
+                const provider = data.provider || 'claude';
+                if (provider !== 'claude') {
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: 'Stopping background agents is only supported by the MTL-Code backend.',
+                        sessionId: data.sessionId || null,
+                        provider
+                    }));
+                } else {
+                    const taskIds = Array.isArray(data.taskIds)
+                        ? data.taskIds.map((taskId) => String(taskId || '').trim()).filter(Boolean)
+                        : [];
+                    const results = taskIds.map((taskId) => ({
+                        taskId,
+                        ...stopClaudeSDKTask(data.sessionId, taskId)
+                    }));
+                    const failed = results.filter((result) => !result.success);
+                    writer.send(createNormalizedMessage({
+                        kind: 'status',
+                        status: 'subagent_stop_requested',
+                        content: failed.length > 0
+                            ? `Requested stop for ${results.length - failed.length}/${results.length} background agents.`
+                            : `Requested stop for ${results.length} background agents.`,
+                        sessionId: data.sessionId || null,
+                        provider,
+                        summary: failed.length > 0 ? failed.map((result) => `${result.taskId}: ${result.error}`).join('; ') : undefined
+                    }));
+                    if (failed.length > 0) {
+                        writer.send(createNormalizedMessage({
+                            kind: 'error',
+                            content: failed.map((result) => `Failed to stop ${result.taskId}: ${result.error}`).join('\n'),
+                            sessionId: data.sessionId || null,
+                            provider
+                        }));
+                    }
                 }
             } else if (data.type === 'cursor-command') {
                 const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));

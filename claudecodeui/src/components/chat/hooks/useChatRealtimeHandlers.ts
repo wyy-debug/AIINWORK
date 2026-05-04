@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
@@ -107,6 +107,27 @@ export function useChatRealtimeHandlers({
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
+  const projectRefreshTimerRef = useRef<number | null>(null);
+
+  const scheduleProjectsRefresh = useCallback((delay = 400) => {
+    if (projectRefreshTimerRef.current) {
+      window.clearTimeout(projectRefreshTimerRef.current);
+    }
+
+    projectRefreshTimerRef.current = window.setTimeout(() => {
+      projectRefreshTimerRef.current = null;
+      window.refreshProjects?.();
+    }, delay);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (projectRefreshTimerRef.current) {
+        window.clearTimeout(projectRefreshTimerRef.current);
+        projectRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!latestMessage) return;
@@ -274,6 +295,7 @@ export function useChatRealtimeHandlers({
           );
         }
         onNavigateToSession?.(newSessionId);
+        scheduleProjectsRefresh(350);
         break;
       }
 
@@ -307,16 +329,23 @@ export function useChatRealtimeHandlers({
 
         // Clear pending session
         const pendingSessionId = sessionStorage.getItem('pendingSessionId');
-        if (pendingSessionId && !currentSessionId && msg.exitCode === 0) {
-          const actualId = msg.actualSessionId || pendingSessionId;
-          setCurrentSessionId(actualId);
-          if (msg.actualSessionId) {
+        if (pendingSessionId && msg.exitCode === 0) {
+          const actualId = msg.actualSessionId
+            || (isTemporarySessionId(currentSessionId) ? sid : currentSessionId)
+            || sid
+            || pendingSessionId;
+          if (actualId && currentSessionId !== actualId) {
+            setCurrentSessionId(actualId);
+          }
+          if (msg.actualSessionId && msg.actualSessionId !== currentSessionId) {
             onNavigateToSession?.(actualId);
           }
-          sessionStorage.removeItem('pendingSessionId');
-          if (window.refreshProjects) {
-            setTimeout(() => window.refreshProjects?.(), 500);
-          }
+          scheduleProjectsRefresh(250);
+          window.setTimeout(() => {
+            if (sessionStorage.getItem('pendingSessionId') === pendingSessionId) {
+              sessionStorage.removeItem('pendingSessionId');
+            }
+          }, 1500);
         }
         break;
       }
@@ -402,6 +431,7 @@ export function useChatRealtimeHandlers({
     onReplaceTemporarySession,
     onNavigateToSession,
     onWebSocketReconnect,
+    scheduleProjectsRefresh,
     sessionStore,
   ]);
 }

@@ -202,6 +202,7 @@ export async function resumeAgentBackground({
     selectedAgent,
     setAppState: rootSetAppState,
     toolUseId: toolUseContext.toolUseId,
+    sessionId: getParentSessionId(),
   })
 
   const metadata = {
@@ -232,7 +233,7 @@ export async function resumeAgentBackground({
       runAsyncAgentLifecycle({
         taskId: agentBackgroundTask.agentId,
         abortController: agentBackgroundTask.abortController!,
-        makeStream: onCacheSafeParams =>
+        makeStream: (onCacheSafeParams, onRuntimeStatus) =>
           runAgent({
             ...runAgentParams,
             override: {
@@ -241,6 +242,7 @@ export async function resumeAgentBackground({
               abortController: agentBackgroundTask.abortController!,
             },
             onCacheSafeParams,
+            onRuntimeStatus,
           }),
         metadata,
         description: uiDescription,

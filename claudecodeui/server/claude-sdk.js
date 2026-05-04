@@ -1559,6 +1559,48 @@ function sendClaudeSDKGuidance(sessionId, content, clientMessageId = null) {
 }
 
 /**
+ * Requests that the running MTL-Code backend stop one background task.
+ * This uses the same SDK control_request channel as the native TaskStop tool.
+ * @param {string} sessionId - Active session identifier
+ * @param {string} taskId - Background task id
+ * @returns {{success: boolean, error?: string}}
+ */
+function stopClaudeSDKTask(sessionId, taskId) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : '';
+
+  if (!normalizedSessionId) {
+    return { success: false, error: 'No active session id is available.' };
+  }
+  if (!normalizedTaskId) {
+    return { success: false, error: 'No task id was provided.' };
+  }
+
+  const session = getSession(normalizedSessionId);
+  if (!session || session.status !== 'active') {
+    return { success: false, error: `Session ${normalizedSessionId} is not active.` };
+  }
+
+  const child = session.instance?.child;
+  if (!child) {
+    return { success: false, error: 'The active backend does not support task control.' };
+  }
+
+  const written = writeMtlCodeJson(child, {
+    type: 'control_request',
+    request_id: createRequestId(),
+    request: {
+      subtype: 'stop_task',
+      task_id: normalizedTaskId,
+    },
+  });
+
+  return written
+    ? { success: true }
+    : { success: false, error: 'The active backend input stream is no longer writable.' };
+}
+
+/**
  * Checks if an SDK session is currently active
  * @param {string} sessionId - Session identifier
  * @returns {boolean} True if session is active
@@ -1618,6 +1660,7 @@ export {
   queryClaudeSDK,
   abortClaudeSDKSession,
   sendClaudeSDKGuidance,
+  stopClaudeSDKTask,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
   resolveToolApproval,

@@ -25,6 +25,14 @@ type FetchProjectsOptions = {
 
 const serialize = (value: unknown) => JSON.stringify(value ?? null);
 
+const readPendingSessionId = (): string | null => {
+  try {
+    return sessionStorage.getItem('pendingSessionId');
+  } catch {
+    return null;
+  }
+};
+
 const projectsHaveChanges = (
   prevProjects: Project[],
   nextProjects: Project[],
@@ -181,6 +189,7 @@ export function useProjectsState({
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeSessionModeSwitchRef = useRef(false);
+  const routeSessionRefreshRef = useRef<{ sessionId: string; requestedAt: number } | null>(null);
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     try {
@@ -243,6 +252,24 @@ export function useProjectsState({
     ]);
   }, [fetchConversationProject, fetchProjects]);
 
+  const refreshRouteSessionSilently = useCallback((targetSessionId: string) => {
+    const now = Date.now();
+    const previous = routeSessionRefreshRef.current;
+    if (
+      previous
+      && previous.sessionId === targetSessionId
+      && now - previous.requestedAt < 1200
+    ) {
+      return;
+    }
+
+    routeSessionRefreshRef.current = {
+      sessionId: targetSessionId,
+      requestedAt: now,
+    };
+    void refreshProjectsSilently();
+  }, [refreshProjectsSilently]);
+
   const openSettings = useCallback((tab = 'tools') => {
     setSettingsInitialTab(tab);
     setShowSettings(true);
@@ -270,7 +297,7 @@ export function useProjectsState({
           setRouteSessionState({
             status: 'missing',
             sessionId: detail.sessionId,
-            message: 'The generated session was not found after refreshing projects.',
+            message: '刷新项目后仍未找到生成的会话。',
           });
           navigate(`/session/${detail.sessionId}`);
           return;
@@ -475,17 +502,30 @@ export function useProjectsState({
     }
 
     if (!isLoadingProjects && !isLoadingConversations) {
+      const pendingSessionId = readPendingSessionId();
+      if (activeSessions.has(sessionId) || pendingSessionId === sessionId) {
+        setRouteSessionState({
+          status: 'resolving',
+          sessionId,
+          message: '会话正在创建，稍后会自动打开。',
+        });
+        refreshRouteSessionSilently(sessionId);
+        return;
+      }
+
       setRouteSessionState({
-        status: 'missing',
-        sessionId,
-        message: 'This session was not found. It may have been deleted or belongs to a project that is no longer available.',
-      });
+          status: 'missing',
+          sessionId,
+          message: '找不到这个会话。它可能已被删除，或所属项目暂时不可用。',
+        });
     }
   }, [
     conversationProject,
+    activeSessions,
     isLoadingConversations,
     isLoadingProjects,
     projects,
+    refreshRouteSessionSilently,
     selectedConversationSession?.id,
     selectedProject?.name,
     selectedSession?.__provider,
@@ -761,7 +801,6 @@ export function useProjectsState({
       isLoadingProjects,
       isMobile,
       loadingProgress,
-      navigate,
       projects,
       conversationProject,
       settingsInitialTab,

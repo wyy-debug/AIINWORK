@@ -4,7 +4,15 @@
  */
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
-import type { ChatMessage, SubagentChildTool, ToolResult } from '../types/types';
+import type {
+  ChatMessage,
+  SubagentChildTool,
+  SubagentRegistryRecord,
+  SubagentRegistryStatus,
+  SubagentRuntimeSnapshot,
+  SubagentRuntimeStatus,
+  ToolResult,
+} from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 
 function isTaskNotificationContent(content: string): boolean {
@@ -20,6 +28,41 @@ function isInternalAgentFailureNarration(content: string): boolean {
     || normalized.includes('every single agent i launch')
     || normalized.includes('provide the user with the complete updated code')
     || normalized.includes('they can replace their existing file with the new version');
+}
+
+function isAgentOrchestrationChatter(content: string): boolean {
+  const text = content.replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 1200) return false;
+  if (/```|###\s*status|结论|原因分析|修复建议|完整报告|analysis report|root cause/i.test(text)) {
+    return false;
+  }
+
+  const mentionsAgent = /\b(agent|worker|subagent|background task|browser-based|chrome-based)\b/i.test(text)
+    || /(智能体|子代理|后台任务|代理)/.test(text);
+  const mentionsWaiting = /\b(waiting|wait|launched|launch|check(?:ing)?|monitoring|sent messages|please wait|running|complete|completed|output file)\b/i.test(text)
+    || /(等待|已启动|启动了|检查|运行中|后台|完成|稍候)/.test(text);
+
+  if (mentionsAgent && mentionsWaiting) return true;
+
+  if (
+    /\b(i'?m ready|ready and waiting|once you provide|as soon as you provide|please paste|still waiting|provide the exported|exported crash data|crash report content|paste the crash|waiting for you to paste|waiting for .*results)\b/i.test(text)
+    || /(等待您提供|请将.*粘贴|请.*粘贴|粘贴.*崩溃|我准备好分析|一旦.*粘贴|导出.*内容|崩溃内容粘贴|等待.*结果)/.test(text)
+  ) {
+    return true;
+  }
+
+  return [
+    /^let me (?:wait|check|take stock|launch|try|stop|send|just wait|get|first read)\b/i,
+    /^understood\. all agents have confirmed\b/i,
+    /^i'?m ready\b/i,
+    /^i'?m trying a new approach\b/i,
+    /^i'?ve launched\b/i,
+    /^i'?m waiting\b/i,
+    /^waiting for\b/i,
+    /^please wait\b/i,
+    /^the .* agent .* running\b/i,
+    /^a .* agent is now running\b/i,
+  ].some((pattern) => pattern.test(text));
 }
 
 function normalizeToolTimestamp(value: unknown): Date {
@@ -38,6 +81,132 @@ function toToolResult(value: NormalizedMessage | ToolResult | null | undefined):
     isError: Boolean(result.isError),
     toolUseResult: result.toolUseResult,
   };
+}
+
+function getToolResultText(value: ToolResult | null | undefined): string {
+  if (!value) return '';
+  const content = value.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (item && typeof item === 'object' && 'text' in item) {
+          return String((item as { text?: unknown }).text || '');
+        }
+        return typeof item === 'string' ? item : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return content === undefined || content === null ? '' : JSON.stringify(content);
+}
+
+function isAsyncSubagentLaunchResult(value: ToolResult | null | undefined): boolean {
+  const text = getToolResultText(value).replace(/\s+/g, ' ').trim().toLowerCase();
+  return text.includes('<subagent-control>')
+    || (
+      text.includes('async agent launched successfully')
+      && text.includes('the agent is working in the background')
+      && text.includes('agentid:')
+    );
+}
+
+function toSubagentRuntimeSnapshot(value: unknown): SubagentRuntimeSnapshot | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const status = typeof record.runtimeStatus === 'string'
+    && ['RUNNING', 'DONE', 'BLOCKED', 'NEED_PARENT_INPUT'].includes(record.runtimeStatus)
+    ? record.runtimeStatus as SubagentRuntimeStatus
+    : undefined;
+  return {
+    objective: typeof record.objective === 'string' ? record.objective : undefined,
+    currentStep: typeof record.currentStep === 'number' ? record.currentStep : undefined,
+    maxSteps: typeof record.maxSteps === 'number' ? record.maxSteps : undefined,
+    remainingSteps: typeof record.remainingSteps === 'number' ? record.remainingSteps : undefined,
+    startedAt: typeof record.startedAt === 'number' ? record.startedAt : undefined,
+    elapsedMs: typeof record.elapsedMs === 'number' ? record.elapsedMs : undefined,
+    runtimeStatus: status,
+    stopReason: typeof record.stopReason === 'string' ? record.stopReason : undefined,
+    lastTool: typeof record.lastTool === 'string' ? record.lastTool : undefined,
+    lastInput: typeof record.lastInput === 'string' ? record.lastInput : undefined,
+    lastToolSummary: typeof record.lastToolSummary === 'string' ? record.lastToolSummary : undefined,
+    recentActions: Array.isArray(record.recentActions)
+      ? record.recentActions.filter((item): item is string => typeof item === 'string')
+      : undefined,
+  };
+}
+
+function toSubagentRegistryRecord(value: unknown): SubagentRegistryRecord | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const status = typeof record.status === 'string'
+    && ['running', 'completed', 'failed', 'cancelled', 'blocked', 'need_parent_input'].includes(record.status)
+    ? record.status as SubagentRegistryStatus
+    : undefined;
+  const runtimeStatus = typeof record.runtimeStatus === 'string'
+    && ['RUNNING', 'DONE', 'BLOCKED', 'NEED_PARENT_INPUT'].includes(record.runtimeStatus)
+    ? record.runtimeStatus as SubagentRuntimeStatus
+    : undefined;
+  return {
+    taskId: typeof record.taskId === 'string' ? record.taskId : undefined,
+    agentId: typeof record.agentId === 'string' ? record.agentId : undefined,
+    parentToolUseId: typeof record.parentToolUseId === 'string' ? record.parentToolUseId : undefined,
+    sessionId: typeof record.sessionId === 'string' ? record.sessionId : undefined,
+    objective: typeof record.objective === 'string' ? record.objective : undefined,
+    agentType: typeof record.agentType === 'string' ? record.agentType : undefined,
+    status,
+    runtimeStatus,
+    startedAt: typeof record.startedAt === 'number' ? record.startedAt : undefined,
+    updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
+    endedAt: typeof record.endedAt === 'number' ? record.endedAt : undefined,
+    currentStep: typeof record.currentStep === 'number' ? record.currentStep : undefined,
+    maxSteps: typeof record.maxSteps === 'number' ? record.maxSteps : undefined,
+    remainingSteps: typeof record.remainingSteps === 'number' ? record.remainingSteps : undefined,
+    lastTool: typeof record.lastTool === 'string' ? record.lastTool : undefined,
+    lastInput: typeof record.lastInput === 'string' ? record.lastInput : undefined,
+    lastToolSummary: typeof record.lastToolSummary === 'string' ? record.lastToolSummary : undefined,
+    stopReason: typeof record.stopReason === 'string' ? record.stopReason : undefined,
+    resultSummary: typeof record.resultSummary === 'string' ? record.resultSummary : undefined,
+    evidence: typeof record.evidence === 'string' ? record.evidence : undefined,
+    nextAction: typeof record.nextAction === 'string' ? record.nextAction : undefined,
+    recentActions: Array.isArray(record.recentActions)
+      ? record.recentActions.filter((item): item is string => typeof item === 'string')
+      : undefined,
+  };
+}
+
+function runtimeStatusFromRegistry(record: SubagentRegistryRecord | undefined): SubagentRuntimeStatus | undefined {
+  if (!record) return undefined;
+  if (record.runtimeStatus) return record.runtimeStatus;
+  switch (record.status) {
+    case 'running':
+      return 'RUNNING';
+    case 'completed':
+      return 'DONE';
+    case 'need_parent_input':
+      return 'NEED_PARENT_INPUT';
+    case 'blocked':
+    case 'cancelled':
+    case 'failed':
+      return 'BLOCKED';
+    default:
+      return undefined;
+  }
+}
+
+function isTerminalRegistryStatus(record: SubagentRegistryRecord | undefined): boolean {
+  return Boolean(record?.status && record.status !== 'running');
+}
+
+function parseProtocolStatus(value: ToolResult | null | undefined): SubagentRuntimeStatus | undefined {
+  const text = getToolResultText(value);
+  const match = text.match(/###\s*STATUS\s*\n\s*(DONE|BLOCKED|NEED_PARENT_INPUT)\b/i);
+  return match ? match[1]!.toUpperCase() as SubagentRuntimeStatus : undefined;
+}
+
+function taskNotificationRuntimeStatus(status: unknown): SubagentRuntimeStatus {
+  const normalized = typeof status === 'string' ? status.toLowerCase() : '';
+  return normalized === 'completed' ? 'DONE' : 'BLOCKED';
 }
 
 /**
@@ -59,7 +228,37 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
   }
 
   const subagentChildToolMap = new Map<string, SubagentChildTool[]>();
+  const subagentProgressMap = new Map<string, SubagentRuntimeSnapshot>();
+  const subagentRecordMap = new Map<string, SubagentRegistryRecord>();
+  const subagentTaskIdByToolId = new Map<string, string>();
+  const taskNotificationByToolId = new Map<string, {
+    taskId?: string;
+    runtimeStatus: SubagentRuntimeStatus;
+    summary?: string;
+  }>();
   for (const msg of messages) {
+    if (msg.kind === 'task_notification' && msg.toolId) {
+      taskNotificationByToolId.set(msg.toolId, {
+        taskId: msg.taskId,
+        runtimeStatus: taskNotificationRuntimeStatus(msg.status),
+        summary: msg.summary || msg.content,
+      });
+      continue;
+    }
+    if (msg.kind === 'status' && msg.status === 'subagent_progress' && msg.toolId) {
+      const snapshot = toSubagentRuntimeSnapshot(msg.subagentRuntime);
+      if (snapshot) {
+        subagentProgressMap.set(msg.toolId, snapshot);
+      }
+      const registryRecord = toSubagentRegistryRecord(msg.subagentRecord);
+      if (registryRecord) {
+        subagentRecordMap.set(msg.toolId, registryRecord);
+      }
+      if (msg.taskId) {
+        subagentTaskIdByToolId.set(msg.toolId, msg.taskId);
+      }
+      continue;
+    }
     if (msg.kind !== 'tool_use' || !msg.parentToolUseId) continue;
     const childToolId = msg.toolId || msg.id;
     const childTool: SubagentChildTool = {
@@ -97,7 +296,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           let text = decodeHtmlEntities(content);
           text = unescapeWithMathProtection(text);
           text = formatUsageLimitText(text);
-          if (isInternalAgentFailureNarration(text)) {
+          if (isInternalAgentFailureNarration(text) || isAgentOrchestrationChatter(text)) {
             continue;
           }
           converted.push({
@@ -135,6 +334,29 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         }
 
         const toolResult = toToolResult(tr);
+        const isAsyncLaunch = isSubagentContainer && isAsyncSubagentLaunchResult(toolResult);
+        const registryRecord = isSubagentContainer && msg.toolId
+          ? subagentRecordMap.get(msg.toolId)
+            || toSubagentRegistryRecord(msg.subagentRecord)
+            || toSubagentRegistryRecord((tr as NormalizedMessage | undefined)?.subagentRecord)
+          : undefined;
+        const runtimeSnapshot = isSubagentContainer && msg.toolId
+          ? subagentProgressMap.get(msg.toolId)
+            || toSubagentRuntimeSnapshot(msg.subagentRuntime)
+            || toSubagentRuntimeSnapshot((tr as NormalizedMessage | undefined)?.subagentRuntime)
+          : undefined;
+        const terminalNotification = isSubagentContainer && msg.toolId
+          ? taskNotificationByToolId.get(msg.toolId)
+          : undefined;
+        const protocolStatus = isSubagentContainer ? parseProtocolStatus(toolResult) : undefined;
+        const runtimeStatus = terminalNotification?.runtimeStatus
+          || runtimeStatusFromRegistry(registryRecord)
+          || runtimeSnapshot?.runtimeStatus
+          || protocolStatus
+          || (toolResult && !isAsyncLaunch ? 'DONE' : 'RUNNING');
+        const isTerminalRuntimeStatus = runtimeStatus === 'DONE'
+          || runtimeStatus === 'BLOCKED'
+          || runtimeStatus === 'NEED_PARENT_INPUT';
 
         converted.push({
           id: msg.id,
@@ -145,13 +367,29 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           toolName: msg.toolName,
           toolInput: typeof msg.toolInput === 'string' ? msg.toolInput : JSON.stringify(msg.toolInput ?? '', null, 2),
           toolId: msg.toolId,
-          toolResult,
+          toolResult: isAsyncLaunch ? null : toolResult,
           isSubagentContainer,
           subagentState: isSubagentContainer
             ? {
+                taskId: registryRecord?.taskId || msg.taskId || (msg.toolId ? subagentTaskIdByToolId.get(msg.toolId) : undefined) || terminalNotification?.taskId,
                 childTools,
                 currentToolIndex: childTools.length > 0 ? childTools.length - 1 : -1,
-                isComplete: Boolean(toolResult),
+                isComplete: isTerminalRegistryStatus(registryRecord) || (Boolean(toolResult) && !isAsyncLaunch) || isTerminalRuntimeStatus,
+                isAsyncLaunch,
+                objective: registryRecord?.objective || runtimeSnapshot?.objective,
+                currentStep: registryRecord?.currentStep ?? runtimeSnapshot?.currentStep,
+                maxSteps: registryRecord?.maxSteps ?? runtimeSnapshot?.maxSteps,
+                remainingSteps: registryRecord?.remainingSteps ?? runtimeSnapshot?.remainingSteps,
+                startedAt: registryRecord?.startedAt ?? runtimeSnapshot?.startedAt,
+                elapsedMs: runtimeSnapshot?.elapsedMs
+                  ?? (registryRecord?.startedAt
+                    ? (registryRecord.endedAt ?? registryRecord.updatedAt ?? Date.now()) - registryRecord.startedAt
+                    : undefined),
+                lastTool: registryRecord?.lastTool || runtimeSnapshot?.lastTool,
+                lastToolSummary: registryRecord?.lastToolSummary || runtimeSnapshot?.lastToolSummary,
+                runtimeStatus,
+                stopReason: terminalNotification?.summary || registryRecord?.stopReason || runtimeSnapshot?.stopReason,
+                registryRecord,
               }
             : undefined,
         });
@@ -190,6 +428,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         break;
 
       case 'task_notification':
+        if (msg.toolId) {
+          break;
+        }
         converted.push({
           id: msg.id,
           type: 'assistant',

@@ -1162,6 +1162,12 @@ async function parseJsonlSessions(filePath) {
 // Parse an agent JSONL file and extract tool uses
 async function parseAgentTools(filePath) {
   const tools = [];
+  let runtimeSnapshot = null;
+
+  const parseProtocolStatus = (text) => {
+    const match = String(text || '').match(/###\s*STATUS\s*\n\s*(DONE|BLOCKED|NEED_PARENT_INPUT)\b/i);
+    return match ? match[1].toUpperCase() : null;
+  };
 
   try {
     const fileStream = fsSync.createReadStream(filePath);
@@ -1177,6 +1183,16 @@ async function parseAgentTools(filePath) {
           // Look for assistant messages with tool_use
           if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
             for (const part of entry.message.content) {
+              if (part.type === 'text' && part.text) {
+                const status = parseProtocolStatus(part.text);
+                if (status) {
+                  runtimeSnapshot = {
+                    ...(runtimeSnapshot || {}),
+                    runtimeStatus: status,
+                    lastToolSummary: String(part.text).replace(/\s+/g, ' ').trim().slice(0, 180),
+                  };
+                }
+              }
               if (part.type === 'tool_use') {
                 tools.push({
                   toolId: part.id,
@@ -1213,7 +1229,7 @@ async function parseAgentTools(filePath) {
     console.warn(`Error parsing agent file ${filePath}:`, error.message);
   }
 
-  return tools;
+  return { tools, runtimeSnapshot };
 }
 
 // Get messages for a specific session with pagination support
@@ -1279,9 +1295,12 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     for (const message of messages) {
       if (message.toolUseResult?.agentId) {
         const agentId = message.toolUseResult.agentId;
-        const agentTools = agentToolsCache.get(agentId);
-        if (agentTools && agentTools.length > 0) {
-          message.subagentTools = agentTools;
+        const agentInfo = agentToolsCache.get(agentId);
+        if (agentInfo?.tools && agentInfo.tools.length > 0) {
+          message.subagentTools = agentInfo.tools;
+        }
+        if (agentInfo?.runtimeSnapshot) {
+          message.subagentRuntime = agentInfo.runtimeSnapshot;
         }
       }
     }

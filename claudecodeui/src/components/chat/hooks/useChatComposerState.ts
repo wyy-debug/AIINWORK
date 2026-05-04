@@ -49,6 +49,7 @@ interface UseChatComposerStateArgs {
   selectedAgentId?: string;
   selectedAgentAppBindings?: AgentAppBinding[];
   selectedSkillNames?: string[];
+  getSelectedSkillNames?: () => string[];
   modelProfileId?: string;
   allowSessionAgentBinding?: boolean;
   isLoading: boolean;
@@ -293,6 +294,7 @@ export function useChatComposerState({
   selectedAgentId = '',
   selectedAgentAppBindings = [],
   selectedSkillNames = [],
+  getSelectedSkillNames,
   modelProfileId = '',
   allowSessionAgentBinding = false,
   isLoading,
@@ -831,7 +833,7 @@ export function useChatComposerState({
           ? selectedAgentAppBindings
           : activeAgent.appBindings
         : [];
-      const activeSkillNames = selectedSkillNames
+      const activeSkillNames = (getSelectedSkillNames?.() || selectedSkillNames)
         .map((skill) => skill.trim())
         .filter(Boolean)
         .slice(0, 60);
@@ -1145,6 +1147,7 @@ export function useChatComposerState({
       selectedAgentId,
       selectedAgentAppBindings,
       selectedSkillNames,
+      getSelectedSkillNames,
       modelProfileId,
       allowSessionAgentBinding,
       sendMessage,

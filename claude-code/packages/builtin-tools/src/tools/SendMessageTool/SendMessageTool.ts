@@ -39,6 +39,7 @@ import {
   writeToMailbox,
 } from 'src/utils/teammateMailbox.js'
 import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
+import { appendSubagentContinuationContract } from '../AgentTool/subagentRuntimeGuard.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -144,6 +145,23 @@ function findTeammateColor(
     }
   }
   return undefined
+}
+
+function isOpenEndedSubagentProbe(content: string): boolean {
+  const normalized = content.trim().replace(/\s+/g, ' ').toLowerCase()
+  if (!normalized || normalized.length > 160) return false
+  if (
+    /\b(status|done|blocked|need_parent_input)\b/.test(normalized) ||
+    /\bif\b|already have|already got|summarize and end|need parent input/.test(
+      normalized,
+    ) ||
+    /如果|若已|已完成|总结并结束|阻塞|缺少输入/.test(normalized)
+  ) {
+    return false
+  }
+  return /progress|status|finish|finished|complete|completed|result|wait|waiting|进度|状态|完成|结果|汇报|等待/.test(
+    normalized,
+  )
 }
 
 async function handleMessage(
@@ -853,12 +871,22 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         const registered = appState.agentNameRegistry.get(input.to)
         const agentId = registered ?? toAgentId(input.to)
         if (agentId) {
+          if (isOpenEndedSubagentProbe(input.message)) {
+            return {
+              data: {
+                success: false,
+                message:
+                  'Refused open-ended subagent polling. SendMessage to a subagent must include a concrete stop condition: DONE, BLOCKED, or NEED_PARENT_INPUT.',
+              },
+            }
+          }
+          const subagentMessage = appendSubagentContinuationContract(input.message)
           const task = appState.tasks[agentId]
           if (isLocalAgentTask(task) && !isMainSessionTask(task)) {
             if (task.status === 'running') {
               queuePendingMessage(
                 agentId,
-                input.message,
+                subagentMessage,
                 context.setAppStateForTasks ?? context.setAppState,
               )
               return {
@@ -872,7 +900,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
             try {
               const result = await resumeAgentBackground({
                 agentId,
-                prompt: input.message,
+                prompt: subagentMessage,
                 toolUseContext: context,
                 canUseTool,
                 invokingRequestId: assistantMessage?.requestId as
@@ -901,7 +929,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
             try {
               const result = await resumeAgentBackground({
                 agentId,
-                prompt: input.message,
+                prompt: subagentMessage,
                 toolUseContext: context,
                 canUseTool,
                 invokingRequestId: assistantMessage?.requestId as

@@ -1,4 +1,6 @@
 import type { SdkWorkflowProgress } from '../../types/tools.js'
+import type { SubagentRuntimeSnapshot } from '@mtl-code/builtin-tools/tools/AgentTool/subagentRuntimeGuard.js'
+import { getSubagentRecord } from '../../tasks/subagentRegistry.js'
 import { enqueueSdkEvent } from '../sdkEventQueue.js'
 
 /**
@@ -17,6 +19,7 @@ export function emitTaskProgress(params: {
   lastToolName?: string
   summary?: string
   workflowProgress?: SdkWorkflowProgress[]
+  subagentRuntime?: SubagentRuntimeSnapshot
 }): void {
   enqueueSdkEvent({
     type: 'system',
@@ -32,5 +35,7 @@ export function emitTaskProgress(params: {
     last_tool_name: params.lastToolName,
     summary: params.summary,
     workflow_progress: params.workflowProgress,
+    subagent_runtime: params.subagentRuntime,
+    subagent_record: getSubagentRecord(params.taskId),
   })
 }

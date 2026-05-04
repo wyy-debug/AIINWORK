@@ -70,6 +70,11 @@ export interface NormalizedMessage {
   actualSessionId?: string;
   parentToolUseId?: string;
   subagentTools?: unknown[];
+  subagentRuntime?: unknown;
+  subagentRecord?: unknown;
+  lastToolName?: string;
+  taskId?: string;
+  usage?: unknown;
   isFinal?: boolean;
   // Cursor-specific ordering
   sequence?: number;

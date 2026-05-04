@@ -33,12 +33,92 @@ export interface SubagentChildTool {
   timestamp: Date;
 }
 
+export type SubagentRuntimeStatus = 'RUNNING' | 'DONE' | 'BLOCKED' | 'NEED_PARENT_INPUT';
+
+export interface SubagentRuntimeSnapshot {
+  objective?: string;
+  currentStep?: number;
+  maxSteps?: number;
+  remainingSteps?: number;
+  startedAt?: number;
+  elapsedMs?: number;
+  runtimeStatus?: SubagentRuntimeStatus;
+  stopReason?: string;
+  lastTool?: string;
+  lastInput?: string;
+  lastToolSummary?: string;
+  recentActions?: string[];
+}
+
+export type SubagentRegistryStatus =
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'blocked'
+  | 'need_parent_input';
+
+export interface SubagentRegistryRecord {
+  taskId?: string;
+  agentId?: string;
+  parentToolUseId?: string;
+  sessionId?: string;
+  objective?: string;
+  agentType?: string;
+  status?: SubagentRegistryStatus;
+  runtimeStatus?: SubagentRuntimeStatus;
+  startedAt?: number;
+  updatedAt?: number;
+  endedAt?: number;
+  currentStep?: number;
+  maxSteps?: number;
+  remainingSteps?: number;
+  lastTool?: string;
+  lastInput?: string;
+  lastToolSummary?: string;
+  stopReason?: string;
+  resultSummary?: string;
+  evidence?: string;
+  nextAction?: string;
+  recentActions?: string[];
+}
+
+export interface SubagentActivityItem {
+  id?: string;
+  taskId?: string;
+  label: string;
+  runtimeStatus?: SubagentRuntimeStatus;
+  objective?: string;
+  currentStep?: number;
+  maxSteps?: number;
+  remainingSteps?: number;
+  lastTool?: string;
+  lastToolSummary?: string;
+  stopReason?: string;
+  elapsedMs?: number;
+  activeToolLabel?: string;
+  outputting?: boolean;
+}
+
 export interface SubagentActivitySummary {
   total: number;
   running: number;
   completed: number;
   outputting: number;
   latestLabel?: string;
+  runningLabels?: string[];
+  outputtingLabels?: string[];
+  activeToolLabels?: string[];
+  runtimeStatus?: SubagentRuntimeStatus;
+  objective?: string;
+  currentStep?: number;
+  maxSteps?: number;
+  remainingSteps?: number;
+  elapsedMs?: number;
+  lastTool?: string;
+  lastToolSummary?: string;
+  stopReason?: string;
+  items: SubagentActivityItem[];
 }
 
 export interface ChatMessage {
@@ -66,9 +146,22 @@ export interface ChatMessage {
   toolCallId?: string;
   isSubagentContainer?: boolean;
   subagentState?: {
+    taskId?: string;
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
+    isAsyncLaunch?: boolean;
+    objective?: string;
+    currentStep?: number;
+    maxSteps?: number;
+    remainingSteps?: number;
+    startedAt?: number;
+    elapsedMs?: number;
+    lastTool?: string;
+    lastToolSummary?: string;
+    runtimeStatus?: SubagentRuntimeStatus;
+    stopReason?: string;
+    registryRecord?: SubagentRegistryRecord;
   };
   [key: string]: unknown;
 }

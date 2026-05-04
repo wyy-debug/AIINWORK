@@ -19,6 +19,7 @@ import type { Tools } from '../../Tool.js'
 import { findToolByName } from '../../Tool.js'
 import type { AgentToolResult } from '@mtl-code/builtin-tools/tools/AgentTool/agentToolUtils.js'
 import type { AgentDefinition } from '@mtl-code/builtin-tools/tools/AgentTool/loadAgentsDir.js'
+import type { SubagentRuntimeSnapshot } from '@mtl-code/builtin-tools/tools/AgentTool/subagentRuntimeGuard.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import { asAgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
@@ -41,6 +42,13 @@ import {
   updateTaskState,
 } from '../../utils/task/framework.js'
 import { emitTaskProgress } from '../../utils/task/sdkProgress.js'
+import {
+  cancelSubagentRecord,
+  completeSubagentRecord,
+  failSubagentRecord,
+  registerSubagentRecord,
+  updateSubagentRuntimeRecord,
+} from '../subagentRegistry.js'
 import type { TaskState } from '../types.js'
 
 export type ToolActivity = {
@@ -60,6 +68,7 @@ export type AgentProgress = {
   lastActivity?: ToolActivity
   recentActivities?: ToolActivity[]
   summary?: string
+  subagentRuntime?: SubagentRuntimeSnapshot
 }
 
 const MAX_RECENT_ACTIVITIES = 5
@@ -387,6 +396,7 @@ export function killAsyncAgent(taskId: string, setAppState: SetAppState): void {
     }
   })
   if (killed) {
+    cancelSubagentRecord(taskId, 'Subagent was stopped by the user or parent task.')
     void evictTaskOutput(taskId)
   }
 }
@@ -436,16 +446,22 @@ export function updateAgentProgress(
   progress: AgentProgress,
   setAppState: SetAppState,
 ): void {
+  updateSubagentRuntimeRecord(taskId, progress.subagentRuntime)
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running') {
       return task
     }
 
     const existingSummary = task.progress?.summary
+    const existingRuntime = task.progress?.subagentRuntime
     return {
       ...task,
       progress: existingSummary
-        ? { ...progress, summary: existingSummary }
+        ? {
+            ...progress,
+            summary: existingSummary,
+            subagentRuntime: progress.subagentRuntime ?? existingRuntime,
+          }
         : progress,
     }
   })
@@ -486,6 +502,7 @@ export function updateAgentSummary(
         toolUseCount: task.progress?.toolUseCount ?? 0,
         tokenCount: task.progress?.tokenCount ?? 0,
         summary,
+        subagentRuntime: task.progress?.subagentRuntime,
       },
     }
   })
@@ -515,6 +532,7 @@ export function completeAgentTask(
   setAppState: SetAppState,
 ): void {
   const taskId = result.agentId
+  completeSubagentRecord(result)
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running') {
       return task
@@ -545,6 +563,7 @@ export function failAgentTask(
   error: string,
   setAppState: SetAppState,
 ): void {
+  failSubagentRecord(taskId, error)
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running') {
       return task
@@ -583,6 +602,7 @@ export function registerAsyncAgent({
   setAppState,
   parentAbortController,
   toolUseId,
+  sessionId,
 }: {
   agentId: string
   description: string
@@ -591,6 +611,7 @@ export function registerAsyncAgent({
   setAppState: SetAppState
   parentAbortController?: AbortController
   toolUseId?: string
+  sessionId?: string
 }): LocalAgentTaskState {
   void initTaskOutputAsSymlink(
     agentId,
@@ -629,6 +650,15 @@ export function registerAsyncAgent({
 
   // Register task in AppState
   registerTask(taskState, setAppState)
+  registerSubagentRecord({
+    taskId: agentId,
+    agentId,
+    parentToolUseId: toolUseId,
+    sessionId,
+    objective: description,
+    prompt,
+    selectedAgent,
+  })
 
   return taskState
 }
@@ -650,6 +680,7 @@ export function registerAgentForeground({
   setAppState,
   autoBackgroundMs,
   toolUseId,
+  sessionId,
 }: {
   agentId: string
   description: string
@@ -658,6 +689,7 @@ export function registerAgentForeground({
   setAppState: SetAppState
   autoBackgroundMs?: number
   toolUseId?: string
+  sessionId?: string
 }): {
   taskId: string
   backgroundSignal: Promise<void>
@@ -701,6 +733,15 @@ export function registerAgentForeground({
   backgroundSignalResolvers.set(agentId, resolveBackgroundSignal!)
 
   registerTask(taskState, setAppState)
+  registerSubagentRecord({
+    taskId: agentId,
+    agentId,
+    parentToolUseId: toolUseId,
+    sessionId,
+    objective: description,
+    prompt,
+    selectedAgent,
+  })
 
   // Auto-background after timeout if configured
   let cancelAutoBackground: (() => void) | undefined

@@ -1,7 +1,7 @@
 import React, { memo, useMemo, useCallback } from 'react';
 
 import type { Project } from '../../../types/app';
-import type { SubagentChildTool } from '../types/types';
+import type { ChatMessage } from '../types/types';
 
 import { getToolConfig } from './configs/toolConfigs';
 import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
@@ -28,11 +28,7 @@ interface ToolRendererProps {
   showRawParameters?: boolean;
   rawToolInput?: string;
   isSubagentContainer?: boolean;
-  subagentState?: {
-    childTools: SubagentChildTool[];
-    currentToolIndex: number;
-    isComplete: boolean;
-  };
+  subagentState?: ChatMessage['subagentState'];
 }
 
 function getToolCategory(toolName: string): string {

@@ -1,6 +1,12 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle'
 import { TASK_OUTPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskOutputTool/constants.js'
+import {
+  AGENT_CANCEL_TOOL_NAME,
+  AGENT_LIST_TOOL_NAME,
+  AGENT_RESULT_TOOL_NAME,
+  AGENT_WAIT_TOOL_NAME,
+} from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '@mtl-code/builtin-tools/tools/ExitPlanModeTool/constants.js'
 import { ENTER_PLAN_MODE_TOOL_NAME } from '@mtl-code/builtin-tools/tools/EnterPlanModeTool/constants.js'
 import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
@@ -35,6 +41,10 @@ import {
 
 export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   TASK_OUTPUT_TOOL_NAME,
+  AGENT_LIST_TOOL_NAME,
+  AGENT_WAIT_TOOL_NAME,
+  AGENT_RESULT_TOOL_NAME,
+  AGENT_CANCEL_TOOL_NAME,
   EXIT_PLAN_MODE_V2_TOOL_NAME,
   ENTER_PLAN_MODE_TOOL_NAME,
   // Allow Agent tool for agents when user is ant (enables nested agents)
@@ -104,6 +114,10 @@ export const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS = new Set([
  */
 export const COORDINATOR_MODE_ALLOWED_TOOLS = new Set([
   AGENT_TOOL_NAME,
+  AGENT_LIST_TOOL_NAME,
+  AGENT_WAIT_TOOL_NAME,
+  AGENT_RESULT_TOOL_NAME,
+  AGENT_CANCEL_TOOL_NAME,
   TASK_STOP_TOOL_NAME,
   SEND_MESSAGE_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,

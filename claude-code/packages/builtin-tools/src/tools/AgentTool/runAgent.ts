@@ -55,7 +55,7 @@ import {
 import { registerFrontmatterHooks } from 'src/utils/hooks/registerFrontmatterHooks.js'
 import { clearSessionHooks } from 'src/utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from 'src/utils/hooks.js'
-import { createUserMessage } from 'src/utils/messages.js'
+import { createAssistantMessage, createUserMessage } from 'src/utils/messages.js'
 import { getAgentModel } from 'src/utils/model/agent.js'
 import { getAPIProvider } from 'src/utils/model/providers.js'
 import {
@@ -87,6 +87,13 @@ import type { ContentReplacementState } from 'src/utils/toolResultStorage.js'
 import { createAgentId } from 'src/utils/uuid.js'
 import { resolveAgentTools } from './agentToolUtils.js'
 import { type AgentDefinition, isBuiltInAgent } from './loadAgentsDir.js'
+import {
+  createSubagentRuntimeGuard,
+  formatBlockedSubagentResult,
+  formatSubagentProtocolReminder,
+  resolveSubagentMaxTurns,
+  type SubagentRuntimeSnapshot,
+} from './subagentRuntimeGuard.js'
 
 /**
  * Initialize agent-specific MCP servers
@@ -273,6 +280,7 @@ export async function* runAgent({
   description,
   transcriptSubdir,
   onQueryProgress,
+  onRuntimeStatus,
 }: {
   agentDefinition: AgentDefinition
   promptMessages: Message[]
@@ -332,6 +340,8 @@ export async function* runAgent({
    * during long single-block streams (e.g. thinking) where no assistant
    * message is yielded for >60s. */
   onQueryProgress?: () => void
+  /** Optional callback fired when the subagent runtime guard/budget changes. */
+  onRuntimeStatus?: (snapshot: SubagentRuntimeSnapshot) => void
 }): AsyncGenerator<Message, void> {
   // Track subagent usage for feature discovery
 
@@ -351,6 +361,14 @@ export async function* runAgent({
   )
 
   const agentId = override?.agentId ? override.agentId : createAgentId()
+  const effectiveMaxTurns = resolveSubagentMaxTurns(
+    maxTurns,
+    agentDefinition.maxTurns,
+  )
+  const runtimeGuard = createSubagentRuntimeGuard({
+    objective: description || agentDefinition.agentType || 'Subagent task',
+    maxSteps: effectiveMaxTurns,
+  })
 
   // Route this agent's transcript into a grouping subdirectory if requested
   // (e.g. workflow subagents write to subagents/workflows/<runId>/).
@@ -560,6 +578,13 @@ export async function* runAgent({
     initialMessages.push(contextMessage)
   }
 
+  initialMessages.push(
+    createUserMessage({
+      content: formatSubagentProtocolReminder(),
+      isMeta: true,
+    }),
+  )
+
   // Register agent's frontmatter hooks (scoped to agent lifecycle)
   // Pass isAgent=true to convert Stop hooks to SubagentStop (since subagents trigger SubagentStop)
   // Same admin-trusted gate for frontmatter hooks: under ["hooks"] alone
@@ -750,6 +775,22 @@ export async function* runAgent({
 
   // Track the last recorded message UUID for parent chain continuity
   let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
+  const recordAndYieldBlockedResult = async function* (
+    snapshot: SubagentRuntimeSnapshot,
+  ): AsyncGenerator<Message, void> {
+    const blockedMessage = createAssistantMessage({
+      content: formatBlockedSubagentResult(snapshot),
+    })
+    await recordSidechainTranscript(
+      [blockedMessage],
+      agentId,
+      lastRecordedUuid,
+    ).catch(err =>
+      logForDebugging(`Failed to record sidechain transcript: ${err}`),
+    )
+    lastRecordedUuid = blockedMessage.uuid
+    yield blockedMessage
+  }
 
   // Create Langfuse sub-agent trace (no-op if not configured).
   // Sub-agent trace shares the same sessionId as the parent, so Langfuse
@@ -779,7 +820,7 @@ export async function* runAgent({
       canUseTool,
       toolUseContext: agentToolUseContext,
       querySource,
-      maxTurns: maxTurns ?? agentDefinition.maxTurns,
+      maxTurns: effectiveMaxTurns,
     })) {
       onQueryProgress?.()
       // Forward subagent API request starts to parent's metrics display
@@ -797,18 +838,13 @@ export async function* runAgent({
       if (message.type === 'attachment') {
         // Handle max turns reached signal from query.ts
         if ((message as any).attachment.type === 'max_turns_reached') {
+          const reachedMaxTurns = (message as any).attachment.maxTurns
           logForDebugging(
-            `[Agent
-: $
-{
-  agentDefinition.agentType
-}
-] Reached max turns limit ($
-{
-  (message as any).attachment.maxTurns
-}
-)`,
+            `[Agent: ${agentDefinition.agentType}] Reached max turns limit (${reachedMaxTurns})`,
           )
+          const snapshot = runtimeGuard.markBudgetReached(reachedMaxTurns)
+          onRuntimeStatus?.(snapshot)
+          yield* recordAndYieldBlockedResult(snapshot)
           break
         }
         yield message as Message
@@ -816,6 +852,8 @@ export async function* runAgent({
       }
 
       if (isRecordableMessage(message)) {
+        const runtimeUpdate = runtimeGuard.observeMessage(message)
+        onRuntimeStatus?.(runtimeUpdate.snapshot)
         // Record only the new message with correct parent (O(1) per message)
         await recordSidechainTranscript(
           [message],
@@ -828,6 +866,12 @@ export async function* runAgent({
           lastRecordedUuid = message.uuid
         }
         yield message
+        if (runtimeUpdate.shouldStop) {
+          if (runtimeUpdate.snapshot.stopReason) {
+            yield* recordAndYieldBlockedResult(runtimeUpdate.snapshot)
+          }
+          break
+        }
       }
     }
 

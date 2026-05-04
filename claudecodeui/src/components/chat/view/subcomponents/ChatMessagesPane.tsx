@@ -108,18 +108,6 @@ const formatElapsed = (milliseconds: number) => {
 const isProcessMessage = (message: ChatMessage) =>
   Boolean(message.isThinking || message.isToolUse);
 
-const isUserMessage = (message: ChatMessage) => message.type === 'user';
-
-const hasVisibleAssistantText = (message: ChatMessage) =>
-  message.type === 'assistant' &&
-  !message.isThinking &&
-  !message.isToolUse &&
-  !message.isTaskNotification &&
-  !message.isInteractivePrompt &&
-  !message.isContextCompaction &&
-  !message.isStreaming &&
-  Boolean(String(message.content || '').trim());
-
 function areProcessTraceGroupPropsEqual(
   previous: ProcessTraceGroupProps,
   next: ProcessTraceGroupProps,
@@ -359,58 +347,34 @@ export default function ChatMessagesPane({
       });
     };
 
-    const pushAssistantSegment = (segment: ChatMessage[], segmentStartIndex: number, isTailSegment: boolean) => {
-      const lastProcessIndex = segment.reduce(
-        (lastIndex, message, index) => isProcessMessage(message) ? index : lastIndex,
-        -1,
-      );
-
-      if (lastProcessIndex < 0) {
-        segment.forEach((message, index) => pushMessage(message, segmentStartIndex + index));
-        return;
-      }
-
-      const hasAnswerAfterProcess = segment
-        .slice(lastProcessIndex + 1)
-        .some(hasVisibleAssistantText);
-      const active = Boolean(isSessionRunning && isTailSegment && !hasAnswerAfterProcess);
-      const traceEndIndex = active ? segment.length : lastProcessIndex + 1;
-      const traceMessages = segment.slice(0, traceEndIndex);
-      const finalMessages = segment.slice(traceEndIndex);
-
-      if (traceMessages.length > 0) {
-        const firstKey = getMessageKey(traceMessages[0]);
-        items.push({
-          type: 'process',
-          messages: traceMessages,
-          active,
-          key: `process-${firstKey}`,
-        });
-      }
-
-      finalMessages.forEach((message, index) => {
-        pushMessage(message, segmentStartIndex + traceEndIndex + index);
+    const pushProcessGroup = (messages: ChatMessage[], endIndex: number) => {
+      const firstKey = getMessageKey(messages[0]);
+      const active = Boolean(isSessionRunning && endIndex === visibleMessages.length - 1);
+      items.push({
+        type: 'process',
+        messages,
+        active,
+        key: `process-${firstKey}`,
       });
     };
 
     for (let index = 0; index < visibleMessages.length; index += 1) {
       const message = visibleMessages[index];
 
-      if (isUserMessage(message)) {
+      if (!isProcessMessage(message)) {
         pushMessage(message, index);
         continue;
       }
 
-      const segmentStartIndex = index;
-      const segment: ChatMessage[] = [];
+      const processMessages: ChatMessage[] = [];
 
-      while (index < visibleMessages.length && !isUserMessage(visibleMessages[index])) {
-        segment.push(visibleMessages[index]);
+      while (index < visibleMessages.length && isProcessMessage(visibleMessages[index])) {
+        processMessages.push(visibleMessages[index]);
         index += 1;
       }
       index -= 1;
 
-      pushAssistantSegment(segment, segmentStartIndex, index === visibleMessages.length - 1);
+      pushProcessGroup(processMessages, index);
     }
 
     return items;
@@ -419,7 +383,7 @@ export default function ChatMessagesPane({
   return (
     <div
       ref={scrollContainerRef}
-      className="relative flex-1 space-y-3 overflow-x-hidden overflow-y-scroll px-0 py-3 [overflow-anchor:none] [scrollbar-gutter:stable] sm:space-y-4 sm:p-4"
+      className="relative min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-scroll px-0 py-3 [overflow-anchor:none] [scrollbar-gutter:stable] sm:space-y-4 sm:p-4"
     >
       {isLoadingSessionMessages && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
@@ -464,12 +428,10 @@ export default function ChatMessagesPane({
         />
       ) : (
         <>
-          {/* Top pagination status is an overlay, not part of message layout. */}
+          {/* Top pagination status stays in normal layout so it remains reachable even when the scroll container is short. */}
           {(isLoadingMoreMessages || hasMoreMessages) && !isLoadingAllMessages && !allMessagesLoaded && (
             <div
-              className={`pointer-events-none z-30 flex h-0 justify-center overflow-visible ${
-                isLoadingMoreMessages ? 'sticky top-2' : 'absolute left-0 right-0 top-3'
-              }`}
+              className="sticky top-2 z-30 flex justify-center px-3"
             >
               <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur">
                 {isLoadingMoreMessages ? (

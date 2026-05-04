@@ -153,6 +153,7 @@ mock.module("src/tools/AgentTool/AgentTool.tsx", () => ({
 const {
   countToolUses,
   getLastToolUseName,
+  isTaskNotificationTriggeredTurn,
 } = await import("../agentToolUtils");
 
 function makeAssistantMessage(content: any[]): any {
@@ -237,5 +238,64 @@ describe("getLastToolUseName", () => {
   test("handles message with null content", () => {
     const msg = { type: "assistant", message: { content: null } } as any;
     expect(getLastToolUseName(msg)).toBeUndefined();
+  });
+});
+
+describe("isTaskNotificationTriggeredTurn", () => {
+  test("detects raw task-notification XML in the latest user attachment", () => {
+    const messages = [
+      makeAssistantMessage([{ type: "text", text: "working" }]),
+      makeUserMessage("A background agent completed a task:\n<task-notification><status>completed</status></task-notification>"),
+    ];
+
+    expect(isTaskNotificationTriggeredTurn(messages)).toBe(true);
+  });
+
+  test("detects HTML-escaped task-notification XML", () => {
+    const messages = [
+      makeUserMessage("A background agent completed a task:\n&lt;task-notification&gt;&lt;status&gt;completed&lt;/status&gt;&lt;/task-notification&gt;"),
+    ];
+
+    expect(isTaskNotificationTriggeredTurn(messages)).toBe(true);
+  });
+
+  test("does not block after a real user message follows the notification", () => {
+    const messages = [
+      makeUserMessage("A background agent completed a task:\n<task-notification><status>completed</status></task-notification>"),
+      makeAssistantMessage([{ type: "text", text: "result received" }]),
+      makeUserMessage("现在基于这个结果再启动一个新的分析"),
+    ];
+
+    expect(isTaskNotificationTriggeredTurn(messages)).toBe(false);
+  });
+
+  test("detects task-notification inside structured text blocks", () => {
+    const messages = [
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "text",
+              text: "A background agent completed a task:\n<task-notification><status>failed</status></task-notification>",
+            },
+          ],
+        },
+      } as any,
+    ];
+
+    expect(isTaskNotificationTriggeredTurn(messages)).toBe(true);
+  });
+
+  test("detects task-notification by message origin even if XML is absent", () => {
+    const messages = [
+      {
+        type: "user",
+        message: { content: "A background agent completed a task." },
+        origin: { kind: "task-notification" },
+      } as any,
+    ];
+
+    expect(isTaskNotificationTriggeredTurn(messages)).toBe(true);
   });
 });

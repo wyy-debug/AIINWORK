@@ -54,6 +54,7 @@ import {
   classifyYoloAction,
 } from 'src/utils/permissions/yoloClassifier.js'
 import { emitTaskProgress as emitTaskProgressEvent } from 'src/utils/task/sdkProgress.js'
+import type { SubagentRuntimeSnapshot } from './subagentRuntimeGuard.js'
 import { isInProcessTeammate } from 'src/utils/teammateContext.js'
 import { getTokenCountFromUsage } from 'src/utils/tokens.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
@@ -367,6 +368,47 @@ export function getLastToolUseName(message: MessageType): string | undefined {
   return block?.type === 'tool_use' ? block.name : undefined
 }
 
+export function extractMessageText(message: MessageType | undefined): string {
+  const content = message?.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(block => {
+      if (!block || typeof block !== 'object') return ''
+      if ('text' in block && typeof block.text === 'string') return block.text
+      if ('content' in block && typeof block.content === 'string') {
+        return block.content
+      }
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+export function isTaskNotificationTriggeredTurn(
+  messages: MessageType[],
+): boolean {
+  for (let i = messages.length - 1; i >= Math.max(0, messages.length - 6); i--) {
+    const message = messages[i]
+    if (!message) continue
+    if (message.type !== 'user') {
+      continue
+    }
+    const originKind = (message as { origin?: { kind?: string } }).origin?.kind
+    if (originKind === 'task-notification') {
+      return true
+    }
+    const text = extractMessageText(message)
+    if (/&lt;task-notification\b/i.test(text) || /<task-notification\b/i.test(text)) {
+      return true
+    }
+    if (text.trim()) {
+      return false
+    }
+  }
+  return false
+}
+
 export function emitTaskProgress(
   tracker: ProgressTracker,
   taskId: string,
@@ -374,6 +416,7 @@ export function emitTaskProgress(
   description: string,
   startTime: number,
   lastToolName: string,
+  subagentRuntime?: SubagentRuntimeSnapshot,
 ): void {
   const progress = getProgressUpdate(tracker)
   emitTaskProgressEvent({
@@ -384,7 +427,78 @@ export function emitTaskProgress(
     totalTokens: progress.tokenCount,
     toolUses: progress.toolUseCount,
     lastToolName,
+    subagentRuntime,
   })
+}
+
+function isTerminalSubagentRuntime(
+  snapshot: SubagentRuntimeSnapshot | undefined,
+): boolean {
+  return (
+    snapshot?.runtimeStatus === 'DONE' ||
+    snapshot?.runtimeStatus === 'BLOCKED' ||
+    snapshot?.runtimeStatus === 'NEED_PARENT_INPUT'
+  )
+}
+
+export function emitTaskRuntimeProgress(
+  tracker: ProgressTracker,
+  taskId: string,
+  toolUseId: string | undefined,
+  description: string,
+  startTime: number,
+  subagentRuntime: SubagentRuntimeSnapshot | undefined,
+  lastToolName?: string,
+): void {
+  if (!subagentRuntime) return
+  const progress = getProgressUpdate(tracker)
+  emitTaskProgressEvent({
+    taskId,
+    toolUseId,
+    description:
+      progress.lastActivity?.activityDescription ||
+      subagentRuntime.objective ||
+      description,
+    startTime,
+    totalTokens: progress.tokenCount,
+    toolUses: progress.toolUseCount,
+    lastToolName: lastToolName ?? progress.lastActivity?.toolName,
+    subagentRuntime,
+  })
+}
+
+export function emitTerminalTaskRuntimeProgressOnce({
+  tracker,
+  taskId,
+  toolUseId,
+  description,
+  startTime,
+  subagentRuntime,
+  lastToolName,
+  didEmitTerminal,
+}: {
+  tracker: ProgressTracker
+  taskId: string
+  toolUseId: string | undefined
+  description: string
+  startTime: number
+  subagentRuntime: SubagentRuntimeSnapshot | undefined
+  lastToolName?: string
+  didEmitTerminal: boolean
+}): boolean {
+  if (didEmitTerminal || !isTerminalSubagentRuntime(subagentRuntime)) {
+    return didEmitTerminal
+  }
+  emitTaskRuntimeProgress(
+    tracker,
+    taskId,
+    toolUseId,
+    description,
+    startTime,
+    subagentRuntime,
+    lastToolName,
+  )
+  return true
 }
 
 export async function classifyHandoffIfNeeded({
@@ -522,6 +636,7 @@ export async function runAsyncAgentLifecycle({
   abortController: AbortController
   makeStream: (
     onCacheSafeParams: ((p: CacheSafeParams) => void) | undefined,
+    onRuntimeStatus: ((snapshot: SubagentRuntimeSnapshot) => void) | undefined,
   ) => AsyncGenerator<MessageType, void>
   metadata: Parameters<typeof finalizeAgentTool>[2]
   description: string
@@ -538,6 +653,8 @@ export async function runAsyncAgentLifecycle({
   const agentMessages: MessageType[] = []
   try {
     const tracker = createProgressTracker()
+    let latestRuntimeSnapshot: SubagentRuntimeSnapshot | undefined
+    let terminalRuntimeProgressEmitted = false
     const resolveActivity = createActivityDescriptionResolver(
       toolUseContext.options.tools,
     )
@@ -552,7 +669,24 @@ export async function runAsyncAgentLifecycle({
           stopSummarization = stop
         }
       : undefined
-    for await (const message of makeStream(onCacheSafeParams)) {
+    const onRuntimeStatus = (snapshot: SubagentRuntimeSnapshot) => {
+      latestRuntimeSnapshot = snapshot
+      updateAsyncAgentProgress(
+        taskId,
+        { ...getProgressUpdate(tracker), subagentRuntime: snapshot },
+        rootSetAppState,
+      )
+      terminalRuntimeProgressEmitted = emitTerminalTaskRuntimeProgressOnce({
+        tracker,
+        taskId,
+        toolUseId: toolUseContext.toolUseId,
+        description,
+        startTime: metadata.startTime,
+        subagentRuntime: snapshot,
+        didEmitTerminal: terminalRuntimeProgressEmitted,
+      })
+    }
+    for await (const message of makeStream(onCacheSafeParams, onRuntimeStatus)) {
       agentMessages.push(message)
       // Append immediately when UI holds the task (retain). Bootstrap reads
       // disk in parallel and UUID-merges the prefix — disk-write-before-yield
@@ -577,7 +711,12 @@ export async function runAsyncAgentLifecycle({
       )
       updateAsyncAgentProgress(
         taskId,
-        getProgressUpdate(tracker),
+        {
+          ...getProgressUpdate(tracker),
+          ...(latestRuntimeSnapshot && {
+            subagentRuntime: latestRuntimeSnapshot,
+          }),
+        },
         rootSetAppState,
       )
       const lastToolName = getLastToolUseName(message)
@@ -589,9 +728,20 @@ export async function runAsyncAgentLifecycle({
           description,
           metadata.startTime,
           lastToolName,
+          latestRuntimeSnapshot,
         )
       }
     }
+
+    terminalRuntimeProgressEmitted = emitTerminalTaskRuntimeProgressOnce({
+      tracker,
+      taskId,
+      toolUseId: toolUseContext.toolUseId,
+      description,
+      startTime: metadata.startTime,
+      subagentRuntime: latestRuntimeSnapshot,
+      didEmitTerminal: terminalRuntimeProgressEmitted,
+    })
 
     stopSummarization?.()
 

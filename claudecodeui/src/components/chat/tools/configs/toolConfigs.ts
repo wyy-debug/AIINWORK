@@ -523,6 +523,36 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     }
   },
 
+  SendMessage: {
+    input: {
+      type: 'one-line',
+      label: 'SendMessage',
+      getValue: (input) => {
+        const rawMessage = input?.summary || input?.message || input?.content || '';
+        const message = typeof rawMessage === 'string'
+          ? rawMessage
+          : JSON.stringify(rawMessage);
+        return message ? `已向子代理发送消息：${message}` : '已向子代理发送消息';
+      },
+      getSecondary: (input) => {
+        const type = typeof input?.type === 'string' ? input.type : '';
+        return type ? `类型：${type}` : undefined;
+      },
+      action: 'none',
+      colorScheme: {
+        primary: 'text-blue-700 dark:text-blue-300',
+        secondary: 'text-blue-500 dark:text-blue-400',
+        background: '',
+        border: 'border-blue-400 dark:border-blue-500',
+        icon: 'text-blue-500 dark:text-blue-400'
+      }
+    },
+    result: {
+      hideOnSuccess: true,
+      type: 'special'
+    }
+  },
+
   // ============================================================================
   // DEFAULT FALLBACK
   // ============================================================================

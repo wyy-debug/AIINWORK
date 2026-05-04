@@ -1,6 +1,11 @@
 import { feature } from 'bun:bundle'
 import * as React from 'react'
-import { buildTool, type ToolDef, toolMatchesName } from 'src/Tool.js'
+import {
+  buildTool,
+  type ToolDef,
+  type ToolUseContext,
+  toolMatchesName,
+} from 'src/Tool.js'
 import type {
   AssistantMessage,
   Message as MessageType,
@@ -40,6 +45,11 @@ import {
   updateAgentProgress as updateAsyncAgentProgress,
   updateProgressFromMessage,
 } from 'src/tasks/LocalAgentTask/LocalAgentTask.js'
+import { isMainSessionTask } from 'src/tasks/LocalMainSessionTask.js'
+import {
+  countRunningSubagents,
+  hasRunningSubagentForObjective,
+} from 'src/tasks/subagentRegistry.js'
 import {
   checkRemoteAgentEligibility,
   formatPreconditionError,
@@ -49,7 +59,12 @@ import {
 } from 'src/tasks/RemoteAgentTask/RemoteAgentTask.js'
 import { assembleToolPool } from 'src/tools.js'
 import { asAgentId } from 'src/types/ids.js'
-import { runWithAgentContext, type SubagentContext } from 'src/utils/agentContext.js'
+import {
+  getAgentContext,
+  isSubagentContext,
+  runWithAgentContext,
+  type SubagentContext,
+} from 'src/utils/agentContext.js'
 import { isAgentSwarmsEnabled } from 'src/utils/agentSwarmsEnabled.js'
 import { getCwd, runWithCwdOverride } from 'src/utils/cwd.js'
 import { logForDebugging } from 'src/utils/debug.js'
@@ -95,9 +110,11 @@ import {
   agentToolResultSchema,
   classifyHandoffIfNeeded,
   emitTaskProgress,
+  emitTerminalTaskRuntimeProgressOnce,
   extractPartialResult,
   finalizeAgentTool,
   getLastToolUseName,
+  isTaskNotificationTriggeredTurn,
   runAsyncAgentLifecycle,
 } from './agentToolUtils.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
@@ -121,6 +138,7 @@ import {
 } from './loadAgentsDir.js'
 import { getPrompt } from './prompt.js'
 import { runAgent } from './runAgent.js'
+import type { SubagentRuntimeSnapshot } from './subagentRuntimeGuard.js'
 import {
   renderGroupedAgentToolUse,
   renderToolResultMessage,
@@ -142,6 +160,209 @@ const proactiveModule =
 
 // Progress display constants (for showing background hint)
 const PROGRESS_THRESHOLD_MS = 2000 // Show background hint after 2 seconds
+const DEFAULT_PARENT_SUBAGENT_MAX_PER_TURN = 3
+const DEFAULT_PARENT_SUBAGENT_MAX_ACTIVE = 2
+const DEFAULT_SESSION_SUBAGENT_MAX_ACTIVE = 3
+const PARENT_SUBAGENT_BUDGET_TTL_MS = 10 * 60_000
+
+type ParentSubagentBudget = {
+  createdAt: number
+  total: number
+  active: number
+  signatures: Set<string>
+}
+
+type ParentSubagentBudgetRegistration = {
+  key: string
+  signature: string
+}
+
+const parentSubagentBudgets = new Map<string, ParentSubagentBudget>()
+
+function parsePositiveLimit(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (!value) return fallback
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback
+  return Math.floor(parsed)
+}
+
+function getParentSubagentLimits(): {
+  maxPerTurn: number
+  maxActive: number
+} {
+  const maxPerTurn = parsePositiveLimit(
+    process.env.MTL_CODE_PARENT_SUBAGENT_MAX_PER_TURN,
+    DEFAULT_PARENT_SUBAGENT_MAX_PER_TURN,
+  )
+  const configuredMaxActive = parsePositiveLimit(
+    process.env.MTL_CODE_PARENT_SUBAGENT_MAX_ACTIVE,
+    DEFAULT_PARENT_SUBAGENT_MAX_ACTIVE,
+  )
+  return {
+    maxPerTurn,
+    maxActive: Math.min(configuredMaxActive, maxPerTurn),
+  }
+}
+
+function getSessionSubagentMaxActive(): number {
+  return parsePositiveLimit(
+    process.env.MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE,
+    DEFAULT_SESSION_SUBAGENT_MAX_ACTIVE,
+  )
+}
+
+function pruneParentSubagentBudgets(now = Date.now()): void {
+  for (const [key, budget] of parentSubagentBudgets) {
+    if (now - budget.createdAt > PARENT_SUBAGENT_BUDGET_TTL_MS) {
+      parentSubagentBudgets.delete(key)
+    }
+  }
+}
+
+function normalizeSubagentSignatureText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function createParentSubagentSignature({
+  agentType,
+  description,
+  prompt,
+}: {
+  agentType: string
+  description: string
+  prompt: string
+}): string {
+  const normalizedPrompt = normalizeSubagentSignatureText(prompt).slice(0, 600)
+  return [
+    normalizeSubagentSignatureText(agentType),
+    normalizeSubagentSignatureText(description),
+    normalizedPrompt,
+  ].join('\n')
+}
+
+function getMessageContentBlocks(message: MessageType): unknown[] | undefined {
+  const record = message as {
+    message?: { content?: unknown }
+    content?: unknown
+  }
+  const content = record.message?.content ?? record.content
+  return Array.isArray(content) ? content : undefined
+}
+
+function isToolResultOnlyUserMessage(message: MessageType): boolean {
+  if (message.type !== 'user') return false
+  const content = getMessageContentBlocks(message)
+  return (
+    Boolean(content?.length) &&
+    content!.every(block => {
+      if (!block || typeof block !== 'object') return false
+      return (block as { type?: unknown }).type === 'tool_result'
+    })
+  )
+}
+
+function getCurrentUserTurnKey(messages: MessageType[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (!message || message.type !== 'user' || isToolResultOnlyUserMessage(message)) {
+      continue
+    }
+    const uuid = (message as { uuid?: string }).uuid
+    if (uuid) return uuid
+    const content = getMessageContentBlocks(message)
+    const fallbackText = content
+      ?.map(block => {
+        if (typeof block === 'string') return block
+        if (block && typeof block === 'object' && 'text' in block) {
+          return String((block as { text?: unknown }).text ?? '')
+        }
+        return ''
+      })
+      .join('\n')
+      .trim()
+    return `message-${i}:${normalizeSubagentSignatureText(fallbackText ?? '').slice(0, 160)}`
+  }
+  return undefined
+}
+
+function getParentSubagentBudgetKey({
+  assistantMessage,
+  toolUseContext,
+}: {
+  assistantMessage: AssistantMessage
+  toolUseContext: ToolUseContext
+}): string {
+  const context = getAgentContext()
+  const parentSessionId =
+    getParentSessionId() ||
+    (isSubagentContext(context) ? context.parentSessionId : undefined) ||
+    'main'
+  const userTurnKey = getCurrentUserTurnKey(toolUseContext.messages)
+  if (userTurnKey) {
+    return `${parentSessionId}:user-turn:${userTurnKey}`
+  }
+  const requestId =
+    (assistantMessage.requestId as string | undefined) ||
+    (assistantMessage.message as { id?: string }).id ||
+    toolUseContext.toolUseId
+  return `${parentSessionId}:${requestId}`
+}
+
+function registerParentSubagentBudget({
+  key,
+  signature,
+  description,
+}: {
+  key: string
+  signature: string
+  description: string
+}): ParentSubagentBudgetRegistration {
+  pruneParentSubagentBudgets()
+  const limits = getParentSubagentLimits()
+  let budget = parentSubagentBudgets.get(key)
+  if (!budget) {
+    budget = {
+      createdAt: Date.now(),
+      total: 0,
+      active: 0,
+      signatures: new Set<string>(),
+    }
+    parentSubagentBudgets.set(key, budget)
+  }
+
+  if (budget.signatures.has(signature)) {
+    throw new Error(
+      `A subagent for "${description}" has already been launched in this turn. Reuse its result or wait for the completion notification instead of launching another agent for the same objective.`,
+    )
+  }
+  if (budget.total >= limits.maxPerTurn) {
+    throw new Error(
+      `This turn has already launched ${budget.total} subagents. The limit is ${limits.maxPerTurn}. Stop spawning agents and summarize the results already available, or ask the user for the missing input.`,
+    )
+  }
+  if (budget.active >= limits.maxActive) {
+    throw new Error(
+      `There are already ${budget.active} subagents active for this turn. The active limit is ${limits.maxActive}. Wait for one to finish before launching another.`,
+    )
+  }
+
+  budget.total += 1
+  budget.active += 1
+  budget.signatures.add(signature)
+  return { key, signature }
+}
+
+function releaseParentSubagentBudget(
+  registration: ParentSubagentBudgetRegistration | undefined,
+): void {
+  if (!registration) return
+  const budget = parentSubagentBudgets.get(registration.key)
+  if (!budget) return
+  budget.active = Math.max(0, budget.active - 1)
+}
 
 // Check if background tasks are disabled at module load time
 const isBackgroundTasksDisabled =
@@ -553,6 +774,22 @@ export const AgentTool = buildTool({
       )
     }
 
+    if (isTaskNotificationTriggeredTurn(toolUseContext.messages)) {
+      throw new Error(
+        'Do not launch another agent in response to a background agent completion notification. Summarize the returned result, ask the user for the missing input once, or stop. A new user request is required before spawning more agents.',
+      )
+    }
+
+    const currentAgentContext = getAgentContext()
+    if (
+      isSubagentContext(currentAgentContext) &&
+      !isEnvTruthy(process.env.MTL_CODE_ALLOW_NESTED_SUBAGENTS)
+    ) {
+      throw new Error(
+        'Nested subagents are disabled. Complete the current subagent task directly with the available tools, or return NEED_PARENT_INPUT/BLOCKED so the parent can decide the next step.',
+      )
+    }
+
     // Capture for type narrowing — `let selectedAgent` prevents TS from
     // narrowing property types across the if-else assignment above.
     const requiredMcpServers = selectedAgent.requiredMcpServers
@@ -711,6 +948,7 @@ export const AgentTool = buildTool({
       }
       return { data: remoteResult } as unknown as { data: Output }
     }
+
     // System prompt + prompt messages: branch on fork path.
     //
     // Fork path: child inherits the PARENT's system prompt (not FORK_AGENT's)
@@ -954,19 +1192,96 @@ export const AgentTool = buildTool({
       return { worktreePath, worktreeBranch }
     }
 
-    if (shouldRunAsync) {
-      const asyncAgentId = earlyAgentId
-      const agentBackgroundTask = registerAsyncAgent({
-        agentId: asyncAgentId,
+    const parentBudgetRegistration = registerParentSubagentBudget({
+      key: getParentSubagentBudgetKey({ assistantMessage, toolUseContext }),
+      signature: createParentSubagentSignature({
+        agentType: selectedAgent.agentType,
         description,
         prompt,
-        selectedAgent,
-        setAppState: rootSetAppState,
-        // Don't link to parent's abort controller -- background agents should
-        // survive when the user presses ESC to cancel the main thread.
-        // They are killed explicitly via chat:killAgents.
-        toolUseId: toolUseContext.toolUseId,
-      })
+      }),
+      description,
+    })
+
+    const activeSubagents = Object.values(
+      toolUseContext.getAppState().tasks,
+    ).filter(
+      task =>
+        isLocalAgentTask(task) &&
+        !isMainSessionTask(task) &&
+        (task.status === 'pending' || task.status === 'running'),
+    )
+    const sessionMaxActiveSubagents = getSessionSubagentMaxActive()
+    const parentSessionId = getParentSessionId()
+    const registryRunningSubagents = countRunningSubagents(parentSessionId)
+    const effectiveRunningSubagents = Math.max(
+      activeSubagents.length,
+      registryRunningSubagents,
+    )
+    if (effectiveRunningSubagents >= sessionMaxActiveSubagents) {
+      releaseParentSubagentBudget(parentBudgetRegistration)
+      throw new Error(
+        `There are already ${effectiveRunningSubagents} subagents running in this session. The limit is ${sessionMaxActiveSubagents}. Wait for a result, summarize what is already available, or stop redundant agents before launching more.`,
+      )
+    }
+    const normalizedCurrentObjective = description.trim().toLowerCase()
+    const duplicateActiveSubagent = activeSubagents.find(
+      task => task.description.trim().toLowerCase() === normalizedCurrentObjective,
+    )
+    if (
+      duplicateActiveSubagent ||
+      hasRunningSubagentForObjective(description, parentSessionId)
+    ) {
+      releaseParentSubagentBudget(parentBudgetRegistration)
+      throw new Error(
+        `A subagent for "${description}" is already running${duplicateActiveSubagent ? ` (${duplicateActiveSubagent.id})` : ''}. Do not launch another one for the same objective; wait for its result or cancel the existing agent first.`,
+      )
+    }
+
+    if (shouldRunAsync) {
+      const activeBackgroundAgents = Object.values(
+        toolUseContext.getAppState().tasks,
+      ).filter(
+        task =>
+          isLocalAgentTask(task) &&
+          (task.status === 'pending' || task.status === 'running') &&
+          task.isBackgrounded,
+      )
+      const normalizedDescription = description.trim().toLowerCase()
+      const duplicateBackgroundAgent = activeBackgroundAgents.find(
+        task => task.description.trim().toLowerCase() === normalizedDescription,
+      )
+      if (duplicateBackgroundAgent) {
+        releaseParentSubagentBudget(parentBudgetRegistration)
+        throw new Error(
+          `A background agent for "${description}" is already running (${duplicateBackgroundAgent.id}). Do not launch another one for the same objective; wait for its completion notification or continue with non-overlapping work.`,
+        )
+      }
+      if (activeBackgroundAgents.length >= 4) {
+        releaseParentSubagentBudget(parentBudgetRegistration)
+        throw new Error(
+          `There are already ${activeBackgroundAgents.length} background agents running. Do not launch more agents now; wait for completion notifications or stop redundant agents first.`,
+        )
+      }
+
+      const asyncAgentId = earlyAgentId
+      let agentBackgroundTask: ReturnType<typeof registerAsyncAgent>
+      try {
+        agentBackgroundTask = registerAsyncAgent({
+          agentId: asyncAgentId,
+          description,
+          prompt,
+          selectedAgent,
+          setAppState: rootSetAppState,
+          // Don't link to parent's abort controller -- background agents should
+          // survive when the user presses ESC to cancel the main thread.
+          // They are killed explicitly via chat:killAgents.
+          toolUseId: toolUseContext.toolUseId,
+          sessionId: getParentSessionId(),
+        })
+      } catch (error) {
+        releaseParentSubagentBudget(parentBudgetRegistration)
+        throw error
+      }
 
       // Register name → agentId for SendMessage routing. Post-registerAsyncAgent
       // so we don't leave a stale entry if spawn fails. Sync agents skipped —
@@ -999,32 +1314,37 @@ export const AgentTool = buildTool({
       // inside. No capture/restore needed; the detached closure sees the
       // parent turn's workload automatically, isolated from its finally.
       void runWithAgentContext(asyncAgentContext, () =>
-        wrapWithCwd(() =>
-          runAsyncAgentLifecycle({
-            taskId: agentBackgroundTask.agentId,
-            abortController: agentBackgroundTask.abortController!,
-            makeStream: onCacheSafeParams =>
-              runAgent({
-                ...runAgentParams,
-                override: {
-                  ...runAgentParams.override,
-                  agentId: asAgentId(agentBackgroundTask.agentId),
-                  abortController: agentBackgroundTask.abortController!,
-                },
-                onCacheSafeParams,
-              }),
-            metadata,
-            description,
-            toolUseContext,
-            rootSetAppState,
-            agentIdForCleanup: asyncAgentId,
-            enableSummarization:
-              isCoordinator ||
-              isForkSubagentEnabled() ||
-              getSdkAgentProgressSummariesEnabled(),
-            getWorktreeResult: cleanupWorktreeIfNeeded,
-          }),
-        ),
+        wrapWithCwd(async () => {
+          try {
+            await runAsyncAgentLifecycle({
+              taskId: agentBackgroundTask.agentId,
+              abortController: agentBackgroundTask.abortController!,
+              makeStream: (onCacheSafeParams, onRuntimeStatus) =>
+                runAgent({
+                  ...runAgentParams,
+                  override: {
+                    ...runAgentParams.override,
+                    agentId: asAgentId(agentBackgroundTask.agentId),
+                    abortController: agentBackgroundTask.abortController!,
+                  },
+                  onCacheSafeParams,
+                  onRuntimeStatus,
+                }),
+              metadata,
+              description,
+              toolUseContext,
+              rootSetAppState,
+              agentIdForCleanup: asyncAgentId,
+              enableSummarization:
+                isCoordinator ||
+                isForkSubagentEnabled() ||
+                getSdkAgentProgressSummariesEnabled(),
+              getWorktreeResult: cleanupWorktreeIfNeeded,
+            })
+          } finally {
+            releaseParentSubagentBudget(parentBudgetRegistration)
+          }
+        }),
       )
 
       const canReadOutputFile = toolUseContext.options.tools.some(
@@ -1068,6 +1388,7 @@ export const AgentTool = buildTool({
           const agentMessages: MessageType[] = []
           const agentStartTime = Date.now()
           const syncTracker = createProgressTracker()
+          let latestRuntimeSnapshot: SubagentRuntimeSnapshot | undefined
           const syncResolveActivity = createActivityDescriptionResolver(
             toolUseContext.options.tools,
           )
@@ -1111,6 +1432,7 @@ export const AgentTool = buildTool({
               selectedAgent,
               setAppState: rootSetAppState,
               toolUseId: toolUseContext.toolUseId,
+              sessionId: getParentSessionId(),
               autoBackgroundMs: getAutoBackgroundMs() || undefined,
             })
             foregroundTaskId = registration.taskId
@@ -1149,6 +1471,19 @@ export const AgentTool = buildTool({
                     stopForegroundSummarization = stop
                   }
                 : undefined,
+            onRuntimeStatus: snapshot => {
+              latestRuntimeSnapshot = snapshot
+              if (foregroundTaskId) {
+                updateAsyncAgentProgress(
+                  foregroundTaskId,
+                  {
+                    ...getProgressUpdate(syncTracker),
+                    subagentRuntime: snapshot,
+                  },
+                  rootSetAppState,
+                )
+              }
+            },
           })[Symbol.asyncIterator]()
 
           // Track if an error occurred during iteration
@@ -1226,6 +1561,10 @@ export const AgentTool = buildTool({
                       ])
                       // Initialize progress tracking from existing messages
                       const tracker = createProgressTracker()
+                      let backgroundedRuntimeSnapshot:
+                        | SubagentRuntimeSnapshot
+                        | undefined = latestRuntimeSnapshot
+                      let terminalRuntimeProgressEmitted = false
                       const resolveActivity2 =
                         createActivityDescriptionResolver(
                           toolUseContext.options.tools,
@@ -1257,6 +1596,27 @@ export const AgentTool = buildTool({
                               stopBackgroundedSummarization = stop
                             }
                           : undefined,
+                        onRuntimeStatus: snapshot => {
+                          backgroundedRuntimeSnapshot = snapshot
+                          updateAsyncAgentProgress(
+                            backgroundedTaskId,
+                            {
+                              ...getProgressUpdate(tracker),
+                              subagentRuntime: snapshot,
+                            },
+                            rootSetAppState,
+                          )
+                          terminalRuntimeProgressEmitted =
+                            emitTerminalTaskRuntimeProgressOnce({
+                              tracker,
+                              taskId: backgroundedTaskId,
+                              toolUseId: toolUseContext.toolUseId,
+                              description,
+                              startTime,
+                              subagentRuntime: snapshot,
+                              didEmitTerminal: terminalRuntimeProgressEmitted,
+                            })
+                        },
                       })) {
                         agentMessages.push(msg)
 
@@ -1269,7 +1629,12 @@ export const AgentTool = buildTool({
                         )
                         updateAsyncAgentProgress(
                           backgroundedTaskId,
-                          getProgressUpdate(tracker),
+                          {
+                            ...getProgressUpdate(tracker),
+                            ...(backgroundedRuntimeSnapshot && {
+                              subagentRuntime: backgroundedRuntimeSnapshot,
+                            }),
+                          },
                           rootSetAppState,
                         )
 
@@ -1282,9 +1647,20 @@ export const AgentTool = buildTool({
                             description,
                             startTime,
                             lastToolName,
+                            backgroundedRuntimeSnapshot,
                           )
                         }
                       }
+                      terminalRuntimeProgressEmitted =
+                        emitTerminalTaskRuntimeProgressOnce({
+                          tracker,
+                          taskId: backgroundedTaskId,
+                          toolUseId: toolUseContext.toolUseId,
+                          description,
+                          startTime,
+                          subagentRuntime: backgroundedRuntimeSnapshot,
+                          didEmitTerminal: terminalRuntimeProgressEmitted,
+                        })
                       const agentResult = finalizeAgentTool(
                         agentMessages,
                         backgroundedTaskId,
@@ -1387,6 +1763,7 @@ export const AgentTool = buildTool({
                       stopBackgroundedSummarization?.()
                       clearInvokedSkillsForAgent(syncAgentId)
                       clearDumpState(syncAgentId)
+                      releaseParentSubagentBudget(parentBudgetRegistration)
                       // Note: worktree cleanup is done before enqueueAgentNotification
                       // in both try and catch paths so we can include worktree info
                     }
@@ -1440,6 +1817,7 @@ export const AgentTool = buildTool({
                     description,
                     agentStartTime,
                     lastToolName,
+                    latestRuntimeSnapshot,
                   )
                   // Keep AppState task.progress in sync when SDK summaries are
                   // enabled, so updateAgentSummary reads correct token/tool counts
@@ -1447,7 +1825,12 @@ export const AgentTool = buildTool({
                   if (getSdkAgentProgressSummariesEnabled()) {
                     updateAsyncAgentProgress(
                       foregroundTaskId,
-                      getProgressUpdate(syncTracker),
+                      {
+                        ...getProgressUpdate(syncTracker),
+                        ...(latestRuntimeSnapshot && {
+                          subagentRuntime: latestRuntimeSnapshot,
+                        }),
+                      },
                       rootSetAppState,
                     )
                   }
@@ -1591,6 +1974,7 @@ export const AgentTool = buildTool({
             // Skip if backgrounded — the background continuation is still running in it
             if (!wasBackgrounded) {
               worktreeResult = await cleanupWorktreeIfNeeded()
+              releaseParentSubagentBudget(parentBudgetRegistration)
             }
           }
 
@@ -1742,17 +2126,22 @@ The agent is now running and will receive instructions via mailbox.`,
         content: [
           {
             type: 'text',
-            text: `Remote agent launched in CCR.\ntaskId: ${r.taskId}\nsession_url: ${r.sessionUrl}\noutput_file: ${r.outputFile}\nThe agent is running remotely. You will be notified automatically when it completes.\nBriefly tell the user what you launched and end your response.`,
+            text: `Remote agent launched in CCR.\ntaskId: ${r.taskId}\nsession_url: ${r.sessionUrl}\noutput_file: ${r.outputFile}\nThe agent is running remotely. You will be notified automatically when it completes.\nDo not narrate this launch or progress to the user. Do not poll, wait aloud, or launch another agent for the same objective. End this turn now unless you have useful non-overlapping work to do.`,
           },
         ],
       }
     }
     if (data.status === 'async_launched') {
-      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (internal ID - do not mention to user. Use SendMessage with to: '${data.agentId}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes.`
-      const instructions = data.canReadOutputFile
-        ? `Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: ${data.outputFile}\nIf asked, you can check progress before completion by using ${FILE_READ_TOOL_NAME} or ${BASH_TOOL_NAME} tail on the output file.`
-        : `Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.`
-      const text = `${prefix}\n${instructions}`
+      const escapedDescription = data.description
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+      const text = `<subagent-control>
+<status>running</status>
+<task_id>${data.agentId}</task_id>
+<objective>${escapedDescription}</objective>
+<instruction>Control event only. Do not show this text, task id, or output path to the user. Do not narrate waiting or progress. Use AgentWait or AgentResult for the final result; use SendMessage only for concrete new instructions with DONE/BLOCKED/NEED_PARENT_INPUT stop conditions.</instruction>
+</subagent-control>`
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',

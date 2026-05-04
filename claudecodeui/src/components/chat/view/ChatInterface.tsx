@@ -9,7 +9,9 @@ import type {
   ChatInterfaceProps,
   ChatMessage,
   Provider,
+  SubagentActivityItem,
   SubagentActivitySummary,
+  SubagentChildTool,
 } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
 import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../types/agent';
@@ -61,18 +63,7 @@ function cacheRuntimeDiagnostics(sessionKey: string, diagnostics: AgentRuntimeDi
 }
 
 function parseSubagentLabel(message: ChatMessage): string {
-  const input = message.toolInput;
-  const payload = (() => {
-    if (!input) return null;
-    if (typeof input === 'object') return input as Record<string, unknown>;
-    if (typeof input !== 'string') return null;
-    try {
-      const parsed = JSON.parse(input) as unknown;
-      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
-    } catch {
-      return null;
-    }
-  })();
+  const payload = parsePlainObject(message.toolInput);
 
   const candidates = [
     payload?.description,
@@ -90,18 +81,82 @@ function parseSubagentLabel(message: ChatMessage): string {
   return 'worker';
 }
 
+function parsePlainObject(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === 'object') return value as Record<string, unknown>;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function basenameOf(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  return normalized.split('/').filter(Boolean).pop() || normalized;
+}
+
+function truncateMiddle(value: string, maxLength = 56): string {
+  if (value.length <= maxLength) return value;
+  const headLength = Math.max(12, Math.floor((maxLength - 1) * 0.6));
+  const tailLength = Math.max(8, maxLength - headLength - 1);
+  return `${value.slice(0, headLength)}...${value.slice(-tailLength)}`;
+}
+
+function summarizeSubagentTool(tool: SubagentChildTool): string {
+  const input = parsePlainObject(tool.toolInput);
+  const toolName = tool.toolName || 'Tool';
+  const filePath = firstString(input?.file_path, input?.path, input?.notebook_path);
+  if (filePath) {
+    return `${toolName} ${basenameOf(filePath)}`;
+  }
+
+  const query = firstString(input?.query, input?.pattern, input?.glob, input?.url);
+  if (query) {
+    return `${toolName} ${truncateMiddle(query)}`;
+  }
+
+  const command = firstString(input?.command);
+  if (command) {
+    return `${toolName} ${truncateMiddle(command)}`;
+  }
+
+  const message = firstString(input?.summary, input?.message, input?.content);
+  if (message) {
+    return `${toolName} ${truncateMiddle(message)}`;
+  }
+
+  return toolName;
+}
+
 function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySummary {
   let total = 0;
   let running = 0;
-  let completed = 0;
+  const completed = 0;
   let outputting = 0;
   let latestLabel = '';
+  const runningLabels: string[] = [];
+  const outputtingLabels: string[] = [];
+  const activeToolLabels: string[] = [];
+  const items: SubagentActivityItem[] = [];
+  let latestRuntimeState: ChatMessage['subagentState'] | undefined;
 
   for (const message of messages) {
     if (!message.isSubagentContainer) continue;
-    total += 1;
 
     const state = message.subagentState;
+    const label = state?.objective || parseSubagentLabel(message);
     const childTools = state?.childTools || [];
     const currentTool = state && state.currentToolIndex >= 0
       ? childTools[state.currentToolIndex] || null
@@ -109,9 +164,16 @@ function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySum
     const isComplete = Boolean(state?.isComplete || message.toolResult);
 
     if (isComplete) {
-      completed += 1;
-    } else {
-      running += 1;
+      continue;
+    }
+
+    total += 1;
+    running += 1;
+    if (runningLabels.length < 3) {
+      runningLabels.push(label);
+    }
+    if (state?.runtimeStatus || state?.currentStep || state?.lastTool || state?.stopReason) {
+      latestRuntimeState = state;
     }
 
     const hasLiveChildOutput = !isComplete && (
@@ -120,9 +182,42 @@ function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySum
     );
     if (hasLiveChildOutput) {
       outputting += 1;
+      if (outputtingLabels.length < 3) {
+        outputtingLabels.push(label);
+      }
     }
 
-    latestLabel = parseSubagentLabel(message) || latestLabel;
+    let activeToolLabel = '';
+    if (!isComplete) {
+      if (currentTool) {
+        activeToolLabel = `${label} · ${summarizeSubagentTool(currentTool)}`;
+      } else if (state?.lastTool) {
+        activeToolLabel = `${label} · ${state.lastTool}`;
+      } else if (state?.isAsyncLaunch) {
+        activeToolLabel = `${label} · 等待后台结果`;
+      }
+    }
+    if (activeToolLabel && activeToolLabels.length < 3) {
+      activeToolLabels.push(activeToolLabel);
+    }
+
+    latestLabel = label || latestLabel;
+    items.push({
+      id: typeof message.id === 'string' ? message.id : undefined,
+      taskId: state?.taskId,
+      label,
+      runtimeStatus: state?.runtimeStatus,
+      objective: state?.objective,
+      currentStep: state?.currentStep,
+      maxSteps: state?.maxSteps,
+      remainingSteps: state?.remainingSteps,
+      elapsedMs: state?.elapsedMs,
+      lastTool: state?.lastTool,
+      lastToolSummary: state?.lastToolSummary,
+      stopReason: state?.stopReason,
+      activeToolLabel,
+      outputting: hasLiveChildOutput,
+    });
   }
 
   return {
@@ -131,6 +226,19 @@ function summarizeSubagentActivity(messages: ChatMessage[]): SubagentActivitySum
     completed,
     outputting,
     latestLabel: latestLabel || undefined,
+    runningLabels,
+    outputtingLabels,
+    activeToolLabels,
+    runtimeStatus: latestRuntimeState?.runtimeStatus,
+    objective: latestRuntimeState?.objective,
+    currentStep: latestRuntimeState?.currentStep,
+    maxSteps: latestRuntimeState?.maxSteps,
+    remainingSteps: latestRuntimeState?.remainingSteps,
+    elapsedMs: latestRuntimeState?.elapsedMs,
+    lastTool: latestRuntimeState?.lastTool,
+    lastToolSummary: latestRuntimeState?.lastToolSummary,
+    stopReason: latestRuntimeState?.stopReason,
+    items,
   };
 }
 
@@ -229,6 +337,7 @@ function ChatInterface({
   const worktreeSessionPersistKeyRef = useRef('');
   const worktreePromptPrefillKeyRef = useRef('');
   const appliedConversationDraftKeyRef = useRef('');
+  const previousProjectSkillCurrentSessionIdRef = useRef<string | null>(null);
   const projectSkillBindingLoadKeyRef = useRef('');
   const projectSkillBindingPersistKeyRef = useRef('');
   const projectSkillBindingHydratedKeyRef = useRef('');
@@ -243,6 +352,8 @@ function ChatInterface({
   const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
   const [selectedSessionSkillNames, setSelectedSessionSkillNames] = useState<string[]>([]);
   const [selectedProjectSkillNames, setSelectedProjectSkillNames] = useState<string[]>([]);
+  const selectedSessionSkillNamesRef = useRef<string[]>([]);
+  const selectedProjectSkillNamesRef = useRef<string[]>([]);
   const [defaultModelProfileId, setDefaultModelProfileId] = useState('');
   const [selectedModelProfileId, setSelectedModelProfileId] = useState('');
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
@@ -265,6 +376,14 @@ function ChatInterface({
   const isWorktreeProject = Boolean(!isConversationSpace && worktreeMeta?.id);
   const agentBindingEnabled = isConversationSpace || isWorktreeProject;
   const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
+
+  useEffect(() => {
+    selectedSessionSkillNamesRef.current = selectedSessionSkillNames;
+  }, [selectedSessionSkillNames]);
+
+  useEffect(() => {
+    selectedProjectSkillNamesRef.current = selectedProjectSkillNames;
+  }, [selectedProjectSkillNames]);
 
   const loadInstalledSkills = useCallback(async () => {
     if (!selectedProject && !isConversationSpace) {
@@ -560,6 +679,38 @@ function ChatInterface({
     () => summarizeSubagentActivity(chatMessages),
     [chatMessages],
   );
+
+  const handleStopSubagents = useCallback((taskIds?: string[]) => {
+    const concreteTaskIds = (taskIds && taskIds.length > 0 ? taskIds : subagentActivity.items.map((item) => item.taskId))
+      .filter((taskId): taskId is string => Boolean(taskId && taskId.trim()));
+    if (concreteTaskIds.length === 0) {
+      return;
+    }
+
+    const sessionId = activeConversationSessionId
+      || selectedSession?.id
+      || currentSessionId
+      || pendingViewSessionRef.current?.sessionId
+      || null;
+    if (!sessionId || isTemporarySessionId(sessionId)) {
+      return;
+    }
+
+    sendMessage({
+      type: 'claude-stop-tasks',
+      sessionId,
+      provider,
+      taskIds: Array.from(new Set(concreteTaskIds)),
+    });
+  }, [
+    activeConversationSessionId,
+    currentSessionId,
+    pendingViewSessionRef,
+    provider,
+    selectedSession?.id,
+    sendMessage,
+    subagentActivity.items,
+  ]);
 
   const setCachedAgentRuntimeDiagnostics = useCallback<React.Dispatch<React.SetStateAction<AgentRuntimeDiagnostics | null>>>(
     (valueOrUpdater) => {
@@ -900,9 +1051,17 @@ function ChatInterface({
         : [...previous, normalized].slice(0, 60);
     };
     if (agentBindingEnabled) {
-      setSelectedSessionSkillNames(updateSkills);
+      setSelectedSessionSkillNames((previous) => {
+        const next = updateSkills(previous);
+        selectedSessionSkillNamesRef.current = next;
+        return next;
+      });
     } else {
-      setSelectedProjectSkillNames(updateSkills);
+      setSelectedProjectSkillNames((previous) => {
+        const next = updateSkills(previous);
+        selectedProjectSkillNamesRef.current = next;
+        return next;
+      });
     }
   }, [agentBindingEnabled]);
 
@@ -914,9 +1073,17 @@ function ChatInterface({
       return exists ? previous : [...previous, normalized].slice(0, 60);
     };
     if (agentBindingEnabled) {
-      setSelectedSessionSkillNames(updateSkills);
+      setSelectedSessionSkillNames((previous) => {
+        const next = updateSkills(previous);
+        selectedSessionSkillNamesRef.current = next;
+        return next;
+      });
     } else {
-      setSelectedProjectSkillNames(updateSkills);
+      setSelectedProjectSkillNames((previous) => {
+        const next = updateSkills(previous);
+        selectedProjectSkillNamesRef.current = next;
+        return next;
+      });
     }
   }, [agentBindingEnabled]);
 
@@ -947,6 +1114,10 @@ function ChatInterface({
   }, [addSessionSkill, loadInstalledSkills]);
 
   const activeSkillNames = agentBindingEnabled ? selectedSessionSkillNames : selectedProjectSkillNames;
+  const getActiveSkillNames = useCallback(
+    () => (agentBindingEnabled ? selectedSessionSkillNamesRef.current : selectedProjectSkillNamesRef.current),
+    [agentBindingEnabled],
+  );
 
   useEffect(() => {
     if (!projectSkillBindingEnabled || !activeConversationSessionId) {
@@ -954,6 +1125,14 @@ function ChatInterface({
     }
 
     const bindingKey = `${provider}:${activeConversationSessionId}:project-skills`;
+    const localSkills = selectedProjectSkillNamesRef.current;
+    const isNewlyCreatedSession = !selectedSession?.id;
+    if (isNewlyCreatedSession && (localSkills.length > 0 || selectedModelProfileId)) {
+      projectSkillBindingHydratedKeyRef.current = bindingKey;
+      projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills: localSkills, modelProfileId: selectedModelProfileId })}`;
+      return undefined;
+    }
+
     let cancelled = false;
     projectSkillBindingLoadKeyRef.current = bindingKey;
 
@@ -989,7 +1168,42 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, defaultModelProfileId, projectSkillBindingEnabled, provider]);
+  }, [activeConversationSessionId, defaultModelProfileId, projectSkillBindingEnabled, provider, selectedModelProfileId, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!projectSkillBindingEnabled) {
+      previousProjectSkillCurrentSessionIdRef.current = currentSessionId;
+      return;
+    }
+
+    const previousSessionId = previousProjectSkillCurrentSessionIdRef.current;
+    previousProjectSkillCurrentSessionIdRef.current = currentSessionId;
+    if (
+      !isTemporarySessionId(previousSessionId)
+      || !activeConversationSessionId
+      || selectedSession?.id
+    ) {
+      return;
+    }
+
+    const skills = selectedProjectSkillNamesRef.current;
+    if (skills.length === 0 && !selectedModelProfileId) {
+      return;
+    }
+
+    const bindingKey = `${provider}:${activeConversationSessionId}:project-skills`;
+    const configuration = {
+      appBindings: [],
+      skills,
+      modelProfileId: selectedModelProfileId,
+    };
+    projectSkillBindingHydratedKeyRef.current = bindingKey;
+    projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills, modelProfileId: selectedModelProfileId })}`;
+    void api.updateSessionAgent(activeConversationSessionId, '', provider, configuration).catch((error) => {
+      console.warn('Failed to persist new project Skill binding:', error);
+      projectSkillBindingPersistKeyRef.current = '';
+    });
+  }, [activeConversationSessionId, currentSessionId, projectSkillBindingEnabled, provider, selectedModelProfileId, selectedSession?.id]);
 
   useEffect(() => {
     if (!projectSkillBindingEnabled || !activeConversationSessionId) {
@@ -1085,6 +1299,7 @@ function ChatInterface({
     selectedAgentId: agentBindingEnabled ? selectedAgentId : '',
     selectedAgentAppBindings: agentBindingEnabled ? selectedAgentAppBindings : [],
     selectedSkillNames: activeSkillNames,
+    getSelectedSkillNames: getActiveSkillNames,
     modelProfileId: selectedModelProfileId,
     allowSessionAgentBinding: agentBindingEnabled || activeSkillNames.length > 0 || Boolean(selectedModelProfileId),
     isLoading,
@@ -1304,7 +1519,7 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onPreserveScrollForLayoutChange={preserveScrollForLayoutChange}
@@ -1382,14 +1597,17 @@ function ChatInterface({
           onToggleSkillName={toggleSessionSkill}
           onClearSkillNames={() => {
             if (agentBindingEnabled) {
+              selectedSessionSkillNamesRef.current = [];
               setSelectedSessionSkillNames([]);
             } else {
+              selectedProjectSkillNamesRef.current = [];
               setSelectedProjectSkillNames([]);
             }
           }}
           showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0 || Boolean(agentRuntimeDiagnostics)}
           agentRuntimeDiagnostics={agentRuntimeDiagnostics}
           subagentActivity={subagentActivity}
+          onStopSubagents={handleStopSubagents}
           tokenBudget={tokenBudget}
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}

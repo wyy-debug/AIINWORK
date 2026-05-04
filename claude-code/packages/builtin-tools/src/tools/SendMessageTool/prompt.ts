@@ -35,6 +35,8 @@ Send a message to another agent.
 
 Your plain text output is NOT visible to other agents — to communicate, you MUST call this tool. Messages from teammates are delivered automatically; you don't check an inbox. Refer to teammates by name, never by UUID. When relaying, don't quote the original — it's already rendered to the user.${udsSection}
 
+When continuing a subagent, do not send open-ended probes like "progress?" or "how is it going?" by themselves. Include a concrete stop condition: if the needed evidence is already available, summarize and end with STATUS DONE; if more parent input is required, end with STATUS NEED_PARENT_INPUT; if blocked, end with STATUS BLOCKED. The runtime appends this stop contract to plain-text subagent messages.
+
 ## Protocol responses (legacy)
 
 If you receive a JSON message with \`type: "shutdown_request"\` or \`type: "plan_approval_request"\`, respond with the matching \`_response\` type — echo the \`request_id\`, set \`approve\` true/false:

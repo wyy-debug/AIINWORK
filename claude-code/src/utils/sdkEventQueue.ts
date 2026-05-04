@@ -27,6 +27,8 @@ type TaskProgressEvent = {
   }
   last_tool_name?: string
   summary?: string
+  subagent_runtime?: unknown
+  subagent_record?: unknown
   // Delta batch of workflow state changes. Clients upsert by
   // `${type}:${index}` then group by phaseIndex to rebuild the phase tree,
   // same fold as collectFromEvents + groupByPhase in PhaseProgress.tsx.

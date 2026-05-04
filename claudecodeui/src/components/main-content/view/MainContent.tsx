@@ -134,7 +134,7 @@ function MainContent({
   const visibleActiveTab = isConversationSpace ? 'chat' : activeTab;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <GlobalCommandMenu selectedProject={selectedProject} setActiveTab={setActiveTab} />
       <MainContentHeader
         activeTab={visibleActiveTab}

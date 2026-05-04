@@ -10,6 +10,7 @@ type ClaudeToolResult = {
   content: unknown;
   isError: boolean;
   subagentTools?: unknown;
+  subagentRuntime?: unknown;
   toolUseResult?: unknown;
 };
 
@@ -55,6 +56,45 @@ function isTaskNotificationContent(content: string): boolean {
   const trimmed = content.trimStart();
   return /^<task-notification\b/i.test(trimmed)
     || /^&lt;task-notification\b/i.test(trimmed);
+}
+
+function decodeBasicEntities(content: string): string {
+  return content
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function getXmlTag(content: string, tagName: string): string | undefined {
+  const pattern = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i');
+  const match = content.match(pattern);
+  return match?.[1]?.trim() || undefined;
+}
+
+function normalizeTaskStatus(value: unknown): string {
+  const status = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (status === 'completed' || status === 'failed' || status === 'killed') {
+    return status;
+  }
+  return 'completed';
+}
+
+function taskNotificationFromContent(content: string): {
+  taskId?: string;
+  toolId?: string;
+  status: string;
+  summary?: string;
+} | null {
+  if (!isTaskNotificationContent(content)) return null;
+  const decoded = decodeBasicEntities(content);
+  return {
+    taskId: getXmlTag(decoded, 'task-id'),
+    toolId: getXmlTag(decoded, 'tool-use-id'),
+    status: normalizeTaskStatus(getXmlTag(decoded, 'status')),
+    summary: getXmlTag(decoded, 'summary') || getXmlTag(decoded, 'result'),
+  };
 }
 
 function isInternalAgentFailureNarration(content: string): boolean {
@@ -123,6 +163,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [];
     }
 
+    const messages: NormalizedMessage[] = [];
+    const ts = raw.timestamp || new Date().toISOString();
+    const baseId = raw.uuid || generateMessageId('claude');
+
     if (raw.type === 'content_block_delta' && raw.delta?.text) {
       return [createNormalizedMessage({ kind: 'stream_delta', content: raw.delta.text, sessionId, provider: PROVIDER })];
     }
@@ -130,9 +174,39 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER })];
     }
 
-    const messages: NormalizedMessage[] = [];
-    const ts = raw.timestamp || new Date().toISOString();
-    const baseId = raw.uuid || generateMessageId('claude');
+    if (raw.type === 'system' && raw.subtype === 'task_progress') {
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'status',
+        status: 'subagent_progress',
+        toolId: typeof raw.tool_use_id === 'string' ? raw.tool_use_id : undefined,
+        taskId: raw.task_id,
+        content: raw.description,
+        summary: raw.summary,
+        usage: raw.usage,
+        lastToolName: raw.last_tool_name,
+        subagentRuntime: raw.subagent_runtime,
+        subagentRecord: raw.subagent_record,
+      })];
+    }
+
+    if (raw.type === 'system' && raw.subtype === 'task_notification') {
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'task_notification',
+        taskId: typeof raw.task_id === 'string' ? raw.task_id : undefined,
+        toolId: typeof raw.tool_use_id === 'string' ? raw.tool_use_id : undefined,
+        status: normalizeTaskStatus(raw.status),
+        summary: typeof raw.summary === 'string' ? raw.summary : undefined,
+        usage: raw.usage,
+      })];
+    }
 
     if (isCompactBoundaryRecord(raw)) {
       const compactMetadata = raw.compactMetadata || raw.compact_metadata || {};
@@ -188,11 +262,25 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
               isError: Boolean(part.is_error),
               subagentTools: raw.subagentTools,
+              subagentRuntime: raw.subagentRuntime,
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
-            if (text && !isInternalContent(text)) {
+            const taskNotification = taskNotificationFromContent(text);
+            if (taskNotification) {
+              messages.push(createNormalizedMessage({
+                id: `${baseId}_task_notification_${partIndex}`,
+                sessionId,
+                timestamp: ts,
+                provider: PROVIDER,
+                kind: 'task_notification',
+                taskId: taskNotification.taskId,
+                toolId: taskNotification.toolId,
+                status: taskNotification.status,
+                summary: taskNotification.summary,
+              }));
+            } else if (text && !isInternalContent(text)) {
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
                 sessionId,
@@ -226,7 +314,20 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }
       } else if (typeof raw.message.content === 'string') {
         const text = raw.message.content;
-        if (text && !isInternalContent(text)) {
+        const taskNotification = taskNotificationFromContent(text);
+        if (taskNotification) {
+          messages.push(createNormalizedMessage({
+            id: `${baseId}_task_notification`,
+            sessionId,
+            timestamp: ts,
+            provider: PROVIDER,
+            kind: 'task_notification',
+            taskId: taskNotification.taskId,
+            toolId: taskNotification.toolId,
+            status: taskNotification.status,
+            summary: taskNotification.summary,
+          }));
+        } else if (text && !isInternalContent(text)) {
           messages.push(createNormalizedMessage({
             id: baseId,
             sessionId,
@@ -263,6 +364,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         toolName: raw.toolName,
         toolInput: raw.toolInput,
         toolId: raw.toolCallId || baseId,
+        subagentTools: raw.subagentTools,
+        subagentRuntime: raw.subagentRuntime,
       }));
       return messages;
     }
@@ -309,6 +412,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolName: part.name,
               toolInput: part.input,
               toolId: part.id,
+              subagentTools: raw.subagentTools,
+              subagentRuntime: raw.subagentRuntime,
             }));
           } else if (part.type === 'thinking' && part.thinking) {
             messages.push(createNormalizedMessage({
@@ -381,6 +486,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               content: part.content,
               isError: Boolean(part.is_error),
               subagentTools: raw.subagentTools,
+              subagentRuntime: raw.subagentRuntime,
               toolUseResult: raw.toolUseResult,
             });
           }
@@ -424,6 +530,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           toolUseResult: toolResult.toolUseResult,
         };
         msg.subagentTools = toolResult.subagentTools;
+        msg.subagentRuntime = toolResult.subagentRuntime;
       }
     }
 
