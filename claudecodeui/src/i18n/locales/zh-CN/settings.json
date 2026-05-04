@@ -77,7 +77,7 @@
     "constraintsLabel": "约束",
     "acceptanceLabel": "验收标准",
     "routesLabel": "路由建议",
-    "dispatchPlanLabel": "自动派发计划",
+    "workerPlanLabel": "Worker 计划",
     "requiredValue": "必需",
     "noDispatchValue": "当前提示不会自动派发 worker",
     "emptyPreview": "输入提示词后可预览运行时任务卡。",

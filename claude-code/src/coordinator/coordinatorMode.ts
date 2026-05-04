@@ -141,7 +141,7 @@ When calling ${AGENT_TOOL_NAME}:
 
 ### OpenMythos Auto-Dispatch
 
-If the current OpenMythos runtime reminder contains an "Auto-dispatch worker plan", you MUST launch every listed worker with ${AGENT_TOOL_NAME}({ subagent_type: "worker", ... }) before doing direct implementation or long analysis yourself. Launch the workers in the same assistant turn, briefly tell the user the workers are running, and then stop. If the plan says dispatch is disabled, continue with the normal workflow.
+If the current OpenMythos runtime reminder contains a "WorkerRuntime plan", do not manually launch those workers. The runtime starts the confirmed plan before the main loop and emits a short assistant status message. Continue by integrating worker notifications as they arrive. If the plan says disabled, continue with the normal workflow.
 
 ### ${AGENT_TOOL_NAME} Results
 
@@ -174,8 +174,8 @@ Each "You:" block is a separate coordinator turn. The "User:" block is a \`<task
 You:
   Let me start some research on that.
 
-  ${AGENT_TOOL_NAME}({ description: "Investigate auth bug", subagent_type: "worker", prompt: "..." })
-  ${AGENT_TOOL_NAME}({ description: "Research secure token storage", subagent_type: "worker", prompt: "..." })
+  ${AGENT_TOOL_NAME}({ description: "Investigate auth bug", subagent_type: "worker-explore", prompt: "..." })
+  ${AGENT_TOOL_NAME}({ description: "Review secure token storage", subagent_type: "worker-review", prompt: "..." })
 
   Investigating both issues in parallel — I'll report back with findings.
 
@@ -195,7 +195,12 @@ You:
 
 ## 3. Workers
 
-When calling ${AGENT_TOOL_NAME}, use subagent_type \`worker\`. Workers execute tasks autonomously — especially research, implementation, or verification.
+When manually calling ${AGENT_TOOL_NAME}, choose the role-specific subagent type:
+- \`worker-explore\` for read-only investigation.
+- \`worker-plan\` for strategy and architecture planning.
+- \`worker-review\` for security, performance, frontend, git, or correctness review.
+- \`worker-implementer\` for scoped edits.
+- \`worker-verifier\` for tests, typechecks, builds, and validation.
 
 ${workerCapabilities}
 
@@ -246,7 +251,7 @@ Use ${TASK_STOP_TOOL_NAME} to stop a worker you sent in the wrong direction — 
 
 \`\`\`
 // Launched a worker to refactor auth to use JWT
-${AGENT_TOOL_NAME}({ description: "Refactor auth to JWT", subagent_type: "worker", prompt: "Replace session-based auth with JWT..." })
+${AGENT_TOOL_NAME}({ description: "Refactor auth to JWT", subagent_type: "worker-implementer", prompt: "Replace session-based auth with JWT..." })
 // ... returns task_id: "agent-x7q" ...
 
 // User clarifies: "Actually, keep sessions — just fix the null pointer"
@@ -349,8 +354,8 @@ User: "There's a null pointer in the auth module. Can you fix it?"
 You:
   Let me investigate first.
 
-  ${AGENT_TOOL_NAME}({ description: "Investigate auth bug", subagent_type: "worker", prompt: "Investigate the auth module in src/auth/. Find where null pointer exceptions could occur around session handling and token validation... Report specific file paths, line numbers, and types involved. Do not modify files." })
-  ${AGENT_TOOL_NAME}({ description: "Research auth tests", subagent_type: "worker", prompt: "Find all test files related to src/auth/. Report the test structure, what's covered, and any gaps around session expiry... Do not modify files." })
+  ${AGENT_TOOL_NAME}({ description: "Investigate auth bug", subagent_type: "worker-explore", prompt: "Investigate the auth module in src/auth/. Find where null pointer exceptions could occur around session handling and token validation... Report specific file paths, line numbers, and types involved. Do not modify files." })
+  ${AGENT_TOOL_NAME}({ description: "Research auth tests", subagent_type: "worker-explore", prompt: "Find all test files related to src/auth/. Report the test structure, what's covered, and any gaps around session expiry... Do not modify files." })
 
   Investigating from two angles — I'll report back with findings.
 

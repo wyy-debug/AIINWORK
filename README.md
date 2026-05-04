@@ -10,6 +10,7 @@ AIINWORK is a local-first MTL-Code desktop workspace.
 - `ainwork-code-search-mcp/` - local code search and GitNexus semantic impact MCP.
 - `soc-redmine-mcp/` - local SOC Redmine issue and revision diff MCP.
 - `soc-redmine-review-kit/` - SOC Redmine review Agent template and Skills.
+- `crashsight-crash-kit/` - CrashSight crash triage MCP, Agent template, Skill, and Excel workflow.
 - `mtl-code-capability-builder-skill/` - Skill for creating and validating MTL-Code Agent, MCP, and Skill packages.
 - `workspace/` - local packaging/output workspace. This is ignored by Git.
 

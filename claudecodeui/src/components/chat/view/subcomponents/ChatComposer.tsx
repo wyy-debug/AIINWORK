@@ -31,8 +31,6 @@ import {
   CloudIcon,
   PaperclipIcon,
   ShieldIcon,
-  BrainCircuitIcon,
-  RouteIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -292,51 +290,6 @@ export default function ChatComposer({
   const normalizedSkillSearch = skillSearch.trim().toLowerCase();
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null;
   const selectedMcpBindings = selectedAgentAppBindings.filter((binding) => binding.app.trim().startsWith('MCP: '));
-  const openMythosRuntime = agentRuntimeDiagnostics?.openMythosRuntime || null;
-  const openMythosDispatchConfirmation = openMythosRuntime?.dispatchConfirmation;
-  const openMythosSingleAgentOverride = openMythosDispatchConfirmation?.mode === 'single-agent';
-  const openMythosAutoDispatchConfigured = openMythosRuntime
-    ? openMythosRuntime.configuredAutoDispatchSubagents
-      ?? (openMythosSingleAgentOverride ? true : openMythosRuntime.autoDispatchSubagents !== false)
-    : false;
-  const openMythosAutoDispatchEffective = openMythosRuntime
-    ? openMythosRuntime.effectiveAutoDispatchSubagents
-      ?? (openMythosSingleAgentOverride ? false : openMythosAutoDispatchConfigured)
-    : false;
-  const openMythosDispatchPlan = openMythosRuntime?.runtimeCard?.dispatchPlan || [];
-  const openMythosWorkerLabels = openMythosDispatchPlan
-    .map((task) => task.label || task.kind || 'worker')
-    .filter((label): label is string => typeof label === 'string' && label.trim().length > 0)
-    .slice(0, 3);
-  const openMythosHint = openMythosRuntime
-    ? openMythosDispatchPlan.length > 0
-      ? {
-        tone: 'active' as const,
-        title: `OpenMythos 将派发 ${openMythosDispatchPlan.length} 个 worker`,
-        description: openMythosWorkerLabels.length > 0
-          ? openMythosWorkerLabels.join('、')
-          : '已生成自动派发计划，Coordinator 会优先执行。',
-      }
-      : openMythosSingleAgentOverride && openMythosAutoDispatchConfigured
-        ? {
-          tone: 'standby' as const,
-          title: 'OpenMythos 自动派发已开启',
-          description: '当前消息未生成或未确认 worker 计划，本轮按单 Agent 执行。',
-        }
-        : openMythosAutoDispatchEffective || openMythosAutoDispatchConfigured
-        ? {
-          tone: 'standby' as const,
-          title: 'OpenMythos 自动派发已开启',
-          description: `最低触发强度 ${openMythosRuntime.autoDispatchMinEffort || 'medium'}，当前消息暂未生成 worker 计划。`,
-        }
-        : openMythosRuntime.enabled
-          ? {
-            tone: 'muted' as const,
-            title: 'OpenMythos 运行时已开启',
-            description: '自动派发子智能体当前关闭，可在运行时设置中开启。',
-          }
-          : null
-    : null;
   const filteredInstalledSkills = useMemo(() => {
     const matches = installedSkills.filter((skill) => (
       !normalizedSkillSearch
@@ -1157,36 +1110,6 @@ export default function ChatComposer({
                     <span className="rounded-md bg-background/70 px-2 py-0.5 text-foreground">输出中 {subagentActivity.outputting}</span>
                   </div>
                 </div>
-              </div>
-            </PromptInputHeader>
-          )}
-
-          {openMythosHint && (
-            <PromptInputHeader>
-              <div
-                className={cn(
-                  'mx-1 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs',
-                  openMythosHint.tone === 'active'
-                    ? 'border-primary/25 bg-primary/8 text-primary'
-                    : 'border-border/70 bg-muted/35 text-muted-foreground',
-                )}
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background/80 text-primary">
-                  {openMythosHint.tone === 'active'
-                    ? <RouteIcon className="h-4 w-4" />
-                    : <BrainCircuitIcon className="h-4 w-4" />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold text-foreground">{openMythosHint.title}</div>
-                  <div className="mt-0.5 truncate">{openMythosHint.description}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsDiagnosticsOpen(true)}
-                  className="shrink-0 rounded-md border border-border/70 bg-background/70 px-2 py-1 font-medium text-foreground transition-colors hover:bg-muted"
-                >
-                  详情
-                </button>
               </div>
             </PromptInputHeader>
           )}

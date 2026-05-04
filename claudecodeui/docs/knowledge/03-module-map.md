@@ -61,7 +61,7 @@
 | Notifications | `server/services/notification-orchestrator.js`，`server/services/vapid-keys.js` | Web Push key/subscription 和通知投递。 |
 | Context budget | `server/services/context-budget-service.js`，`server/claude-sdk.js`，`server/projects.js`，`server/routes/messages.js` | 统一 Argus 实时 `modelUsage`、历史 JSONL 和 `/token-usage` 的 `ContextBudget` 口径；旧 `used/total` 字段只做兼容。 |
 | Runtime diagnostics | `server/index.js`, `src/components/chat/hooks/useChatRealtimeHandlers.ts`, `src/components/chat/view/ChatInterface.tsx`, `src/components/chat/view/subcomponents/AgentRuntimeDiagnosticsPanel.tsx` | 后端在发送前 emit `agent_runtime_debug`，前端按 session 缓存并在临时 session id 替换为真实 id 时迁移，避免诊断面板显示空态。OpenMythos 自动派发需要先经过发送前预览/确认，确认状态随 command options 进入 diagnostics。 |
-| OpenMythos dispatch preview | `server/routes/settings.js`, `server/claude-sdk.js`, `src/components/chat/hooks/useChatComposerState.ts` | `POST /api/settings/openmythos-dispatch-preview` 使用后端同一套 OpenMythos 规则预估 `dispatchPlan`；聊天发送前提示用户确认，未确认或预览失败时本轮通过 env 覆盖禁用自动派发。 |
+| OpenMythos worker preview | `server/routes/settings.js`, `server/claude-sdk.js`, `src/components/chat/hooks/useChatComposerState.ts` | `POST /api/settings/openmythos-dispatch-preview` 使用后端同一套 OpenMythos 规则预估 `workerPlan`；聊天发送前提示用户确认，确认后把同一个 plan 传给 CLI，未确认或预览失败时本轮通过 env 覆盖禁用自动派发。 |
 
 ## 2026-04-26 Argus Agent Model Config Anchors
 

@@ -94,20 +94,24 @@ type PreviewCard = {
   routes: string[];
   phasePlan: string[];
   expertRoutes: string[];
-  dispatchPlan: Array<{
-    kind: string;
-    label: string;
-    reason: string;
-    required: boolean;
-    description: string;
-  }>;
+  workerPlan: {
+    assignments: Array<{
+      kind: string;
+      role: string;
+      label: string;
+      reason: string;
+      required: boolean;
+      description: string;
+      objective: string;
+    }>;
+  } | null;
 };
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly EffortLevel[];
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const DEFAULT_PREVIEW_PROMPT = 'Implement an auth database migration with rollback tests and CI verification';
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
-  enabled: true,
+  enabled: false,
   adaptiveEffort: true,
   taskCard: true,
   routingHints: true,
@@ -116,7 +120,7 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
-  autoDispatchSubagents: true,
+  autoDispatchSubagents: false,
   autoDispatchMinEffort: 'medium',
   autoDispatchMaxWorkers: 3,
   minEffort: 'low',
@@ -401,32 +405,43 @@ const effortMeetsMinimum = (effort: EffortLevel, minimum: EffortLevel): boolean 
   EFFORT_LEVELS.indexOf(effort) >= EFFORT_LEVELS.indexOf(minimum)
 );
 
-const buildDispatchPlan = (
+const routeToWorkerRole = (kind: string): string => {
+  if (kind === 'implementation' || kind === 'frontend') return 'worker-implementer';
+  if (kind === 'verification') return 'worker-verifier';
+  if (kind === 'architecture') return 'worker-plan';
+  if (kind === 'security') return 'worker-review';
+  return 'worker-explore';
+};
+
+const buildWorkerPlan = (
   goal: string,
   effort: EffortLevel,
   runtimeConfig: OpenMythosRuntimeConfig,
   signals: Signal[],
   translate: RuntimeTranslator,
-): PreviewCard['dispatchPlan'] => {
+): PreviewCard['workerPlan'] => {
   if (!runtimeConfig.autoDispatchSubagents || !effortMeetsMinimum(effort, runtimeConfig.autoDispatchMinEffort)) {
-    return [];
+    return null;
   }
 
-  const routes = new Map<string, PreviewCard['dispatchPlan'][number]>();
+  const routes = new Map<string, NonNullable<PreviewCard['workerPlan']>['assignments'][number]>();
   for (const signal of signals) {
     if (!signal.dispatch) continue;
     const label = translate(signal.dispatch.labelKey, signal.dispatch.labelDefault);
     const previous = routes.get(signal.dispatch.kind);
     routes.set(signal.dispatch.kind, {
       kind: signal.dispatch.kind,
+      role: routeToWorkerRole(signal.dispatch.kind),
       label,
       reason: translate(signal.reasonKey, signal.reasonDefault),
       required: Boolean(previous?.required || signal.dispatch.required),
       description: truncate(`${label}: ${goal}`, 80),
+      objective: `${label}: ${goal}`,
     });
   }
 
-  return [...routes.values()].slice(0, Math.max(1, runtimeConfig.autoDispatchMaxWorkers));
+  const assignments = [...routes.values()].slice(0, Math.max(1, runtimeConfig.autoDispatchMaxWorkers));
+  return assignments.length > 0 ? { assignments } : null;
 };
 
 const buildPreviewCard = (
@@ -508,7 +523,7 @@ const buildPreviewCard = (
         effort === 'low' ? translate('experts.local', 'Local execution') : null,
       ].filter((route): route is string => Boolean(route))).slice(0, 5)
       : [],
-    dispatchPlan: buildDispatchPlan(goal, effort, runtimeConfig, signals, translate),
+    workerPlan: buildWorkerPlan(goal, effort, runtimeConfig, signals, translate),
   };
 };
 
@@ -1040,10 +1055,10 @@ export default function OpenMythosRuntimeContent() {
                   : [t('openMythosRuntime.disabledValue', { defaultValue: '已关闭' })]}
               />
               <PreviewList
-                label={t('openMythosRuntime.dispatchPlanLabel', { defaultValue: '自动派发计划' })}
-                values={previewCard.dispatchPlan.length > 0
-                  ? previewCard.dispatchPlan.map((task) => (
-                    `${task.label}${task.required ? ` (${t('openMythosRuntime.requiredValue', { defaultValue: '必需' })})` : ''}: ${task.description}`
+                label={t('openMythosRuntime.workerPlanLabel', { defaultValue: 'Worker 计划' })}
+                values={previewCard.workerPlan?.assignments.length
+                  ? previewCard.workerPlan.assignments.map((task) => (
+                    `${task.label}${task.role ? ` / ${task.role}` : ''}${task.required ? ` (${t('openMythosRuntime.requiredValue', { defaultValue: '必需' })})` : ''}: ${task.description}`
                   ))
                   : [t('openMythosRuntime.noDispatchValue', { defaultValue: '当前提示不会自动派发 worker' })]}
               />

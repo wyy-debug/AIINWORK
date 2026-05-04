@@ -2194,14 +2194,25 @@ function createRuntimeDiagnosticsPayload(data) {
             autoDispatchSubagents: false,
         }
         : diagnostics.openMythosRuntime;
+    const previewRuntimeCard = diagnostics.openMythosRuntime
+        ? buildOpenMythosRuntimePreview(
+            data?.command,
+            runtimeForPreview,
+            permissions.permissionMode,
+        )
+        : null;
+    const runtimeCard = previewRuntimeCard
+        && data?.options?.openMythosWorkerPlan
+        && typeof data.options.openMythosWorkerPlan === 'object'
+        ? {
+            ...previewRuntimeCard,
+            workerPlan: data.options.openMythosWorkerPlan,
+        }
+        : previewRuntimeCard;
     const openMythosRuntime = diagnostics.openMythosRuntime
         ? {
             ...diagnostics.openMythosRuntime,
-            runtimeCard: buildOpenMythosRuntimePreview(
-                data?.command,
-                runtimeForPreview,
-                permissions.permissionMode,
-            ),
+            runtimeCard,
             contextCache: {
                 skillPromptLength: diagnostics.skillPromptLength || 0,
                 appendSystemPromptLength: diagnostics.appendSystemPromptLength || 0,

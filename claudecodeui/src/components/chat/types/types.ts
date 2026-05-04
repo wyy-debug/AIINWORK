@@ -171,14 +171,27 @@ export interface OpenMythosRuntimeDiagnostics {
       reason?: string;
       required?: boolean;
     }>;
-    dispatchPlan?: Array<{
-      kind?: string;
-      label?: string;
-      reason?: string;
-      required?: boolean;
-      description?: string;
-      prompt?: string;
-    }>;
+    workerPlan?: {
+      planId?: string;
+      goal?: string;
+      effort?: string;
+      status?: string;
+      dispatchPolicy?: {
+        minEffort?: string;
+        maxWorkers?: number;
+      };
+      assignments?: Array<{
+        assignmentId?: string;
+        kind?: string;
+        role?: string;
+        label?: string;
+        reason?: string;
+        required?: boolean;
+        description?: string;
+        objective?: string;
+        prompt?: string;
+      }>;
+    } | null;
   } | null;
   contextCache?: {
     compactBoundaryCount?: number;

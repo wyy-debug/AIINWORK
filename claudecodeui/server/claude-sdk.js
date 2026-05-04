@@ -534,7 +534,7 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     MTLCODE: '1'
   };
   if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
-    spawnEnv.MTL_CODE_COORDINATOR_MODE = '1';
+    spawnEnv.MTL_CODE_COORDINATOR_MODE = '0';
   }
   for (const key of [
     'ANTHROPIC_MODEL',
@@ -560,8 +560,12 @@ async function buildMtlCodeSpawnEnv(options = {}) {
   if (options.openMythosAutoDispatch === false) {
     spawnEnv.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '0';
     spawnEnv.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '0';
+    delete spawnEnv.MTL_CODE_OPENMYTHOS_WORKER_PLAN;
   } else if (options.openMythosDispatchConfirmed === true) {
     spawnEnv.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '1';
+    if (options.openMythosWorkerPlan && typeof options.openMythosWorkerPlan === 'object') {
+      spawnEnv.MTL_CODE_OPENMYTHOS_WORKER_PLAN = JSON.stringify(options.openMythosWorkerPlan);
+    }
   }
 
   if (isDeepSeekAnthropicRuntime(spawnEnv)) {

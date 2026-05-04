@@ -129,6 +129,8 @@ export type FetchHistoryResult = {
   messages: NormalizedMessage[];
   total: number;
   hasMore: boolean;
+  /** Offset to use for the next page request. This is provider-native and may differ from messages.length. */
+  nextOffset?: number;
   offset: number;
   limit: number | null;
   tokenUsage?: unknown;

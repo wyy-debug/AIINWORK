@@ -519,7 +519,9 @@ function ChatInterface({
     tokenBudget,
     setTokenBudget,
     visibleMessageCount,
+    loadedMessageCount,
     visibleMessages,
+    loadMoreHistoryMessages,
     loadEarlierMessages,
     loadAllMessages,
     allMessagesLoaded,
@@ -532,7 +534,7 @@ function ChatInterface({
     scrollContainerRef,
     scrollToBottom,
     scrollToBottomAndReset,
-    handleScroll,
+    preserveScrollForLayoutChange,
   } = useChatSessionState({
     selectedProject,
     selectedSession,
@@ -1305,8 +1307,7 @@ function ChatInterface({
       <div className="flex h-full flex-col">
         <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
-          onWheel={handleScroll}
-          onTouchMove={handleScroll}
+          onPreserveScrollForLayoutChange={preserveScrollForLayoutChange}
           isLoadingSessionMessages={isLoadingSessionMessages}
           sessionLoadError={sessionLoadError}
           chatMessages={chatMessages}
@@ -1330,10 +1331,11 @@ function ChatInterface({
           isLoadingMoreMessages={isLoadingMoreMessages}
           hasMoreMessages={hasMoreMessages}
           totalMessages={totalMessages}
-          sessionMessagesCount={chatMessages.length}
+          sessionMessagesCount={loadedMessageCount || Math.min(chatMessages.length, totalMessages || chatMessages.length)}
           visibleMessageCount={visibleMessageCount}
           visibleMessages={visibleMessages}
           isSessionRunning={isLoading}
+          loadMoreHistoryMessages={loadMoreHistoryMessages}
           loadEarlierMessages={loadEarlierMessages}
           loadAllMessages={loadAllMessages}
           allMessagesLoaded={allMessagesLoaded}

@@ -125,10 +125,10 @@ import {
   type OpenMythosRuntimeState,
 } from './utils/openmythosRuntime.js'
 import {
-  formatOpenMythosHardDispatchMessage,
-  runOpenMythosHardDispatch,
-  shouldRunOpenMythosHardDispatch,
-} from './utils/openmythosHardDispatch.js'
+  formatOpenMythosWorkerRuntimeMessage,
+  runOpenMythosWorkerRuntime,
+  shouldRunOpenMythosWorkerRuntime,
+} from './utils/openmythosWorkerRuntime.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -720,22 +720,22 @@ async function* queryLoop(
     )
     if (
       openMythosRuntimeState &&
-      shouldRunOpenMythosHardDispatch(openMythosRuntimeState, toolUseContext)
+      shouldRunOpenMythosWorkerRuntime(openMythosRuntimeState, toolUseContext)
     ) {
-      const hardDispatchParentMessage = createAssistantMessage({ content: '' })
-      const hardDispatchResult = await runOpenMythosHardDispatch({
+      const workerRuntimeParentMessage = createAssistantMessage({ content: '' })
+      const workerRuntimeResult = await runOpenMythosWorkerRuntime({
         state: openMythosRuntimeState,
         toolUseContext,
         canUseTool: activeCanUseTool,
-        assistantMessage: hardDispatchParentMessage,
+        assistantMessage: workerRuntimeParentMessage,
       })
 
-      if (hardDispatchResult.launched.length > 0) {
-        const hardDispatchMessage = createAssistantMessage({
-          content: formatOpenMythosHardDispatchMessage(hardDispatchResult),
+      if (workerRuntimeResult.launched.length > 0) {
+        const workerRuntimeMessage = createAssistantMessage({
+          content: formatOpenMythosWorkerRuntimeMessage(workerRuntimeResult),
         })
-        yield hardDispatchMessage
-        messagesForQuery = [...messagesForQuery, hardDispatchMessage]
+        yield workerRuntimeMessage
+        messagesForQuery = [...messagesForQuery, workerRuntimeMessage]
         toolUseContext = {
           ...toolUseContext,
           messages: messagesForQuery,

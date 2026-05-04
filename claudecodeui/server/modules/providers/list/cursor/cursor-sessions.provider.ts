@@ -239,6 +239,7 @@ export class CursorSessionsProvider implements IProviderSessions {
           messages: page,
           total,
           hasMore,
+          nextOffset: start + page.length,
           offset,
           limit,
         };
@@ -248,6 +249,7 @@ export class CursorSessionsProvider implements IProviderSessions {
         messages: allNormalized,
         total,
         hasMore: false,
+        nextOffset: total,
         offset: 0,
         limit: null,
       };

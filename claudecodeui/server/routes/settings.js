@@ -838,18 +838,20 @@ router.post('/openmythos-dispatch-preview', async (req, res) => {
     const env = readObjectRecord(settings.env) ?? {};
     const openMythosRuntime = readOpenMythosRuntimeConfig(settings, env);
     const runtimeCard = buildOpenMythosRuntimePreview(input, openMythosRuntime, permissionMode);
-    const dispatchPlan = Array.isArray(runtimeCard?.dispatchPlan) ? runtimeCard.dispatchPlan : [];
+    const workerPlan = runtimeCard?.workerPlan && Array.isArray(runtimeCard.workerPlan.assignments)
+      ? runtimeCard.workerPlan
+      : null;
 
     res.json({
       success: true,
       configPath: filePath,
       openMythosRuntime,
       runtimeCard,
-      dispatchPlan,
+      workerPlan,
       shouldConfirm: Boolean(
         openMythosRuntime?.enabled
         && openMythosRuntime?.autoDispatchSubagents
-        && dispatchPlan.length > 0
+        && workerPlan?.assignments?.length > 0
       ),
     });
   } catch (error) {
