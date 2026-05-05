@@ -73,7 +73,7 @@ import {
     saveProjectTextFileWithGuard,
     toFileMutationHttpError,
 } from './services/file-mutation-service.js';
-import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig } from './services/mtl-code-model-service.js';
+import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig, readResolvedSubagentRuntimeConfig } from './services/mtl-code-model-service.js';
 import {
     evaluateRuntimePermission,
     resolveRuntimeShell,
@@ -2187,32 +2187,17 @@ function createRuntimeDiagnosticsPayload(data) {
         return null;
     }
     const permissions = createRuntimePermissionSnapshot(data);
-    const runtimeForPreview = diagnostics.openMythosRuntime
-        && diagnostics.openMythosRuntime.effectiveAutoDispatchSubagents === false
-        ? {
-            ...diagnostics.openMythosRuntime,
-            autoDispatchSubagents: false,
-        }
-        : diagnostics.openMythosRuntime;
     const previewRuntimeCard = diagnostics.openMythosRuntime
         ? buildOpenMythosRuntimePreview(
             data?.command,
-            runtimeForPreview,
+            diagnostics.openMythosRuntime,
             permissions.permissionMode,
         )
         : null;
-    const runtimeCard = previewRuntimeCard
-        && data?.options?.openMythosWorkerPlan
-        && typeof data.options.openMythosWorkerPlan === 'object'
-        ? {
-            ...previewRuntimeCard,
-            workerPlan: data.options.openMythosWorkerPlan,
-        }
-        : previewRuntimeCard;
     const openMythosRuntime = diagnostics.openMythosRuntime
         ? {
             ...diagnostics.openMythosRuntime,
-            runtimeCard,
+            runtimeCard: previewRuntimeCard,
             contextCache: {
                 skillPromptLength: diagnostics.skillPromptLength || 0,
                 appendSystemPromptLength: diagnostics.appendSystemPromptLength || 0,
@@ -2335,35 +2320,6 @@ function normalizeModelProfileId(value) {
         .replace(/^-+|-+$/g, '');
 }
 
-function applyOpenMythosDispatchChoice(openMythosRuntime, options = {}) {
-    if (!openMythosRuntime || typeof openMythosRuntime !== 'object') {
-        return openMythosRuntime;
-    }
-
-    const isSingleAgentOverride = options.openMythosAutoDispatch === false;
-    const isConfirmed = options.openMythosDispatchConfirmed === true;
-    if (!isSingleAgentOverride && !isConfirmed) {
-        return {
-            ...openMythosRuntime,
-            configuredAutoDispatchSubagents: openMythosRuntime.autoDispatchSubagents !== false,
-            effectiveAutoDispatchSubagents: openMythosRuntime.autoDispatchSubagents !== false,
-        };
-    }
-
-    const configuredAutoDispatchSubagents = openMythosRuntime.autoDispatchSubagents !== false;
-    return {
-        ...openMythosRuntime,
-        configuredAutoDispatchSubagents,
-        effectiveAutoDispatchSubagents: isSingleAgentOverride ? false : configuredAutoDispatchSubagents,
-        dispatchConfirmation: {
-            required: true,
-            confirmed: isConfirmed && !isSingleAgentOverride,
-            mode: isSingleAgentOverride ? 'single-agent' : 'auto-dispatch',
-            source: 'chat-composer',
-        },
-    };
-}
-
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
     let openMythosRuntime = provider === 'claude'
@@ -2372,7 +2328,12 @@ async function applyAgentRuntimeToChatCommand(data) {
             return null;
         })
         : null;
-    openMythosRuntime = applyOpenMythosDispatchChoice(openMythosRuntime, data?.options || {});
+    const subagentRuntime = provider === 'claude'
+        ? await readResolvedSubagentRuntimeConfig().catch((error) => {
+            console.warn('[Subagent Runtime] Failed to read settings:', error?.message || error);
+            return null;
+        })
+        : null;
     const concreteSessionId = getConcreteCommandSessionId(data);
     const allowSessionAgentBinding = data?.options?.allowSessionAgentBinding === true;
     const storedBinding = allowSessionAgentBinding && concreteSessionId
@@ -2431,6 +2392,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                         model: data?.options?.model || '',
                         modelProfileId: sessionModelProfileId || '',
                         openMythosRuntime,
+                        subagents: subagentRuntime,
                     },
                 },
             };
@@ -2470,6 +2432,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                 model: data?.options?.model || '',
                 modelProfileId: sessionModelProfileId || '',
                 openMythosRuntime,
+                subagents: subagentRuntime,
             },
         };
 
@@ -2527,6 +2490,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                     model: data?.options?.model || '',
                     modelProfileId: sessionModelProfileId || '',
                     openMythosRuntime,
+                    subagents: subagentRuntime,
                 },
             };
 
@@ -2579,6 +2543,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             model: runtime.model || data?.options?.model || '',
             modelProfileId: sessionModelProfileId || '',
             openMythosRuntime,
+            subagents: subagentRuntime,
         },
         contextWindowTokens: runtime.contextWindowTokens,
     };
@@ -3698,11 +3663,11 @@ async function startServer() {
         console.log('');
 
         if (isProduction) {
-            console.log(`${c.info('[INFO]')} To run in production mode, go to http://${DISPLAY_HOST}:${SERVER_PORT}`);            
+            console.log(`${c.info('[INFO]')} To run in production mode, go to http://${DISPLAY_HOST}:${SERVER_PORT}`);
         }
 
         console.log(`${c.info('[INFO]')} To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
-   
+
         server.listen(SERVER_PORT, HOST, async () => {
             const appInstallPath = APP_ROOT;
 

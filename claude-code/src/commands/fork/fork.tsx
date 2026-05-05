@@ -39,16 +39,14 @@ export async function call(
   }
 
   try {
-    // Reuse AgentTool logic for fork path.
-    // Omitting subagent_type triggers implicit fork.
+    // Reuse Codex-style spawn_agent with explicit fork_context.
     const input = {
-      prompt: directive,
-      run_in_background: true, // fork always runs async
-      description: `Fork: ${directive.slice(0, 30)}${directive.length > 30 ? '...' : ''}`,
+      message: directive,
+      fork_context: true,
     }
 
     // Call AgentTool with proper parameters:
-    // - input: the agent parameters (no subagent_type => fork path)
+    // - input: the Codex-style spawn_agent parameters
     // - toolUseContext: the current context (ToolUseContext)
     // - canUseTool: permission-check function from context
     // - assistantMessage: the last assistant message to fork from

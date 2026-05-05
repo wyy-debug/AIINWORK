@@ -892,7 +892,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Message queued for subagent ${input.to}. Use AgentWait or AgentResult for status/result instead of polling.`,
+                  message: `Message queued for subagent ${input.to}. Use wait_agent for status/result instead of polling.`,
                 },
               }
             }
@@ -910,7 +910,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Subagent "${input.to}" was stopped (${task.status}) and has been resumed. Use AgentWait or AgentResult to retrieve its structured result.`,
+                  message: `Subagent "${input.to}" was stopped (${task.status}) and has been resumed. Use wait_agent to retrieve its structured result.`,
                 },
               }
             } catch (e) {
@@ -939,7 +939,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               return {
                 data: {
                   success: true,
-                  message: `Subagent "${input.to}" had no active task and has been resumed from transcript. Use AgentWait or AgentResult to retrieve its structured result.`,
+                  message: `Subagent "${input.to}" had no active task and has been resumed from transcript. Use wait_agent to retrieve its structured result.`,
                 },
               }
             } catch (e) {

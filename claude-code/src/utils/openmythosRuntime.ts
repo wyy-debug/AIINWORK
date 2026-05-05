@@ -2,7 +2,6 @@ import type { PermissionMode } from '../types/permissions.js'
 import type { EffortLevel, EffortValue } from './effort.js'
 import { getEffortEnvOverride } from './effort.js'
 import { isEnvTruthy } from './envUtils.js'
-import { createHash } from 'crypto'
 
 export type OpenMythosRuntimeCard = {
   goal: string
@@ -15,7 +14,6 @@ export type OpenMythosRuntimeCard = {
   routes: string[]
   phasePlan: OpenMythosPhase[]
   expertRoutes: OpenMythosExpertRoute[]
-  workerPlan: OpenMythosWorkerPlan | null
   remainingBudget?: number
 }
 
@@ -29,9 +27,6 @@ export type OpenMythosRuntimeConfig = {
   phaseAdapter: boolean
   expertRouting: boolean
   contextCacheDiagnostics: boolean
-  autoDispatchSubagents: boolean
-  autoDispatchMinEffort: OpenMythosEffortLevel
-  autoDispatchMaxWorkers: number
   minEffort: OpenMythosEffortLevel
   maxEffort: OpenMythosEffortLevel
 }
@@ -49,71 +44,6 @@ export type OpenMythosExpertRoute = {
   label: string
   reason: string
   required: boolean
-}
-
-export type OpenMythosWorkerKind = OpenMythosExpertRoute['kind'] | 'implementation'
-
-export type OpenMythosWorkerRole =
-  | 'worker-explore'
-  | 'worker-plan'
-  | 'worker-review'
-  | 'worker-implementer'
-  | 'worker-verifier'
-
-export type OpenMythosWorkerAssignment = {
-  assignmentId: string
-  kind: OpenMythosWorkerKind
-  role: OpenMythosWorkerRole
-  label: string
-  reason: string
-  required: boolean
-  description: string
-  objective: string
-  prompt: string
-}
-
-export type OpenMythosWorkerPlan = {
-  planId: string
-  goal: string
-  effort: OpenMythosEffortLevel
-  status: 'previewed' | 'dispatching' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
-  dispatchPolicy: {
-    maxWorkers: number
-    minEffort: OpenMythosEffortLevel
-    requiresUserConfirmation: boolean
-  }
-  assignments: OpenMythosWorkerAssignment[]
-}
-
-export type OpenMythosWorkerRun = {
-  runId: string
-  planId: string
-  assignmentId: string
-  role: OpenMythosWorkerRole
-  label: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
-  agentId?: string
-  outputFile?: string
-  error?: string
-}
-
-export type OpenMythosWorkerReport = {
-  summary: string
-  evidence: Array<{ ref: string; note: string }>
-  changes: Array<{ path: string; note: string }>
-  risks: string[]
-  blockers: string[]
-}
-
-type OpenMythosDispatchTask = {
-  kind: OpenMythosExpertRoute['kind'] | 'implementation'
-  label: string
-  reason: string
-  required: boolean
-  description: string
-  objective: string
-  role: OpenMythosWorkerRole
-  prompt: string
 }
 
 export type OpenMythosContextCacheDiagnostics = {
@@ -169,9 +99,6 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
-  autoDispatchSubagents: false,
-  autoDispatchMinEffort: 'medium',
-  autoDispatchMaxWorkers: 3,
   minEffort: 'low',
   maxEffort: 'max',
 }
@@ -325,16 +252,6 @@ export function getOpenMythosRuntimeConfig(): OpenMythosRuntimeConfig {
       process.env.MTL_CODE_OPENMYTHOS_CONTEXT_CACHE_DIAGNOSTICS,
       DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics,
     ),
-    autoDispatchSubagents: false,
-    autoDispatchMinEffort: readEffortBound(
-      process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT,
-      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort,
-    ),
-    autoDispatchMaxWorkers: readPositiveInteger(
-      process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MAX_WORKERS,
-      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers,
-      8,
-    ),
     minEffort: normalizedMinEffort,
     maxEffort: normalizedMaxEffort,
   }
@@ -425,25 +342,6 @@ export function buildOpenMythosRuntimeCard(
   const phasePlan: OpenMythosPhase[] = config.phaseAdapter
     ? buildPhasePlan(effort)
     : ['implement', 'finalize']
-  const workerPlan = shouldBuildWorkerPlan({
-    autoDispatchSubagents: config.autoDispatchSubagents,
-    minEffort: config.autoDispatchMinEffort,
-    effort,
-    isTaskNotification,
-  })
-    ? parseWorkerPlanOverride(goal, effort) ??
-      buildWorkerPlan({
-        autoDispatchSubagents: config.autoDispatchSubagents,
-        minEffort: config.autoDispatchMinEffort,
-        maxWorkers: config.autoDispatchMaxWorkers,
-        goal,
-        effort,
-        signals,
-        expertRoutes,
-        isTaskNotification,
-      })
-    : null
-
   return {
     goal,
     effort,
@@ -455,7 +353,6 @@ export function buildOpenMythosRuntimeCard(
     routes,
     phasePlan,
     expertRoutes,
-    workerPlan,
     remainingBudget: loopBudget,
   }
 }
@@ -520,14 +417,7 @@ export function formatOpenMythosRuntimeReminder(
         .map(route => `${route.label}${route.required ? ' (required)' : ''}: ${route.reason}`)
         .join('; ')
     : 'disabled'
-  const workerPlan = card.workerPlan && card.workerPlan.assignments.length > 0
-    ? card.workerPlan.assignments
-        .map((task, index) => `${index + 1}. ${task.role}: ${task.description}`)
-        .join('\n')
-    : 'disabled'
-  const coordinatorInstruction = card.workerPlan && card.workerPlan.assignments.length > 0
-    ? '- Coordinator instruction: Worker plan is a proposal only. Submit AgentDispatchPlan after local tool events prove the next subagent step is runnable; then call AgentSpawn only with the returned dispatch_ticket.'
-    : '- Coordinator instruction: no automatic worker runtime dispatch is required for this turn.'
+  const coordinatorInstruction = '- Coordinator instruction: OpenMythos is advisory only. Do not auto-spawn workers. Use spawn_agent only when the user explicitly asks for subagents, delegation, or parallel agent work.'
   const contextCache = state?.contextCache
   const contextCacheLine = contextCache
     ? `- Context cache ledger: compact boundaries=${contextCache.compactBoundaryCount ?? 0}; microcompact boundaries=${contextCache.microcompactBoundaryCount ?? 0}; RAG excerpts=${contextCache.ragExcerptCount ?? 0}; RAG prompt chars=${contextCache.ragPromptLength ?? 0}; tool summaries=${contextCache.toolSummaryCount ?? 0}.`
@@ -545,7 +435,7 @@ export function formatOpenMythosRuntimeReminder(
       card.routes.length > 0 ? card.routes.join(' ') : 'disabled'
     }`,
     `- Expert routes: ${expertRoutes}`,
-    `- WorkerRuntime plan: ${workerPlan}`,
+    '- Automatic dispatch: removed; OpenMythos provides advisory routes only.',
     coordinatorInstruction,
     phase === 'orient' || phase === 'plan'
       ? '- Phase guard: read, inspect, and plan only. Do not write files or run mutating tools until implement/verify/finalize.'
@@ -639,30 +529,6 @@ function unique(values: string[]): string[] {
   return [...new Set(values)]
 }
 
-function effortMeetsMinimum(
-  effort: OpenMythosEffortLevel,
-  minimum: OpenMythosEffortLevel,
-): boolean {
-  return OPENMYTHOS_EFFORT_LEVELS.indexOf(effort) >= OPENMYTHOS_EFFORT_LEVELS.indexOf(minimum)
-}
-
-function shouldBuildWorkerPlan({
-  autoDispatchSubagents,
-  minEffort,
-  effort,
-  isTaskNotification,
-}: {
-  autoDispatchSubagents: boolean
-  minEffort: OpenMythosEffortLevel
-  effort: OpenMythosEffortLevel
-  isTaskNotification: boolean
-}): boolean {
-  if (!autoDispatchSubagents) return false
-  if (isTaskNotification) return false
-  if (!isEnvTruthy(process.env.MTL_CODE_COORDINATOR_MODE)) return false
-  return effortMeetsMinimum(effort, minEffort)
-}
-
 function getRemainingBudget(loopBudget: number, turnCount: number): number {
   return Math.max(0, loopBudget - Math.max(0, turnCount - 1))
 }
@@ -709,235 +575,6 @@ function selectExpertRoutes(
   return [...routed.values()].slice(0, 5)
 }
 
-function buildWorkerPlan({
-  autoDispatchSubagents,
-  minEffort,
-  maxWorkers,
-  goal,
-  effort,
-  signals,
-  expertRoutes,
-  isTaskNotification,
-}: {
-  autoDispatchSubagents: boolean
-  minEffort: OpenMythosEffortLevel
-  maxWorkers: number
-  goal: string
-  effort: OpenMythosEffortLevel
-  signals: Signal[]
-  expertRoutes: OpenMythosExpertRoute[]
-  isTaskNotification: boolean
-}): OpenMythosWorkerPlan | null {
-  if (!autoDispatchSubagents) return null
-  if (isTaskNotification) return null
-  if (!isEnvTruthy(process.env.MTL_CODE_COORDINATOR_MODE)) return null
-  if (!effortMeetsMinimum(effort, minEffort)) return null
-
-  const tasks = expertRoutes
-    .filter(route => route.kind !== 'local')
-    .map(route => routeToDispatchTask(route, goal))
-
-  const hasImplementationSignal = signals.some(signal => signal.reason === 'implementation requested')
-  if (hasImplementationSignal && !tasks.some(task => task.kind === 'implementation')) {
-    tasks.push(routeToDispatchTask({
-      kind: 'implementation',
-      label: 'Implementation worker',
-      reason: 'implementation requested',
-      required: true,
-    }, goal))
-  }
-
-  const assignments = tasks
-    .slice(0, Math.max(1, maxWorkers))
-    .map((task, index) => toWorkerAssignment(task, goal, index))
-  if (assignments.length === 0) return null
-
-  const planId = stableId('owp', [
-    goal,
-    effort,
-    minEffort,
-    String(maxWorkers),
-    ...assignments.map(assignment => `${assignment.kind}:${assignment.role}:${assignment.label}`),
-  ])
-
-  return {
-    planId,
-    goal,
-    effort,
-    status: 'previewed',
-    dispatchPolicy: {
-      maxWorkers,
-      minEffort,
-      requiresUserConfirmation: true,
-    },
-    assignments,
-  }
-}
-
 function isOpenMythosTaskNotificationInput(input: string): boolean {
   return /<task-notification\b/i.test(input)
-}
-
-function routeToDispatchTask(
-  route: Omit<OpenMythosDispatchTask, 'description' | 'objective' | 'role' | 'prompt'>,
-  goal: string,
-): OpenMythosDispatchTask {
-  const description = truncate(`${route.label}: ${goal}`, 80)
-  const role = routeToWorkerRole(route.kind)
-  const objective = `${route.label}: ${goal}`
-  const prompt = [
-    'You are an Argus worker selected by OpenMythos WorkerRuntime.',
-    `User goal: ${goal}`,
-    `Route: ${route.label}.`,
-    `Reason: ${route.reason}.`,
-    route.required ? 'This route is required for a safe answer.' : 'This route is helpful if it materially improves the answer.',
-    `Worker role: ${role}.`,
-    'Work autonomously within this route. Do not revert unrelated user changes.',
-    'End your final response with these exact Markdown headings: SUMMARY, EVIDENCE, CHANGES, RISKS, BLOCKERS.',
-    'Under EVIDENCE, cite concrete files, commands, or observations. Under CHANGES, list every file you changed or write "None."',
-  ].join('\n')
-
-  return {
-    ...route,
-    description,
-    objective,
-    role,
-    prompt,
-  }
-}
-
-function toWorkerAssignment(
-  task: OpenMythosDispatchTask,
-  goal: string,
-  index: number,
-): OpenMythosWorkerAssignment {
-  return {
-    assignmentId: stableId('owa', [
-      goal,
-      String(index + 1),
-      task.kind,
-      task.role,
-      task.label,
-      task.reason,
-    ]),
-    kind: task.kind,
-    role: task.role,
-    label: task.label,
-    reason: task.reason,
-    required: task.required,
-    description: task.description,
-    objective: task.objective,
-    prompt: task.prompt,
-  }
-}
-
-function routeToWorkerRole(kind: OpenMythosWorkerKind): OpenMythosWorkerRole {
-  switch (kind) {
-    case 'verification':
-      return 'worker-verifier'
-    case 'architecture':
-      return 'worker-plan'
-    case 'implementation':
-      return 'worker-implementer'
-    case 'security':
-    case 'performance':
-    case 'frontend':
-    case 'git':
-      return 'worker-review'
-    case 'local':
-      return 'worker-explore'
-  }
-}
-
-function stableId(prefix: string, parts: string[]): string {
-  const hash = createHash('sha256')
-    .update(parts.join('\0'))
-    .digest('hex')
-    .slice(0, 12)
-  return `${prefix}_${hash}`
-}
-
-function parseWorkerPlanOverride(
-  goal: string,
-  effort: OpenMythosEffortLevel,
-): OpenMythosWorkerPlan | null {
-  const raw = process.env.MTL_CODE_OPENMYTHOS_WORKER_PLAN
-  if (!raw?.trim()) return null
-  try {
-    const parsed = JSON.parse(raw) as Partial<OpenMythosWorkerPlan>
-    if (!parsed || !Array.isArray(parsed.assignments) || parsed.assignments.length === 0) {
-      return null
-    }
-    const assignments = parsed.assignments
-      .map((assignment, index): OpenMythosWorkerAssignment | null => {
-        if (!assignment || typeof assignment !== 'object') return null
-        const role = normalizeWorkerRole((assignment as Partial<OpenMythosWorkerAssignment>).role)
-        const kind = normalizeWorkerKind((assignment as Partial<OpenMythosWorkerAssignment>).kind)
-        const label = asNonEmptyString((assignment as Partial<OpenMythosWorkerAssignment>).label) ?? `Worker ${index + 1}`
-        const reason = asNonEmptyString((assignment as Partial<OpenMythosWorkerAssignment>).reason) ?? 'OpenMythos worker plan override'
-        const description = asNonEmptyString((assignment as Partial<OpenMythosWorkerAssignment>).description) ?? truncate(`${label}: ${goal}`, 80)
-        const objective = asNonEmptyString((assignment as Partial<OpenMythosWorkerAssignment>).objective) ?? description
-        return {
-          assignmentId: asNonEmptyString((assignment as Partial<OpenMythosWorkerAssignment>).assignmentId) ??
-            stableId('owa', [goal, String(index + 1), kind, role, label]),
-          kind,
-          role,
-          label,
-          reason,
-          required: Boolean((assignment as Partial<OpenMythosWorkerAssignment>).required),
-          description,
-          objective,
-          prompt: asNonEmptyString((assignment as Partial<OpenMythosWorkerAssignment>).prompt) ?? routeToDispatchTask({
-            kind,
-            label,
-            reason,
-            required: Boolean((assignment as Partial<OpenMythosWorkerAssignment>).required),
-          }, goal).prompt,
-        }
-      })
-      .filter((assignment): assignment is OpenMythosWorkerAssignment => assignment !== null)
-    if (assignments.length === 0) return null
-    return {
-      planId: asNonEmptyString(parsed.planId) ?? stableId('owp', [goal, effort, ...assignments.map(a => a.assignmentId)]),
-      goal: asNonEmptyString(parsed.goal) ?? goal,
-      effort: normalizeEffort((parsed as Partial<OpenMythosWorkerPlan>).effort, effort),
-      status: 'previewed',
-      dispatchPolicy: {
-        maxWorkers: parsed.dispatchPolicy?.maxWorkers ?? assignments.length,
-        minEffort: normalizeEffort(parsed.dispatchPolicy?.minEffort, 'medium'),
-        requiresUserConfirmation: parsed.dispatchPolicy?.requiresUserConfirmation !== false,
-      },
-      assignments,
-    }
-  } catch {
-    return null
-  }
-}
-
-function asNonEmptyString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
-function normalizeEffort(
-  value: unknown,
-  fallback: OpenMythosEffortLevel,
-): OpenMythosEffortLevel {
-  return typeof value === 'string' &&
-    OPENMYTHOS_EFFORT_LEVELS.includes(value as OpenMythosEffortLevel)
-    ? value as OpenMythosEffortLevel
-    : fallback
-}
-
-function normalizeWorkerKind(value: unknown): OpenMythosWorkerKind {
-  const normalized = typeof value === 'string' ? value : ''
-  return ['security', 'verification', 'performance', 'architecture', 'frontend', 'git', 'local', 'implementation'].includes(normalized)
-    ? normalized as OpenMythosWorkerKind
-    : 'implementation'
-}
-
-function normalizeWorkerRole(value: unknown): OpenMythosWorkerRole {
-  const normalized = typeof value === 'string' ? value : ''
-  return ['worker-explore', 'worker-plan', 'worker-review', 'worker-implementer', 'worker-verifier'].includes(normalized)
-    ? normalized as OpenMythosWorkerRole
-    : routeToWorkerRole(normalizeWorkerKind(normalized))
 }

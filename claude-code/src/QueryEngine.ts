@@ -78,11 +78,6 @@ import {
   createOpenMythosRuntimeState,
   shouldEnforceOpenMythosLoopBudget,
 } from './utils/openmythosRuntime.js'
-import {
-  createDispatchRuntimeBindingEvents,
-  deriveDispatchUserTurnId,
-  dispatchManager,
-} from './tasks/subagentDispatch.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
 import {
@@ -95,7 +90,6 @@ import {
   shouldEnableThinkingByDefault,
   type ThinkingConfig,
 } from './utils/thinking.js'
-import { getParentSessionId } from './utils/teammate.js'
 
 // Lazy: MessageSelector.tsx pulls React/ink; only needed for message filtering at query time
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -276,23 +270,6 @@ export class QueryEngine {
         toolUseID,
         forceDecision,
       )
-      const dispatchSessionId = getParentSessionId() || getSessionId() || 'main'
-      dispatchManager.recordLocalEvent({
-        sessionId: dispatchSessionId,
-        userTurnId: deriveDispatchUserTurnId({
-          sessionId: dispatchSessionId,
-          messages: this.mutableMessages,
-          requestId:
-            (assistantMessage.requestId as string | undefined) ||
-            (assistantMessage.message as { id?: string }).id,
-          toolUseId: toolUseID,
-        }),
-        type: 'permission_result',
-        toolName: tool.name,
-        status: result.behavior === 'allow' ? 'ok' : 'blocked',
-        summary: result.behavior,
-      })
-
       // Track denials for SDK reporting
       if (result.behavior !== 'allow') {
         this.permissionDenials.push({
@@ -576,22 +553,6 @@ export class QueryEngine {
       })
     }
     processUserInputContext.renderedSystemPrompt = systemPrompt
-
-    const dispatchSessionId = getParentSessionId() || getSessionId() || 'main'
-    const dispatchUserTurnId = deriveDispatchUserTurnId({
-      sessionId: dispatchSessionId,
-      messages: this.mutableMessages,
-      requestId: options?.uuid,
-    })
-    for (const event of createDispatchRuntimeBindingEvents({
-      sessionId: dispatchSessionId,
-      userTurnId: dispatchUserTurnId,
-      model: mainLoopModel,
-      modelProfileId: userSpecifiedModel,
-      mcpClients,
-    })) {
-      dispatchManager.recordLocalEvent(event)
-    }
 
     headlessProfilerCheckpoint('before_skills_plugins')
     // Cache-only: headless/SDK/CCR startup must not block on network for

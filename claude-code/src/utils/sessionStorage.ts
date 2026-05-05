@@ -267,15 +267,13 @@ export type AgentMetadata = {
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
    * resumed agent's notification can show the original description instead
-   * of a placeholder. Optional — older metadata files lack this field. */
+   * of a placeholder. Optional because older metadata files lack this field. */
   description?: string
 }
 
 /**
- * Persist the agentType used to launch a subagent. Read by resume to
- * route correctly when subagent_type is omitted — without this, resuming
- * a fork silently degrades to general-purpose (4KB system prompt, no
- * inherited history). Sidecar file avoids JSONL schema changes.
+ * Persist the agentType used to launch an agent thread. Read by resume so the
+ * restored child thread keeps the same role without changing the JSONL schema.
  *
  * Also stores the worktreePath when the agent was spawned with worktree
  * isolation, enabling resume to restore the correct cwd.

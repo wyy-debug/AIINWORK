@@ -18,9 +18,6 @@ test('OpenMythos runtime settings are normalized and written to MTL_CODE_OPENMYT
     phaseAdapter: true,
     expertRouting: false,
     contextCacheDiagnostics: true,
-    autoDispatchSubagents: true,
-    autoDispatchMinEffort: 'xhigh',
-    autoDispatchMaxWorkers: 6,
     minEffort: 'medium',
     maxEffort: 'high',
   });
@@ -34,11 +31,31 @@ test('OpenMythos runtime settings are normalized and written to MTL_CODE_OPENMYT
   assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter], '1');
   assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting], '0');
   assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics], '1');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchSubagents], '0');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMinEffort], 'xhigh');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.autoDispatchMaxWorkers], '6');
   assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort], 'medium');
   assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort], 'high');
+  assert.equal('MTL_CODE_OPENMYTHOS_AUTO_DISPATCH' in env, false);
+});
+
+test('Subagent runtime settings are normalized and written to Codex-style env keys', async () => {
+  const {
+    MTL_CODE_MODEL_ENV_KEYS,
+    applySubagentRuntimeToEnv,
+    normalizeSubagentRuntimeConfig,
+  } = await import(`../mtl-code-model-service.js?subagentRuntime=${Date.now()}`);
+
+  const env: Record<string, string> = {};
+  const config = normalizeSubagentRuntimeConfig({
+    enabled: true,
+    maxConcurrentThreadsPerSession: 5,
+    maxDepth: 2,
+  });
+  applySubagentRuntimeToEnv(env, config);
+
+  assert.equal(config.enabled, true);
+  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled], '1');
+  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxConcurrentThreadsPerSession], '5');
+  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxDepth], '2');
+  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.allowNestedSubagents], '1');
 });
 
 test('OpenMythos runtime settings override stale env values when read back', async () => {
@@ -49,7 +66,6 @@ test('OpenMythos runtime settings override stale env values when read back', asy
 
   const env = {
     MTL_CODE_OPENMYTHOS_RUNTIME: '0',
-    MTL_CODE_OPENMYTHOS_AUTO_DISPATCH: '0',
     MTL_CODE_OPENMYTHOS_LOOP_CONTROL: 'advisory',
     MTL_CODE_OPENMYTHOS_MIN_EFFORT: 'low',
     MTL_CODE_OPENMYTHOS_MAX_EFFORT: 'medium',
@@ -57,7 +73,6 @@ test('OpenMythos runtime settings override stale env values when read back', asy
   const settings = {
     [OPENMYTHOS_RUNTIME_SETTINGS_KEY]: {
       enabled: true,
-      autoDispatchSubagents: true,
       loopControl: 'enforced',
       minEffort: 'high',
       maxEffort: 'xhigh',
@@ -67,7 +82,7 @@ test('OpenMythos runtime settings override stale env values when read back', asy
   const config = readOpenMythosRuntimeConfig(settings, env);
 
   assert.equal(config.enabled, true);
-  assert.equal(config.autoDispatchSubagents, false);
+  assert.equal('autoDispatchSubagents' in config, false);
   assert.equal(config.loopControl, 'enforced');
   assert.equal(config.minEffort, 'high');
   assert.equal(config.maxEffort, 'xhigh');

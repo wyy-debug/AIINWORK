@@ -56,11 +56,6 @@
     "expertRoutingDescription": "按任务信号确定性建议安全、验证、性能、架构或前端专家。",
     "contextCacheDiagnostics": "上下文缓存诊断",
     "contextCacheDiagnosticsDescription": "在诊断中显示压缩、检索增强和工具摘要账本；不伪装成 KV 缓存。",
-    "autoDispatchSubagents": "自动分发子智能体",
-    "autoDispatchSubagentsDescription": "复杂任务会生成 Coordinator worker 派发计划，并由 Argus 首轮自动启动对应 worker。",
-    "dispatchPolicy": "子智能体派发策略",
-    "autoDispatchMinEffort": "最低派发强度",
-    "autoDispatchMaxWorkers": "最大 worker 数",
     "effortBounds": "推理强度范围",
     "minEffort": "最低推理强度",
     "maxEffort": "最高推理强度",
@@ -77,9 +72,8 @@
     "constraintsLabel": "约束",
     "acceptanceLabel": "验收标准",
     "routesLabel": "路由建议",
-    "workerPlanLabel": "Worker 计划",
     "requiredValue": "必需",
-    "noDispatchValue": "当前提示不会自动派发 worker",
+    "noDispatchValue": "OpenMythos 只提供建议；Argus 不会自动派发 worker。",
     "emptyPreview": "输入提示词后可预览运行时任务卡。",
     "disabledPreview": "运行时已关闭。",
     "saved": "运行时设置已保存。",
@@ -155,7 +149,8 @@
       "implement": "实现",
       "verify": "验证",
       "finalize": "收尾"
-    }
+    },
+    "subagentPolicy": "子智能体工具策略"
   },
   "account": {
     "title": "账户",

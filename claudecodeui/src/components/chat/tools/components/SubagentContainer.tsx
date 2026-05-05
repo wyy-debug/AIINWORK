@@ -101,7 +101,9 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
     }
     case 'Agent':
     case 'Task':
-      return pick('description', 'subagent_type');
+    case 'spawn_agent':
+      return pick('description', 'agent_type', 'message');
+    case 'send_input':
     case 'SendMessage':
       return pick('summary', 'message', 'content');
     case 'WebFetch':
@@ -131,9 +133,12 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
   subagentState,
 }) => {
   const parsedInput = parseObject(toolInput);
-  const subagentType = stringifyValue(parsedInput.subagent_type) || 'Agent';
-  const description = stringifyValue(parsedInput.description) || '后台任务';
-  const prompt = stringifyValue(parsedInput.prompt);
+  const subagentType = stringifyValue(parsedInput.agent_type)
+    || 'Agent';
+  const description = stringifyValue(parsedInput.description)
+    || stringifyValue(parsedInput.message)
+    || '后台任务';
+  const prompt = stringifyValue(parsedInput.prompt) || stringifyValue(parsedInput.message);
   const {
     childTools,
     currentToolIndex,

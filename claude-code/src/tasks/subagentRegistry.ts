@@ -20,6 +20,15 @@ export type SubagentRegistryStatus =
   | 'need_parent_input'
   | 'interrupted'
 
+export type AgentThreadGraphStatus = 'open' | 'closed'
+
+export type SubAgentSource =
+  | 'review'
+  | 'compact'
+  | 'thread_spawn'
+  | 'memory_consolidation'
+  | 'other'
+
 export type SubagentRole =
   | 'general'
   | 'explorer'
@@ -69,6 +78,13 @@ export type SubagentProtocolResult = {
 export type SubagentRegistryRecord = {
   taskId: string
   agentId: string
+  threadId: string
+  parentThreadId?: string
+  depth: number
+  agentNickname?: string
+  agentRole?: string
+  graphStatus: AgentThreadGraphStatus
+  source: SubAgentSource
   parentToolUseId?: string
   parentSessionId?: string
   sessionId?: string
@@ -185,12 +201,43 @@ function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
     status === 'running' ? 'interrupted' : status
   const timestamp = now()
   const agentType = typeof record.agentType === 'string' ? record.agentType : 'general-purpose'
+  const sessionId = typeof record.sessionId === 'string' ? record.sessionId : undefined
+  const parentSessionId = typeof record.parentSessionId === 'string' ? record.parentSessionId : undefined
+  const parentThreadId =
+    typeof record.parentThreadId === 'string'
+      ? record.parentThreadId
+      : parentSessionId
+  const threadId =
+    typeof record.threadId === 'string'
+      ? record.threadId
+      : sessionId ?? taskId
+  const graphStatus =
+    record.graphStatus === 'open' || record.graphStatus === 'closed'
+      ? record.graphStatus
+      : status === 'running'
+        ? 'open'
+        : 'closed'
+  const source =
+    record.source === 'review' ||
+    record.source === 'compact' ||
+    record.source === 'thread_spawn' ||
+    record.source === 'memory_consolidation' ||
+    record.source === 'other'
+      ? record.source
+      : 'thread_spawn'
   return {
     taskId,
     agentId: typeof record.agentId === 'string' ? record.agentId : taskId,
+    threadId,
+    parentThreadId,
+    depth: typeof record.depth === 'number' ? record.depth : parentThreadId ? 1 : 0,
+    agentNickname: typeof record.agentNickname === 'string' ? record.agentNickname : undefined,
+    agentRole: typeof record.agentRole === 'string' ? record.agentRole : undefined,
+    graphStatus,
+    source,
     parentToolUseId: typeof record.parentToolUseId === 'string' ? record.parentToolUseId : undefined,
-    parentSessionId: typeof record.parentSessionId === 'string' ? record.parentSessionId : undefined,
-    sessionId: typeof record.sessionId === 'string' ? record.sessionId : undefined,
+    parentSessionId,
+    sessionId,
     userTurnId: typeof record.userTurnId === 'string' ? record.userTurnId : undefined,
     objective: typeof record.objective === 'string' ? record.objective : 'Subagent task',
     prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
@@ -275,6 +322,12 @@ export class SubagentManager {
   register(params: {
     taskId: string
     agentId?: string
+    threadId?: string
+    parentThreadId?: string
+    depth?: number
+    agentNickname?: string
+    agentRole?: string
+    source?: SubAgentSource
     parentToolUseId?: string
     parentSessionId?: string
     sessionId?: string
@@ -289,12 +342,24 @@ export class SubagentManager {
     const timestamp = now()
     const existing = this.records.get(params.taskId)
     const agentType = params.selectedAgent?.agentType ?? existing?.agentType ?? 'general-purpose'
+    const threadId = params.threadId ?? params.sessionId ?? existing?.threadId ?? params.taskId
+    const parentThreadId =
+      params.parentThreadId ??
+      params.parentSessionId ??
+      existing?.parentThreadId
     const record: SubagentRegistryRecord = {
       ...existing,
       taskId: params.taskId,
       agentId: params.agentId ?? params.taskId,
+      threadId,
+      parentThreadId,
+      depth: params.depth ?? existing?.depth ?? (parentThreadId ? 1 : 0),
+      agentNickname: params.agentNickname ?? existing?.agentNickname,
+      agentRole: params.agentRole ?? params.role ?? existing?.agentRole,
+      graphStatus: 'open',
+      source: params.source ?? existing?.source ?? 'thread_spawn',
       parentToolUseId: params.parentToolUseId ?? existing?.parentToolUseId,
-      parentSessionId: params.parentSessionId ?? params.sessionId ?? existing?.parentSessionId,
+      parentSessionId: params.parentSessionId ?? params.parentThreadId ?? existing?.parentSessionId,
       sessionId: params.sessionId ?? existing?.sessionId,
       userTurnId: params.userTurnId ?? existing?.userTurnId,
       objective: params.objective.trim() || existing?.objective || 'Subagent task',
@@ -361,7 +426,7 @@ export class SubagentManager {
       recentActions: runtime.recentActions,
       updatedAt: timestamp,
       ...(mappedStatus && mappedStatus !== 'running' && !existing.endedAt
-        ? { endedAt: timestamp, hasLiveHandle: false }
+        ? { endedAt: timestamp, hasLiveHandle: false, graphStatus: 'closed' as const }
         : {}),
     }
     record.events = this.appendEvent(record, {
@@ -424,6 +489,7 @@ export class SubagentManager {
       updatedAt: timestamp,
       endedAt: timestamp,
       hasLiveHandle: false,
+      graphStatus: 'closed',
     }
     record.events = this.appendEvent(record, {
       type: record.status === 'blocked' ? 'blocked' : 'completed',
@@ -446,6 +512,32 @@ export class SubagentManager {
 
   cancel(taskId: string, reason = 'Subagent was cancelled.'): SubagentRegistryRecord | undefined {
     return this.terminal(taskId, 'cancelled', reason, 'cancelled')
+  }
+
+  closeSubtree(rootId: string, reason = 'Subagent was closed.'): SubagentRegistryRecord[] {
+    this.ensureLoaded()
+    const root = this.findByGraphId(rootId)
+    if (!root) return []
+    const closed: SubagentRegistryRecord[] = []
+    const threadIdsToClose = [root.threadId]
+    const taskIdsToClose = new Set<string>([root.taskId])
+    for (let index = 0; index < threadIdsToClose.length; index += 1) {
+      const parentThreadId = threadIdsToClose[index]
+      for (const record of this.records.values()) {
+        if (
+          record.parentThreadId === parentThreadId &&
+          !taskIdsToClose.has(record.taskId)
+        ) {
+          taskIdsToClose.add(record.taskId)
+          threadIdsToClose.push(record.threadId)
+        }
+      }
+    }
+    for (const taskId of taskIdsToClose) {
+      const record = this.terminal(taskId, 'cancelled', reason, 'cancelled')
+      if (record) closed.push(record)
+    }
+    return closed
   }
 
   interrupt(taskId: string, reason = 'Subagent was interrupted.'): SubagentRegistryRecord | undefined {
@@ -508,6 +600,7 @@ export class SubagentManager {
       updatedAt: timestamp,
       endedAt: timestamp,
       hasLiveHandle: false,
+      graphStatus: 'closed',
     }
     record.events = this.appendEvent(record, {
       type: eventType,
@@ -556,6 +649,18 @@ export class SubagentManager {
       // Persistence is best-effort; runtime state remains authoritative in memory.
     }
   }
+
+  private findByGraphId(id: string): SubagentRegistryRecord | undefined {
+    return (
+      this.records.get(id) ??
+      [...this.records.values()].find(
+        record =>
+          record.agentId === id ||
+          record.threadId === id ||
+          record.sessionId === id,
+      )
+    )
+  }
 }
 
 export const subagentManager = new SubagentManager()
@@ -592,6 +697,12 @@ export function parseSubagentProtocolResult(
 export function registerSubagentRecord(params: {
   taskId: string
   agentId?: string
+  threadId?: string
+  parentThreadId?: string
+  depth?: number
+  agentNickname?: string
+  agentRole?: string
+  source?: SubAgentSource
   parentToolUseId?: string
   parentSessionId?: string
   sessionId?: string
@@ -637,6 +748,13 @@ export function cancelSubagentRecord(
   reason = 'Subagent was cancelled.',
 ): SubagentRegistryRecord | undefined {
   return subagentManager.cancel(taskId, reason)
+}
+
+export function closeSubagentSubtree(
+  rootId: string,
+  reason = 'Subagent was closed.',
+): SubagentRegistryRecord[] {
+  return subagentManager.closeSubtree(rootId, reason)
 }
 
 export function interruptSubagentRecord(

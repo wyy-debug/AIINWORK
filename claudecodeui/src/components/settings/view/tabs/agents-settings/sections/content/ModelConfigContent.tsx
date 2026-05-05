@@ -56,9 +56,6 @@ type OpenMythosRuntimeConfig = {
   phaseAdapter: boolean;
   expertRouting: boolean;
   contextCacheDiagnostics: boolean;
-  autoDispatchSubagents: boolean;
-  autoDispatchMinEffort: OpenMythosEffort;
-  autoDispatchMaxWorkers: number;
   minEffort: OpenMythosEffort;
   maxEffort: OpenMythosEffort;
 };
@@ -94,9 +91,6 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   phaseAdapter: true,
   expertRouting: true,
   contextCacheDiagnostics: true,
-  autoDispatchSubagents: false,
-  autoDispatchMinEffort: 'medium',
-  autoDispatchMaxWorkers: 3,
   minEffort: 'low',
   maxEffort: 'max',
 };
@@ -139,11 +133,6 @@ const normalizeLoopControl = (value: unknown, fallback: OpenMythosLoopControl): 
     : fallback;
 };
 
-const normalizePositiveInteger = (value: unknown, fallback: number, max = 8): number => {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
-};
-
 const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => {
   const data = isObjectRecord(value) ? value : {};
   const minEffort = normalizeEffort(data.minEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort);
@@ -161,9 +150,6 @@ const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => 
     phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
     expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
     contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
-    autoDispatchSubagents: false,
-    autoDispatchMinEffort: normalizeEffort(data.autoDispatchMinEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort),
-    autoDispatchMaxWorkers: normalizePositiveInteger(data.autoDispatchMaxWorkers, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers),
     minEffort: minIndex <= maxIndex ? minEffort : maxEffort,
     maxEffort: minIndex <= maxIndex ? maxEffort : minEffort,
   };

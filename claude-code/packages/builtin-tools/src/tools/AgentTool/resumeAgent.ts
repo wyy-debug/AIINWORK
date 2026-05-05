@@ -24,7 +24,6 @@ import {
 } from 'src/utils/sessionStorage.js'
 import { buildEffectiveSystemPrompt } from 'src/utils/systemPrompt.js'
 import type { SystemPrompt } from 'src/utils/systemPromptType.js'
-import { getTaskOutputPath } from 'src/utils/task/diskOutput.js'
 import { getParentSessionId } from 'src/utils/teammate.js'
 import { reconstructForSubagentResume } from 'src/utils/toolResultStorage.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
@@ -34,10 +33,9 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { runAgent } from './runAgent.js'
 
-export type ResumeAgentResult = {
+export type ResumeBackgroundResult = {
   agentId: string
   description: string
-  outputFile: string
 }
 export async function resumeAgentBackground({
   agentId,
@@ -51,7 +49,7 @@ export async function resumeAgentBackground({
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   invokingRequestId?: string
-}): Promise<ResumeAgentResult> {
+}): Promise<ResumeBackgroundResult> {
   const startTime = Date.now()
   const appState = toolUseContext.getAppState()
   // In-process teammates get a no-op setAppState; setAppStateForTasks
@@ -96,7 +94,7 @@ export async function resumeAgentBackground({
     await fsp.utimes(resumedWorktreePath, now, now)
   }
 
-  // Skip filterDeniedAgents re-gating — original spawn already passed permission checks
+  // Skip filterDeniedAgents re-gating: original spawn already passed permission checks.
   let selectedAgent: AgentDefinition
   let isResumedFork = false
   if (meta?.agentType === FORK_AGENT.agentType) {
@@ -262,6 +260,5 @@ export async function resumeAgentBackground({
   return {
     agentId,
     description: uiDescription,
-    outputFile: getTaskOutputPath(agentId),
   }
 }

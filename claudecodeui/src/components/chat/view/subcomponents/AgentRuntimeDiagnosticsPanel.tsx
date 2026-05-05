@@ -178,30 +178,8 @@ function OpenMythosRuntimeSection({
   const card = runtime?.runtimeCard;
   const contextCache = runtime?.contextCache;
   const expertRoutes = card?.expertRoutes?.map((route) => (
-    `${route.label || route.kind || 'expert'}${route.required ? ' (required)' : ''}${route.reason ? `: ${route.reason}` : ''}`
+    `${route.label || route.kind || '专家路线'}${route.required ? '（建议优先）' : ''}${route.reason ? `：${route.reason}` : ''}`
   ));
-  const workerAssignments = card?.workerPlan?.assignments?.map((task) => (
-    `${task.label || task.role || task.kind || 'worker'}${task.required ? ' (必需)' : ''}${task.description ? `: ${task.description}` : ''}`
-  ));
-  const configuredAutoDispatchSubagents = runtime
-    ? runtime.configuredAutoDispatchSubagents
-      ?? (runtime.dispatchConfirmation?.mode === 'single-agent'
-        ? true
-        : runtime.autoDispatchSubagents !== false)
-    : false;
-  const effectiveAutoDispatchSubagents = runtime
-    ? runtime.effectiveAutoDispatchSubagents
-      ?? (runtime.dispatchConfirmation?.mode === 'single-agent'
-        ? false
-        : configuredAutoDispatchSubagents)
-    : false;
-  const autoDispatchStatus = !runtime
-    ? EMPTY_TEXT
-    : configuredAutoDispatchSubagents
-      ? effectiveAutoDispatchSubagents
-        ? '开启'
-        : '设置开启，本轮单 Agent'
-      : '关闭';
 
   return (
     <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
@@ -212,19 +190,16 @@ function OpenMythosRuntimeSection({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="已启用" value={formatBoolean(runtime?.enabled)} />
         <Field label="自适应推理" value={formatBoolean(runtime?.adaptiveEffort)} />
-        <Field label="冻结任务卡" value={formatBoolean(runtime?.taskCard)} />
+        <Field label="任务卡" value={formatBoolean(runtime?.taskCard)} />
         <Field label="路由提示" value={formatBoolean(runtime?.routingHints)} />
         <Field label="循环控制" value={formatText(runtime?.loopControl)} />
         <Field label="稳定重注入" value={formatBoolean(runtime?.stableReinjection)} />
         <Field label="阶段适配" value={formatBoolean(runtime?.phaseAdapter)} />
-        <Field label="专家路由" value={formatBoolean(runtime?.expertRouting)} />
+        <Field label="专家路线" value={formatBoolean(runtime?.expertRouting)} />
         <Field label="缓存诊断" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
-        <Field label="自动派发" value={autoDispatchStatus} />
-        <Field label="最低派发强度" value={formatText(runtime?.autoDispatchMinEffort)} />
-        <Field label="最大 worker 数" value={formatNumber(runtime?.autoDispatchMaxWorkers)} />
         <Field label="最低 effort" value={formatText(runtime?.minEffort)} />
         <Field label="最高 effort" value={formatText(runtime?.maxEffort)} />
-        <Field label="来源" value={runtime ? 'settings/env' : EMPTY_TEXT} />
+        <Field label="派发策略" value={runtime ? '仅建议，不自动派发' : EMPTY_TEXT} />
       </div>
 
       {card && (
@@ -233,28 +208,28 @@ function OpenMythosRuntimeSection({
             <div className="text-[11px] font-medium uppercase text-muted-foreground">运行时卡片</div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <Field label="effort" value={formatText(card.effort)} />
-              <Field label="loopBudget" value={formatNumber(card.loopBudget)} />
-              <Field label="remainingBudget" value={formatNumber(card.remainingBudget)} />
-              <Field label="riskScore" value={formatNumber(card.riskScore)} />
-              <Field label="phase" value={formatText(card.phase)} />
-              <Field label="phasePlan" value={card.phasePlan?.join(' → ') || EMPTY_TEXT} />
+              <Field label="循环预算" value={formatNumber(card.loopBudget)} />
+              <Field label="剩余预算" value={formatNumber(card.remainingBudget)} />
+              <Field label="风险分" value={formatNumber(card.riskScore)} />
+              <Field label="阶段" value={formatText(card.phase)} />
+              <Field label="阶段计划" value={card.phasePlan?.join(' -> ') || EMPTY_TEXT} />
             </div>
             <div className="mt-3 text-xs leading-5 text-muted-foreground">
               {card.goal || EMPTY_TEXT}
             </div>
           </div>
           <div className="rounded-lg border border-border bg-card/70 p-3">
-            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">专家 / 上下文账本</div>
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">专家路线 / 上下文账本</div>
             <StringBadges values={expertRoutes} />
-            <div className="mt-3 text-[11px] font-medium uppercase text-muted-foreground">自动派发计划</div>
-            <div className="mt-2">
-              <StringBadges values={workerAssignments} />
+            <div className="mt-3 text-[11px] font-medium uppercase text-muted-foreground">子智能体派发</div>
+            <div className="mt-2 text-xs leading-5 text-muted-foreground">
+              OpenMythos 只给任务拆分建议；只有用户明确要求子智能体、委派或并行工作时，模型才会调用 Codex 风格的 spawn_agent。
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Field label="compactBoundary" value={formatNumber(contextCache?.compactBoundaryCount)} />
+              <Field label="compact 边界" value={formatNumber(contextCache?.compactBoundaryCount)} />
               <Field label="microcompact" value={formatNumber(contextCache?.microcompactBoundaryCount)} />
-              <Field label="skill prompt" value={formatNumber(contextCache?.skillPromptLength)} />
-              <Field label="append prompt" value={formatNumber(contextCache?.appendSystemPromptLength)} />
+              <Field label="Skill prompt" value={formatNumber(contextCache?.skillPromptLength)} />
+              <Field label="追加 prompt" value={formatNumber(contextCache?.appendSystemPromptLength)} />
             </div>
           </div>
         </div>
@@ -272,9 +247,32 @@ function OpenMythosRuntimeSection({
           稳定重注入 {runtime?.stableReinjection ? '开启' : '关闭'}
         </span>
         <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          自动派发 {autoDispatchStatus}
+          子智能体：Codex 工具手动触发
         </span>
       </div>
+    </section>
+  );
+}
+
+function SubagentRuntimeSection({
+  subagents,
+}: {
+  subagents?: AgentRuntimeDiagnostics['subagents'];
+}) {
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+        <BotIcon className="h-4 w-4 text-primary" />
+        子智能体运行时
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="启用状态" value={subagents?.enabled ? '开启' : '关闭'} />
+        <Field label="单会话最大并发" value={formatNumber(subagents?.maxConcurrentThreadsPerSession)} />
+        <Field label="最大嵌套深度" value={formatNumber(subagents?.maxDepth)} />
+      </div>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        开启后只对新会话生效；OpenMythos 的 worker plan 是建议，不会自动派发。
+      </p>
     </section>
   );
 }
@@ -334,6 +332,7 @@ export default function AgentRuntimeDiagnosticsPanel({
           </div>
 
           <OpenMythosRuntimeSection runtime={diagnostics?.openMythosRuntime} />
+          <SubagentRuntimeSection subagents={diagnostics?.subagents} />
 
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <section className="rounded-lg border border-border bg-background/60 p-3">

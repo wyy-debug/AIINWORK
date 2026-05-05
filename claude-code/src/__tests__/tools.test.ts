@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
   parseToolPreset,
   filterToolsByDenyRules,
@@ -7,9 +7,19 @@ import {
 } from '../tools'
 import { getEmptyToolPermissionContext } from '../Tool'
 
-const SUBAGENT_TOOL_NAMES = [
+const CODEX_SUBAGENT_TOOL_NAMES = [
+  'spawn_agent',
+  'list_agents',
+  'wait_agent',
+  'close_agent',
+  'send_input',
+  'resume_agent',
+]
+
+const LEGACY_SUBAGENT_TOOL_NAMES = [
   'Agent',
   'AgentSpawn',
+  'AgentDispatchPlan',
   'AgentList',
   'AgentWait',
   'AgentResult',
@@ -18,6 +28,12 @@ const SUBAGENT_TOOL_NAMES = [
   'AgentResume',
   'Task',
 ]
+
+const originalEnv = { ...process.env }
+
+afterEach(() => {
+  process.env = { ...originalEnv }
+})
 
 describe('parseToolPreset', () => {
   test('returns "default" for "default" input', () => {
@@ -102,13 +118,34 @@ describe('filterToolsByDenyRules', () => {
 })
 
 describe('subagent publishing gate', () => {
-  test('does not expose subagent tools while the runtime is hard-disabled', () => {
+  test('does not expose subagent tools by default', () => {
+    delete process.env.MTL_CODE_SUBAGENTS_ENABLED
+
     const baseToolNames = getAllBaseTools().map(tool => tool.name)
     const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
       tool => tool.name,
     )
 
-    for (const toolName of SUBAGENT_TOOL_NAMES) {
+    for (const toolName of [...CODEX_SUBAGENT_TOOL_NAMES, ...LEGACY_SUBAGENT_TOOL_NAMES]) {
+      expect(baseToolNames).not.toContain(toolName)
+      expect(enabledToolNames).not.toContain(toolName)
+    }
+  })
+
+  test('exposes only Codex-style collaborative agent tools when enabled', () => {
+    process.env.MTL_CODE_SUBAGENTS_ENABLED = '1'
+
+    const baseToolNames = getAllBaseTools().map(tool => tool.name)
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    for (const toolName of CODEX_SUBAGENT_TOOL_NAMES) {
+      expect(baseToolNames).toContain(toolName)
+      expect(enabledToolNames).toContain(toolName)
+    }
+
+    for (const toolName of LEGACY_SUBAGENT_TOOL_NAMES) {
       expect(baseToolNames).not.toContain(toolName)
       expect(enabledToolNames).not.toContain(toolName)
     }

@@ -35,7 +35,9 @@ function isSubagentToolName(toolName?: string): boolean {
   return normalized === 'agent'
     || normalized === 'task'
     || normalized === 'agentspawn'
-    || normalized === 'agent_spawn';
+    || normalized === 'agent_spawn'
+    || normalized === 'spawn_agent'
+    || normalized === 'delegate_to_agent';
 }
 
 function isAgentOrchestrationChatter(content: string): boolean {

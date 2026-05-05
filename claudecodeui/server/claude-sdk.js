@@ -22,8 +22,10 @@ import { MTL_CODE_MODEL } from '../shared/modelConstants.js';
 import {
   applyAnthropicRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
+  applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
   readOpenMythosRuntimeConfig,
+  readSubagentRuntimeConfig,
   repairAnthropicRuntimeModelEnv,
   resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
@@ -488,6 +490,10 @@ async function readMtlCodeSettingsEnv() {
         runtimeEnv,
         readOpenMythosRuntimeConfig(settings || {}, runtimeEnv),
       );
+      applySubagentRuntimeToEnv(
+        runtimeEnv,
+        readSubagentRuntimeConfig(settings || {}, runtimeEnv),
+      );
       return runtimeEnv;
     }
 
@@ -497,6 +503,7 @@ async function readMtlCodeSettingsEnv() {
     );
     repairAnthropicRuntimeModelEnv(env);
     applyOpenMythosRuntimeToEnv(env, readOpenMythosRuntimeConfig(settings, env));
+    applySubagentRuntimeToEnv(env, readSubagentRuntimeConfig(settings, env));
     return env;
   } catch {
     return {};
@@ -546,17 +553,6 @@ async function buildMtlCodeSpawnEnv(options = {}) {
   if (configuredContextWindow) {
     spawnEnv.MTL_CODE_MAX_CONTEXT_TOKENS = configuredContextWindow;
     spawnEnv.CONTEXT_WINDOW = configuredContextWindow;
-  }
-
-  if (options.openMythosAutoDispatch === false) {
-    spawnEnv.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '0';
-    spawnEnv.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '0';
-    delete spawnEnv.MTL_CODE_OPENMYTHOS_WORKER_PLAN;
-  } else if (options.openMythosDispatchConfirmed === true) {
-    spawnEnv.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '1';
-    if (options.openMythosWorkerPlan && typeof options.openMythosWorkerPlan === 'object') {
-      spawnEnv.MTL_CODE_OPENMYTHOS_WORKER_PLAN = JSON.stringify(options.openMythosWorkerPlan);
-    }
   }
 
   applyAnthropicRuntimeModelDefaults(spawnEnv, {

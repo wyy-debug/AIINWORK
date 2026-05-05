@@ -43,7 +43,7 @@ function parseSubagentLabel(message: ChatMessage): string {
   const payload = parsePlainObject(message.toolInput);
   const candidates = [
     payload?.description,
-    payload?.subagent_type,
+    payload?.agent_type,
     payload?.agent,
     payload?.label,
     message.toolName,

@@ -74,8 +74,8 @@ sequenceDiagram
   participant Runtime as Argus runtime
   participant Store as useSessionStore
 
-  Chat->>Settings: preview OpenMythos workerPlan
-  Settings-->>Chat: confirm or single-agent decision
+  Chat->>Settings: load OpenMythos/Subagent runtime config
+  Settings-->>Chat: runtime diagnostics payload
   Chat->>WS: Argus command message
   WS->>Server: claude-command compatibility message
   Server->>Runtime: spawn mtl-code stream-json
@@ -86,14 +86,13 @@ sequenceDiagram
   Store-->>Chat: merged render state
 ```
 
-OpenMythos 自动派发确认流程：
+OpenMythos / Subagent ??????
 
-1. `useChatComposerState` 在真正发送前调用 `POST /api/settings/openmythos-dispatch-preview`；未配置时 OpenMythos 和自动派发默认关闭。
-2. 后端使用 `buildOpenMythosRuntimePreview()` 和当前 `~/.mtl-code/settings.json` 生成 `workerPlan`。
-3. 如果没有派发计划，本轮默认以单 Agent 执行，并把 `openMythosAutoDispatch: false` 放入 command options，避免 CLI 自己重新判断后意外派发。
-4. 如果存在派发计划，前端弹出中文确认：确定则发送 `openMythosDispatchConfirmed: true` 并允许自动派发；取消则发送 `openMythosAutoDispatch: false`。
-5. `server/claude-sdk.js` 根据 command options 注入 `MTL_CODE_OPENMYTHOS_AUTO_DISPATCH=0` 或 `MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED=1`，子进程最终以该单次决策为准。
-6. `agent_runtime_debug` 会记录本轮确认状态，诊断面板只展示后端实际收到的配置。
+1. `useChatComposerState` ?????????? Argus command options???????????????
+2. ??? `~/.mtl-code/settings.json` ?? `openMythosRuntime` ? `subagents`?????????????
+3. OpenMythos ???????????????????? ticket ? worker plan?
+4. Subagent ???????? `subagents.enabled` ????????????????
+5. `agent_runtime_debug` ????????? OpenMythos ? Subagent ?????????????????
 
 `server/index.js` 当前主路径处理 `claude-command`，它是 Argus 的 compatibility message type。以下其他 command types 可能仍在旧代码中存在，但属于 legacy hidden Provider surface：
 
@@ -364,9 +363,9 @@ Project/conversation separation:
 10. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
 11. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
 
-## OpenMythos 自动派发流程
+## OpenMythos 建议与 Codex Subagent 流程
 
-OpenMythos 是策略层，WorkerRuntime 是执行层。UI 发送前预览并确认 `workerPlan`；确认后 Argus CLI 使用同一个 plan 通过现有 `AgentTool.call()` 启动角色化 worker。
+OpenMythos 是策略层，Codex 风格 collaborative agent tools 是执行层。OpenMythos 可以建议拆分任务，但不会自动启动 worker。
 
 ```mermaid
 sequenceDiagram
@@ -376,31 +375,24 @@ sequenceDiagram
   participant Coord as Coordinator
   participant Worker as Agent worker
 
-  UI->>API: 保存 openMythosRuntime
-  API->>CLI: 注入 MTL_CODE_OPENMYTHOS_* 和 MTL_CODE_COORDINATOR_MODE
-  CLI->>CLI: 读取确认后的 runtimeCard 和 workerPlan
-  CLI->>Coord: 追加 OpenMythos runtime reminder
-  CLI->>Worker: WorkerRuntime 按 assignment 启动 worker
-  Worker-->>Coord: <task-notification>
-  Coord->>Coord: 汇总 worker 结果，不重新生成 workerPlan
-  Coord-->>UI: 合并 worker 结果并继续主会话
+  UI->>API: 保存 openMythosRuntime / subagents
+  API->>CLI: 注入 OpenMythos 与 Subagent feature gate env
+  CLI->>Coord: 追加 OpenMythos advisory runtime reminder
+  Coord->>Coord: 判断用户是否明确要求 subagents/delegation/parallel work
+  Coord->>Worker: 必要时调用 spawn_agent(message/items, agent_type)
+  Worker-->>Coord: 通过 wait_agent 返回最终状态
+  Coord-->>UI: 汇总结果并继续主会话
 ```
 
 关键不变量：
 
-1. `low` effort 不自动派发。
-2. `autoDispatchSubagents=false` 时不自动派发。
-3. `MTL_CODE_COORDINATOR_MODE` 未开启时不自动派发。
-4. `autoDispatchMinEffort` 控制最低触发强度，默认 `medium`。
-5. `autoDispatchMaxWorkers` 控制最多 worker 数，默认 3。
-6. 诊断面板必须展示自动派发开关、最低派发强度、最大 worker 数和当前 `workerPlan.assignments`。
-7. Chat 输入框上方必须在收到 `agent_runtime_debug` 后展示 OpenMythos 状态提示，让普通对话也能看到自动派发是否开启以及当前是否有 worker 计划。
-8. Worker 回传的 `<task-notification>` 是汇总输入，不是新的用户任务；OpenMythos 不得为它生成新的 `workerPlan`。
-9. SDK/print 路径的硬派发在同一个 runtime state 里只允许尝试一次，避免 worker 完成后同一计划被重复启动。
-10. `<task-notification>` 是 coordinator/subagent 的内部控制消息，不应该作为用户蓝色气泡渲染。后端 `ClaudeSessionsProvider` 会在历史/实时归一化时过滤，前端 `useChatMessages` 也会兜底跳过。
-11. `useChatMessages` 会把带 `parentToolUseId` 的实时 child tool 归并回对应 `Task` / `Agent` 容器，并跳过这些内部 child 消息的主聊天渲染。
-12. 输入框上方的 Subagent 状态条只从当前会话的 `Task` / `Agent` 容器聚合：`running` 表示容器未完成，`completed` 表示已有 tool result，`outputting` 表示未完成且存在正在输出的 child tool。
-13. OpenMythos 诊断需要区分 `configuredAutoDispatchSubagents` 和 `effectiveAutoDispatchSubagents`：设置开启但本轮没有 worker 计划、或用户选择单 Agent 时，UI 应显示“设置开启，本轮单 Agent”，不能误写成“运行时设置关闭”。
+1. OpenMythos 不自动派发。
+2. 只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才能调用 `spawn_agent`。
+3. `subagents.enabled=false` 时，新会话不暴露 collaborative agent tools。
+4. 诊断面板必须展示 OpenMythos 是“仅建议层”，并展示 Subagents 是否启用、最大并发和最大嵌套深度。
+5. 内部 subagent notification 不应该作为用户蓝色气泡渲染。后端 `ClaudeSessionsProvider` 会在历史/实时归一化时过滤，前端 `useChatMessages` 也会兜底跳过。
+6. `useChatMessages` 会把带 `parentToolUseId` 的实时 child tool 归并回对应 `spawn_agent` 容器，并跳过这些内部 child 消息的主聊天渲染。
+7. 输入框上方的 Subagent 状态条只从当前会话的 subagent container 聚合：`running` 表示容器未完成，`completed` 表示已有 tool result，`outputting` 表示未完成且存在正在输出的 child tool。
 
 ## Worktree Dispatch Management
 

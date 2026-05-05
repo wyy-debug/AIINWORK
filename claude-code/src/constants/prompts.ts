@@ -9,6 +9,7 @@ import { getSessionStartDate } from './common.js'
 import { getInitialSettings } from '../utils/settings/settings.js'
 import { isPoorModeActive } from '../commands/poor/poorMode.js'
 import {
+  AGENT_SPAWN_TOOL_NAME,
   AGENT_TOOL_NAME,
   VERIFICATION_AGENT_TYPE,
 } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
@@ -363,7 +364,7 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
     `  Single file fix: 1-2 searches (find file, read it)`,
     `  Cross-cutting change: 3-5 searches (find all affected files)`,
     `  Architecture investigation: 5-10+ searches (trace call chains, read interfaces)`,
-    `  Full codebase audit: use ${AGENT_TOOL_NAME} with a specialized subagent instead of manual searches`,
+    `  Full codebase audit: use ${AGENT_SPAWN_TOOL_NAME} with a specialized agent_type when the user explicitly asked for delegated or parallel agent work`,
   ].join('\n')
 
   // --- Search before saying unknown (#22) ---
@@ -403,9 +404,7 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
 }
 
 function getAgentToolSection(): string {
-  return isForkSubagentEnabled()
-    ? `Calling ${AGENT_TOOL_NAME} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context \u2014 so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** \u2014 execute directly; do not re-delegate.`
-    : `Use the ${AGENT_TOOL_NAME} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
+  return `Use ${AGENT_SPAWN_TOOL_NAME} only when the user explicitly asks for subagents, delegation, or parallel agent work. Provide message/items, optionally agent_type, and set fork_context=true only when the child needs the current thread history. Use wait_agent for final status instead of polling with extra messages.`
 }
 
 /**
@@ -445,7 +444,8 @@ function getSessionSpecificGuidanceSection(
   const hasAskUserQuestionTool = enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
   const hasSkills =
     skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
-  const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
+  const hasAgentTool =
+    enabledTools.has(AGENT_TOOL_NAME) || enabledTools.has(AGENT_SPAWN_TOOL_NAME)
   const searchTools = hasEmbeddedSearchTools()
     ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
     : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
@@ -465,7 +465,7 @@ function getSessionSpecificGuidanceSection(
     !isForkSubagentEnabled()
       ? [
           `For simple, directed codebase searches (e.g. for a specific file/class/function) use ${searchTools} directly.`,
-          `For broader codebase exploration and deep research, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType}. This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
+          `For broader codebase exploration and deep research, use ${AGENT_SPAWN_TOOL_NAME} with agent_type="${EXPLORE_AGENT.agentType}". This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when the user explicitly asked for delegated agent work.`,
         ]
       : []),
     hasSkills
@@ -482,7 +482,7 @@ function getSessionSpecificGuidanceSection(
     getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false) &&
     // Poor mode: skip verification agent to save tokens
     !isPoorModeActive()
-      ? `The contract: when non-trivial implementation happens on your turn, independent adversarial verification must happen before you report completion \u2014 regardless of who did the implementing (you directly, a fork you spawned, or a subagent). You are the one reporting to the user; you own the gate. Non-trivial means: 3+ file edits, backend/API changes, or infrastructure changes. Spawn the ${AGENT_TOOL_NAME} tool with subagent_type="${VERIFICATION_AGENT_TYPE}". Your own checks, caveats, and a fork's self-checks do NOT substitute \u2014 only the verifier assigns a verdict; you cannot self-assign PARTIAL. Pass the original user request, all files changed (by anyone), the approach, and the plan file path if applicable. Flag concerns if you have them but do NOT share test results or claim things work. On FAIL: fix, resume the verifier with its findings plus your fix, repeat until PASS. On PASS: spot-check it \u2014 re-run 2-3 commands from its report, confirm every PASS has a Command run block with output that matches your re-run. If any PASS lacks a command block or diverges, resume the verifier with the specifics. On PARTIAL (from the verifier): report what passed and what could not be verified.`
+      ? `The contract: when non-trivial implementation happens on your turn and the user has explicitly allowed delegated agent work, independent adversarial verification should happen before you report completion. Spawn ${AGENT_SPAWN_TOOL_NAME} with agent_type="${VERIFICATION_AGENT_TYPE}". Your own checks, caveats, and a fork's self-checks do NOT substitute. Pass the original user request, all files changed, the approach, and the plan file path if applicable. Use wait_agent for the final verifier status.`
       : null,
   ].filter(item => item !== null)
 

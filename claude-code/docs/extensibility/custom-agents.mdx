@@ -163,7 +163,7 @@ getSystemPrompt: () => {
 当主 Agent 需要派生子 Agent 时：
 
 ```
-AgentTool.call({ subagent_type: "reviewer", ... })
+spawn_agent({ agent_type: "reviewer", message: "..." })
   ↓
 1. 从 agentDefinitions.activeAgents 查找 agentType === "reviewer"
   ↓

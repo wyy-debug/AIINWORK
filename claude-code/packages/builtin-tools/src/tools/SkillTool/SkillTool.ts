@@ -58,8 +58,6 @@ import { createUserMessage, normalizeMessages } from 'src/utils/messages.js'
 import type { ModelAlias } from 'src/utils/model/aliases.js'
 import { resolveSkillModelOverride } from 'src/utils/model/model.js'
 import { recordSkillUsage } from 'src/utils/suggestions/skillUsageTracking.js'
-import { deriveDispatchUserTurnId, dispatchManager } from 'src/tasks/subagentDispatch.js'
-import { getParentSessionId } from 'src/utils/teammate.js'
 import { createAgentId } from 'src/utils/uuid.js'
 import { runAgent } from '../AgentTool/runAgent.js'
 import {
@@ -119,28 +117,14 @@ const remoteSkillModules = feature('EXPERIMENTAL_SKILL_SEARCH')
 
 function recordSkillBindingDispatchEvent({
   skillName,
-  context,
-  parentMessage,
+  context: _context,
+  parentMessage: _parentMessage,
 }: {
   skillName: string
   context: ToolUseContext
   parentMessage: AssistantMessage
 }): void {
-  const sessionId = getParentSessionId() || getSessionId() || 'main'
-  dispatchManager.recordLocalEvent({
-    sessionId,
-    userTurnId: deriveDispatchUserTurnId({
-      sessionId,
-      messages: context.messages,
-      requestId:
-        (parentMessage.requestId as string | undefined) ||
-        (parentMessage.message as { id?: string }).id,
-      toolUseId: context.toolUseId,
-    }),
-    type: 'skill_binding',
-    skillName,
-    status: 'ok',
-  })
+  void skillName
 }
 
 /**

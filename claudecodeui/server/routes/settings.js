@@ -14,12 +14,15 @@ import {
 } from '../shared/utils.js';
 import {
   OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
-  buildOpenMythosRuntimePreview,
+  applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
   normalizeOpenMythosRuntimeConfig,
+  normalizeSubagentRuntimeConfig,
   readOpenMythosRuntimeConfig,
+  readSubagentRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
 import {
   readRuntimePermissions,
@@ -44,6 +47,10 @@ const MTL_CODE_ENV_KEYS = {
   subagentModel: 'MTL_CODE_SUBAGENT_MODEL',
   legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
   coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
+  subagentsEnabled: 'MTL_CODE_SUBAGENTS_ENABLED',
+  subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
+  subagentMaxDepth: 'MTL_CODE_SUBAGENTS_MAX_DEPTH',
+  allowNestedSubagents: 'MTL_CODE_ALLOW_NESTED_SUBAGENTS',
 };
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_PAYG_ANTHROPIC_BASE_URL = 'https://api.xiaomimimo.com/anthropic';
@@ -280,6 +287,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
       coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
     },
     openMythosRuntime: readOpenMythosRuntimeConfig(settings, env),
+    subagents: readSubagentRuntimeConfig(settings, env),
   };
 };
 
@@ -471,11 +479,8 @@ const applyArgusRuntimeToEnv = (env, runtime) => {
 };
 
 const applyCoordinatorModeFromOpenMythosRuntime = (env, runtime) => {
-  const shouldUseCoordinator = Boolean(
-    runtime?.enabled !== false
-    && runtime?.autoDispatchSubagents !== false,
-  );
-  env[MTL_CODE_ENV_KEYS.coordinatorMode] = shouldUseCoordinator ? '1' : '0';
+  void env;
+  void runtime;
 };
 
 // ===============================
@@ -778,6 +783,12 @@ router.put('/mtl-code-model', async (req, res) => {
     );
     settings[OPENMYTHOS_RUNTIME_SETTINGS_KEY] = openMythosRuntime;
     applyOpenMythosRuntimeToEnv(env, openMythosRuntime);
+    const subagents = normalizeSubagentRuntimeConfig(
+      readObjectRecord(req.body?.subagents),
+      readSubagentRuntimeConfig(settings, env),
+    );
+    settings[SUBAGENT_RUNTIME_SETTINGS_KEY] = subagents;
+    applySubagentRuntimeToEnv(env, subagents);
     applyCoordinatorModeFromOpenMythosRuntime(env, openMythosRuntime);
     clearOpenAIEnv(env);
     settings.env = env;
@@ -790,37 +801,6 @@ router.put('/mtl-code-model', async (req, res) => {
   } catch (error) {
     console.error('Error saving Argus model settings:', error);
     res.status(500).json({ error: 'Failed to save Argus model settings' });
-  }
-});
-
-router.post('/openmythos-dispatch-preview', async (req, res) => {
-  try {
-    const { filePath, settings } = await readMtlCodeSettings();
-    const body = readObjectRecord(req.body) ?? {};
-    const input = readOptionalString(body.input) || readOptionalString(body.command) || '';
-    const permissionMode = readOptionalString(body.permissionMode) || '';
-    const env = readObjectRecord(settings.env) ?? {};
-    const openMythosRuntime = readOpenMythosRuntimeConfig(settings, env);
-    const runtimeCard = buildOpenMythosRuntimePreview(input, openMythosRuntime, permissionMode);
-    const workerPlan = runtimeCard?.workerPlan && Array.isArray(runtimeCard.workerPlan.assignments)
-      ? runtimeCard.workerPlan
-      : null;
-
-    res.json({
-      success: true,
-      configPath: filePath,
-      openMythosRuntime,
-      runtimeCard,
-      workerPlan,
-      shouldConfirm: Boolean(
-        openMythosRuntime?.enabled
-        && openMythosRuntime?.autoDispatchSubagents
-        && workerPlan?.assignments?.length > 0
-      ),
-    });
-  } catch (error) {
-    console.error('Error previewing OpenMythos dispatch:', error);
-    res.status(500).json({ error: 'Failed to preview OpenMythos dispatch' });
   }
 });
 

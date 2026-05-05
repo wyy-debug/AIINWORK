@@ -1,6 +1,6 @@
 /**
  * Centralized tool configuration registry
- * Defines display behavior for all tool types 
+ * Defines display behavior for all tool types
  */
 
 export interface ToolDisplayConfig {
@@ -380,8 +380,8 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     input: {
       type: 'collapsible',
       title: (input) => {
-        const subagentType = input.subagent_type || 'Agent';
-        const description = input.description || 'Running task';
+        const subagentType = input.agent_type || 'Agent';
+        const description = input.description || input.message || '后台任务';
         return `Subagent / ${subagentType}: ${description}`;
       },
       defaultOpen: false,
@@ -457,6 +457,35 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
         // Fallback to string representation
         return { content: String(result || 'No response') };
       }
+    }
+  },
+
+  spawn_agent: {
+    input: {
+      type: 'collapsible',
+      title: (input) => {
+        const subagentType = input.agent_type || 'Agent';
+        const description = input.description || input.message || '后台任务';
+        return `Subagent / ${subagentType}: ${description}`;
+      },
+      defaultOpen: false,
+      contentType: 'markdown',
+      getContentProps: (input) => ({
+        content: input.prompt || input.message || JSON.stringify(input, null, 2)
+      }),
+      colorScheme: {
+        border: 'border-purple-500 dark:border-purple-400',
+        icon: 'text-purple-500 dark:text-purple-400'
+      }
+    },
+    result: {
+      type: 'collapsible',
+      title: 'Subagent 状态',
+      defaultOpen: false,
+      contentType: 'task',
+      getContentProps: (result) => ({
+        content: String(result?.content || '')
+      })
     }
   },
 

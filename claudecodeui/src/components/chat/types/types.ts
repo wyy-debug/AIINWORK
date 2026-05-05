@@ -262,17 +262,6 @@ export interface OpenMythosRuntimeDiagnostics {
   phaseAdapter?: boolean;
   expertRouting?: boolean;
   contextCacheDiagnostics?: boolean;
-  autoDispatchSubagents?: boolean;
-  configuredAutoDispatchSubagents?: boolean;
-  effectiveAutoDispatchSubagents?: boolean;
-  autoDispatchMinEffort?: string;
-  autoDispatchMaxWorkers?: number;
-  dispatchConfirmation?: {
-    required?: boolean;
-    confirmed?: boolean;
-    mode?: 'single-agent' | 'auto-dispatch' | string;
-    source?: string;
-  };
   minEffort: string;
   maxEffort: string;
   runtimeCard?: {
@@ -291,27 +280,6 @@ export interface OpenMythosRuntimeDiagnostics {
       reason?: string;
       required?: boolean;
     }>;
-    workerPlan?: {
-      planId?: string;
-      goal?: string;
-      effort?: string;
-      status?: string;
-      dispatchPolicy?: {
-        minEffort?: string;
-        maxWorkers?: number;
-      };
-      assignments?: Array<{
-        assignmentId?: string;
-        kind?: string;
-        role?: string;
-        label?: string;
-        reason?: string;
-        required?: boolean;
-        description?: string;
-        objective?: string;
-        prompt?: string;
-      }>;
-    } | null;
   } | null;
   contextCache?: {
     compactBoundaryCount?: number;
@@ -321,6 +289,12 @@ export interface OpenMythosRuntimeDiagnostics {
     skillPromptLength?: number;
     appendSystemPromptLength?: number;
   };
+}
+
+export interface SubagentRuntimeDiagnostics {
+  enabled?: boolean;
+  maxConcurrentThreadsPerSession?: number;
+  maxDepth?: number;
 }
 
 export interface AgentRuntimeDiagnostics {
@@ -346,6 +320,7 @@ export interface AgentRuntimeDiagnostics {
   model?: string;
   modelProfileId?: string;
   openMythosRuntime?: OpenMythosRuntimeDiagnostics | null;
+  subagents?: SubagentRuntimeDiagnostics | null;
   contextWindowTokens?: number | null;
   projectPath?: string;
   sessionId?: string | null;

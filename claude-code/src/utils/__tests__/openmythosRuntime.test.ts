@@ -14,7 +14,6 @@ const originalEnv = { ...process.env }
 
 beforeEach(() => {
   process.env.MTL_CODE_OPENMYTHOS_RUNTIME = '1'
-  process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '1'
 })
 
 afterEach(() => {
@@ -24,27 +23,24 @@ afterEach(() => {
 describe('openmythos runtime card', () => {
   test('is disabled by default without explicit runtime opt-in', () => {
     delete process.env.MTL_CODE_OPENMYTHOS_RUNTIME
-    delete process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH
 
     expect(getOpenMythosRuntimeConfig().enabled).toBe(false)
-    expect(getOpenMythosRuntimeConfig().autoDispatchSubagents).toBe(false)
     expect(buildOpenMythosRuntimeCard('Implement auth migration')).toBeNull()
     expect(shouldApplyAdaptiveEffort(undefined)).toBe(false)
     expect(shouldAttachOpenMythosRuntimeCard()).toBe(false)
   })
 
-  test('classifies small conversational prompts as low effort', () => {
+  test('classifies small conversational prompts as low effort without worker plans', () => {
     const card = buildOpenMythosRuntimeCard('thanks, what branch am I on?')
 
     expect(card?.effort).toBe('low')
     expect(card?.loopBudget).toBe(2)
     expect(card?.phasePlan).toEqual(['orient', 'finalize'])
     expect(card?.routes.join(' ')).toContain('Handle locally')
-    expect(card?.workerPlan).toBeNull()
+    expect(card).not.toHaveProperty('workerPlan')
   })
 
-  test('escalates risky implementation work and records routes', () => {
-    process.env.MTL_CODE_COORDINATOR_MODE = '1'
+  test('escalates risky implementation work and records advisory routes only', () => {
     const card = buildOpenMythosRuntimeCard(
       'Implement an auth database migration with rollback tests and CI verification',
     )
@@ -55,9 +51,8 @@ describe('openmythos runtime card', () => {
     expect(card?.reasons).toContain('deployment, data, or CI risk')
     expect(card?.routes.join(' ')).toContain('security-focused skill')
     expect(card?.routes.join(' ')).toContain('verification pass')
-    expect(card?.riskScore).toBeGreaterThanOrEqual(8)
     expect(card?.expertRoutes.map(route => route.kind)).toContain('security')
-    expect(card?.workerPlan).toBeNull()
+    expect(card).not.toHaveProperty('workerPlan')
     expect(card?.phasePlan).toEqual([
       'orient',
       'plan',
@@ -67,23 +62,18 @@ describe('openmythos runtime card', () => {
     ])
   })
 
-  test('adds plan-mode no-mutation constraint', () => {
-    const card = buildOpenMythosRuntimeCard('Plan a broad refactor', 'plan')
-
-    expect(card?.constraints.join(' ')).toContain('do not mutate tracked files')
-  })
-
-  test('formats the frozen goal reminder', () => {
-    const card = buildOpenMythosRuntimeCard('Fix flaky tests')
+  test('formats reminder as advisory-only and never mentions old dispatch tools', () => {
+    const card = buildOpenMythosRuntimeCard('Refactor multi-module architecture')
     if (!card) throw new Error('expected runtime card')
 
     const reminder = formatOpenMythosRuntimeReminder(card)
 
-    expect(reminder).toContain('Frozen goal: Fix flaky tests')
-    expect(reminder).toContain('Adaptive effort:')
-    expect(reminder).toContain('Current phase:')
-    expect(reminder).toContain('Expert routes:')
-    expect(reminder).toContain('WorkerRuntime plan:')
+    expect(reminder).toContain('Frozen goal: Refactor multi-module architecture')
+    expect(reminder).toContain('OpenMythos is advisory only')
+    expect(reminder).toContain('spawn_agent only when the user explicitly asks')
+    expect(reminder).not.toContain('AgentDispatchPlan')
+    expect(reminder).not.toContain('dispatch_ticket')
+    expect(reminder).not.toContain('MTL_CODE_OPENMYTHOS_WORKER_PLAN')
   })
 
   test('creates enforced runtime state with read-only early phases', () => {
@@ -108,24 +98,6 @@ describe('openmythos runtime card', () => {
     expect(shouldApplyAdaptiveEffort(undefined)).toBe(false)
   })
 
-  test('can disable the runtime entirely', () => {
-    process.env.MTL_CODE_OPENMYTHOS_RUNTIME = '0'
-
-    expect(buildOpenMythosRuntimeCard('Implement auth migration')).toBeNull()
-    expect(shouldApplyAdaptiveEffort(undefined)).toBe(false)
-    expect(shouldAttachOpenMythosRuntimeCard()).toBe(false)
-  })
-
-  test('can disable adaptive effort without disabling the task card', () => {
-    process.env.MTL_CODE_OPENMYTHOS_ADAPTIVE_EFFORT = '0'
-
-    const card = buildOpenMythosRuntimeCard('Implement auth migration')
-
-    expect(card?.effort).toBe('max')
-    expect(shouldApplyAdaptiveEffort(undefined)).toBe(false)
-    expect(shouldAttachOpenMythosRuntimeCard()).toBe(true)
-  })
-
   test('can disable task-card attachment independently', () => {
     process.env.MTL_CODE_OPENMYTHOS_TASK_CARD = '0'
 
@@ -145,41 +117,7 @@ describe('openmythos runtime card', () => {
     )
   })
 
-  test('keeps worker dispatch disabled even in coordinator mode above the configured effort', () => {
-    const prompt = 'Refactor multi-module architecture'
-    let card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.workerPlan).toBeNull()
-
-    process.env.MTL_CODE_COORDINATOR_MODE = '1'
-    card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.workerPlan).toBeNull()
-    const reminder = formatOpenMythosRuntimeReminder(card!)
-    expect(reminder).toContain('WorkerRuntime plan: disabled')
-
-    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT = 'high'
-    card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.workerPlan).toBeNull()
-  })
-
-  test('ignores auto-dispatch env overrides while subagents are hard-disabled', () => {
-    process.env.MTL_CODE_COORDINATOR_MODE = '1'
-    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '0'
-    let card = buildOpenMythosRuntimeCard(
-      'Implement an auth database migration with rollback tests and CI verification',
-    )
-    expect(card?.workerPlan).toBeNull()
-
-    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '1'
-    process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MAX_WORKERS = '2'
-    card = buildOpenMythosRuntimeCard(
-      'Implement an auth database migration with rollback tests and CI verification plus frontend verification',
-    )
-    expect(card?.workerPlan).toBeNull()
-  })
-
-  test('does not auto-dispatch again for worker task notifications', () => {
-    process.env.MTL_CODE_COORDINATOR_MODE = '1'
-
+  test('does not produce worker plans for task notifications', () => {
     const card = buildOpenMythosRuntimeCard(`
       <task-notification>
         <task-id>agent-a1b</task-id>
@@ -189,34 +127,8 @@ describe('openmythos runtime card', () => {
       </task-notification>
     `)
 
-    expect(card?.workerPlan).toBeNull()
-    expect(formatOpenMythosRuntimeReminder(card!)).toContain(
-      'no automatic worker runtime dispatch is required',
-    )
-  })
-
-  test('reminder no longer mentions legacy visible dispatch plan bypasses', () => {
-    process.env.MTL_CODE_COORDINATOR_MODE = '1'
-    const card = buildOpenMythosRuntimeCard('Refactor multi-module architecture')
-    if (!card) throw new Error('expected runtime card')
-    const state = createOpenMythosRuntimeState(card)
-
-    const reminder = formatOpenMythosRuntimeReminder(card, state)
-    expect(reminder).not.toContain(`visible ${'DispatchPlan'}V2`)
-    expect(reminder).not.toContain('already started this plan')
-  })
-
-  test('can switch loop control to advisory and disable expert routing', () => {
-    process.env.MTL_CODE_OPENMYTHOS_LOOP_CONTROL = 'advisory'
-    process.env.MTL_CODE_OPENMYTHOS_EXPERT_ROUTING = '0'
-
-    const card = buildOpenMythosRuntimeCard('Implement auth migration')
-    if (!card) throw new Error('expected runtime card')
-    const state = createOpenMythosRuntimeState(card)
-
-    expect(getOpenMythosRuntimeConfig().loopControl).toBe('advisory')
-    expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(false)
-    expect(card.expertRoutes).toEqual([])
+    expect(card).not.toHaveProperty('workerPlan')
+    expect(formatOpenMythosRuntimeReminder(card!)).toContain('advisory only')
   })
 
   test('clamps adaptive effort to configured bounds', () => {
@@ -229,13 +141,5 @@ describe('openmythos runtime card', () => {
         'Implement an auth database migration with rollback tests and CI verification',
       )?.effort,
     ).toBe('high')
-  })
-
-  test('normalizes inverted effort bounds', () => {
-    process.env.MTL_CODE_OPENMYTHOS_MIN_EFFORT = 'xhigh'
-    process.env.MTL_CODE_OPENMYTHOS_MAX_EFFORT = 'medium'
-
-    expect(getOpenMythosRuntimeConfig().minEffort).toBe('medium')
-    expect(getOpenMythosRuntimeConfig().maxEffort).toBe('xhigh')
   })
 })

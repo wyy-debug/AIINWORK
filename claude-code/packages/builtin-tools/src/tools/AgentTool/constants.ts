@@ -1,5 +1,5 @@
 export const AGENT_TOOL_NAME = 'Agent'
-export const AGENT_SPAWN_TOOL_NAME = 'AgentSpawn'
+export const AGENT_SPAWN_TOOL_NAME = 'spawn_agent'
 // Legacy wire name for backward compat (permission rules, hooks, resumed sessions)
 export const LEGACY_AGENT_TOOL_NAME = 'Task'
 export const VERIFICATION_AGENT_TYPE = 'verification'

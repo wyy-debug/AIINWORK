@@ -1,6 +1,6 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { Command } from '../commands.js'
-import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import { AGENT_SPAWN_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
 
 const statusline = {
   type: 'prompt',
@@ -10,7 +10,7 @@ const statusline = {
   name: 'statusline',
   progressMessage: 'setting up statusLine',
   allowedTools: [
-    AGENT_TOOL_NAME,
+    AGENT_SPAWN_TOOL_NAME,
     'Read(~/**)',
     'Edit(~/.claude/settings.json)',
   ],
@@ -22,7 +22,7 @@ const statusline = {
     return [
       {
         type: 'text',
-        text: `Create an ${AGENT_TOOL_NAME} with subagent_type "statusline-setup" and the prompt "${prompt}"`,
+        text: `Use ${AGENT_SPAWN_TOOL_NAME} with agent_type "statusline-setup" and message "${prompt}"`,
       },
     ]
   },

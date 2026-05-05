@@ -112,7 +112,7 @@ export type ForkedAgentParams = {
   skipCacheWrite?: boolean
 }
 
-export type ForkedAgentResult = {
+export type ForkedRunResult = {
   /** All messages yielded during the query loop */
   messages: Message[]
   /** Accumulated usage across all API calls in the loop */
@@ -518,7 +518,7 @@ export async function runForkedAgent({
   onMessage,
   skipTranscript,
   skipCacheWrite,
-}: ForkedAgentParams): Promise<ForkedAgentResult> {
+}: ForkedAgentParams): Promise<ForkedRunResult> {
   const startTime = Date.now()
   const outputMessages: Message[] = []
   let totalUsage: NonNullableUsage = { ...EMPTY_USAGE }

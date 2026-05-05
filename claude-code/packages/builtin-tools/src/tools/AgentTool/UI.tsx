@@ -4,6 +4,7 @@ import type {
   ToolUseBlockParam,
 } from '@anthropic-ai/sdk/resources/index.mjs'
 type BetaContentBlock = ContentBlock | ToolResultBlockParam
+type AgentResponseContentBlock = BetaContentBlock | { type: 'text'; text: string }
 import * as React from 'react'
 import { ConfigurableShortcutHint } from 'src/components/ConfigurableShortcutHint.js'
 import {
@@ -46,11 +47,9 @@ import type { Theme, ThemeName } from 'src/utils/theme.js'
 import type {
   outputSchema,
   Progress,
-  RemoteLaunchedOutput,
 } from './AgentTool.js'
 import { inputSchema } from './AgentTool.js'
 import { getAgentColor } from './agentColorManager.js'
-import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import { BetaUsage } from '@anthropic-ai/sdk/resources/beta.mjs'
 
 const MAX_PROGRESS_MESSAGES_TO_SHOW = 3
@@ -247,15 +246,19 @@ export function AgentPromptDisplay({
 export function AgentResponseDisplay({
   content,
 }: {
-  content: { type: string; text: string }[]
+  content: AgentResponseContentBlock[]
   theme?: ThemeName // deprecated, kept for compatibility - Markdown uses useTheme internally
 }): React.ReactNode {
+  const textBlocks = content.filter(
+    (block): block is { type: 'text'; text: string } =>
+      block.type === 'text' && typeof (block as { text?: unknown }).text === 'string',
+  )
   return (
     <Box flexDirection="column">
       <Text color="success" bold>
         Response:
       </Text>
-      {content.map((block: { type: string; text: string }, index: number) => (
+      {textBlocks.map((block, index: number) => (
         <Box key={index} paddingLeft={2} marginTop={index === 0 ? 0 : 1}>
           <Markdown>{block.text}</Markdown>
         </Box>
@@ -339,25 +342,11 @@ export function renderToolResultMessage(
     isTranscriptMode?: boolean
   },
 ): React.ReactNode {
-  // Remote-launched agents (ant-only) use a private output type not in the
-  // public schema. Narrow via the internal discriminant.
-  const internal = data as Output | RemoteLaunchedOutput
-  if (internal.status === 'remote_launched') {
-    return (
-      <Box flexDirection="column">
-        <MessageResponse height={1}>
-          <Text>
-            Remote agent launched{' '}
-            <Text dimColor>
-              · {internal.taskId} · {internal.sessionUrl}
-            </Text>
-          </Text>
-        </MessageResponse>
-      </Box>
-    )
+  const internal = data as unknown as {
+    status?: string
   }
-  if (data.status === 'async_launched') {
-    const { prompt } = data
+  if (internal.status === 'async_launched') {
+    const prompt = (data as unknown as { prompt?: string }).prompt
     return (
       <Box flexDirection="column">
         <MessageResponse height={1}>
@@ -391,7 +380,7 @@ export function renderToolResultMessage(
     )
   }
 
-  if (data.status !== 'completed') {
+  if (internal.status !== 'completed') {
     return null
   }
 
@@ -403,7 +392,15 @@ export function renderToolResultMessage(
     usage,
     content,
     prompt,
-  } = data
+  } = data as unknown as {
+    agentId: string
+    totalDurationMs: number
+    totalToolUseCount: number
+    totalTokens: number
+    usage?: BetaUsage
+    content: AgentResponseContentBlock[]
+    prompt?: string
+  }
   const result = [
     totalToolUseCount === 1 ? '1 tool use' : `${totalToolUseCount} tool uses`,
     formatNumber(totalTokens) + ' tokens',
@@ -472,23 +469,36 @@ export function renderToolResultMessage(
 }
 
 export function renderToolUseMessage({
-  description,
-  prompt,
+  message,
+  items,
+  agent_type,
 }: Partial<{
-  description: string
-  prompt: string
+  message: string
+  items: unknown[]
+  agent_type: string
 }>): React.ReactNode {
-  if (!description || !prompt) {
+  const fallbackText = Array.isArray(items)
+    ? items
+        .map(item => {
+          if (!item || typeof item !== 'object') return undefined
+          const record = item as Record<string, unknown>
+          return typeof record.text === 'string' ? record.text : undefined
+        })
+        .filter((item): item is string => Boolean(item?.trim()))
+        .join(' ')
+    : undefined
+  const text = message || fallbackText
+  if (!text) {
     return null
   }
-  return description
+  return agent_type ? `${agent_type}: ${text}` : text
 }
 
 export function renderToolUseTag(
   input: Partial<{
-    description: string
-    prompt: string
-    subagent_type: string
+    message: string
+    items: unknown[]
+    agent_type: string
     model?: ModelAlias
   }>,
 ): React.ReactNode {
@@ -726,9 +736,8 @@ export function renderToolUseRejectedMessage(
   _input: Partial<{
     description: string
     prompt: string
-    subagent_type: string
-    dispatch_ticket: string
-    dispatchTicket: string
+    agent_type: string
+    message: string
   }>,
   {
     progressMessagesForMessage,
@@ -855,54 +864,29 @@ export function renderGroupedAgentToolUse(
       const lastToolInfo = extractLastToolInfo(progressMessages, tools)
       const parsedInput = inputSchema().safeParse(param.input)
 
-      // teammate_spawned is not part of the exported Output type (cast through unknown
-      // for dead code elimination), so check via string comparison on the raw value
-      const isTeammateSpawn =
-        (result?.output?.status as string) === 'teammate_spawned'
-
-      // For teammate spawns, show @name with type in parens and description as status
       let agentType: string
       let description: string | undefined
       let color: keyof Theme | undefined
-      let descriptionColor: keyof Theme | undefined
       let taskDescription: string | undefined
-      if (isTeammateSpawn && parsedInput.success && parsedInput.data.name) {
-        agentType = `@${parsedInput.data.name}`
-        const subagentType = parsedInput.data.subagent_type
-        description = isCustomSubagentType(subagentType)
-          ? subagentType
-          : undefined
-        taskDescription = parsedInput.data.description
-        // Use the custom agent definition's color on the type, not the name
-        descriptionColor = isCustomSubagentType(subagentType)
-          ? getAgentColor(subagentType)
-          : undefined
-      } else {
-        agentType = parsedInput.success
-          ? userFacingName(parsedInput.data)
-          : 'Agent'
-        description = parsedInput.success
-          ? parsedInput.data.description
-          : undefined
-        color = parsedInput.success
-          ? userFacingNameBackgroundColor(parsedInput.data)
-          : undefined
-        taskDescription = undefined
-      }
+      agentType = parsedInput.success
+        ? userFacingName(parsedInput.data)
+        : 'Agent'
+      description = parsedInput.success
+        ? parsedInput.data.message
+        : undefined
+      color = parsedInput.success
+        ? userFacingNameBackgroundColor(parsedInput.data)
+        : undefined
+      taskDescription = undefined
 
-      // Check if this was launched as a background agent OR backgrounded mid-execution
-      const launchedAsAsync =
-        parsedInput.success &&
-        'run_in_background' in parsedInput.data &&
-        parsedInput.data.run_in_background === true
+      // Check if this was backgrounded mid-execution.
       const outputStatus = (result?.output as { status?: string } | undefined)
         ?.status
       const backgroundedMidExecution =
-        outputStatus === 'async_launched' || outputStatus === 'remote_launched'
-      const isAsync =
-        launchedAsAsync || backgroundedMidExecution || isTeammateSpawn
+        outputStatus === 'async_launched'
+      const isAsync = backgroundedMidExecution
 
-      const name = parsedInput.success ? parsedInput.data.name : undefined
+      const name = parsedInput.success ? parsedInput.data.agent_type : undefined
 
       return {
         id: param.id,
@@ -914,7 +898,7 @@ export function renderGroupedAgentToolUse(
         isError,
         isAsync,
         color,
-        descriptionColor,
+        descriptionColor: undefined,
         lastToolInfo,
         taskDescription,
         name,
@@ -997,38 +981,33 @@ export function renderGroupedAgentToolUse(
 export function userFacingName(
   input:
     | Partial<{
-        description: string
-        prompt: string
-        subagent_type: string
-        name: string
-        team_name: string
+        message: string
+        items: unknown[]
+        agent_type: string
       }>
     | undefined,
 ): string {
-  if (
-    input?.subagent_type &&
-    input.subagent_type !== GENERAL_PURPOSE_AGENT.agentType
-  ) {
-    // Display "worker" agents as "Agent" for cleaner UI
-    if (input.subagent_type === 'worker') {
+  const agentType = input?.agent_type
+  if (agentType) {
+    if (agentType === 'default' || agentType === 'worker') {
       return 'Agent'
     }
-    return input.subagent_type
+    return agentType
   }
   return 'Agent'
 }
 
 export function userFacingNameBackgroundColor(
   input:
-    | Partial<{ description: string; prompt: string; subagent_type: string }>
+    | Partial<{ agent_type: string }>
     | undefined,
 ): keyof Theme | undefined {
-  if (!input?.subagent_type) {
+  const agentType = input?.agent_type
+  if (!agentType) {
     return undefined
   }
 
-  // Get the color for this agent
-  return getAgentColor(input.subagent_type)
+  return getAgentColor(agentType)
 }
 
 export function extractLastToolInfo(
@@ -1131,14 +1110,4 @@ export function extractLastToolInfo(
   }
 
   return null
-}
-
-function isCustomSubagentType(
-  subagentType: string | undefined,
-): subagentType is string {
-  return (
-    !!subagentType &&
-    subagentType !== GENERAL_PURPOSE_AGENT.agentType &&
-    subagentType !== 'worker'
-  )
 }

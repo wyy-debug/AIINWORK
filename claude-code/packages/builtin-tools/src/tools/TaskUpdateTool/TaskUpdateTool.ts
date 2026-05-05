@@ -394,7 +394,7 @@ export const TaskUpdateTool = buildTool({
     }
 
     if (verificationNudgeNeeded) {
-      resultContent += `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type="${VERIFICATION_AGENT_TYPE}"). You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict.`
+      resultContent += `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, use spawn_agent with agent_type="${VERIFICATION_AGENT_TYPE}". You cannot self-assign PARTIAL by listing caveats in your summary 鈥?only the verifier issues a verdict.`
     }
 
     return {

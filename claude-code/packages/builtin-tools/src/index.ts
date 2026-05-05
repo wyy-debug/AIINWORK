@@ -1,4 +1,4 @@
-// builtin-tools — All tool implementations for MTL-Code
+// builtin-tools 鈥?All tool implementations for MTL-Code
 // This barrel file re-exports the main tool constants and utilities.
 // For specific submodules, use deep imports: 'builtin-tools/tools/XTool/XTool.js'
 
@@ -7,15 +7,13 @@
 // =============================================================================
 
 // Core tools
-export { AgentSpawnTool, AgentTool } from './tools/AgentTool/AgentTool.js'
+export { SpawnAgentTool, AgentTool } from './tools/AgentTool/AgentTool.js'
 export {
-  AgentCancelTool,
-  AgentDispatchPlanTool,
-  AgentListTool,
-  AgentResumeTool,
-  AgentResultTool,
-  AgentSendInputTool,
-  AgentWaitTool,
+  CloseAgentTool,
+  ListAgentsTool,
+  ResumeAgentTool,
+  SendInputAgentTool,
+  WaitAgentTool,
 } from './tools/AgentControlTool/AgentControlTools.js'
 export { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
 export { BashTool } from './tools/BashTool/BashTool.js'

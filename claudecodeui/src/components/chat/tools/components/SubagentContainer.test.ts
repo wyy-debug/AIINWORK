@@ -8,7 +8,7 @@ describe('SubagentContainer', () => {
   it('renders collapsed internal tool history as a compact summary by default', () => {
     const html = renderToStaticMarkup(
       React.createElement(SubagentContainer, {
-        toolInput: { subagent_type: 'Agent', description: 'Inspect crash data' },
+        toolInput: { agent_type: 'Agent', description: 'Inspect crash data' },
         subagentState: {
           childTools: [
             { toolId: 'read-a', toolName: 'Read', toolInput: { file_path: 'a.ts' }, timestamp: new Date(1) },

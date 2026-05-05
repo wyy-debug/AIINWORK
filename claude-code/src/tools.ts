@@ -1,14 +1,12 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { toolMatchesName, type Tool, type Tools } from './Tool.js'
-import { AgentSpawnTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
+import { SpawnAgentTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
 import {
-  AgentCancelTool,
-  AgentDispatchPlanTool,
-  AgentListTool,
-  AgentResultTool,
-  AgentResumeTool,
-  AgentSendInputTool,
-  AgentWaitTool,
+  CloseAgentTool,
+  ListAgentsTool,
+  ResumeAgentTool,
+  SendInputAgentTool,
+  WaitAgentTool,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { SkillTool } from '@mtl-code/builtin-tools/tools/SkillTool/SkillTool.js'
 import { BashTool } from '@mtl-code/builtin-tools/tools/BashTool/BashTool.js'
@@ -210,14 +208,12 @@ export function getAllBaseTools(): Tools {
   const subagentTools = areSubagentsHardDisabled()
     ? []
     : [
-        AgentSpawnTool,
-        AgentDispatchPlanTool,
-        AgentListTool,
-        AgentWaitTool,
-        AgentResultTool,
-        AgentCancelTool,
-        AgentSendInputTool,
-        AgentResumeTool,
+        SpawnAgentTool,
+        ListAgentsTool,
+        WaitAgentTool,
+        CloseAgentTool,
+        SendInputAgentTool,
+        ResumeAgentTool,
       ]
 
   return [
@@ -288,7 +284,7 @@ export function getAllBaseTools(): Tools {
  *
  * Uses the same matcher as the runtime permission check (step 1a), so MCP
  * server-prefix rules like `mcp__server` strip all tools from that server
- * before the model sees them — not just at call time.
+ * before the model sees them 鈥?not just at call time.
  */
 export function filterToolsByDenyRules<
   T extends {
@@ -314,20 +310,18 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       ) {
         replSimple.push(
           TaskStopTool,
-          AgentListTool,
-          AgentDispatchPlanTool,
-          AgentWaitTool,
-          AgentResultTool,
-          AgentCancelTool,
-          AgentSendInputTool,
-          AgentResumeTool,
+          ListAgentsTool,
+          WaitAgentTool,
+          CloseAgentTool,
+          SendInputAgentTool,
+          ResumeAgentTool,
           getSendMessageTool(),
         )
       }
       return filterToolsByDenyRules(replSimple, permissionContext)
     }
     const simpleTools: Tool[] = [BashTool, FileReadTool, FileEditTool]
-    // When coordinator mode is also active, include AgentSpawn and TaskStopTool
+    // When coordinator mode is also active, include spawn_agent and TaskStopTool
     // so the coordinator gets Task+TaskStop (via useMergedTools filtering) and
     // workers get Bash/Read/Edit (via filterToolsForAgent filtering).
     if (
@@ -336,15 +330,13 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       coordinatorModeModule?.isCoordinatorMode()
     ) {
       simpleTools.push(
-        AgentSpawnTool,
-        AgentDispatchPlanTool,
+        SpawnAgentTool,
         TaskStopTool,
-        AgentListTool,
-        AgentWaitTool,
-        AgentResultTool,
-        AgentCancelTool,
-        AgentSendInputTool,
-        AgentResumeTool,
+        ListAgentsTool,
+        WaitAgentTool,
+        CloseAgentTool,
+        SendInputAgentTool,
+        ResumeAgentTool,
         getSendMessageTool(),
       )
     }
@@ -411,7 +403,7 @@ export function assembleToolPool(
   // sort would interleave MCP tools into built-ins and invalidate all downstream
   // cache keys whenever an MCP tool sorts between existing built-ins. uniqBy
   // preserves insertion order, so built-ins win on name conflict.
-  // Avoid Array.toSorted (Node 20+) — we support Node 18. builtInTools is
+  // Avoid Array.toSorted (Node 20+) 鈥?we support Node 18. builtInTools is
   // readonly so copy-then-sort; allowedMcpTools is a fresh .filter() result.
   const byName = (a: Tool, b: Tool) => a.name.localeCompare(b.name)
   return uniqBy(

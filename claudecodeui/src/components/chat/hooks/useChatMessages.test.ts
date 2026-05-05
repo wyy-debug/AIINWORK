@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
+
 import { normalizedToChatMessages } from './useChatMessages';
 
 const timestamp = '2026-05-05T00:00:00.000Z';
@@ -103,6 +104,57 @@ describe('normalizedToChatMessages subagent handling', () => {
     ];
 
     expect(normalizedToChatMessages(messages)).toEqual([]);
+  });
+
+  it('filters task notification XML even when it arrives as a user text message', () => {
+    const messages = [
+      message({
+        id: 'user-notification-1',
+        role: 'user',
+        content: [
+          '<task-notification>',
+          '<task-id>a0505b3f4a718760d</task-id>',
+          '<tool-use-id>call_00_b3</tool-use-id>',
+          '<output-file>C:\\Users\\Stan\\AppData\\Local\\Temp\\agent-output.txt</output-file>',
+          '<status>killed</status>',
+          '<summary>Agent was stopped</summary>',
+          '</task-notification>',
+        ].join('\n'),
+      }),
+    ];
+
+    expect(normalizedToChatMessages(messages)).toEqual([]);
+  });
+
+  it('treats Codex-style spawn_agent as a subagent container', () => {
+    const messages = [
+      message({
+        id: 'spawn-agent-1',
+        kind: 'tool_use',
+        toolName: 'spawn_agent',
+        toolId: 'tool-spawn-1',
+        taskId: 'task-spawn-1',
+        toolInput: { agent_type: 'worker', message: 'Inspect the change' },
+      }),
+      message({
+        id: 'progress-1',
+        kind: 'status',
+        status: 'subagent_progress',
+        toolId: 'tool-spawn-1',
+        taskId: 'task-spawn-1',
+        subagentSnapshot: {
+          taskId: 'task-spawn-1',
+          objective: 'Inspect the change',
+          status: 'running',
+          runtimeStatus: 'RUNNING',
+        },
+      }),
+    ];
+
+    const [subagent] = normalizedToChatMessages(messages);
+
+    expect(subagent?.isSubagentContainer).toBe(true);
+    expect(subagent?.subagentState?.runtimeStatus).toBe('RUNNING');
   });
 
   it('groups interleaved subagent child tools by stable task id when parentToolUseId is missing', () => {
