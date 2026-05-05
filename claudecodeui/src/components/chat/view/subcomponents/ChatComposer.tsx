@@ -57,6 +57,8 @@ import type {
 } from '../../types/types';
 import { ARGUS_DEFAULT_PERMISSION_MODE } from '../../utils/chatStorage';
 import { normalizeContextBudget } from '../../utils/contextBudget';
+import { buildSubagentDetailRows } from '../../utils/subagentDetailRows';
+import { getSubagentBlockerGuidance } from '../../utils/subagentGuidance';
 
 import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
 import CommandMenu from './CommandMenu';
@@ -420,9 +422,9 @@ export default function ChatComposer({
     .filter((taskId): taskId is string => Boolean(taskId && taskId.trim()));
   const canStopSubagents = Boolean(onStopSubagents && stoppableSubagentIds.length > 0);
   const hasSubagentHistory = subagentHistoryItems.length > 0;
-  const visibleManagerItems = isSubagentManagerOpen
-    ? subagentHistoryItems
-    : activeSubagentItems;
+  const visibleManagerItems = buildSubagentDetailRows(subagentActivity, {
+    mode: isSubagentManagerOpen ? 'history' : 'active',
+  });
   const formatSubagentElapsed = (elapsedMs?: number) => {
     if (!Number.isFinite(elapsedMs || NaN)) return '';
     const totalSeconds = Math.max(0, Math.floor((elapsedMs || 0) / 1000));
@@ -1214,6 +1216,23 @@ export default function ChatComposer({
                         const evidenceText = [item.evidence, item.resultSummary, item.nextAction, item.blockers]
                           .filter(Boolean)
                           .join('\n\n');
+                        const blockerGuidance = terminal && (
+                          item.runtimeStatus === 'BLOCKED'
+                          || item.status === 'blocked'
+                          || item.status === 'cancelled'
+                          || item.status === 'failed'
+                          || item.status === 'interrupted'
+                          || Boolean(item.stopReason || item.blockers)
+                        )
+                          ? getSubagentBlockerGuidance({
+                            status: item.runtimeStatus || item.status,
+                            stopReason: item.stopReason,
+                            objective: item.objective || item.label,
+                            lastTool: item.lastTool,
+                            blockers: item.blockers,
+                            nextAction: item.nextAction,
+                          })
+                          : null;
                         return (
                           <div
                             key={item.taskId || item.id || item.label}
@@ -1240,7 +1259,14 @@ export default function ChatComposer({
                               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                                 {item.objective || item.activeToolLabel || '后台任务运行中'}
                               </div>
-                              {(item.lastTool || item.lastToolSummary || item.stopReason || item.resultSummary || item.nextAction) && (
+                              {blockerGuidance ? (
+                                <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                                  <div className="font-medium">{blockerGuidance.title}</div>
+                                  <div className="mt-0.5 line-clamp-2">{blockerGuidance.description}</div>
+                                  <div className="mt-0.5 line-clamp-2">{blockerGuidance.nextAction}</div>
+                                </div>
+                              ) : null}
+                              {!blockerGuidance && (item.lastTool || item.lastToolSummary || item.stopReason || item.resultSummary || item.nextAction) && (
                                 <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                                   {item.stopReason
                                     ? `阻塞原因：${item.stopReason}`

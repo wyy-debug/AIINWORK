@@ -114,3 +114,10 @@ claudecodeui/tasks.json
 
 # Reference-only upstream checkout used for OpenMythos runtime ideas.
 OpenMythos/
+
+# Reference-only local checkouts and scenario kits used during subagent design.
+DeepSeek-TUI/
+crashsight-crash-kit/
+crashsight-single-crash-analysis-skill/
+reivewtestCase/
+soc-hunter-test-kit/

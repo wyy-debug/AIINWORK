@@ -58,6 +58,8 @@ import { createUserMessage, normalizeMessages } from 'src/utils/messages.js'
 import type { ModelAlias } from 'src/utils/model/aliases.js'
 import { resolveSkillModelOverride } from 'src/utils/model/model.js'
 import { recordSkillUsage } from 'src/utils/suggestions/skillUsageTracking.js'
+import { deriveDispatchUserTurnId, dispatchManager } from 'src/tasks/subagentDispatch.js'
+import { getParentSessionId } from 'src/utils/teammate.js'
 import { createAgentId } from 'src/utils/uuid.js'
 import { runAgent } from '../AgentTool/runAgent.js'
 import {
@@ -114,6 +116,32 @@ const remoteSkillModules = feature('EXPERIMENTAL_SKILL_SEARCH')
     }
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
+
+function recordSkillBindingDispatchEvent({
+  skillName,
+  context,
+  parentMessage,
+}: {
+  skillName: string
+  context: ToolUseContext
+  parentMessage: AssistantMessage
+}): void {
+  const sessionId = getParentSessionId() || getSessionId() || 'main'
+  dispatchManager.recordLocalEvent({
+    sessionId,
+    userTurnId: deriveDispatchUserTurnId({
+      sessionId,
+      messages: context.messages,
+      requestId:
+        (parentMessage.requestId as string | undefined) ||
+        (parentMessage.message as { id?: string }).id,
+      toolUseId: context.toolUseId,
+    }),
+    type: 'skill_binding',
+    skillName,
+    status: 'ok',
+  })
+}
 
 /**
  * Executes a skill in a forked sub-agent context.
@@ -609,6 +637,11 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
     ) {
       const slug = remoteSkillModules!.stripCanonicalPrefix(commandName)
       if (slug !== null) {
+        recordSkillBindingDispatchEvent({
+          skillName: commandName,
+          context,
+          parentMessage,
+        })
         return executeRemoteSkill(slug, commandName, parentMessage, context)
       }
     }
@@ -618,6 +651,11 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
 
     // Track skill usage for ranking
     recordSkillUsage(commandName)
+    recordSkillBindingDispatchEvent({
+      skillName: commandName,
+      context,
+      parentMessage,
+    })
 
     // Check if skill should run as a forked sub-agent
     if (command?.type === 'prompt' && command.context === 'fork') {

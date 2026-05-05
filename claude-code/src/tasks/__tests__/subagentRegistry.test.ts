@@ -143,6 +143,34 @@ describe('SubagentManager', () => {
     expect(events).toContain('tool_completed')
     expect(events).toContain('token_usage')
   })
+
+  test('stores budget exhaustion as terminal blocked state that releases concurrency', () => {
+    const manager = new SubagentManager(statePath())
+    manager.register({
+      taskId: 'agent-budget',
+      agentId: 'agent-budget',
+      sessionId: 'session-a',
+      objective: 'Explore with a hard budget',
+    })
+
+    const record = manager.updateRuntime('agent-budget', {
+      objective: 'Explore with a hard budget',
+      runtimeStatus: 'BLOCKED',
+      stopReason: 'Reached the subagent hard budget of 15 turns.',
+      startedAt: 1,
+      elapsedMs: 100,
+      currentStep: 15,
+      maxSteps: 15,
+      remainingSteps: 0,
+      recentActions: ['Read a.ts'],
+    })
+
+    expect(record?.status).toBe('blocked')
+    expect(record?.hasLiveHandle).toBe(false)
+    expect(record?.resultSummary).toBe('Reached the subagent hard budget of 15 turns.')
+    expect(record?.events.at(-1)?.type).toBe('blocked')
+    expect(manager.countRunning('session-a')).toBe(0)
+  })
 })
 
 describe('parseSubagentProtocolResult', () => {

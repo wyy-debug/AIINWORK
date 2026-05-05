@@ -133,6 +133,7 @@ export class SubagentRuntimeGuard {
   private consecutiveSameReadPath = 0
   private consecutiveSameUrl = 0
   private consecutiveEmptyResults = 0
+  private consecutiveAuthFailures = 0
   private textSinceLastTool = false
   private pendingStopReason: string | undefined
   private readonly toolUseById = new Map<string, ToolUseRecord>()
@@ -291,6 +292,12 @@ export class SubagentRuntimeGuard {
         this.consecutiveEmptyResults = 0
       }
 
+      if (isAuthenticationFailureResult(resultText)) {
+        this.consecutiveAuthFailures += 1
+      } else if (!isEmptyOrUnhelpfulResult(resultText, Boolean(block.is_error))) {
+        this.consecutiveAuthFailures = 0
+      }
+
       if (this.consecutiveEmptyResults >= 2) {
         this.block('Received two consecutive empty, no-match, or error-only tool results.')
         return
@@ -300,6 +307,11 @@ export class SubagentRuntimeGuard {
     if (this.pendingStopReason && this.unresolvedToolUseIds.size === 0) {
       this.block(this.pendingStopReason)
       this.pendingStopReason = undefined
+      return
+    }
+
+    if (this.consecutiveAuthFailures >= 2) {
+      this.block('Received repeated authentication or permission failures. Ask the parent/user to log in, export the data, or configure the required token before retrying.')
     }
   }
 
@@ -462,6 +474,28 @@ function isEmptyOrUnhelpfulResult(text: string, isError: boolean): boolean {
     '0 results',
     'nothing found',
     'empty result',
+  ].some(marker => normalized.includes(marker))
+}
+
+function isAuthenticationFailureResult(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase()
+  if (!normalized) return false
+  return [
+    '401',
+    '403',
+    'unauthorized',
+    'forbidden',
+    'login required',
+    'please login',
+    'please log in',
+    'not authenticated',
+    'authentication required',
+    'permission denied',
+    'session expired',
+    'api key is required',
+    'token is required',
+    'missing token',
+    'invalid token',
   ].some(marker => normalized.includes(marker))
 }
 

@@ -16,6 +16,7 @@ This directory is the development entry point for `claudecodeui`, now branded as
 
 ## Current Notes
 
+- [2026-05-05-subagent-event-driven-dispatch.md](2026-05-05-subagent-event-driven-dispatch.md): event-driven Subagent dispatch contract, typed local events, dispatch tickets, AgentSpawn ticket-only behavior, and release-disabled status.
 - [2026-05-04-deepseek-tui-multi-agent-design.md](2026-05-04-deepseek-tui-multi-agent-design.md): DeepSeek-TUI sub-agent lifecycle analysis, Argus/OpenMythos multi-agent gaps, and WorkerPlan-based redesign path.
 - [2026-05-04-subagent-runtime-user-guide.md](2026-05-04-subagent-runtime-user-guide.md): user-facing Subagent Runtime behavior, status bar, AgentWait/AgentResult usage, blocking guidance, and release checks.
 - [2026-05-04-openmythos-worker-runtime-rewrite.md](2026-05-04-openmythos-worker-runtime-rewrite.md): current WorkerRuntime rewrite contract, WorkerPlan flow, role-specific workers, and dispatch invariants.

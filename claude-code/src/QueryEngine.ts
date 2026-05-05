@@ -63,7 +63,6 @@ import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.j
 import { getInMemoryErrors } from './utils/log.js'
 import {
   countToolCalls,
-  createAssistantMessage,
   SYNTHETIC_MESSAGES,
 } from './utils/messages.js'
 import {
@@ -77,14 +76,13 @@ import {
 } from './utils/processUserInput/processUserInput.js'
 import {
   createOpenMythosRuntimeState,
-  formatOpenMythosRuntimeReminder,
   shouldEnforceOpenMythosLoopBudget,
 } from './utils/openmythosRuntime.js'
 import {
-  formatOpenMythosWorkerRuntimeMessage,
-  runOpenMythosWorkerRuntime,
-  shouldRunOpenMythosWorkerRuntime,
-} from './utils/openmythosWorkerRuntime.js'
+  createDispatchRuntimeBindingEvents,
+  deriveDispatchUserTurnId,
+  dispatchManager,
+} from './tasks/subagentDispatch.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
 import {
@@ -97,6 +95,7 @@ import {
   shouldEnableThinkingByDefault,
   type ThinkingConfig,
 } from './utils/thinking.js'
+import { getParentSessionId } from './utils/teammate.js'
 
 // Lazy: MessageSelector.tsx pulls React/ink; only needed for message filtering at query time
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -277,6 +276,22 @@ export class QueryEngine {
         toolUseID,
         forceDecision,
       )
+      const dispatchSessionId = getParentSessionId() || getSessionId() || 'main'
+      dispatchManager.recordLocalEvent({
+        sessionId: dispatchSessionId,
+        userTurnId: deriveDispatchUserTurnId({
+          sessionId: dispatchSessionId,
+          messages: this.mutableMessages,
+          requestId:
+            (assistantMessage.requestId as string | undefined) ||
+            (assistantMessage.message as { id?: string }).id,
+          toolUseId: toolUseID,
+        }),
+        type: 'permission_result',
+        toolName: tool.name,
+        status: result.behavior === 'allow' ? 'ok' : 'blocked',
+        summary: result.behavior,
+      })
 
       // Track denials for SDK reporting
       if (result.behavior !== 'allow') {
@@ -562,6 +577,22 @@ export class QueryEngine {
     }
     processUserInputContext.renderedSystemPrompt = systemPrompt
 
+    const dispatchSessionId = getParentSessionId() || getSessionId() || 'main'
+    const dispatchUserTurnId = deriveDispatchUserTurnId({
+      sessionId: dispatchSessionId,
+      messages: this.mutableMessages,
+      requestId: options?.uuid,
+    })
+    for (const event of createDispatchRuntimeBindingEvents({
+      sessionId: dispatchSessionId,
+      userTurnId: dispatchUserTurnId,
+      model: mainLoopModel,
+      modelProfileId: userSpecifiedModel,
+      mcpClients,
+    })) {
+      dispatchManager.recordLocalEvent(event)
+    }
+
     headlessProfilerCheckpoint('before_skills_plugins')
     // Cache-only: headless/SDK/CCR startup must not block on network for
     // ref-tracked plugins. CCR populates the cache via MTL_CODE_SYNC_PLUGIN_INSTALL
@@ -710,68 +741,6 @@ export class QueryEngine {
     const initialStructuredOutputCalls = jsonSchema
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
-
-    if (
-      openMythosRuntimeState &&
-      shouldRunOpenMythosWorkerRuntime(
-        openMythosRuntimeState,
-        processUserInputContext,
-      )
-    ) {
-      const workerRuntimeParentMessage = createAssistantMessage({ content: '' })
-      const workerRuntimeResult = await runOpenMythosWorkerRuntime({
-        state: openMythosRuntimeState,
-        toolUseContext: processUserInputContext,
-        canUseTool: wrappedCanUseTool,
-        assistantMessage: workerRuntimeParentMessage,
-      })
-
-      if (workerRuntimeResult.launched.length > 0) {
-        if (!hasAcknowledgedInitialMessages && messagesToAck.length > 0) {
-          hasAcknowledgedInitialMessages = true
-          for (const msgToAck of messagesToAck) {
-            if (msgToAck.type === 'user') {
-              yield {
-                type: 'user',
-                message: msgToAck.message,
-                session_id: getSessionId(),
-                parent_tool_use_id: null,
-                uuid: msgToAck.uuid,
-                timestamp: msgToAck.timestamp,
-                isReplay: true,
-              } as unknown as SDKUserMessageReplay
-            }
-          }
-        }
-
-        const workerRuntimeMessage = createAssistantMessage({
-          content: formatOpenMythosWorkerRuntimeMessage(workerRuntimeResult),
-        })
-        messages.push(workerRuntimeMessage)
-        this.mutableMessages.push(workerRuntimeMessage)
-        if (persistSession) {
-          await recordTranscript(messages)
-          if (
-            isEnvTruthy(process.env.MTL_CODE_EAGER_FLUSH) ||
-            isEnvTruthy(process.env.MTL_CODE_IS_COWORK)
-          ) {
-            await flushSessionStorage()
-          }
-        }
-
-        yield* normalizeMessage(workerRuntimeMessage)
-        processUserInputContext = {
-          ...processUserInputContext,
-          messages,
-          openMythosRuntimeState,
-          criticalSystemReminder_EXPERIMENTAL:
-            formatOpenMythosRuntimeReminder(
-              openMythosRuntimeState.card,
-              openMythosRuntimeState,
-            ),
-        }
-      }
-    }
 
     const effectiveMaxTurns =
       maxTurns ??

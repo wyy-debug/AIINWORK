@@ -14,6 +14,7 @@ import {
 } from '../shared/utils.js';
 import {
   OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  applyAnthropicRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
   buildOpenMythosRuntimePreview,
   canonicalizeAnthropicModel,
@@ -371,39 +372,6 @@ const clearOpenAIEnv = (env) => {
   }
 };
 
-const isDeepSeekAnthropicRuntime = (baseUrl, model) => {
-  const normalizedBaseUrl = (readOptionalString(baseUrl) || '').toLowerCase();
-  const normalizedModel = (readOptionalString(model) || '').toLowerCase();
-  return normalizedBaseUrl.includes('api.deepseek.com') || normalizedModel.includes('deepseek');
-};
-
-const applyDeepSeekAnthropicDefaults = (env, model) => {
-  const configuredModel = canonicalizeAnthropicModel(model) || 'deepseek-v4-pro';
-  const smallModel = configuredModel.toLowerCase().includes('deepseek-v4-pro')
-    ? 'deepseek-v4-flash'
-    : configuredModel;
-
-  env[ANTHROPIC_ENV_KEYS.defaultSonnetModel] = configuredModel;
-  env[ANTHROPIC_ENV_KEYS.defaultOpusModel] = configuredModel;
-  env[ANTHROPIC_ENV_KEYS.defaultHaikuModel] = smallModel || 'deepseek-v4-flash';
-  env[MTL_CODE_ENV_KEYS.subagentModel] = env[MTL_CODE_ENV_KEYS.subagentModel] || env[MTL_CODE_ENV_KEYS.legacySubagentModel] || env[ANTHROPIC_ENV_KEYS.defaultHaikuModel];
-  env[MTL_CODE_ENV_KEYS.legacySubagentModel] = env[MTL_CODE_ENV_KEYS.legacySubagentModel] || env[MTL_CODE_ENV_KEYS.subagentModel];
-  env[MTL_CODE_ENV_KEYS.effortLevel] = env[MTL_CODE_ENV_KEYS.effortLevel] || env[MTL_CODE_ENV_KEYS.legacyEffortLevel] || 'high';
-  env[MTL_CODE_ENV_KEYS.legacyEffortLevel] = env[MTL_CODE_ENV_KEYS.legacyEffortLevel] || env[MTL_CODE_ENV_KEYS.effortLevel];
-};
-
-const applyMimoAnthropicDefaults = (env, model) => {
-  const configuredModel = canonicalizeAnthropicModel(model) || 'mimo-v2.5-pro';
-
-  env[ANTHROPIC_ENV_KEYS.defaultSonnetModel] = configuredModel;
-  env[ANTHROPIC_ENV_KEYS.defaultOpusModel] = configuredModel;
-  env[ANTHROPIC_ENV_KEYS.defaultHaikuModel] = configuredModel;
-  env[MTL_CODE_ENV_KEYS.subagentModel] = env[MTL_CODE_ENV_KEYS.subagentModel] || env[MTL_CODE_ENV_KEYS.legacySubagentModel] || configuredModel;
-  env[MTL_CODE_ENV_KEYS.legacySubagentModel] = env[MTL_CODE_ENV_KEYS.legacySubagentModel] || env[MTL_CODE_ENV_KEYS.subagentModel];
-  delete env[MTL_CODE_ENV_KEYS.effortLevel];
-  delete env[MTL_CODE_ENV_KEYS.legacyEffortLevel];
-};
-
 const mergeAndStoreModelProfiles = (settings, env, input) => {
   const existingProfiles = readStoredModelProfiles(settings, env);
   const existingById = new Map(existingProfiles.map((profile) => [profile.id, profile]));
@@ -460,9 +428,6 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
 
   setOptionalEnv(env, ANTHROPIC_ENV_KEYS.baseUrl, profile.baseUrl);
   setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, profile.model);
-  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultHaikuModel, profile.model);
-  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultSonnetModel, profile.model);
-  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.defaultOpusModel, profile.model);
   env[MTL_CODE_ENV_KEYS.uiBareMode] = profile.bareMode !== false ? '1' : '0';
 
   const contextWindowTokens = resolveProfileContextWindow(profile, env);
@@ -475,11 +440,10 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
     delete env[ANTHROPIC_ENV_KEYS.authToken];
   }
 
-  if (isDeepSeekAnthropicRuntime(profile.baseUrl, profile.model)) {
-    applyDeepSeekAnthropicDefaults(env, profile.model);
-  } else if (isMimoAnthropicRuntime(profile.baseUrl, profile.model)) {
-    applyMimoAnthropicDefaults(env, profile.model);
-  }
+  applyAnthropicRuntimeModelDefaults(env, {
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+  });
 
   if (profile.model) {
     settings.model = profile.model;

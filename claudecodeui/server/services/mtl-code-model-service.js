@@ -162,7 +162,7 @@ export function normalizeOpenMythosRuntimeConfig(value, fallback = DEFAULT_OPENM
     phaseAdapter: normalizeOpenMythosBoolean(data.phaseAdapter, fallback.phaseAdapter),
     expertRouting: normalizeOpenMythosBoolean(data.expertRouting, fallback.expertRouting),
     contextCacheDiagnostics: normalizeOpenMythosBoolean(data.contextCacheDiagnostics, fallback.contextCacheDiagnostics),
-    autoDispatchSubagents: normalizeOpenMythosBoolean(data.autoDispatchSubagents, fallback.autoDispatchSubagents),
+    autoDispatchSubagents: false,
     autoDispatchMinEffort: normalizeOpenMythosEffort(data.autoDispatchMinEffort, fallback.autoDispatchMinEffort),
     autoDispatchMaxWorkers: normalizeOpenMythosPositiveInteger(data.autoDispatchMaxWorkers, fallback.autoDispatchMaxWorkers),
     minEffort: normalizeOpenMythosEffort(data.minEffort, fallback.minEffort),
@@ -502,6 +502,61 @@ export function canonicalizeAnthropicModel(value) {
   return model;
 }
 
+export function isDeepSeekAnthropicRuntime(baseUrl, model) {
+  const normalizedBaseUrl = (readOptionalString(baseUrl) || '').toLowerCase();
+  const normalizedModel = (readOptionalString(model) || '').toLowerCase();
+  return normalizedBaseUrl.includes('api.deepseek.com') || normalizedModel.includes('deepseek');
+}
+
+export function isMimoAnthropicRuntime(baseUrl, model) {
+  const normalizedBaseUrl = (readOptionalString(baseUrl) || '').toLowerCase();
+  const normalizedModel = canonicalizeAnthropicModel(model).toLowerCase();
+  return normalizedBaseUrl.includes('xiaomimimo.com') || normalizedModel.startsWith('mimo-');
+}
+
+export function applyAnthropicRuntimeModelDefaults(env, { baseUrl = '', model = '' } = {}) {
+  const configuredModel = canonicalizeAnthropicModel(model);
+  if (!configuredModel) {
+    return env;
+  }
+
+  env[ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel] = configuredModel;
+  env[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel] = configuredModel;
+  env[ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel] = configuredModel;
+  env[MTL_CODE_MODEL_ENV_KEYS.subagentModel] = configuredModel;
+  env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel] = configuredModel;
+
+  if (isDeepSeekAnthropicRuntime(baseUrl, configuredModel)) {
+    const effortLevel = env[MTL_CODE_MODEL_ENV_KEYS.effortLevel]
+      || env[MTL_CODE_MODEL_ENV_KEYS.legacyEffortLevel]
+      || 'high';
+    env[MTL_CODE_MODEL_ENV_KEYS.effortLevel] = effortLevel;
+    env[MTL_CODE_MODEL_ENV_KEYS.legacyEffortLevel] = effortLevel;
+  } else if (isMimoAnthropicRuntime(baseUrl, configuredModel)) {
+    delete env[MTL_CODE_MODEL_ENV_KEYS.effortLevel];
+    delete env[MTL_CODE_MODEL_ENV_KEYS.legacyEffortLevel];
+  }
+
+  return env;
+}
+
+export function repairAnthropicRuntimeModelEnv(env) {
+  const model = canonicalizeAnthropicModel(
+    readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.model)
+      || readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel)
+      || readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel)
+      || readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel),
+  );
+  if (!model) {
+    return env;
+  }
+
+  return applyAnthropicRuntimeModelDefaults(env, {
+    baseUrl: readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.baseUrl),
+    model,
+  });
+}
+
 function normalizeProfileId(value) {
   return (readOptionalString(value) || '')
     .toLowerCase()
@@ -601,6 +656,7 @@ export async function readMtlCodeModelSettings(env = process.env) {
 export async function readResolvedOpenMythosRuntimeConfig(env = process.env) {
   const settings = await readMtlCodeModelSettings(env);
   const settingsEnv = readObjectRecord(settings.env) ?? {};
+  repairAnthropicRuntimeModelEnv(settingsEnv);
   return readOpenMythosRuntimeConfig(settings, settingsEnv);
 }
 
@@ -612,6 +668,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
 
   const settings = await readMtlCodeModelSettings(env);
   const settingsEnv = readObjectRecord(settings.env) ?? {};
+  repairAnthropicRuntimeModelEnv(settingsEnv);
   const profiles = readStoredModelProfiles(settings, settingsEnv);
   const profile = profiles.find((entry) => entry.id === normalizedProfileId);
   if (!profile) {
@@ -628,14 +685,15 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   const runtimeEnv = {
     [ANTHROPIC_MODEL_ENV_KEYS.baseUrl]: profile.baseUrl,
     [ANTHROPIC_MODEL_ENV_KEYS.model]: model,
-    [ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel]: model,
-    [ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel]: model,
-    [ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel]: model,
     [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: profile.bareMode !== false ? '1' : '0',
     [MTL_CODE_MODEL_ENV_KEYS.maxContextTokens]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.coordinatorMode]: coordinatorModeEnabled ? '1' : '0',
   };
+  applyAnthropicRuntimeModelDefaults(runtimeEnv, {
+    baseUrl: profile.baseUrl,
+    model,
+  });
   applyOpenMythosRuntimeToEnv(runtimeEnv, openMythosRuntime);
 
   if (profile.authToken) {

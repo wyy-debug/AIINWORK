@@ -30,11 +30,15 @@
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "client": "vite",
     "build": "npm run build:client && npm run build:server",
+    "test:unit": "vitest run --config vitest.config.ts",
     "check:mojibake": "node scripts/check-mojibake.mjs",
     "icons:app": "node scripts/generate-app-icons.mjs",
     "package:preview-win": "node scripts/package-preview-win.mjs",
+    "package:debug-win": "node scripts/package-debug-win.mjs",
     "package:electron-win": "node scripts/package-electron-win.mjs",
+    "package:release-win": "node scripts/package-release-win.mjs",
     "smoke:ui": "node scripts/smoke-ui.mjs",
+    "smoke:packaged-debug": "node scripts/packaged-smoke.mjs",
     "smoke:api": "node scripts/smoke-api.mjs",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
@@ -154,6 +158,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.3.2",
     "node-gyp": "^10.0.0",
+    "playwright": "^1.59.1",
     "postcss": "^8.4.32",
     "release-it": "^19.0.5",
     "sharp": "^0.34.2",
@@ -162,7 +167,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.5"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx,js,jsx}": "eslint",

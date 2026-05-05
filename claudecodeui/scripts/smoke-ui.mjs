@@ -20,6 +20,18 @@ async function clickFirstVisible(page, selectors, label) {
   throw new Error(`Could not find ${label}`);
 }
 
+async function waitForMainShell(page) {
+  const shellLocator = page.locator([
+    'button:has-text("项目")',
+    'button:has-text("Projects")',
+    'button:has-text("对话")',
+    'button:has-text("Conversations")',
+    'textarea',
+    '[contenteditable="true"]',
+  ].join(', ')).first();
+  await shellLocator.waitFor({ timeout: 20_000 });
+}
+
 function isExpectedAuthError(text) {
   return allowAuthErrors && /401|Unauthorized|No token provided|Authentication failed|Failed to load conversations|Failed to fetch projects|TaskMaster .*401|WebSocket error/i.test(text);
 }
@@ -46,7 +58,7 @@ async function run() {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
 
-    await page.getByText(/Argus|Argus/i).first().waitFor({ timeout: 20_000 });
+    await waitForMainShell(page);
     logStep('main shell loaded');
 
     await clickFirstVisible(page, [

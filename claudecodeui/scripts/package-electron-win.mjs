@@ -1,8 +1,9 @@
-import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createBuildManifest, writeBuildManifest } from './package-manifest.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDir, '..');
@@ -13,6 +14,7 @@ const resourcesDir = path.join(appRoot, 'electron-resources');
 const runtimeDir = path.join(resourcesDir, 'runtime');
 const mtlCodeDir = path.join(resourcesDir, 'mtl-code');
 const bunExe = process.env.BUN_EXE || path.join(process.env.USERPROFILE || '', '.bun', 'bin', 'bun.exe');
+const packageChannel = process.env.ARGUS_PACKAGE_CHANNEL === 'debug' ? 'debug' : 'release';
 
 const mirrorEnv = {
   CSC_IDENTITY_AUTO_DISCOVERY: process.env.CSC_IDENTITY_AUTO_DISCOVERY || 'false',
@@ -93,6 +95,20 @@ const run = (command, args, options = {}) => {
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed with ${result.status}`);
   }
+};
+
+const readCommand = (command, args, options = {}) => {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd || appRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ...mirrorEnv,
+      ...(options.env || {}),
+    },
+  });
+  return result.status === 0 ? result.stdout.trim() : '';
 };
 
 const runNode = (args, options = {}) => {
@@ -329,6 +345,18 @@ const main = async () => {
   await emptyDir(electronDistDir);
   runLocalNodeCli(['node_modules', 'electron-builder', 'cli.js'], ['--win', 'nsis', '--x64']);
   verifyPackagedNativeModules();
+  const packageJson = JSON.parse(await readFile(path.join(appRoot, 'package.json'), 'utf8'));
+  const version = packageJson.version || '0.0.0';
+  const artifactPath = path.join(electronDistDir, `Argus-${version}-x64.exe`);
+  const manifest = createBuildManifest({
+    version,
+    commit: readCommand('git', ['rev-parse', '--short', 'HEAD'], { cwd: workspaceRoot }) || 'unknown',
+    channel: packageChannel,
+    artifact: 'nsis',
+    outputPath: artifactPath,
+    bunVersion: readCommand(bunExe, ['--version']) || '',
+  });
+  writeBuildManifest(electronDistDir, manifest);
 };
 
 main().catch((error) => {

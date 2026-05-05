@@ -57,6 +57,35 @@ function normalizeAppBindings(value) {
     .slice(0, 40);
 }
 
+export function resolveWorktreeSessionBinding({ body = {}, sourceBinding = null, provider = 'claude' } = {}) {
+  const sourceConfiguration = sourceBinding?.configuration && typeof sourceBinding.configuration === 'object'
+    ? sourceBinding.configuration
+    : {};
+  const explicitSkills = normalizeStringArray(body?.skills);
+  const inheritedSkills = normalizeStringArray(sourceConfiguration.skills);
+  const explicitAppBindings = normalizeAppBindings(body?.appBindings);
+  const inheritedAppBindings = normalizeAppBindings(sourceConfiguration.appBindings);
+  const explicitModelProfileId = normalizeString(body?.modelProfileId, 160);
+  const inheritedModelProfileId = normalizeString(sourceConfiguration.modelProfileId, 160);
+  const skills = explicitSkills.length > 0 ? explicitSkills : inheritedSkills;
+  const appBindings = explicitAppBindings.length > 0 ? explicitAppBindings : inheritedAppBindings;
+  const modelProfileId = explicitModelProfileId || inheritedModelProfileId;
+  const agentId = normalizeString(body?.agentId, 120) || normalizeString(sourceBinding?.agentId, 120);
+  const configuration = {
+    appBindings,
+    skills,
+    ...(modelProfileId ? { modelProfileId } : {}),
+  };
+
+  return {
+    provider: normalizeString(provider, 40) || 'claude',
+    agentId,
+    skills,
+    appBindings,
+    configuration,
+  };
+}
+
 function slugify(value) {
   const normalized = normalizeString(value, 80)
     .toLowerCase()
@@ -202,10 +231,15 @@ export async function createManagedWorktreeDispatch(parentProjectName, body = {}
   const parentDisplayName = getProjectDisplayName(parentProjectName, parentProjectPath);
   const displayName = normalizeString(body?.displayName, 120) || `${parentDisplayName} - WT ${id.slice(0, 8)}`;
   const project = await addProjectManually(worktreePath, displayName);
-  const skills = normalizeStringArray(body?.skills);
-  const appBindings = normalizeAppBindings(body?.appBindings);
-  const agentId = normalizeString(body?.agentId, 120);
   const provider = normalizeString(body?.provider, 40) || 'claude';
+  const sourceSessionId = normalizeString(body?.sourceSessionId || body?.parentSessionId, 200);
+  const sourceBinding = sourceSessionId
+    ? sessionAgentBindingsDb.getBinding(sourceSessionId, provider)
+    : null;
+  const sessionBinding = resolveWorktreeSessionBinding({ body, sourceBinding, provider });
+  const skills = sessionBinding.skills;
+  const appBindings = sessionBinding.appBindings;
+  const agentId = sessionBinding.agentId;
 
   let worktree = worktreeDispatchesDb.create({
     id,
@@ -229,8 +263,13 @@ export async function createManagedWorktreeDispatch(parentProjectName, body = {}
   if (body?.sessionId) {
     const sessionId = normalizeString(body.sessionId, 200);
     worktree = worktreeDispatchesDb.updateSession(id, sessionId, provider);
-    if (agentId || skills.length > 0) {
-      sessionAgentBindingsDb.setAgent(sessionId, provider, agentId, { appBindings, skills });
+    if (
+      agentId
+      || skills.length > 0
+      || appBindings.length > 0
+      || sessionBinding.configuration.modelProfileId
+    ) {
+      sessionAgentBindingsDb.setAgent(sessionId, provider, agentId, sessionBinding.configuration);
     }
   }
 
@@ -238,6 +277,7 @@ export async function createManagedWorktreeDispatch(parentProjectName, body = {}
     worktree,
     project: { ...project, worktree },
     parentDirty,
+    sessionBinding,
   };
 }
 
@@ -344,6 +384,17 @@ router.post('/projects/:projectName/worktrees', async (req, res) => {
     const result = await createManagedWorktreeDispatch(req.params.projectName, req.body || {});
     if (req.body?.createNewSession || req.body?.startArgus) {
       result.worktree = await bindArgusSessionForWorktree(result.worktree, result.worktree.taskPrompt || req.body?.taskPrompt || '');
+      if (result.worktree?.sessionId && result.sessionBinding) {
+        const binding = result.sessionBinding;
+        if (
+          binding.agentId
+          || binding.skills.length > 0
+          || binding.appBindings.length > 0
+          || binding.configuration.modelProfileId
+        ) {
+          sessionAgentBindingsDb.setAgent(result.worktree.sessionId, binding.provider, binding.agentId, binding.configuration);
+        }
+      }
       result.project = { ...result.project, worktree: result.worktree };
     }
     res.json({

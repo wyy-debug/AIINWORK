@@ -20,9 +20,11 @@ import { fileURLToPath } from 'url';
 import { MTL_CODE_MODEL } from '../shared/modelConstants.js';
 
 import {
+  applyAnthropicRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
   canonicalizeAnthropicModel,
   readOpenMythosRuntimeConfig,
+  repairAnthropicRuntimeModelEnv,
   resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
 import {
@@ -493,23 +495,12 @@ async function readMtlCodeSettingsEnv() {
       Object.entries(settings.env)
         .filter(([, value]) => typeof value === 'string' && value.length > 0)
     );
+    repairAnthropicRuntimeModelEnv(env);
     applyOpenMythosRuntimeToEnv(env, readOpenMythosRuntimeConfig(settings, env));
     return env;
   } catch {
     return {};
   }
-}
-
-function isDeepSeekAnthropicRuntime(env) {
-  const baseUrl = String(env.ANTHROPIC_BASE_URL || '').toLowerCase();
-  const model = String(env.ANTHROPIC_MODEL || '').toLowerCase();
-  return baseUrl.includes('api.deepseek.com') || model.includes('deepseek');
-}
-
-function isMimoAnthropicRuntime(env) {
-  const baseUrl = String(env.ANTHROPIC_BASE_URL || '').toLowerCase();
-  const model = String(env.ANTHROPIC_MODEL || '').toLowerCase();
-  return baseUrl.includes('xiaomimimo.com') || model.startsWith('mimo-');
 }
 
 function resolveConfiguredContextWindow(env, overrideTokens = null) {
@@ -568,30 +559,10 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     }
   }
 
-  if (isDeepSeekAnthropicRuntime(spawnEnv)) {
-    const configuredModel = canonicalizeAnthropicModel(spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || '');
-    const smallModel = spawnEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL
-      || (String(configuredModel).toLowerCase().includes('deepseek-v4-pro')
-        ? 'deepseek-v4-flash'
-        : configuredModel)
-      || 'deepseek-v4-flash';
-    const effortLevel = spawnEnv.MTL_CODE_EFFORT_LEVEL || spawnEnv.CLAUDE_CODE_EFFORT_LEVEL || 'high';
-
-    spawnEnv.MTL_CODE_SUBAGENT_MODEL = spawnEnv.MTL_CODE_SUBAGENT_MODEL || spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || smallModel;
-    spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL = spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || spawnEnv.MTL_CODE_SUBAGENT_MODEL;
-    spawnEnv.MTL_CODE_EFFORT_LEVEL = effortLevel;
-    spawnEnv.CLAUDE_CODE_EFFORT_LEVEL = spawnEnv.CLAUDE_CODE_EFFORT_LEVEL || effortLevel;
-  } else if (isMimoAnthropicRuntime(spawnEnv)) {
-    const configuredModel = canonicalizeAnthropicModel(spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || 'mimo-v2.5-pro');
-
-    spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL = spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || configuredModel;
-    spawnEnv.ANTHROPIC_DEFAULT_OPUS_MODEL = spawnEnv.ANTHROPIC_DEFAULT_OPUS_MODEL || configuredModel;
-    spawnEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL = spawnEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL || configuredModel;
-    spawnEnv.MTL_CODE_SUBAGENT_MODEL = spawnEnv.MTL_CODE_SUBAGENT_MODEL || spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || configuredModel;
-    spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL = spawnEnv.CLAUDE_CODE_SUBAGENT_MODEL || spawnEnv.MTL_CODE_SUBAGENT_MODEL;
-    delete spawnEnv.MTL_CODE_EFFORT_LEVEL;
-    delete spawnEnv.CLAUDE_CODE_EFFORT_LEVEL;
-  }
+  applyAnthropicRuntimeModelDefaults(spawnEnv, {
+    baseUrl: spawnEnv.ANTHROPIC_BASE_URL || '',
+    model: spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || '',
+  });
 
   return spawnEnv;
 }

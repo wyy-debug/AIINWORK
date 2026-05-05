@@ -272,16 +272,111 @@ const normalizeManifestTools = (manifest: Record<string, unknown> | null): strin
     .filter(Boolean);
 };
 
-const redactSecrets = (text: string, env: Record<string, string> = {}): string => {
-  let redacted = text;
-  for (const [key, value] of Object.entries(env)) {
-    if (!value || value.length < 4) continue;
-    if (/key|token|secret|password|authorization/i.test(key)) {
-      redacted = redacted.split(value).join('[redacted]');
+const maskConfiguredValue = (value: string | undefined): string =>
+  value && value.trim() ? '[configured]' : '[missing]';
+
+const maskStringRecord = (values: Record<string, string> | undefined): Record<string, string> | undefined => {
+  if (!values) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [key, maskConfiguredValue(value)]),
+  );
+};
+
+const sanitizeProviderMcpServerForDiagnostics = (server: ProviderMcpServer): ProviderMcpServer => {
+  const sanitized: ProviderMcpServer = {
+    ...server,
+  };
+
+  if (server.env) {
+    sanitized.env = maskStringRecord(server.env);
+  }
+
+  if (server.headers) {
+    sanitized.headers = maskStringRecord(server.headers);
+  }
+
+  if (server.envHttpHeaders) {
+    sanitized.envHttpHeaders = maskStringRecord(server.envHttpHeaders);
+  }
+
+  return sanitized;
+};
+
+const collectSensitiveValues = (...sources: Array<Record<string, string> | undefined>): string[] => {
+  const values: string[] = [];
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (!value || value.length < 4) continue;
+      if (/key|token|secret|password|authorization|auth/i.test(key)) {
+        values.push(value);
+      }
     }
+  }
+  return values;
+};
+
+const redactSecrets = (text: string, ...sources: Array<Record<string, string> | undefined>): string => {
+  let redacted = text;
+  for (const value of collectSensitiveValues(...sources)) {
+    redacted = redacted.split(value).join('[redacted]');
   }
   return redacted.slice(0, 1200);
 };
+
+const sanitizeDiagnosticCheck = (
+  check: McpDiagnosticCheck,
+  server: ProviderMcpServer,
+): McpDiagnosticCheck => ({
+  ...check,
+  ...(check.detail ? { detail: redactSecrets(String(check.detail), server.env, server.headers) } : {}),
+});
+
+type NormalizedSetupField = ReturnType<typeof normalizeSetupFields>[number];
+
+const isSetupFieldConfigured = (
+  field: NormalizedSetupField,
+  server: ProviderMcpServer,
+  manifestArgs: string[],
+): boolean => {
+  if (field.target === 'env') {
+    return Boolean(server.env?.[field.key]?.trim());
+  }
+
+  if (field.target === 'header') {
+    return Boolean(server.headers?.[field.key]?.trim());
+  }
+
+  if (field.target === 'cwd') {
+    return Boolean(server.cwd);
+  }
+
+  if (field.target === 'url') {
+    return Boolean(server.url);
+  }
+
+  if (field.target === 'arg' || field.target === 'args') {
+    return (server.args || []).some((arg) => !manifestArgs.includes(String(arg)) || String(arg).includes(field.key));
+  }
+
+  return false;
+};
+
+const describeSetupFields = (
+  setupFields: NormalizedSetupField[],
+  server: ProviderMcpServer,
+  manifestArgs: string[],
+) => setupFields.map((field) => ({
+  key: field.key,
+  label: field.label || field.key,
+  type: field.type,
+  target: field.target,
+  required: field.required,
+  configured: isSetupFieldConfigured(field, server, manifestArgs),
+}));
 
 const checkLaunchable = async (
   server: ProviderMcpServer,
@@ -342,7 +437,7 @@ const checkLaunchable = async (
       id: 'launchable',
       status: 'fail',
       message: 'MCP Server 启动失败。',
-      detail: redactSecrets(error.message, server.env),
+      detail: redactSecrets(error.message, server.env, server.headers),
     });
   });
 
@@ -357,7 +452,7 @@ const checkLaunchable = async (
   }, 2500);
 
   child.on('exit', (code) => {
-    const detail = redactSecrets(output.trim(), server.env);
+    const detail = redactSecrets(output.trim(), server.env, server.headers);
     finish({
       id: 'launchable',
       status: code === 0 ? 'warn' : 'fail',
@@ -530,31 +625,8 @@ const diagnoseProviderMcpServer = async (
     detail: packageDependencies.length > 0 ? packageDependencies.join(', ') : undefined,
   });
 
-  const requiredFields = setupFields
-    .filter((field) => field.required)
-    .map((field) => {
-      const configured = field.target === 'env'
-        ? Boolean(server.env?.[field.key]?.trim())
-        : field.target === 'header'
-          ? Boolean(server.headers?.[field.key]?.trim())
-          : Boolean(
-              field.target === 'cwd'
-                ? server.cwd
-                : field.target === 'url'
-                  ? server.url
-                  : field.target === 'arg' || field.target === 'args'
-                    ? (server.args || []).some((arg) => !manifestArgs.includes(String(arg)) || String(arg).includes(field.key))
-                    : false,
-            );
-      return {
-        key: field.key,
-        label: field.label || field.key,
-        type: field.type,
-        target: field.target,
-        required: field.required,
-        configured,
-      };
-    });
+  const setupFieldStatuses = describeSetupFields(setupFields, server, manifestArgs);
+  const requiredFields = setupFieldStatuses.filter((field) => field.required);
   const missingRequiredFields = requiredFields.filter((field) => !field.configured);
   checks.push({
     id: 'required-setup',
@@ -604,18 +676,13 @@ const diagnoseProviderMcpServer = async (
   const dependenciesInstalledCheck = checkById('dependencies-installed');
   const launchableCheck = checkById('launchable');
   const runtimeToolsCheck = checkById('runtime-tools');
-  const safeMessages = checks.map((check) => ({
-    id: check.id,
-    status: check.status,
-    message: check.message,
-    ...(check.detail ? { detail: redactSecrets(String(check.detail), server.env) } : {}),
-  }));
+  const sanitizedChecks = checks.map((check) => sanitizeDiagnosticCheck(check, server));
 
   const failed = checks.some((check) => check.status === 'fail');
   const warned = checks.some((check) => check.status === 'warn');
   return {
     provider,
-    server,
+    server: sanitizeProviderMcpServerForDiagnostics(server),
     scope: requestedScope,
     installDir,
     status: failed ? 'error' : warned ? 'warning' : 'ok',
@@ -627,7 +694,7 @@ const diagnoseProviderMcpServer = async (
       ? {
           status: launchableCheck.status,
           message: launchableCheck.message,
-          detail: launchableCheck.detail ? redactSecrets(String(launchableCheck.detail), server.env) : '',
+          detail: launchableCheck.detail ? redactSecrets(String(launchableCheck.detail), server.env, server.headers) : '',
         }
       : null,
     runtimeToolsStatus: {
@@ -635,9 +702,10 @@ const diagnoseProviderMcpServer = async (
       tools: manifestTools,
       message: runtimeToolsCheck?.message || 'Tool listing is discovered by the Argus runtime after a session starts.',
     },
-    safeMessages,
+    safeMessages: sanitizedChecks,
+    setupFields: setupFieldStatuses,
     requiredFields,
-    checks,
+    checks: sanitizedChecks,
   };
 };
 

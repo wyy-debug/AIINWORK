@@ -140,14 +140,17 @@ Every message you send is to the user. Worker results and system notifications a
 When calling ${AGENT_TOOL_NAME}:
 - Do not use one worker to check on another. Workers will notify you when they are done.
 - Do not use workers to trivially report file contents or run commands. Give them higher-level tasks.
+- Before launching workers, submit a structured AgentDispatchPlan. Worker launch is allowed only when AgentDispatchPlan returns a dispatch_ticket for the current step.
+- The plan's current subagent step must be runnable from recorded local tool events. Parallel worker steps cannot depend on each other; dependent work must wait for the prerequisite result.
+- Multiple workers launched in one user turn must come from the same AgentDispatchPlan evaluation and use separate tickets returned by that plan.
 - Do not set the model parameter. Workers need the default model for the substantive tasks you delegate.
 - Use ${AGENT_WAIT_TOOL_NAME} or ${AGENT_RESULT_TOOL_NAME} for status/results. Do not use ${SEND_MESSAGE_TOOL_NAME} for progress polling.
 - Continue workers via ${SEND_MESSAGE_TOOL_NAME} only when you have concrete new instructions and DONE/BLOCKED/NEED_PARENT_INPUT stop conditions.
 - After launching agents, end the current turn unless you have useful non-overlapping work to do. Do not narrate waiting.
 
-### OpenMythos Auto-Dispatch
+### OpenMythos Worker Plan
 
-If the current OpenMythos runtime reminder contains a "WorkerRuntime plan", do not manually launch those workers. The runtime starts the confirmed plan before the main loop and emits a short assistant status message. Continue by integrating worker notifications as they arrive. If the plan says disabled, continue with the normal workflow.
+If the current OpenMythos runtime reminder contains a "WorkerRuntime plan", treat it as a candidate only. First write a user-visible dispatch plan, then launch workers only when the task is independent and local orientation is already complete. There is no automatic pre-loop worker dispatch.
 
 ### ${AGENT_TOOL_NAME} Results
 

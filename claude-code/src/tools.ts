@@ -3,6 +3,7 @@ import { toolMatchesName, type Tool, type Tools } from './Tool.js'
 import { AgentSpawnTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
 import {
   AgentCancelTool,
+  AgentDispatchPlanTool,
   AgentListTool,
   AgentResultTool,
   AgentResumeTool,
@@ -154,6 +155,7 @@ import { isEnvTruthy } from './utils/envUtils.js'
 import { isPowerShellToolEnabled } from './utils/shell/shellToolUtils.js'
 import { isAgentSwarmsEnabled } from './utils/agentSwarmsEnabled.js'
 import { isWorktreeModeEnabled } from './utils/worktreeModeEnabled.js'
+import { areSubagentsHardDisabled } from './utils/subagentFeatureGate.js'
 import {
   REPL_TOOL_NAME,
   REPL_ONLY_TOOLS,
@@ -205,14 +207,21 @@ export function getToolsForDefaultPreset(): string[] {
  * NOTE: This MUST stay in sync with https://console.statsig.com/4aF3Ewatb6xPVpCwxb5nA3/dynamic_configs/mtl_code_global_system_caching, in order to cache the system prompt across users.
  */
 export function getAllBaseTools(): Tools {
+  const subagentTools = areSubagentsHardDisabled()
+    ? []
+    : [
+        AgentSpawnTool,
+        AgentDispatchPlanTool,
+        AgentListTool,
+        AgentWaitTool,
+        AgentResultTool,
+        AgentCancelTool,
+        AgentSendInputTool,
+        AgentResumeTool,
+      ]
+
   return [
-    AgentSpawnTool,
-    AgentListTool,
-    AgentWaitTool,
-    AgentResultTool,
-    AgentCancelTool,
-    AgentSendInputTool,
-    AgentResumeTool,
+    ...subagentTools,
     TaskOutputTool,
     BashTool,
     // Ant-native builds have bfs/ugrep embedded in the bun binary (same ARGV0
@@ -299,12 +308,14 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
     if (isReplModeEnabled() && REPLTool) {
       const replSimple: Tool[] = [REPLTool]
       if (
+        !areSubagentsHardDisabled() &&
         feature('COORDINATOR_MODE') &&
         coordinatorModeModule?.isCoordinatorMode()
       ) {
         replSimple.push(
           TaskStopTool,
           AgentListTool,
+          AgentDispatchPlanTool,
           AgentWaitTool,
           AgentResultTool,
           AgentCancelTool,
@@ -320,11 +331,13 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
     // so the coordinator gets Task+TaskStop (via useMergedTools filtering) and
     // workers get Bash/Read/Edit (via filterToolsForAgent filtering).
     if (
+      !areSubagentsHardDisabled() &&
       feature('COORDINATOR_MODE') &&
       coordinatorModeModule?.isCoordinatorMode()
     ) {
       simpleTools.push(
         AgentSpawnTool,
+        AgentDispatchPlanTool,
         TaskStopTool,
         AgentListTool,
         AgentWaitTool,

@@ -2,6 +2,7 @@ import React from 'react';
 
 import type { ChatMessage } from '../../types/types';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../../../shared/view/ui';
+import { getSubagentBlockerGuidance } from '../../utils/subagentGuidance';
 
 import { CollapsibleSection } from './CollapsibleSection';
 
@@ -151,13 +152,30 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
 
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
   const status = runtimeStatus || (isComplete ? 'DONE' : 'RUNNING');
+  const readToolCount = childTools.filter(child =>
+    /^(Read|FileRead|View)$/i.test(child.toolName)
+  ).length;
+  const toolHistorySummary = childTools.length > 0
+    ? [
+      `运行 ${childTools.length} 个工具`,
+      readToolCount > 0 ? `读取 ${readToolCount} 个文件` : null,
+    ].filter(Boolean).join(' · ')
+    : '';
   const finalText = toolResult ? extractTextContent(toolResult.content) : '';
   const shouldShowFinalText = Boolean(finalText && !isAsyncLaunchNoise(finalText));
+  const blockerGuidance = (status === 'BLOCKED' || status === 'NEED_PARENT_INPUT' || stopReason)
+    ? getSubagentBlockerGuidance({
+      status,
+      stopReason,
+      objective: objective || description,
+      lastTool,
+    })
+    : null;
 
   return (
     <div className="my-1 border-l-2 border-l-purple-500 py-0.5 pl-3 dark:border-l-purple-400">
       <CollapsibleSection
-        title={`${subagentType}: ${description}`}
+        title={`${subagentType}: ${description}${toolHistorySummary ? ` · ${toolHistorySummary}` : ''}`}
         toolName="Subagent"
         open={!isComplete}
         badge={
@@ -200,11 +218,18 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
             )}
           </div>
 
-          {(objective || lastToolSummary || stopReason) && (
+          {(objective || lastToolSummary || stopReason || blockerGuidance) && (
             <div className="mt-1.5 space-y-0.5 text-muted-foreground">
               {objective && <div className="line-clamp-1">目标：{objective}</div>}
               {lastToolSummary && <div className="line-clamp-1">最近输出：{lastToolSummary}</div>}
-              {stopReason && (
+              {blockerGuidance && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                  <div className="font-medium">{blockerGuidance.title}</div>
+                  <div className="mt-0.5 line-clamp-2">{blockerGuidance.description}</div>
+                  <div className="mt-0.5 line-clamp-2">{blockerGuidance.nextAction}</div>
+                </div>
+              )}
+              {stopReason && !blockerGuidance && (
                 <div className="line-clamp-2 text-amber-700 dark:text-amber-300">
                   停止原因：{stopReason}
                 </div>

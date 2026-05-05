@@ -15,6 +15,7 @@ import { getQuerySourceForAgent } from 'src/utils/promptCategory.js'
 import { z } from 'zod/v4'
 import {
   clearInvokedSkillsForAgent,
+  getSessionId,
   getSdkAgentProgressSummariesEnabled,
 } from 'src/bootstrap/state.js'
 import {
@@ -48,8 +49,12 @@ import {
 import { isMainSessionTask } from 'src/tasks/LocalMainSessionTask.js'
 import {
   countRunningSubagents,
-  hasRunningSubagentForObjective,
 } from 'src/tasks/subagentRegistry.js'
+import {
+  deriveDispatchUserTurnId,
+  dispatchManager,
+  type DispatchTicket,
+} from 'src/tasks/subagentDispatch.js'
 import {
   checkRemoteAgentEligibility,
   formatPreconditionError,
@@ -69,6 +74,7 @@ import { isAgentSwarmsEnabled } from 'src/utils/agentSwarmsEnabled.js'
 import { getCwd, runWithCwdOverride } from 'src/utils/cwd.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { isEnvTruthy } from 'src/utils/envUtils.js'
+import { assertSubagentsEnabled } from 'src/utils/subagentFeatureGate.js'
 import { AbortError, errorMessage, toError } from 'src/utils/errors.js'
 import type { CacheSafeParams } from 'src/utils/forkedAgent.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
@@ -161,208 +167,124 @@ const proactiveModule =
 
 // Progress display constants (for showing background hint)
 const PROGRESS_THRESHOLD_MS = 2000 // Show background hint after 2 seconds
-const DEFAULT_PARENT_SUBAGENT_MAX_PER_TURN = 3
-const DEFAULT_PARENT_SUBAGENT_MAX_ACTIVE = 2
-const DEFAULT_SESSION_SUBAGENT_MAX_ACTIVE = 3
-const PARENT_SUBAGENT_BUDGET_TTL_MS = 10 * 60_000
 
-type ParentSubagentBudget = {
-  createdAt: number
-  total: number
-  active: number
-  signatures: Set<string>
-}
-
-type ParentSubagentBudgetRegistration = {
-  key: string
-  signature: string
-}
-
-const parentSubagentBudgets = new Map<string, ParentSubagentBudget>()
-
-function parsePositiveLimit(
-  value: string | undefined,
-  fallback: number,
-): number {
-  if (!value) return fallback
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed) || parsed < 1) return fallback
-  return Math.floor(parsed)
-}
-
-function getParentSubagentLimits(): {
-  maxPerTurn: number
-  maxActive: number
-} {
-  const maxPerTurn = parsePositiveLimit(
-    process.env.MTL_CODE_PARENT_SUBAGENT_MAX_PER_TURN,
-    DEFAULT_PARENT_SUBAGENT_MAX_PER_TURN,
-  )
-  const configuredMaxActive = parsePositiveLimit(
-    process.env.MTL_CODE_PARENT_SUBAGENT_MAX_ACTIVE,
-    DEFAULT_PARENT_SUBAGENT_MAX_ACTIVE,
-  )
-  return {
-    maxPerTurn,
-    maxActive: Math.min(configuredMaxActive, maxPerTurn),
-  }
-}
-
-function getSessionSubagentMaxActive(): number {
-  return parsePositiveLimit(
-    process.env.MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE,
-    DEFAULT_SESSION_SUBAGENT_MAX_ACTIVE,
-  )
-}
-
-function pruneParentSubagentBudgets(now = Date.now()): void {
-  for (const [key, budget] of parentSubagentBudgets) {
-    if (now - budget.createdAt > PARENT_SUBAGENT_BUDGET_TTL_MS) {
-      parentSubagentBudgets.delete(key)
-    }
-  }
-}
-
-function normalizeSubagentSignatureText(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase()
-}
-
-function createParentSubagentSignature({
-  agentType,
-  description,
-  prompt,
-}: {
-  agentType: string
-  description: string
-  prompt: string
-}): string {
-  const normalizedPrompt = normalizeSubagentSignatureText(prompt).slice(0, 600)
-  return [
-    normalizeSubagentSignatureText(agentType),
-    normalizeSubagentSignatureText(description),
-    normalizedPrompt,
-  ].join('\n')
-}
-
-function getMessageContentBlocks(message: MessageType): unknown[] | undefined {
-  const record = message as {
-    message?: { content?: unknown }
-    content?: unknown
-  }
-  const content = record.message?.content ?? record.content
-  return Array.isArray(content) ? content : undefined
-}
-
-function isToolResultOnlyUserMessage(message: MessageType): boolean {
-  if (message.type !== 'user') return false
-  const content = getMessageContentBlocks(message)
+function getAgentSpawnSessionId(): string {
+  const context = getAgentContext()
   return (
-    Boolean(content?.length) &&
-    content!.every(block => {
-      if (!block || typeof block !== 'object') return false
-      return (block as { type?: unknown }).type === 'tool_result'
-    })
+    getParentSessionId() ||
+    (isSubagentContext(context) ? context.parentSessionId : undefined) ||
+    getSessionId() ||
+    'main'
   )
 }
 
-function getCurrentUserTurnKey(messages: MessageType[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i]
-    if (!message || message.type !== 'user' || isToolResultOnlyUserMessage(message)) {
-      continue
-    }
-    const uuid = (message as { uuid?: string }).uuid
-    if (uuid) return uuid
-    const content = getMessageContentBlocks(message)
-    const fallbackText = content
-      ?.map(block => {
-        if (typeof block === 'string') return block
-        if (block && typeof block === 'object' && 'text' in block) {
-          return String((block as { text?: unknown }).text ?? '')
-        }
-        return ''
-      })
-      .join('\n')
-      .trim()
-    return `message-${i}:${normalizeSubagentSignatureText(fallbackText ?? '').slice(0, 160)}`
-  }
-  return undefined
-}
-
-function getParentSubagentBudgetKey({
+function getAgentSpawnUserTurnId({
   assistantMessage,
   toolUseContext,
 }: {
   assistantMessage: AssistantMessage
   toolUseContext: ToolUseContext
 }): string {
-  const context = getAgentContext()
-  const parentSessionId =
-    getParentSessionId() ||
-    (isSubagentContext(context) ? context.parentSessionId : undefined) ||
-    'main'
-  const userTurnKey = getCurrentUserTurnKey(toolUseContext.messages)
-  if (userTurnKey) {
-    return `${parentSessionId}:user-turn:${userTurnKey}`
-  }
-  const requestId =
-    (assistantMessage.requestId as string | undefined) ||
-    (assistantMessage.message as { id?: string }).id ||
-    toolUseContext.toolUseId
-  return `${parentSessionId}:${requestId}`
+  const sessionId = getAgentSpawnSessionId()
+  return deriveDispatchUserTurnId({
+    sessionId,
+    messages: toolUseContext.messages,
+    requestId:
+      (assistantMessage.requestId as string | undefined) ||
+      (assistantMessage.message as { id?: string }).id,
+    toolUseId: toolUseContext.toolUseId,
+  })
 }
 
-function registerParentSubagentBudget({
-  key,
-  signature,
-  description,
+type ParentSubagentBudgetRegistration = {
+  ticket: DispatchTicket
+}
+
+type AgentSpawnDispatchTicketConsumer = {
+  consumeTicket(input: {
+    ticketId: string
+    sessionId: string
+    userTurnId: string
+    objective: string
+  }): DispatchTicket
+}
+
+export function consumeAgentSpawnDispatchTicket({
+  dispatchTicket,
+  dispatch_ticket,
+  sessionId,
+  userTurnId,
+  objective,
+  manager = dispatchManager,
 }: {
-  key: string
-  signature: string
-  description: string
-}): ParentSubagentBudgetRegistration {
-  pruneParentSubagentBudgets()
-  const limits = getParentSubagentLimits()
-  let budget = parentSubagentBudgets.get(key)
-  if (!budget) {
-    budget = {
-      createdAt: Date.now(),
-      total: 0,
-      active: 0,
-      signatures: new Set<string>(),
-    }
-    parentSubagentBudgets.set(key, budget)
-  }
-
-  if (budget.signatures.has(signature)) {
+  dispatchTicket?: string
+  dispatch_ticket?: string
+  sessionId: string
+  userTurnId: string
+  objective: string
+  manager?: AgentSpawnDispatchTicketConsumer
+}): DispatchTicket {
+  const ticketId = (dispatch_ticket ?? dispatchTicket ?? '').trim()
+  if (!ticketId) {
     throw new Error(
-      `A subagent for "${description}" has already been launched in this turn. Reuse its result or wait for the completion notification instead of launching another agent for the same objective.`,
+      'AgentSpawn requires a dispatch_ticket returned by AgentDispatchPlan. Submit a structured DispatchProposal first; AgentSpawn no longer decides whether work can be delegated.',
     )
   }
-  if (budget.total >= limits.maxPerTurn) {
-    throw new Error(
-      `This turn has already launched ${budget.total} subagents. The limit is ${limits.maxPerTurn}. Stop spawning agents and summarize the results already available, or ask the user for the missing input.`,
-    )
-  }
-  if (budget.active >= limits.maxActive) {
-    throw new Error(
-      `There are already ${budget.active} subagents active for this turn. The active limit is ${limits.maxActive}. Wait for one to finish before launching another.`,
-    )
-  }
-
-  budget.total += 1
-  budget.active += 1
-  budget.signatures.add(signature)
-  return { key, signature }
+  return manager.consumeTicket({
+    ticketId,
+    sessionId,
+    userTurnId,
+    objective,
+  })
 }
 
 function releaseParentSubagentBudget(
   registration: ParentSubagentBudgetRegistration | undefined,
 ): void {
-  if (!registration) return
-  const budget = parentSubagentBudgets.get(registration.key)
-  if (!budget) return
-  budget.active = Math.max(0, budget.active - 1)
+  void registration
+}
+
+function getSessionSubagentMaxActive(): number {
+  const value = Number.parseInt(process.env.MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE ?? '', 10)
+  return Number.isFinite(value) && value > 0 ? value : 3
+}
+
+function validateSessionSubagentCapacity({
+  activeTaskCount,
+  registryRunningCount,
+  maxActive,
+}: {
+  activeTaskCount: number
+  registryRunningCount: number
+  maxActive: number
+}): void {
+  const observedActive = Math.max(activeTaskCount, registryRunningCount)
+  if (observedActive >= maxActive) {
+    throw new Error(
+      `There are already ${observedActive} subagents running in this session. Wait for AgentResult or cancel an existing agent before spawning more.`,
+    )
+  }
+}
+
+function validateSubagentSpawnLifecycle({
+  isTaskNotificationTurn,
+  isNestedSubagent,
+  allowNestedSubagents,
+}: {
+  isTaskNotificationTurn: boolean
+  isNestedSubagent: boolean
+  allowNestedSubagents: boolean
+}): void {
+  if (isTaskNotificationTurn) {
+    throw new Error(
+      'Do not launch another agent in response to a background agent completion notification. Use AgentResult, summarize the result, or ask the user for missing input.',
+    )
+  }
+  if (isNestedSubagent && !allowNestedSubagents) {
+    throw new Error(
+      'Nested subagents are disabled. Return DONE, BLOCKED, or NEED_PARENT_INPUT instead of spawning another subagent.',
+    )
+  }
 }
 
 // Check if background tasks are disabled at module load time
@@ -407,6 +329,16 @@ const baseInputSchema = lazySchema(() =>
       .describe(
         'Set to true to run this agent in the background. You will be notified when it completes.',
       ),
+    dispatch_ticket: z
+      .string()
+      .optional()
+      .describe(
+        'Required one-shot ticket returned by AgentDispatchPlan. AgentSpawn does not decide when delegation is allowed.',
+      ),
+    dispatchTicket: z
+      .string()
+      .optional()
+      .describe('Alias for dispatch_ticket.'),
   }),
 )
 
@@ -489,6 +421,8 @@ type AgentToolInput = z.infer<ReturnType<typeof baseInputSchema>> & {
   mode?: z.infer<ReturnType<typeof permissionModeSchema>>
   isolation?: 'worktree' | 'remote'
   cwd?: string
+  dispatch_ticket?: string
+  dispatchTicket?: string
 }
 
 // Output schema - multi-agent spawned schema added dynamically at runtime when enabled
@@ -620,12 +554,15 @@ export const AgentTool = buildTool({
       mode: spawnMode,
       isolation,
       cwd,
+      dispatch_ticket,
+      dispatchTicket,
     }: AgentToolInput,
     toolUseContext,
     canUseTool,
     assistantMessage,
     onProgress?,
   ) {
+    assertSubagentsEnabled()
     const startTime = Date.now()
     const model = isCoordinatorMode() ? undefined : modelParam
 
@@ -660,6 +597,56 @@ export const AgentTool = buildTool({
       )
     }
 
+    const currentAgentContext = getAgentContext()
+    validateSubagentSpawnLifecycle({
+      isTaskNotificationTurn: isTaskNotificationTriggeredTurn(toolUseContext.messages),
+      isNestedSubagent: isSubagentContext(currentAgentContext),
+      allowNestedSubagents: isEnvTruthy(process.env.MTL_CODE_ALLOW_NESTED_SUBAGENTS),
+    })
+
+    let parentBudgetRegistration: ParentSubagentBudgetRegistration | undefined
+    const ensureParentSubagentBudget = (agentType: string): ParentSubagentBudgetRegistration => {
+      if (parentBudgetRegistration) return parentBudgetRegistration
+      void agentType
+      void prompt
+      const ticket = consumeAgentSpawnDispatchTicket({
+        dispatch_ticket,
+        dispatchTicket,
+        sessionId: getAgentSpawnSessionId(),
+        userTurnId: getAgentSpawnUserTurnId({ assistantMessage, toolUseContext }),
+        objective: description,
+      })
+      parentBudgetRegistration = { ticket }
+      return parentBudgetRegistration
+    }
+    const ensureSessionSubagentCapacity = (): void => {
+      const activeSubagents = Object.values(
+        toolUseContext.getAppState().tasks,
+      ).filter(
+        task =>
+          isLocalAgentTask(task) &&
+          !isMainSessionTask(task) &&
+          (task.status === 'pending' || task.status === 'running'),
+      )
+      const sessionMaxActiveSubagents = getSessionSubagentMaxActive()
+      const parentSessionId = getAgentSpawnSessionId()
+      const registryRunningSubagents = countRunningSubagents(parentSessionId)
+      validateSessionSubagentCapacity({
+        activeTaskCount: activeSubagents.length,
+        registryRunningCount: registryRunningSubagents,
+        maxActive: sessionMaxActiveSubagents,
+      })
+      const normalizedCurrentObjective = description.trim().toLowerCase()
+      const duplicateActiveSubagent = activeSubagents.find(
+        task => task.description.trim().toLowerCase() === normalizedCurrentObjective,
+      )
+      if (duplicateActiveSubagent) {
+        throw new Error(
+          `A subagent for "${description}" is already running${duplicateActiveSubagent ? ` (${duplicateActiveSubagent.id})` : ''}. Do not launch another one for the same objective; wait for its result or cancel the existing agent first.`,
+        )
+      }
+    }
+
     // Check if this is a multi-agent spawn request
     // Spawn is triggered when team_name is set (from param or context) and name is provided
     if (teamName && name) {
@@ -672,31 +659,38 @@ export const AgentTool = buildTool({
       if (agentDef?.color) {
         setAgentColor(subagent_type!, agentDef.color)
       }
-      const result = await spawnTeammate(
-        {
-          name,
-          prompt,
-          description,
-          team_name: teamName,
-          use_splitpane: true,
-          plan_mode_required: spawnMode === 'plan',
-          model: model ?? agentDef?.model,
-          agent_type: subagent_type,
-          invokingRequestId: assistantMessage?.requestId as string | undefined,
-        },
-        toolUseContext,
-      )
+      try {
+        ensureParentSubagentBudget(subagent_type ?? `teammate:${teamName}:${name}`)
+        ensureSessionSubagentCapacity()
+        const result = await spawnTeammate(
+          {
+            name,
+            prompt,
+            description,
+            team_name: teamName,
+            use_splitpane: true,
+            plan_mode_required: spawnMode === 'plan',
+            model: model ?? agentDef?.model,
+            agent_type: subagent_type,
+            invokingRequestId: assistantMessage?.requestId as string | undefined,
+          },
+          toolUseContext,
+        )
 
-      // Type assertion uses TeammateSpawnedOutput (defined above) instead of any.
-      // This type is excluded from the exported outputSchema for dead code elimination.
-      // Cast through unknown because TeammateSpawnedOutput is intentionally
-      // not part of the exported Output union (for dead code elimination purposes).
-      const spawnResult: TeammateSpawnedOutput = {
-        status: 'teammate_spawned' as const,
-        prompt,
-        ...result.data,
+        // Type assertion uses TeammateSpawnedOutput (defined above) instead of any.
+        // This type is excluded from the exported outputSchema for dead code elimination.
+        // Cast through unknown because TeammateSpawnedOutput is intentionally
+        // not part of the exported Output union (for dead code elimination purposes).
+        const spawnResult: TeammateSpawnedOutput = {
+          status: 'teammate_spawned' as const,
+          prompt,
+          ...result.data,
+        }
+        return { data: spawnResult } as unknown as { data: Output }
+      } catch (error) {
+        releaseParentSubagentBudget(parentBudgetRegistration)
+        throw error
       }
-      return { data: spawnResult } as unknown as { data: Output }
     }
 
     // Fork subagent experiment routing:
@@ -774,22 +768,6 @@ export const AgentTool = buildTool({
     ) {
       throw new Error(
         `In-process teammates cannot spawn background agents. Agent '${selectedAgent.agentType}' has background: true in its definition.`,
-      )
-    }
-
-    if (isTaskNotificationTriggeredTurn(toolUseContext.messages)) {
-      throw new Error(
-        'Do not launch another agent in response to a background agent completion notification. Summarize the returned result, ask the user for the missing input once, or stop. A new user request is required before spawning more agents.',
-      )
-    }
-
-    const currentAgentContext = getAgentContext()
-    if (
-      isSubagentContext(currentAgentContext) &&
-      !isEnvTruthy(process.env.MTL_CODE_ALLOW_NESTED_SUBAGENTS)
-    ) {
-      throw new Error(
-        'Nested subagents are disabled. Complete the current subagent task directly with the available tools, or return NEED_PARENT_INPUT/BLOCKED so the parent can decide the next step.',
       )
     }
 
@@ -1195,49 +1173,13 @@ export const AgentTool = buildTool({
       return { worktreePath, worktreeBranch }
     }
 
-    const parentBudgetRegistration = registerParentSubagentBudget({
-      key: getParentSubagentBudgetKey({ assistantMessage, toolUseContext }),
-      signature: createParentSubagentSignature({
-        agentType: selectedAgent.agentType,
-        description,
-        prompt,
-      }),
-      description,
-    })
+    ensureParentSubagentBudget(selectedAgent.agentType)
 
-    const activeSubagents = Object.values(
-      toolUseContext.getAppState().tasks,
-    ).filter(
-      task =>
-        isLocalAgentTask(task) &&
-        !isMainSessionTask(task) &&
-        (task.status === 'pending' || task.status === 'running'),
-    )
-    const sessionMaxActiveSubagents = getSessionSubagentMaxActive()
-    const parentSessionId = getParentSessionId()
-    const registryRunningSubagents = countRunningSubagents(parentSessionId)
-    const effectiveRunningSubagents = Math.max(
-      activeSubagents.length,
-      registryRunningSubagents,
-    )
-    if (effectiveRunningSubagents >= sessionMaxActiveSubagents) {
+    try {
+      ensureSessionSubagentCapacity()
+    } catch (error) {
       releaseParentSubagentBudget(parentBudgetRegistration)
-      throw new Error(
-        `There are already ${effectiveRunningSubagents} subagents running in this session. The limit is ${sessionMaxActiveSubagents}. Wait for a result, summarize what is already available, or stop redundant agents before launching more.`,
-      )
-    }
-    const normalizedCurrentObjective = description.trim().toLowerCase()
-    const duplicateActiveSubagent = activeSubagents.find(
-      task => task.description.trim().toLowerCase() === normalizedCurrentObjective,
-    )
-    if (
-      duplicateActiveSubagent ||
-      hasRunningSubagentForObjective(description, parentSessionId)
-    ) {
-      releaseParentSubagentBudget(parentBudgetRegistration)
-      throw new Error(
-        `A subagent for "${description}" is already running${duplicateActiveSubagent ? ` (${duplicateActiveSubagent.id})` : ''}. Do not launch another one for the same objective; wait for its result or cancel the existing agent first.`,
-      )
+      throw error
     }
 
     if (shouldRunAsync) {

@@ -49,7 +49,6 @@ import {
   createUserInterruptionMessage,
   normalizeMessagesForAPI,
   createSystemMessage,
-  createAssistantMessage,
   createAssistantAPIErrorMessage,
   getMessagesAfterCompactBoundary,
   createToolUseSummaryMessage,
@@ -124,11 +123,6 @@ import {
   type OpenMythosContextCacheDiagnostics,
   type OpenMythosRuntimeState,
 } from './utils/openmythosRuntime.js'
-import {
-  formatOpenMythosWorkerRuntimeMessage,
-  runOpenMythosWorkerRuntime,
-  shouldRunOpenMythosWorkerRuntime,
-} from './utils/openmythosWorkerRuntime.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -718,36 +712,6 @@ async function* queryLoop(
       canUseTool,
       openMythosRuntimeState,
     )
-    if (
-      openMythosRuntimeState &&
-      shouldRunOpenMythosWorkerRuntime(openMythosRuntimeState, toolUseContext)
-    ) {
-      const workerRuntimeParentMessage = createAssistantMessage({ content: '' })
-      const workerRuntimeResult = await runOpenMythosWorkerRuntime({
-        state: openMythosRuntimeState,
-        toolUseContext,
-        canUseTool: activeCanUseTool,
-        assistantMessage: workerRuntimeParentMessage,
-      })
-
-      if (workerRuntimeResult.launched.length > 0) {
-        const workerRuntimeMessage = createAssistantMessage({
-          content: formatOpenMythosWorkerRuntimeMessage(workerRuntimeResult),
-        })
-        yield workerRuntimeMessage
-        messagesForQuery = [...messagesForQuery, workerRuntimeMessage]
-        toolUseContext = {
-          ...toolUseContext,
-          messages: messagesForQuery,
-          openMythosRuntimeState,
-          criticalSystemReminder_EXPERIMENTAL:
-            formatOpenMythosRuntimeReminder(
-              openMythosRuntimeState.card,
-              openMythosRuntimeState,
-            ),
-        }
-      }
-    }
     const effectiveMaxTurns =
       maxTurns ??
       (shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)

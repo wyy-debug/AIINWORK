@@ -130,7 +130,6 @@ export type OpenMythosRuntimeState = {
   phase: OpenMythosPhase
   turnCount: number
   remainingBudget: number
-  workerRuntimeAttempted: boolean
   loopControl: OpenMythosLoopControl
   stableReinjection: boolean
   phaseAdapter: boolean
@@ -326,10 +325,7 @@ export function getOpenMythosRuntimeConfig(): OpenMythosRuntimeConfig {
       process.env.MTL_CODE_OPENMYTHOS_CONTEXT_CACHE_DIAGNOSTICS,
       DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics,
     ),
-    autoDispatchSubagents: readBooleanEnv(
-      process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH,
-      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchSubagents,
-    ),
+    autoDispatchSubagents: false,
     autoDispatchMinEffort: readEffortBound(
       process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT,
       DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort,
@@ -475,7 +471,6 @@ export function createOpenMythosRuntimeState(
     phase: getOpenMythosPhase(card, turnCount),
     turnCount,
     remainingBudget: getRemainingBudget(card.loopBudget, turnCount),
-    workerRuntimeAttempted: false,
     loopControl: config.loopControl,
     stableReinjection: config.stableReinjection,
     phaseAdapter: config.phaseAdapter,
@@ -530,14 +525,9 @@ export function formatOpenMythosRuntimeReminder(
         .map((task, index) => `${index + 1}. ${task.role}: ${task.description}`)
         .join('\n')
     : 'disabled'
-  const workerPlanConfirmed = isEnvTruthy(process.env.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED)
-  const coordinatorInstruction = state?.workerRuntimeAttempted
-    ? '- Coordinator instruction: OpenMythos WorkerRuntime already started this plan. Do not manually launch the same workers; synthesize worker notifications or proceed locally.'
-    : card.workerPlan && card.workerPlan.assignments.length > 0
-      ? workerPlanConfirmed
-        ? '- Coordinator instruction: WorkerRuntime will start the worker plan before the main loop. Do not manually call Agent for this plan; integrate worker notifications when they arrive.'
-        : '- Coordinator instruction: Worker plan exists but has not been confirmed for this run. Do not launch it; continue as a single Agent unless the user explicitly confirms worker dispatch.'
-      : '- Coordinator instruction: no automatic worker runtime dispatch is required for this turn.'
+  const coordinatorInstruction = card.workerPlan && card.workerPlan.assignments.length > 0
+    ? '- Coordinator instruction: Worker plan is a proposal only. Submit AgentDispatchPlan after local tool events prove the next subagent step is runnable; then call AgentSpawn only with the returned dispatch_ticket.'
+    : '- Coordinator instruction: no automatic worker runtime dispatch is required for this turn.'
   const contextCache = state?.contextCache
   const contextCacheLine = contextCache
     ? `- Context cache ledger: compact boundaries=${contextCache.compactBoundaryCount ?? 0}; microcompact boundaries=${contextCache.microcompactBoundaryCount ?? 0}; RAG excerpts=${contextCache.ragExcerptCount ?? 0}; RAG prompt chars=${contextCache.ragPromptLength ?? 0}; tool summaries=${contextCache.toolSummaryCount ?? 0}.`

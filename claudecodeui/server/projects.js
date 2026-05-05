@@ -1284,11 +1284,107 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       || message.subagent_events
     );
 
+    const collectString = (set, value) => {
+      if (typeof value === 'string' && value.trim()) {
+        set.add(value.trim());
+      }
+    };
+
+    const collectIdentityFromRecord = (identity, value) => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      collectString(identity.agentIds, value.agentId || value.agent_id);
+      collectString(identity.taskIds, value.taskId || value.task_id);
+      collectString(identity.toolUseIds, value.toolId || value.tool_id || value.toolUseId || value.tool_use_id || value.parentToolUseId || value.parent_tool_use_id);
+    };
+
+    const collectIdentityFromEvents = (identity, value) => {
+      if (!Array.isArray(value)) {
+        return;
+      }
+      for (const event of value) {
+        collectIdentityFromRecord(identity, event);
+      }
+    };
+
+    const collectToolResultIds = (message) => {
+      const ids = [];
+      const content = message?.message?.content;
+      if (!Array.isArray(content)) {
+        return ids;
+      }
+      for (const part of content) {
+        if (part?.type === 'tool_result') {
+          if (typeof part.tool_use_id === 'string' && part.tool_use_id.trim()) {
+            ids.push(part.tool_use_id.trim());
+          }
+          if (typeof part.toolUseId === 'string' && part.toolUseId.trim()) {
+            ids.push(part.toolUseId.trim());
+          }
+        }
+      }
+      return ids;
+    };
+
+    const canonicalIdentity = {
+      agentIds: new Set(),
+      taskIds: new Set(),
+      toolUseIds: new Set(),
+    };
+
+    for (const message of messages) {
+      if (!hasCanonicalSubagentState(message)) {
+        continue;
+      }
+
+      collectString(canonicalIdentity.taskIds, message.taskId || message.task_id);
+      collectString(canonicalIdentity.toolUseIds, message.toolId || message.tool_id || message.toolUseId || message.tool_use_id);
+      collectIdentityFromRecord(canonicalIdentity, message.subagentSnapshot || message.subagent_snapshot);
+      collectIdentityFromRecord(canonicalIdentity, message.subagentRecord || message.subagent_record);
+      collectIdentityFromRecord(canonicalIdentity, message.subagentRuntime || message.subagent_runtime);
+      collectIdentityFromEvents(canonicalIdentity, message.subagentEvents || message.subagent_events);
+    }
+
+    const referencesCanonicalSubagent = (message) => {
+      if (hasCanonicalSubagentState(message)) {
+        return true;
+      }
+
+      if (message?.toolUseResult?.agentId && canonicalIdentity.agentIds.has(message.toolUseResult.agentId)) {
+        return true;
+      }
+      if (message?.toolUseResult?.taskId && canonicalIdentity.taskIds.has(message.toolUseResult.taskId)) {
+        return true;
+      }
+      if (message?.taskId && canonicalIdentity.taskIds.has(message.taskId)) {
+        return true;
+      }
+      if (message?.task_id && canonicalIdentity.taskIds.has(message.task_id)) {
+        return true;
+      }
+      if (message?.toolId && canonicalIdentity.toolUseIds.has(message.toolId)) {
+        return true;
+      }
+      if (message?.tool_id && canonicalIdentity.toolUseIds.has(message.tool_id)) {
+        return true;
+      }
+      if (message?.toolUseId && canonicalIdentity.toolUseIds.has(message.toolUseId)) {
+        return true;
+      }
+      if (message?.tool_use_id && canonicalIdentity.toolUseIds.has(message.tool_use_id)) {
+        return true;
+      }
+
+      return collectToolResultIds(message).some((toolUseId) => canonicalIdentity.toolUseIds.has(toolUseId));
+    };
+
     // Collect legacy agentIds from old Task tool results only when the
     // canonical Subagent Manager snapshot is not present.
     const agentIds = new Set();
     for (const message of messages) {
-      if (!hasCanonicalSubagentState(message) && message.toolUseResult?.agentId) {
+      if (!referencesCanonicalSubagent(message) && message.toolUseResult?.agentId) {
         agentIds.add(message.toolUseResult.agentId);
       }
     }
@@ -1307,7 +1403,7 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     // subagentSnapshot/subagentEvents and should not be inferred from text or
     // agent-*.jsonl side files.
     for (const message of messages) {
-      if (!hasCanonicalSubagentState(message) && message.toolUseResult?.agentId) {
+      if (!referencesCanonicalSubagent(message) && message.toolUseResult?.agentId) {
         const agentId = message.toolUseResult.agentId;
         const agentInfo = agentToolsCache.get(agentId);
         if (agentInfo?.tools && agentInfo.tools.length > 0) {

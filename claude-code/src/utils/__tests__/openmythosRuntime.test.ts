@@ -15,7 +15,6 @@ const originalEnv = { ...process.env }
 beforeEach(() => {
   process.env.MTL_CODE_OPENMYTHOS_RUNTIME = '1'
   process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '1'
-  process.env.MTL_CODE_OPENMYTHOS_DISPATCH_CONFIRMED = '1'
 })
 
 afterEach(() => {
@@ -58,10 +57,7 @@ describe('openmythos runtime card', () => {
     expect(card?.routes.join(' ')).toContain('verification pass')
     expect(card?.riskScore).toBeGreaterThanOrEqual(8)
     expect(card?.expertRoutes.map(route => route.kind)).toContain('security')
-    expect(card?.workerPlan?.assignments.map(task => task.kind)).toContain('security')
-    expect(card?.workerPlan?.assignments.map(task => task.kind)).toContain('verification')
-    expect(card?.workerPlan?.assignments.map(task => task.role)).toContain('worker-review')
-    expect(card?.workerPlan?.assignments.map(task => task.role)).toContain('worker-verifier')
+    expect(card?.workerPlan).toBeNull()
     expect(card?.phasePlan).toEqual([
       'orient',
       'plan',
@@ -97,7 +93,6 @@ describe('openmythos runtime card', () => {
     const state = createOpenMythosRuntimeState(card)
 
     expect(state.loopControl).toBe('enforced')
-    expect(state.workerRuntimeAttempted).toBe(false)
     expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(true)
     expect(state.phase).toBe('orient')
     expect(isOpenMythosReadOnlyPhase(state)).toBe(true)
@@ -150,24 +145,23 @@ describe('openmythos runtime card', () => {
     )
   })
 
-  test('only dispatches workers in coordinator mode above the configured effort', () => {
+  test('keeps worker dispatch disabled even in coordinator mode above the configured effort', () => {
     const prompt = 'Refactor multi-module architecture'
     let card = buildOpenMythosRuntimeCard(prompt)
     expect(card?.workerPlan).toBeNull()
 
     process.env.MTL_CODE_COORDINATOR_MODE = '1'
     card = buildOpenMythosRuntimeCard(prompt)
-    expect(card?.workerPlan?.assignments.length).toBeGreaterThan(0)
-    expect(formatOpenMythosRuntimeReminder(card!)).toContain(
-      'WorkerRuntime will start the worker plan',
-    )
+    expect(card?.workerPlan).toBeNull()
+    const reminder = formatOpenMythosRuntimeReminder(card!)
+    expect(reminder).toContain('WorkerRuntime plan: disabled')
 
     process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH_MIN_EFFORT = 'high'
     card = buildOpenMythosRuntimeCard(prompt)
     expect(card?.workerPlan).toBeNull()
   })
 
-  test('can disable auto-dispatch and cap worker count', () => {
+  test('ignores auto-dispatch env overrides while subagents are hard-disabled', () => {
     process.env.MTL_CODE_COORDINATOR_MODE = '1'
     process.env.MTL_CODE_OPENMYTHOS_AUTO_DISPATCH = '0'
     let card = buildOpenMythosRuntimeCard(
@@ -180,7 +174,7 @@ describe('openmythos runtime card', () => {
     card = buildOpenMythosRuntimeCard(
       'Implement an auth database migration with rollback tests and CI verification plus frontend verification',
     )
-    expect(card?.workerPlan?.assignments.length).toBeLessThanOrEqual(2)
+    expect(card?.workerPlan).toBeNull()
   })
 
   test('does not auto-dispatch again for worker task notifications', () => {
@@ -201,17 +195,15 @@ describe('openmythos runtime card', () => {
     )
   })
 
-  test('reminder suppresses duplicate coordinator dispatch after WorkerRuntime starts', () => {
+  test('reminder no longer mentions legacy visible dispatch plan bypasses', () => {
     process.env.MTL_CODE_COORDINATOR_MODE = '1'
     const card = buildOpenMythosRuntimeCard('Refactor multi-module architecture')
     if (!card) throw new Error('expected runtime card')
     const state = createOpenMythosRuntimeState(card)
 
-    state.workerRuntimeAttempted = true
-
-    expect(formatOpenMythosRuntimeReminder(card, state)).toContain(
-      'WorkerRuntime already started this plan',
-    )
+    const reminder = formatOpenMythosRuntimeReminder(card, state)
+    expect(reminder).not.toContain(`visible ${'DispatchPlan'}V2`)
+    expect(reminder).not.toContain('already started this plan')
   })
 
   test('can switch loop control to advisory and disable expert routing', () => {

@@ -6,6 +6,14 @@ import type { ChatMessage, Provider } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import {
+  captureViewportAnchor,
+  getRestoredScrollTop,
+  shouldAutoFillHistory,
+  shouldPreserveViewport,
+  type ScrollAnchorBox,
+  type ScrollRestoreState,
+} from '../utils/chatScrollRestore';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -31,15 +39,6 @@ interface UseChatSessionStateArgs {
   resetStreamingState: () => void;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   sessionStore: SessionStore;
-}
-
-interface ScrollRestoreState {
-  height: number;
-  top: number;
-  anchorKey?: string | null;
-  anchorOffset?: number;
-  attemptsLeft?: number;
-  fallbackMode?: 'height-diff' | 'top';
 }
 
 /* ------------------------------------------------------------------ */
@@ -156,30 +155,38 @@ export function useChatSessionState({
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
 
+  const getScrollAnchorBoxes = useCallback((container: HTMLDivElement): ScrollAnchorBox[] => {
+    return Array.from(container.querySelectorAll<HTMLElement>('[data-message-key]'))
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          key: element.dataset.messageKey || '',
+          top: rect.top,
+          bottom: rect.bottom,
+        };
+      })
+      .filter((element) => Boolean(element.key));
+  }, []);
+
   const captureScrollRestoreState = useCallback((
     container: HTMLDivElement,
     fallbackMode: ScrollRestoreState['fallbackMode'] = 'height-diff',
   ): ScrollRestoreState => {
     const containerRect = container.getBoundingClientRect();
-    const messageElements = container.querySelectorAll<HTMLElement>('[data-message-key]');
-    let anchor: HTMLElement | null = null;
-    for (const element of messageElements) {
-      const rect = element.getBoundingClientRect();
-      if (rect.bottom >= containerRect.top + 8) {
-        anchor = element;
-        break;
-      }
-    }
+    const anchor = captureViewportAnchor({
+      containerTop: containerRect.top,
+      elements: getScrollAnchorBoxes(container),
+    });
 
     return {
       height: container.scrollHeight,
       top: container.scrollTop,
-      anchorKey: anchor?.dataset.messageKey || null,
-      anchorOffset: anchor ? anchor.getBoundingClientRect().top - containerRect.top : undefined,
+      anchorKey: anchor.anchorKey,
+      anchorOffset: anchor.anchorOffset,
       attemptsLeft: SCROLL_RESTORE_ATTEMPTS,
       fallbackMode,
     };
-  }, []);
+  }, [getScrollAnchorBoxes]);
 
   const updateScrollPositionSnapshot = useCallback((container: HTMLDivElement) => {
     scrollPositionRef.current = captureScrollRestoreState(container, 'top');
@@ -189,27 +196,18 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return false;
 
-    if (state.anchorKey) {
-      const selectorValue = typeof CSS !== 'undefined' && CSS.escape
-        ? CSS.escape(state.anchorKey)
-        : state.anchorKey.replace(/"/g, '\\"');
-      const anchor = container.querySelector<HTMLElement>(`[data-message-key="${selectorValue}"]`);
-      if (anchor) {
-        const containerRect = container.getBoundingClientRect();
-        const anchorTop = anchor.getBoundingClientRect().top - containerRect.top;
-        container.scrollTop += anchorTop - (state.anchorOffset || 0);
-        return true;
-      }
-    }
-
-    if (state.fallbackMode === 'height-diff') {
-      const newScrollHeight = container.scrollHeight;
-      container.scrollTop = Math.max(0, state.top + (newScrollHeight - state.height));
-    } else {
-      container.scrollTop = Math.max(0, state.top);
-    }
+    const containerRect = container.getBoundingClientRect();
+    container.scrollTop = getRestoredScrollTop({
+      state,
+      current: {
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+        containerTop: containerRect.top,
+        anchors: getScrollAnchorBoxes(container),
+      },
+    });
     return true;
-  }, []);
+  }, [getScrollAnchorBoxes]);
 
   const queueScrollRestore = useCallback((state: ScrollRestoreState) => {
     pendingScrollRestoreRef.current = {
@@ -792,9 +790,12 @@ export function useChatSessionState({
     if (searchScrollActiveRef.current) return;
 
     const container = scrollContainerRef.current;
-    const shouldPreserveViewport = isUserScrolledUp || !isNearBottom();
+    const preserveViewport = shouldPreserveViewport({
+      isUserScrolledUp,
+      isNearBottom: isNearBottom(),
+    });
 
-    if (shouldPreserveViewport) {
+    if (preserveViewport) {
       restoreScrollPosition(scrollPositionRef.current);
       updateScrollPositionSnapshot(container);
       return;
@@ -810,7 +811,7 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    if (isUserScrolledUp || !isNearBottom()) {
+    if (shouldPreserveViewport({ isUserScrolledUp, isNearBottom: isNearBottom() })) {
       queueScrollRestore(captureScrollRestoreState(container, 'top'));
       return;
     }
@@ -880,7 +881,6 @@ export function useChatSessionState({
       autoFillSessionKeyRef.current = sessionKey;
       autoFillPagesRef.current = 0;
     }
-    if (autoFillPagesRef.current >= AUTO_FILL_MAX_PAGES_PER_SESSION) return;
 
     if (autoFillFrameRef.current !== null) {
       window.cancelAnimationFrame(autoFillFrameRef.current);
@@ -890,8 +890,18 @@ export function useChatSessionState({
       autoFillFrameRef.current = null;
       const latestContainer = scrollContainerRef.current;
       if (!latestContainer || !hasMoreMessages || isLoadingMoreRef.current) return;
-      const lacksScrollableHistory = latestContainer.scrollHeight <= latestContainer.clientHeight + 24;
-      if (lacksScrollableHistory) {
+      if (shouldAutoFillHistory({
+        hasMoreMessages,
+        allMessagesLoaded: allMessagesLoadedRef.current,
+        isLoadingMoreMessages: isLoadingMoreRef.current || isLoadingMoreMessages,
+        isSessionLoading: isLoadingSessionMessages,
+        hasPendingRestore: Boolean(pendingScrollRestoreRef.current),
+        searchScrollActive: searchScrollActiveRef.current,
+        pagesLoadedForSession: autoFillPagesRef.current,
+        maxPagesPerSession: AUTO_FILL_MAX_PAGES_PER_SESSION,
+        scrollHeight: latestContainer.scrollHeight,
+        clientHeight: latestContainer.clientHeight,
+      })) {
         autoFillPagesRef.current += 1;
         void loadOlderMessages(latestContainer);
       }

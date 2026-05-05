@@ -35,6 +35,38 @@ async function readJsonResponse(response: Response) {
   return data;
 }
 
+export function buildWorktreeDispatchPayload({
+  taskPrompt,
+  baseRef,
+  sourceSessionTitle,
+  sourceSession,
+  isSessionDispatch,
+  selectedAgent,
+  selectedSkills,
+  createSession,
+}: {
+  taskPrompt: string;
+  baseRef: string;
+  sourceSessionTitle: string;
+  sourceSession?: SessionWithProvider | null;
+  isSessionDispatch: boolean;
+  selectedAgent?: Pick<AgentConfig, 'id' | 'appBindings'> | null;
+  selectedSkills: string[];
+  createSession: boolean;
+}) {
+  return {
+    taskPrompt,
+    baseRef,
+    title: sourceSessionTitle || taskPrompt,
+    agentId: isSessionDispatch ? '' : selectedAgent?.id || '',
+    appBindings: isSessionDispatch ? [] : selectedAgent?.appBindings || [],
+    skills: isSessionDispatch ? [] : selectedSkills,
+    provider: sourceSession?.__provider || 'claude',
+    sourceSessionId: sourceSession?.id || undefined,
+    createNewSession: createSession,
+  };
+}
+
 export default function WorktreeDispatchModal({
   project,
   sourceSession = null,
@@ -49,7 +81,7 @@ export default function WorktreeDispatchModal({
   const [baseRef, setBaseRef] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
-  const [createSession, setCreateSession] = useState(!isSessionDispatch);
+  const [createSession, setCreateSession] = useState(true);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [skills, setSkills] = useState<InstalledSkill[]>([]);
   const [parentGitState, setParentGitState] = useState<{
@@ -66,7 +98,7 @@ export default function WorktreeDispatchModal({
     const nextTitle = getSessionTitle(sourceSession);
     if (nextTitle) {
       setTaskPrompt(`继续处理：${nextTitle}`);
-      setCreateSession(false);
+      setCreateSession(true);
     }
   }, [sourceSession]);
 
@@ -162,15 +194,16 @@ export default function WorktreeDispatchModal({
     setError('');
     try {
       const response = await api.createProjectWorktree(project.name, {
-        taskPrompt,
-        baseRef,
-        title: sourceSessionTitle || taskPrompt,
-        agentId: isSessionDispatch ? '' : selectedAgent?.id || '',
-        appBindings: isSessionDispatch ? [] : selectedAgent?.appBindings || [],
-        skills: isSessionDispatch ? [] : selectedSkills,
-        provider: sourceSession?.__provider || 'claude',
-        sessionId: sourceSession?.id || undefined,
-        createSession,
+        ...buildWorktreeDispatchPayload({
+          taskPrompt,
+          baseRef,
+          sourceSessionTitle,
+          sourceSession,
+          isSessionDispatch,
+          selectedAgent,
+          selectedSkills,
+          createSession,
+        }),
       });
       const data = await readJsonResponse(response);
       onCreated(data.project as Project, {

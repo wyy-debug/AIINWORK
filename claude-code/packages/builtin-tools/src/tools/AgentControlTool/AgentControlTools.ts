@@ -1,6 +1,7 @@
 import { z } from 'zod/v4'
 import { isTerminalTaskStatus } from 'src/Task.js'
 import { buildTool, type ToolDef } from 'src/Tool.js'
+import { getSessionId } from 'src/bootstrap/state.js'
 import { stopTask } from 'src/tasks/stopTask.js'
 import {
   isLocalAgentTask,
@@ -12,6 +13,14 @@ import {
   listSubagentRecords,
   type SubagentRegistryRecord,
 } from 'src/tasks/subagentRegistry.js'
+import {
+  deriveDispatchUserTurnId,
+  dispatchManager,
+  type DispatchEventRequirement,
+  type DispatchPlanStep,
+  type DispatchProposal,
+} from 'src/tasks/subagentDispatch.js'
+import { getParentSessionId } from 'src/utils/teammate.js'
 import type { TaskState } from 'src/tasks/types.js'
 import { asAgentId } from 'src/types/ids.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
@@ -30,6 +39,7 @@ export const AGENT_RESULT_TOOL_NAME = 'AgentResult'
 export const AGENT_CANCEL_TOOL_NAME = 'AgentCancel'
 export const AGENT_SEND_INPUT_TOOL_NAME = 'AgentSendInput'
 export const AGENT_RESUME_TOOL_NAME = 'AgentResume'
+export const AGENT_DISPATCH_PLAN_TOOL_NAME = 'AgentDispatchPlan'
 
 const optionalIdSchema = {
   task_id: z.string().optional().describe('Subagent task id'),
@@ -90,14 +100,80 @@ const resumeInputSchema = lazySchema(() =>
 )
 type ResumeInputSchema = ReturnType<typeof resumeInputSchema>
 
+const eventRequirementSchema = z.strictObject({
+  type: z
+    .enum([
+      'tool_completed',
+      'file_read',
+      'file_exists',
+      'mcp_tool_completed',
+      'mcp_config',
+      'permission_result',
+      'model_binding',
+      'skill_binding',
+      'task_notification',
+    ])
+    .optional(),
+  tool_name: z.string().optional(),
+  file_path_contains: z.string().optional(),
+  mcp_server: z.string().optional(),
+  mcp_tool: z.string().optional(),
+  model: z.string().optional(),
+  model_profile_id: z.string().optional(),
+  skill_name: z.string().optional(),
+  status: z.enum(['ok', 'error', 'missing', 'blocked']).optional(),
+})
+
+const dispatchPlanInputSchema = lazySchema(() =>
+  z.strictObject({
+    proposal_id: z.string().optional(),
+    session_id: z.string(),
+    user_turn_id: z.string(),
+    execution_mode: z.enum(['sequential', 'parallel', 'mixed']),
+    merge_strategy: z.string(),
+    current_step_id: z.string().optional(),
+    steps: z.array(
+      z.strictObject({
+        id: z.string(),
+        type: z.enum(['local', 'subagent']),
+        objective: z.string(),
+        role: z.string().optional(),
+        depends_on: z.array(z.string()),
+        can_run_parallel: z.boolean(),
+        stop_condition: z.enum(['DONE', 'BLOCKED', 'NEED_PARENT_INPUT']),
+        required_events: z.array(eventRequirementSchema).optional(),
+        expected_result: z.string().optional(),
+      }),
+    ),
+  }),
+)
+type DispatchPlanInputSchema = ReturnType<typeof dispatchPlanInputSchema>
+
 const outputSchema = lazySchema(() =>
   z.object({
     status: z.string(),
     timed_out: z.boolean().optional(),
     records: z.array(z.any()).optional(),
     record: z.any().optional(),
+    result: z
+      .object({
+        status: z.string().optional(),
+        summary: z.string().optional(),
+        evidence: z.string().optional(),
+        nextAction: z.string().optional(),
+        changes: z.string().optional(),
+        blockers: z.string().optional(),
+      })
+      .optional(),
+    completed_task_ids: z.array(z.string()).optional(),
+    pending_task_ids: z.array(z.string()).optional(),
     message: z.string().optional(),
     outputFile: z.string().optional(),
+    proposal_id: z.string().optional(),
+    tickets: z.array(z.any()).optional(),
+    completed_step_ids: z.array(z.string()).optional(),
+    denials: z.array(z.string()).optional(),
+    next_local_actions: z.array(z.string()).optional(),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -130,8 +206,108 @@ function normalizeIds(input: Record<string, unknown>): string[] {
   return [...ids]
 }
 
+function requirementFromInput(
+  requirement: z.infer<typeof eventRequirementSchema>,
+): DispatchEventRequirement {
+  return {
+    type: requirement.type,
+    toolName: requirement.tool_name,
+    filePathContains: requirement.file_path_contains,
+    mcpServer: requirement.mcp_server,
+    mcpTool: requirement.mcp_tool,
+    model: requirement.model,
+    modelProfileId: requirement.model_profile_id,
+    skillName: requirement.skill_name,
+    status: requirement.status,
+  }
+}
+
+function stepFromInput(
+  step: z.infer<ReturnType<typeof dispatchPlanInputSchema>>['steps'][number],
+): DispatchPlanStep {
+  return {
+    id: step.id,
+    type: step.type,
+    objective: step.objective,
+    role: step.role,
+    dependsOn: step.depends_on,
+    canRunParallel: step.can_run_parallel,
+    stopCondition: step.stop_condition,
+    requiredEvents: step.required_events?.map(requirementFromInput),
+    expectedResult: step.expected_result,
+  }
+}
+
+function proposalFromInput(
+  input: z.infer<ReturnType<typeof dispatchPlanInputSchema>>,
+): DispatchProposal {
+  return {
+    proposalId: input.proposal_id,
+    sessionId: input.session_id,
+    userTurnId: input.user_turn_id,
+    executionMode: input.execution_mode,
+    mergeStrategy: input.merge_strategy,
+    currentStepId: input.current_step_id,
+    steps: input.steps.map(stepFromInput),
+  }
+}
+
 function terminal(record: SubagentRegistryRecord | undefined): boolean {
   return Boolean(record && record.status !== 'running')
+}
+
+function protocolStatusFromRecord(
+  record: SubagentRegistryRecord | undefined,
+): string | undefined {
+  if (!record) return undefined
+  if (
+    record.runtimeStatus === 'DONE' ||
+    record.runtimeStatus === 'BLOCKED' ||
+    record.runtimeStatus === 'NEED_PARENT_INPUT'
+  ) {
+    return record.runtimeStatus
+  }
+  switch (record.status) {
+    case 'completed':
+      return 'DONE'
+    case 'blocked':
+      return 'BLOCKED'
+    case 'need_parent_input':
+      return 'NEED_PARENT_INPUT'
+    case 'failed':
+    case 'cancelled':
+    case 'interrupted':
+      return 'BLOCKED'
+    default:
+      return record.runtimeStatus
+  }
+}
+
+function structuredResultFromRecord(
+  record: SubagentRegistryRecord | undefined,
+): Output['result'] {
+  if (!record) return undefined
+  return {
+    status: protocolStatusFromRecord(record),
+    summary: record.resultSummary,
+    evidence: record.evidence,
+    nextAction: record.nextAction,
+    changes: record.changes,
+    blockers: record.blockers,
+  }
+}
+
+function completedTaskIds(records: SubagentRegistryRecord[]): string[] {
+  return records.filter(terminal).map(record => record.taskId)
+}
+
+function pendingTaskIds(
+  ids: string[],
+  records: SubagentRegistryRecord[],
+): string[] {
+  const terminalIds = new Set(completedTaskIds(records))
+  const knownIds = new Set(records.map(record => record.taskId))
+  return ids.filter(id => !terminalIds.has(id) || !knownIds.has(id))
 }
 
 function clampTimeout(value: number | undefined): number {
@@ -187,6 +363,75 @@ function isOpenEndedSubagentProbe(content: string): boolean {
     normalized,
   )
 }
+
+export const AgentDispatchPlanTool = buildTool({
+  name: AGENT_DISPATCH_PLAN_TOOL_NAME,
+  aliases: ['agent_dispatch_plan', 'DispatchPlan', 'dispatch_plan'],
+  searchHint: 'evaluate subagent dispatch plan',
+  maxResultSizeChars: 100_000,
+  get inputSchema(): DispatchPlanInputSchema {
+    return dispatchPlanInputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  async description() {
+    return 'Submit a structured dispatch proposal and receive one-shot tickets for runnable subagent steps.'
+  },
+  async prompt() {
+    return 'Use this before AgentSpawn. It evaluates local tool events and returns dispatch tickets; it does not start agents.'
+  },
+  isReadOnly() {
+    return true
+  },
+  isConcurrencySafe() {
+    return true
+  },
+  async call(
+    input,
+    toolUseContext?: { messages?: unknown[]; toolUseId?: string },
+    _canUseTool?: unknown,
+    assistantMessage?: { requestId?: string; message?: { id?: string } },
+  ) {
+    const baseProposal = proposalFromInput(input)
+    const hasRuntimeScope =
+      Array.isArray(toolUseContext?.messages) ||
+      typeof toolUseContext?.toolUseId === 'string'
+    const sessionId = hasRuntimeScope
+      ? getParentSessionId() || getSessionId() || 'main'
+      : baseProposal.sessionId
+    const proposal = hasRuntimeScope
+      ? {
+          ...baseProposal,
+          sessionId,
+          userTurnId: deriveDispatchUserTurnId({
+            sessionId,
+            messages:
+              toolUseContext?.messages as Parameters<
+                typeof deriveDispatchUserTurnId
+              >[0]['messages'],
+            requestId:
+              assistantMessage?.requestId ||
+              assistantMessage?.message?.id,
+            toolUseId: toolUseContext?.toolUseId,
+          }),
+        }
+      : baseProposal
+    const result = dispatchManager.evaluate(proposal)
+    return {
+      data: {
+        status: result.status,
+        proposal_id: result.proposalId,
+        tickets: result.tickets,
+        completed_step_ids: result.completedStepIds,
+        denials: result.denials,
+        next_local_actions: result.nextLocalActions,
+      },
+    }
+  },
+  renderToolUseMessage: renderControlToolUseMessage,
+  mapToolResultToToolResultBlockParam: toolResult,
+} satisfies ToolDef<DispatchPlanInputSchema, Output>)
 
 export const AgentListTool = buildTool({
   name: AGENT_LIST_TOOL_NAME,
@@ -269,6 +514,7 @@ export const AgentResultTool = buildTool({
         status: record ? record.status : 'not_found',
         timed_out: timedOut,
         record,
+        result: structuredResultFromRecord(record),
       },
     }
   },
@@ -339,6 +585,8 @@ export const AgentWaitTool = buildTool({
         status: done ? 'completed' : 'timeout',
         timed_out: timedOut,
         records,
+        completed_task_ids: completedTaskIds(records),
+        pending_task_ids: pendingTaskIds(ids, records),
       },
     }
   },
@@ -388,6 +636,7 @@ export const AgentCancelTool = buildTool({
       data: {
         status: 'cancelled',
         record: getSubagentRecord(taskId),
+        result: structuredResultFromRecord(getSubagentRecord(taskId)),
       },
     }
   },
@@ -489,6 +738,9 @@ export const AgentResumeTool = buildTool({
     const taskId = normalizeId(input)
     if (!taskId) {
       return { result: false, message: 'Missing required parameter: task_id', errorCode: 1 }
+    }
+    if (!getSubagentRecord(taskId)) {
+      return { result: false, message: `No subagent found with ID: ${taskId}`, errorCode: 2 }
     }
     return { result: true }
   },

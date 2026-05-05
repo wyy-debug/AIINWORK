@@ -161,7 +161,7 @@ const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => 
     phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
     expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
     contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
-    autoDispatchSubagents: normalizeBoolean(data.autoDispatchSubagents, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchSubagents),
+    autoDispatchSubagents: false,
     autoDispatchMinEffort: normalizeEffort(data.autoDispatchMinEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort),
     autoDispatchMaxWorkers: normalizePositiveInteger(data.autoDispatchMaxWorkers, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers),
     minEffort: minIndex <= maxIndex ? minEffort : maxEffort,

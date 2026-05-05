@@ -252,6 +252,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
   const subagentProgressMap = new Map<string, SubagentRuntimeSnapshot>();
   const subagentRecordMap = new Map<string, SubagentRegistryRecord>();
   const subagentTaskIdByToolId = new Map<string, string>();
+  const subagentToolIdByTaskId = new Map<string, string>();
   const taskNotificationByToolId = new Map<string, {
     taskId?: string;
     runtimeStatus: SubagentRuntimeStatus;
@@ -263,6 +264,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     summary?: string;
   }>();
   for (const msg of messages) {
+    if (msg.kind === 'tool_use' && msg.toolId && msg.taskId && isSubagentToolName(msg.toolName)) {
+      subagentToolIdByTaskId.set(msg.taskId, msg.toolId);
+    }
     if (msg.kind === 'task_notification' && msg.toolId) {
       const notification = {
         taskId: msg.taskId,
@@ -292,15 +296,19 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       const snapshotRecord = toSubagentRegistryRecord(msg.subagentSnapshot);
       if (registryRecord) {
         subagentRecordMap.set(msg.toolId, registryRecord);
-      } else if (snapshotRecord) {
+      }
+      if (snapshotRecord) {
         subagentRecordMap.set(msg.toolId, snapshotRecord);
       }
       if (msg.taskId) {
         subagentTaskIdByToolId.set(msg.toolId, msg.taskId);
+        subagentToolIdByTaskId.set(msg.taskId, msg.toolId);
       }
       continue;
     }
-    if (msg.kind !== 'tool_use' || !msg.parentToolUseId) continue;
+    if (msg.kind !== 'tool_use') continue;
+    const parentSubagentToolId = msg.parentToolUseId || (msg.taskId ? subagentToolIdByTaskId.get(msg.taskId) : undefined);
+    if (!parentSubagentToolId || parentSubagentToolId === msg.toolId) continue;
     const childToolId = msg.toolId || msg.id;
     const childTool: SubagentChildTool = {
       toolId: childToolId,
@@ -309,8 +317,8 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       toolResult: toToolResult(msg.toolResult || (childToolId ? toolResultMap.get(childToolId) : null)),
       timestamp: normalizeToolTimestamp(msg.timestamp),
     };
-    const existing = subagentChildToolMap.get(msg.parentToolUseId) || [];
-    subagentChildToolMap.set(msg.parentToolUseId, [...existing, childTool]);
+    const existing = subagentChildToolMap.get(parentSubagentToolId) || [];
+    subagentChildToolMap.set(parentSubagentToolId, [...existing, childTool]);
   }
 
   for (const msg of messages) {
@@ -378,10 +386,10 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const isAsyncLaunch = isSubagentContainer && isAsyncSubagentLaunchResult(toolResult);
         const registryRecord = isSubagentContainer && msg.toolId
           ? subagentRecordMap.get(msg.toolId)
-            || toSubagentRegistryRecord(msg.subagentRecord)
             || toSubagentRegistryRecord(msg.subagentSnapshot)
-            || toSubagentRegistryRecord((tr as NormalizedMessage | undefined)?.subagentRecord)
+            || toSubagentRegistryRecord(msg.subagentRecord)
             || toSubagentRegistryRecord((tr as NormalizedMessage | undefined)?.subagentSnapshot)
+            || toSubagentRegistryRecord((tr as NormalizedMessage | undefined)?.subagentRecord)
           : undefined;
         const runtimeSnapshot = isSubagentContainer && msg.toolId
           ? subagentProgressMap.get(msg.toolId)

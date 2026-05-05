@@ -153,6 +153,14 @@ type McpDiagnostics = {
     message: string;
   };
   safeMessages?: McpDiagnosticCheck[];
+  setupFields?: Array<{
+    key: string;
+    label: string;
+    type?: string;
+    target?: string;
+    required?: boolean;
+    configured: boolean;
+  }>;
   requiredFields?: Array<{
     key: string;
     label: string;
@@ -595,9 +603,9 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                   </span>
                 )}
               </div>
-              {diagnostics.requiredFields && diagnostics.requiredFields.length > 0 && (
+              {(diagnostics.setupFields || diagnostics.requiredFields) && (diagnostics.setupFields || diagnostics.requiredFields)!.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-                  {diagnostics.requiredFields.map((field) => (
+                  {(diagnostics.setupFields || diagnostics.requiredFields)!.map((field) => (
                     <span
                       key={`${field.target}:${field.key}`}
                       className={cn(
@@ -607,7 +615,7 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
                           : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
                       )}
                     >
-                      {field.label || field.key}: {field.configured ? '已配置' : '缺失'}
+                      {field.label || field.key}: {field.configured ? '已配置' : field.required ? '缺失' : '可选'}
                     </span>
                   ))}
                 </div>

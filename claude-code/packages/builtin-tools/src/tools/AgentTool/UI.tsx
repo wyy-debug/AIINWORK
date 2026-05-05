@@ -723,7 +723,13 @@ export function renderToolUseProgressMessage(
 }
 
 export function renderToolUseRejectedMessage(
-  _input: { description: string; prompt: string; subagent_type: string },
+  _input: Partial<{
+    description: string
+    prompt: string
+    subagent_type: string
+    dispatch_ticket: string
+    dispatchTicket: string
+  }>,
   {
     progressMessagesForMessage,
     tools,

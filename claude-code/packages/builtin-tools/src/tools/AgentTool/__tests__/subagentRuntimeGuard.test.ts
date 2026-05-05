@@ -121,6 +121,18 @@ describe('subagentRuntimeGuard', () => {
     expect(result.snapshot.stopReason).toContain('same URL')
   })
 
+  test('blocks repeated authentication failures across different tools', () => {
+    const guard = createSubagentRuntimeGuard({ objective: 'fetch private crash page', maxSteps: 15 })
+    guard.observeMessage(assistantTool('a', 'WebFetch', { url: 'https://example.com/crash?id=1' }))
+    expect(guard.observeMessage(toolResult('a', 'HTTP 401 Unauthorized: login required')).shouldStop).toBe(false)
+    guard.observeMessage(assistantTool('b', 'Browser', { url: 'https://example.com/crash?id=2' }))
+    const result = guard.observeMessage(toolResult('b', 'HTTP 403 Forbidden: session expired'))
+
+    expect(result.shouldStop).toBe(true)
+    expect(result.snapshot.runtimeStatus).toBe('BLOCKED')
+    expect(result.snapshot.stopReason).toContain('authentication')
+  })
+
   test('does not block normal different tool calls with useful results', () => {
     const guard = createSubagentRuntimeGuard({ objective: 'inspect', maxSteps: 15 })
     guard.observeMessage(assistantTool('a', 'Read', { file_path: 'a.ts' }))

@@ -354,6 +354,10 @@ export class SubagentManager {
       lastInput: runtime.lastInput,
       lastToolSummary: runtime.lastToolSummary,
       stopReason: runtime.stopReason ?? existing.stopReason,
+      resultSummary:
+        mappedStatus && isTerminalStatus(mappedStatus)
+          ? summarizeText(runtime.stopReason ?? runtime.lastToolSummary)
+          : existing.resultSummary,
       recentActions: runtime.recentActions,
       updatedAt: timestamp,
       ...(mappedStatus && mappedStatus !== 'running' && !existing.endedAt

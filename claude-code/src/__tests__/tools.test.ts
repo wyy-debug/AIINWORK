@@ -1,6 +1,23 @@
 import { describe, expect, test } from 'bun:test'
-import { parseToolPreset, filterToolsByDenyRules } from '../tools'
+import {
+  parseToolPreset,
+  filterToolsByDenyRules,
+  getAllBaseTools,
+  getTools,
+} from '../tools'
 import { getEmptyToolPermissionContext } from '../Tool'
+
+const SUBAGENT_TOOL_NAMES = [
+  'Agent',
+  'AgentSpawn',
+  'AgentList',
+  'AgentWait',
+  'AgentResult',
+  'AgentCancel',
+  'AgentSendInput',
+  'AgentResume',
+  'Task',
+]
 
 describe('parseToolPreset', () => {
   test('returns "default" for "default" input', () => {
@@ -81,5 +98,19 @@ describe('filterToolsByDenyRules', () => {
   test('handles empty tools array', () => {
     const ctx = getEmptyToolPermissionContext()
     expect(filterToolsByDenyRules([], ctx)).toEqual([])
+  })
+})
+
+describe('subagent publishing gate', () => {
+  test('does not expose subagent tools while the runtime is hard-disabled', () => {
+    const baseToolNames = getAllBaseTools().map(tool => tool.name)
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    for (const toolName of SUBAGENT_TOOL_NAMES) {
+      expect(baseToolNames).not.toContain(toolName)
+      expect(enabledToolNames).not.toContain(toolName)
+    }
   })
 })

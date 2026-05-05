@@ -1,8 +1,9 @@
-import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createBuildManifest, writeBuildManifest } from './package-manifest.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDir, '..');
@@ -11,6 +12,7 @@ const bundleRoot = process.env.MTL_CODE_BUNDLE_ROOT
   ? path.resolve(process.env.MTL_CODE_BUNDLE_ROOT)
   : path.join(workspaceRoot, 'workspace', 'vendor', 'bundle');
 const previewExeName = process.env.MTL_CODE_PREVIEW_EXE_NAME || 'Argus-Preview.exe';
+const packageChannel = process.env.ARGUS_PACKAGE_CHANNEL === 'debug' ? 'debug' : 'preview';
 const resourcesDir = path.join(bundleRoot, 'resources');
 const appBundleDir = path.join(resourcesDir, 'app');
 const runtimeDir = path.join(resourcesDir, 'runtime');
@@ -38,6 +40,16 @@ function run(command, args, options = {}) {
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed with ${result.status}`);
   }
+}
+
+function readCommand(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: appRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    ...options,
+  });
+  return result.status === 0 ? result.stdout.trim() : '';
 }
 
 function robocopy(src, dest) {
@@ -156,6 +168,41 @@ async function main() {
       '',
     ].join('\r\n'),
   );
+
+  if (packageChannel === 'debug') {
+    await writeFile(
+      path.join(bundleRoot, 'README-Debug.txt'),
+      [
+        'Argus debug bundle',
+        '',
+        'This portable package is intended for validation and diagnostics.',
+        'It keeps build metadata in build-manifest.json and starts with debug-oriented environment flags.',
+        '',
+      ].join('\r\n'),
+    );
+    await writeFile(
+      path.join(bundleRoot, 'start-debug.ps1'),
+      [
+        '$ErrorActionPreference = "Stop"',
+        '$env:ARGUS_PACKAGE_CHANNEL = "debug"',
+        '$env:ARGUS_DEBUG_PACKAGE = "1"',
+        '$root = Split-Path -Parent $MyInvocation.MyCommand.Path',
+        '& (Join-Path $root "Argus-Debug.exe")',
+        '',
+      ].join('\r\n'),
+    );
+  }
+
+  const packageJson = JSON.parse(await readFile(path.join(appRoot, 'package.json'), 'utf8'));
+  const manifest = createBuildManifest({
+    version: packageJson.version || '0.0.0',
+    commit: readCommand('git', ['rev-parse', '--short', 'HEAD'], { cwd: workspaceRoot }) || 'unknown',
+    channel: packageChannel,
+    artifact: 'portable',
+    outputPath: bundleRoot,
+    bunVersion: readCommand(bunExe, ['--version']) || '',
+  });
+  writeBuildManifest(bundleRoot, manifest);
 
   console.log(`Preview bundle created at ${bundleRoot}`);
 }

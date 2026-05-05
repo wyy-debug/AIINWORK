@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BrainCircuit,
-  CheckCircle2,
   Gauge,
   Route,
   Save,
@@ -66,50 +65,8 @@ type MtlCodeModelConfig = {
   configPath?: string;
 };
 
-type Signal = {
-  pattern: RegExp;
-  reasonKey: string;
-  reasonDefault: string;
-  weight: number;
-  routeKey?: string;
-  routeDefault?: string;
-  dispatch?: {
-    kind: string;
-    labelKey: string;
-    labelDefault: string;
-    required: boolean;
-  };
-};
-
-type RuntimeTranslator = (key: string, defaultValue: string) => string;
-
-type PreviewCard = {
-  goal: string;
-  effort: EffortLevel;
-  loopBudget: number;
-  riskScore: number;
-  reasons: string[];
-  constraints: string[];
-  acceptance: string[];
-  routes: string[];
-  phasePlan: string[];
-  expertRoutes: string[];
-  workerPlan: {
-    assignments: Array<{
-      kind: string;
-      role: string;
-      label: string;
-      reason: string;
-      required: boolean;
-      description: string;
-      objective: string;
-    }>;
-  } | null;
-};
-
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly EffortLevel[];
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
-const DEFAULT_PREVIEW_PROMPT = 'Implement an auth database migration with rollback tests and CI verification';
 const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   enabled: false,
   adaptiveEffort: true,
@@ -126,119 +83,6 @@ const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
   minEffort: 'low',
   maxEffort: 'max',
 };
-
-const HIGH_RISK_SIGNALS: Signal[] = [
-  {
-    pattern: /\b(security|auth|permission|secret|token|credential|privacy|hipaa|soc2)\b/i,
-    reasonKey: 'reasons.security',
-    reasonDefault: 'security or privacy sensitive work',
-    weight: 5,
-    routeKey: 'routes.security',
-    routeDefault: 'Use a security-focused skill or reviewer before reporting completion.',
-    dispatch: {
-      kind: 'security',
-      labelKey: 'dispatch.security',
-      labelDefault: 'Security reviewer',
-      required: true,
-    },
-  },
-  {
-    pattern: /\b(migration|schema|database|sql|backfill|rollback|deploy|release|ci|production)\b/i,
-    reasonKey: 'reasons.deployment',
-    reasonDefault: 'deployment, data, or CI risk',
-    weight: 4,
-    routeKey: 'routes.verification',
-    routeDefault: 'Use a verification pass for migration, rollout, or CI-sensitive changes.',
-    dispatch: {
-      kind: 'verification',
-      labelKey: 'dispatch.verification',
-      labelDefault: 'Verification specialist',
-      required: true,
-    },
-  },
-  {
-    pattern: /\b(concurrency|async|race|deadlock|performance|memory|latency|benchmark)\b/i,
-    reasonKey: 'reasons.performance',
-    reasonDefault: 'performance or concurrency-sensitive work',
-    weight: 4,
-    routeKey: 'routes.performance',
-    routeDefault: 'Route to a performance, async, or profiling skill when available.',
-    dispatch: {
-      kind: 'performance',
-      labelKey: 'dispatch.performance',
-      labelDefault: 'Performance specialist',
-      required: false,
-    },
-  },
-  {
-    pattern: /\b(refactor|architecture|design|redesign|multi[- ]?module|cross[- ]?module)\b/i,
-    reasonKey: 'reasons.architecture',
-    reasonDefault: 'broad architectural change',
-    weight: 3,
-    routeKey: 'routes.architecture',
-    routeDefault: 'Use Explore/Plan agents for broad codebase research before edits.',
-    dispatch: {
-      kind: 'architecture',
-      labelKey: 'dispatch.architecture',
-      labelDefault: 'Architecture reviewer',
-      required: false,
-    },
-  },
-];
-
-const IMPLEMENTATION_SIGNALS: Signal[] = [
-  {
-    pattern: /\b(implement|build|add|fix|change|update|wire|integrate)\b/i,
-    reasonKey: 'reasons.implementation',
-    reasonDefault: 'implementation requested',
-    weight: 2,
-    dispatch: {
-      kind: 'implementation',
-      labelKey: 'dispatch.implementation',
-      labelDefault: 'Implementation worker',
-      required: true,
-    },
-  },
-  {
-    pattern: /\b(test|typecheck|lint|verify|benchmark|coverage)\b/i,
-    reasonKey: 'reasons.verification',
-    reasonDefault: 'verification requested',
-    weight: 2,
-    routeKey: 'routes.test',
-    routeDefault: 'Run focused tests or a verification agent after edits.',
-    dispatch: {
-      kind: 'verification',
-      labelKey: 'dispatch.verification',
-      labelDefault: 'Verification specialist',
-      required: false,
-    },
-  },
-  {
-    pattern: /\b(branch|commit|pr|pull request|merge)\b/i,
-    reasonKey: 'reasons.git',
-    reasonDefault: 'git workflow requested',
-    weight: 1,
-    routeKey: 'routes.git',
-    routeDefault: 'Preserve existing worktree changes and report git state explicitly.',
-  },
-];
-
-const FRONTEND_SIGNALS: Signal[] = [
-  {
-    pattern: /\b(ui|frontend|react|css|layout|responsive|accessibility|visual|figma)\b/i,
-    reasonKey: 'reasons.frontend',
-    reasonDefault: 'frontend or visual quality work',
-    weight: 2,
-    routeKey: 'routes.frontend',
-    routeDefault: 'Use frontend/design guidance and verify the rendered UI when available.',
-    dispatch: {
-      kind: 'frontend',
-      labelKey: 'dispatch.frontend',
-      labelDefault: 'Frontend reviewer',
-      required: false,
-    },
-  },
-];
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -290,7 +134,7 @@ const normalizeRuntimeConfig = (value: unknown): OpenMythosRuntimeConfig => {
     phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
     expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
     contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
-    autoDispatchSubagents: normalizeBoolean(data.autoDispatchSubagents, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchSubagents),
+    autoDispatchSubagents: false,
     autoDispatchMinEffort: normalizeEffort(data.autoDispatchMinEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMinEffort),
     autoDispatchMaxWorkers: normalizePositiveInteger(data.autoDispatchMaxWorkers, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers),
     minEffort,
@@ -380,150 +224,6 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
           : activeProfile.contextWindowTokens,
     },
     openMythosRuntime: normalizeRuntimeConfig(data.openMythosRuntime),
-  };
-};
-
-const unique = (values: string[]): string[] => [...new Set(values)];
-
-const truncate = (value: string, max: number): string => (
-  value.length <= max ? value : `${value.slice(0, max - 1)}...`
-);
-
-const clampEffort = (
-  effort: EffortLevel,
-  minEffort: EffortLevel,
-  maxEffort: EffortLevel,
-): EffortLevel => {
-  const [normalizedMinEffort, normalizedMaxEffort] = normalizeBounds(minEffort, maxEffort);
-  const effortIndex = EFFORT_LEVELS.indexOf(effort);
-  const minIndex = EFFORT_LEVELS.indexOf(normalizedMinEffort);
-  const maxIndex = EFFORT_LEVELS.indexOf(normalizedMaxEffort);
-  return EFFORT_LEVELS[Math.min(Math.max(effortIndex, minIndex), maxIndex)];
-};
-
-const effortMeetsMinimum = (effort: EffortLevel, minimum: EffortLevel): boolean => (
-  EFFORT_LEVELS.indexOf(effort) >= EFFORT_LEVELS.indexOf(minimum)
-);
-
-const routeToWorkerRole = (kind: string): string => {
-  if (kind === 'implementation' || kind === 'frontend') return 'worker-implementer';
-  if (kind === 'verification') return 'worker-verifier';
-  if (kind === 'architecture') return 'worker-plan';
-  if (kind === 'security') return 'worker-review';
-  return 'worker-explore';
-};
-
-const buildWorkerPlan = (
-  goal: string,
-  effort: EffortLevel,
-  runtimeConfig: OpenMythosRuntimeConfig,
-  signals: Signal[],
-  translate: RuntimeTranslator,
-): PreviewCard['workerPlan'] => {
-  if (!runtimeConfig.autoDispatchSubagents || !effortMeetsMinimum(effort, runtimeConfig.autoDispatchMinEffort)) {
-    return null;
-  }
-
-  const routes = new Map<string, NonNullable<PreviewCard['workerPlan']>['assignments'][number]>();
-  for (const signal of signals) {
-    if (!signal.dispatch) continue;
-    const label = translate(signal.dispatch.labelKey, signal.dispatch.labelDefault);
-    const previous = routes.get(signal.dispatch.kind);
-    routes.set(signal.dispatch.kind, {
-      kind: signal.dispatch.kind,
-      role: routeToWorkerRole(signal.dispatch.kind),
-      label,
-      reason: translate(signal.reasonKey, signal.reasonDefault),
-      required: Boolean(previous?.required || signal.dispatch.required),
-      description: truncate(`${label}: ${goal}`, 80),
-      objective: `${label}: ${goal}`,
-    });
-  }
-
-  const assignments = [...routes.values()].slice(0, Math.max(1, runtimeConfig.autoDispatchMaxWorkers));
-  return assignments.length > 0 ? { assignments } : null;
-};
-
-const buildPreviewCard = (
-  input: string,
-  runtimeConfig: OpenMythosRuntimeConfig,
-  translate: RuntimeTranslator,
-): PreviewCard | null => {
-  if (!runtimeConfig.enabled || !input.trim()) {
-    return null;
-  }
-
-  const normalized = input.replace(/\s+/g, ' ').trim();
-  const signals = [...HIGH_RISK_SIGNALS, ...IMPLEMENTATION_SIGNALS, ...FRONTEND_SIGNALS].filter((signal) => (
-    signal.pattern.test(normalized)
-  ));
-  const score = signals.reduce((sum, signal) => sum + signal.weight, 0)
-    + Math.min(3, Math.floor(normalized.length / 600));
-  const inferredEffort: EffortLevel = score >= 10
-    ? 'max'
-    : score >= 8
-      ? 'xhigh'
-      : score >= 4
-        ? 'high'
-        : score >= 2
-          ? 'medium'
-          : 'low';
-  const effort = clampEffort(inferredEffort, runtimeConfig.minEffort, runtimeConfig.maxEffort);
-  const loopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
-  const phasePlan = runtimeConfig.phaseAdapter
-    ? effort === 'low'
-      ? ['orient', 'finalize']
-      : effort === 'medium'
-        ? ['orient', 'plan', 'implement', 'finalize']
-        : ['orient', 'plan', 'implement', 'verify', 'finalize']
-    : ['implement', 'finalize'];
-  const reasons = unique(signals.map((signal) => (
-    translate(signal.reasonKey, signal.reasonDefault)
-  ))).slice(0, 4);
-  if (reasons.length === 0) {
-    reasons.push(translate('reasons.small', 'small or conversational task'));
-  }
-  const goal = truncate(normalized, 260);
-
-  return {
-    goal,
-    effort,
-    loopBudget,
-    riskScore: score,
-    reasons,
-    constraints: [
-      translate('constraints.keepGoal', 'Keep the current user goal visible before each major action.'),
-      translate('constraints.noRevert', 'Do not revert unrelated user changes.'),
-      translate('constraints.safeChange', 'Before editing, identify the smallest safe change and the verification path.'),
-    ],
-    acceptance: [
-      translate('acceptance.answer', 'Answer the user request directly.'),
-      translate('acceptance.changed', 'State what changed or what was found.'),
-      translate('acceptance.tests', 'Report tests or checks run, or explain why they were not run.'),
-    ],
-    routes: runtimeConfig.routingHints
-      ? unique([
-        ...signals
-          .map((signal) => (
-            signal.routeKey && signal.routeDefault
-              ? translate(signal.routeKey, signal.routeDefault)
-              : null
-          ))
-          .filter((route): route is string => Boolean(route)),
-        effort === 'low'
-          ? translate('routes.local', 'Handle locally; avoid spawning agents unless a specific side task appears.')
-          : translate('routes.routed', 'Use skill/subagent routing only for distinct work that can run in parallel or protect main context.'),
-      ]).slice(0, 4)
-      : [],
-    phasePlan,
-    expertRoutes: runtimeConfig.expertRouting
-      ? unique([
-        ...signals.map((signal) => signal.routeDefault ? translate(signal.routeKey || signal.reasonKey, signal.routeDefault) : null)
-          .filter((route): route is string => Boolean(route)),
-        effort === 'low' ? translate('experts.local', 'Local execution') : null,
-      ].filter((route): route is string => Boolean(route))).slice(0, 5)
-      : [],
-    workerPlan: buildWorkerPlan(goal, effort, runtimeConfig, signals, translate),
   };
 };
 
@@ -643,21 +343,6 @@ function LoopControlSegmentedControl({
   );
 }
 
-function PreviewList({ label, values }: { label: string; values: string[] }) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">{label}</div>
-      <div className="space-y-1">
-        {values.map((value) => (
-          <div key={value} className="rounded-md border border-border bg-muted/30 px-2 py-1.5 text-xs leading-5 text-foreground">
-            {value}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function OpenMythosRuntimeContent() {
   const { t } = useTranslation('settings');
   const formatEffortLevel = (level: EffortLevel) => (
@@ -673,16 +358,8 @@ export default function OpenMythosRuntimeContent() {
         : '仅作为提示约束',
     }),
   });
-  const formatPhasePlan = (phases: string[]) => (
-    phases.map((phase) => (
-      t(`openMythosRuntime.phases.${phase}`, { defaultValue: phase })
-    )).join(' → ')
-  );
   const [config, setConfig] = useState<MtlCodeModelConfig>(() => createEmptyConfig());
   const [runtimeConfig, setRuntimeConfig] = useState<OpenMythosRuntimeConfig>(DEFAULT_OPENMYTHOS_RUNTIME_CONFIG);
-  const [previewPrompt, setPreviewPrompt] = useState(() => (
-    t('openMythosRuntime.defaultPreviewPrompt', { defaultValue: DEFAULT_PREVIEW_PROMPT })
-  ));
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [status, setStatus] = useState<'success' | 'load-error' | 'save-error' | null>(null);
@@ -723,15 +400,6 @@ export default function OpenMythosRuntimeContent() {
       cancelled = true;
     };
   }, []);
-
-  const previewCard = useMemo(
-    () => buildPreviewCard(
-      previewPrompt,
-      runtimeConfig,
-      (key, defaultValue) => t(`openMythosRuntime.${key}`, { defaultValue }),
-    ),
-    [previewPrompt, runtimeConfig, t],
-  );
 
   const updateRuntimeConfig = (patch: Partial<OpenMythosRuntimeConfig>) => {
     setRuntimeConfig((current) => normalizeRuntimeConfig({ ...current, ...patch }));
@@ -816,7 +484,7 @@ export default function OpenMythosRuntimeContent() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+      <div className="space-y-4">
         <div className="space-y-4">
           <RuntimeToggleRow
             icon={BrainCircuit}
@@ -907,16 +575,15 @@ export default function OpenMythosRuntimeContent() {
               onChange={(contextCacheDiagnostics) => updateRuntimeConfig({ contextCacheDiagnostics })}
             />
 
-            <RuntimeToggleRow
-              icon={Route}
-              title={t('openMythosRuntime.autoDispatchSubagents', { defaultValue: '自动分发子智能体' })}
-              description={t('openMythosRuntime.autoDispatchSubagentsDescription', {
-                defaultValue: '复杂任务会生成 Coordinator worker 派发计划，并由 Argus 首轮自动启动对应 worker。',
-              })}
-              checked={runtimeConfig.autoDispatchSubagents}
-              disabled={disabled || !runtimeConfig.enabled}
-              onChange={(autoDispatchSubagents) => updateRuntimeConfig({ autoDispatchSubagents })}
-            />
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+              <div className="flex items-center gap-2 font-medium">
+                <Route className="h-4 w-4" />
+                子智能体派发已暂停
+              </div>
+              <p className="mt-2 leading-6">
+                当前版本已硬关闭 Subagent/Worker 派发，设置中的自动分发不会保存为开启，也不会传给运行时。等新的事件驱动运行时完成后再恢复。
+              </p>
+            </div>
 
             <div className="space-y-4 rounded-lg border border-border bg-background p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -939,39 +606,6 @@ export default function OpenMythosRuntimeContent() {
               />
             </div>
 
-            <div className="space-y-4 rounded-lg border border-border bg-background p-4">
-              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <Route className="h-4 w-4 text-primary" />
-                {t('openMythosRuntime.dispatchPolicy', { defaultValue: '子智能体派发策略' })}
-              </div>
-              <EffortSegmentedControl
-                label={t('openMythosRuntime.autoDispatchMinEffort', { defaultValue: '最低派发强度' })}
-                value={runtimeConfig.autoDispatchMinEffort}
-                disabled={disabled || !runtimeConfig.enabled || !runtimeConfig.autoDispatchSubagents}
-                onChange={(autoDispatchMinEffort) => updateRuntimeConfig({ autoDispatchMinEffort })}
-                formatEffortLevel={formatEffortLevel}
-              />
-              <label className="block space-y-2">
-                <span className="text-sm font-medium text-foreground">
-                  {t('openMythosRuntime.autoDispatchMaxWorkers', { defaultValue: '最大 worker 数' })}
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={runtimeConfig.autoDispatchMaxWorkers}
-                  disabled={disabled || !runtimeConfig.enabled || !runtimeConfig.autoDispatchSubagents}
-                  onChange={(event) => updateRuntimeConfig({
-                    autoDispatchMaxWorkers: normalizePositiveInteger(
-                      event.target.value,
-                      DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.autoDispatchMaxWorkers,
-                    ),
-                  })}
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                />
-              </label>
-            </div>
-
             <div className="space-y-3 rounded-lg border border-border bg-background p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <Gauge className="h-4 w-4 text-primary" />
@@ -987,90 +621,6 @@ export default function OpenMythosRuntimeContent() {
           </div>
         </div>
 
-        <aside className="space-y-3 rounded-lg border border-border bg-card/50 p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            {t('openMythosRuntime.preview', { defaultValue: '运行时预览' })}
-          </div>
-          <textarea
-            value={previewPrompt}
-            onChange={(event) => setPreviewPrompt(event.target.value)}
-            disabled={disabled}
-            rows={4}
-            className="min-h-28 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-5 text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={t('openMythosRuntime.previewPrompt', { defaultValue: '预览提示词' })}
-          />
-          {previewCard ? (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-border bg-background p-3">
-                <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                  {t('openMythosRuntime.frozenGoal', { defaultValue: '冻结目标' })}
-                </div>
-                <div className="mt-1 text-sm leading-5 text-foreground">{previewCard.goal}</div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.previewEffort', { defaultValue: '推理强度' })}
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-foreground">{formatEffortLevel(previewCard.effort)}</div>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.loopBudget', { defaultValue: '循环预算' })}
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-foreground">{previewCard.loopBudget}</div>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.riskScore', { defaultValue: '风险分' })}
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-foreground">{previewCard.riskScore}</div>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <div className="text-[11px] font-medium uppercase text-muted-foreground">
-                    {t('openMythosRuntime.loopControl', { defaultValue: '循环控制' })}
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-foreground">{formatLoopControl(runtimeConfig.loopControl).label}</div>
-                </div>
-              </div>
-              <PreviewList label={t('openMythosRuntime.phasePlan', { defaultValue: '阶段计划' })} values={[formatPhasePlan(previewCard.phasePlan)]} />
-              <PreviewList label={t('openMythosRuntime.why', { defaultValue: '原因' })} values={previewCard.reasons} />
-              {runtimeConfig.taskCard && (
-                <>
-                  <PreviewList label={t('openMythosRuntime.constraintsLabel', { defaultValue: '约束' })} values={previewCard.constraints} />
-                  <PreviewList label={t('openMythosRuntime.acceptanceLabel', { defaultValue: '验收标准' })} values={previewCard.acceptance} />
-                </>
-              )}
-              <PreviewList
-                label={t('openMythosRuntime.routesLabel', { defaultValue: '路由建议' })}
-                values={previewCard.routes.length > 0
-                  ? previewCard.routes
-                  : [t('openMythosRuntime.disabledValue', { defaultValue: '已关闭' })]}
-              />
-              <PreviewList
-                label={t('openMythosRuntime.expertRoutesLabel', { defaultValue: '专家路由' })}
-                values={previewCard.expertRoutes.length > 0
-                  ? previewCard.expertRoutes
-                  : [t('openMythosRuntime.disabledValue', { defaultValue: '已关闭' })]}
-              />
-              <PreviewList
-                label={t('openMythosRuntime.workerPlanLabel', { defaultValue: 'Worker 计划' })}
-                values={previewCard.workerPlan?.assignments.length
-                  ? previewCard.workerPlan.assignments.map((task) => (
-                    `${task.label}${task.role ? ` / ${task.role}` : ''}${task.required ? ` (${t('openMythosRuntime.requiredValue', { defaultValue: '必需' })})` : ''}: ${task.description}`
-                  ))
-                  : [t('openMythosRuntime.noDispatchValue', { defaultValue: '当前提示不会自动派发 worker' })]}
-              />
-            </div>
-          ) : (
-            <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
-              {runtimeConfig.enabled
-                ? t('openMythosRuntime.emptyPreview', { defaultValue: '输入提示词以预览运行时卡片。' })
-                : t('openMythosRuntime.disabledPreview', { defaultValue: '运行时已关闭。' })}
-            </div>
-          )}
-        </aside>
       </div>
 
       <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">

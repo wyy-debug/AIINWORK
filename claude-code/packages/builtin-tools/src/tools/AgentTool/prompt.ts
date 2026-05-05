@@ -233,6 +233,8 @@ ${
     ? ''
     : `
 When NOT to use the ${AGENT_SPAWN_TOOL_NAME} tool:
+- If you have not first oriented locally and formed a concrete dispatch plan, do not spawn an agent yet
+- If the next step is reading SKILL.md, listing bookmarks, opening one file, checking one URL, or calling one obvious MCP/tool once, do that locally instead of delegating
 - If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead of the ${AGENT_SPAWN_TOOL_NAME} tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use ${contentSearchHint} instead, to find the match more quickly
 - If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${AGENT_SPAWN_TOOL_NAME} tool, to find the match more quickly
@@ -254,6 +256,10 @@ ${whenNotToUseSection}
 
 Usage notes:
 - Always include a short description (3-5 words) summarizing what the agent will do${concurrencyNote}
+- AgentSpawn requires a \`dispatch_ticket\` returned by AgentDispatchPlan. Submit a structured AgentDispatchPlan first; AgentSpawn no longer decides whether delegation is allowed.
+- AgentDispatchPlan is event-driven: it evaluates local tool events, dependencies, runnable steps, and current subagent state. If it returns no ticket, continue locally or ask for the missing input/configuration.
+- Parallel plans may only launch subagent steps with no unmet dependencies and \`can_run_parallel: true\`. Sequential or mixed plans must launch only the currently runnable step; do not start future dependent workers early.
+- Dispatch only for genuinely independent work that can run in parallel or provide an independent review after local orientation. Do not dispatch just because a skill exists or because a task feels complex before you have inspected the immediate first step locally.
 - When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result.${
     // eslint-disable-next-line custom-rules/no-process-env-top-level
     !isEnvTruthy(process.env.MTL_CODE_DISABLE_BACKGROUND_TASKS) &&
@@ -272,8 +278,8 @@ Usage notes:
 - When continuing a spawned agent, include a clear stop condition. Do not only ask for progress; tell it to return DONE when the objective is satisfied, NEED_PARENT_INPUT when blocked on parent input, or BLOCKED when it cannot make progress. ${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
 - The agent's outputs should generally be trusted
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ", since it is not aware of the user's intent"}
-- If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple AgentSpawn tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
+- If an agent description says it can be proactive, still apply the dispatch plan gate first. Proactive means "consider this route", not "spawn before local orientation".
+- If the user specifies that they want you to run agents "in parallel", submit one shared AgentDispatchPlan and only spawn steps for tickets returned by that plan. For example, if you need both a build-validator and a test-runner, AgentDispatchPlan must mark both steps runnable and parallel-safe before AgentSpawn.
 - You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${
     process.env.USER_TYPE === 'ant'
       ? `\n- You can set \`isolation: "remote"\` to run the agent in a remote CCR environment. This is always a background task; you'll be notified when it completes. Use for long-running tasks that need a fresh sandbox.`

@@ -21,6 +21,7 @@ import {
 import {
   addToToolDuration,
   getCodeEditToolDecisionCounter,
+  getSessionId,
   getStatsStore,
 } from '../../bootstrap/state.js'
 import {
@@ -88,6 +89,12 @@ import {
 } from '../../utils/sessionActivity.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { Stream } from '../../utils/stream.js'
+import {
+  createLocalToolEventFromToolExecution,
+  deriveDispatchUserTurnId,
+  dispatchManager,
+  type DispatchEventStatus,
+} from '../../tasks/subagentDispatch.js'
 import { logOTelEvent } from '../../utils/telemetry/events.js'
 import {
   addToolContentEvent,
@@ -124,6 +131,7 @@ import {
   getMcpServerScopeFromToolName,
   isMcpTool,
 } from '../mcp/utils.js'
+import { getParentSessionId } from '../../utils/teammate.js'
 import {
   resolveHookPermissionDecision,
   runPostToolUseFailureHooks,
@@ -143,6 +151,60 @@ let _skillLearningWrapperCache:
       ) => Promise<T>
     }>
   | undefined
+
+function getDispatchSessionId(): string {
+  return getParentSessionId() || getSessionId() || 'main'
+}
+
+function recordDispatchToolExecutionEvent({
+  toolUseContext,
+  assistantMessage,
+  toolUseID,
+  toolName,
+  input,
+  status,
+  summary,
+}: {
+  toolUseContext: ToolUseContext
+  assistantMessage: AssistantMessage
+  toolUseID: string
+  toolName: string
+  input: unknown
+  status: DispatchEventStatus
+  summary?: string
+}): void {
+  try {
+    const sessionId = getDispatchSessionId()
+    dispatchManager.recordLocalEvent(
+      createLocalToolEventFromToolExecution({
+        sessionId,
+        userTurnId: deriveDispatchUserTurnId({
+          sessionId,
+          messages: toolUseContext.messages,
+          requestId:
+            (assistantMessage.requestId as string | undefined) ||
+            (assistantMessage.message as { id?: string }).id,
+          toolUseId: toolUseID,
+        }),
+        toolName,
+        input,
+        status,
+        summary,
+      }),
+    )
+  } catch (error) {
+    logForDebugging(
+      `Failed to record dispatch tool event for ${toolName}: ${errorMessage(error).slice(0, 200)}`,
+      { level: 'info' },
+    )
+  }
+}
+
+function summarizeDispatchToolOutput(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+  const text = typeof value === 'string' ? value : jsonStringify(value)
+  return text.slice(0, 500)
+}
 
 function getSkillLearningWrapper() {
   if (!_skillLearningWrapperCache) {
@@ -1349,6 +1411,15 @@ async function checkPermissionsAndCallTool(
       result.data && typeof result.data === 'object'
         ? jsonStringify(result.data)
         : String(result.data ?? '')
+    recordDispatchToolExecutionEvent({
+      toolUseContext,
+      assistantMessage,
+      toolUseID,
+      toolName: tool.name,
+      input: processedInput,
+      status: 'ok',
+      summary: summarizeDispatchToolOutput(toolResultStr),
+    })
     endToolSpan(toolResultStr)
 
     // Record tool observation in Langfuse (no-op if not configured)
@@ -1670,6 +1741,15 @@ async function checkPermissionsAndCallTool(
       error: errorMessage(error),
     })
     endToolSpan()
+    recordDispatchToolExecutionEvent({
+      toolUseContext,
+      assistantMessage,
+      toolUseID,
+      toolName: tool?.name ?? 'unknown',
+      input: processedInput ?? input,
+      status: error instanceof AbortError ? 'blocked' : 'error',
+      summary: summarizeDispatchToolOutput(errorMessage(error)),
+    })
 
     // Record error observation in Langfuse (no-op if not configured)
     recordToolObservation(toolUseContext.langfuseTrace ?? null, {

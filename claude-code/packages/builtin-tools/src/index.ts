@@ -10,6 +10,7 @@
 export { AgentSpawnTool, AgentTool } from './tools/AgentTool/AgentTool.js'
 export {
   AgentCancelTool,
+  AgentDispatchPlanTool,
   AgentListTool,
   AgentResumeTool,
   AgentResultTool,
