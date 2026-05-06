@@ -29,7 +29,7 @@ OpenMythos is advisory only. It can create runtime hints, effort guidance, phase
 Subagent execution follows the Codex collaborative tool protocol:
 
 - `spawn_agent`
-- `send_input`
+- `send_message`
 - `wait_agent`
 - `list_agents`
 - `close_agent`

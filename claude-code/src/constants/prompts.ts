@@ -404,7 +404,7 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
 }
 
 function getAgentToolSection(): string {
-  return `Use ${AGENT_SPAWN_TOOL_NAME} only when the user explicitly asks for subagents, delegation, or parallel agent work. Provide message/items, optionally agent_type, and set fork_context=true only when the child needs the current thread history. Use wait_agent for final status instead of polling with extra messages.`
+  return `Use ${AGENT_SPAWN_TOOL_NAME} only when the user explicitly asks for subagents, delegation, or parallel agent work. Provide message and task_name, optionally agent_type and fork_turns. Use wait_agent for mailbox updates instead of polling with extra messages.`
 }
 
 /**

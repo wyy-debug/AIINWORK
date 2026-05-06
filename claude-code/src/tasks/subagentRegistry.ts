@@ -52,6 +52,7 @@ export type SubagentEventType =
 
 export type SubagentEventV1 = {
   id: string
+  seq?: number
   taskId: string
   type: SubagentEventType
   timestamp: number
@@ -78,6 +79,7 @@ export type SubagentProtocolResult = {
 export type SubagentRegistryRecord = {
   taskId: string
   agentId: string
+  taskName?: string
   threadId: string
   parentThreadId?: string
   depth: number
@@ -228,6 +230,7 @@ function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
   return {
     taskId,
     agentId: typeof record.agentId === 'string' ? record.agentId : taskId,
+    taskName: typeof record.taskName === 'string' ? record.taskName : undefined,
     threadId,
     parentThreadId,
     depth: typeof record.depth === 'number' ? record.depth : parentThreadId ? 1 : 0,
@@ -286,6 +289,8 @@ export class SubagentManager {
   private readonly records = new Map<string, SubagentRegistryRecord>()
   private readonly filePath: string
   private loaded = false
+  private mailboxSeq = 0
+  private consumedTerminalMailboxSeq = 0
 
   constructor(filePath = stateFilePath()) {
     this.filePath = filePath
@@ -305,6 +310,11 @@ export class SubagentManager {
         const record = coerceRecord(entry)
         if (record) {
           this.records.set(record.taskId, record)
+          for (const event of record.events) {
+            if (typeof event.seq === 'number') {
+              this.mailboxSeq = Math.max(this.mailboxSeq, event.seq)
+            }
+          }
         }
       }
       this.persist()
@@ -322,6 +332,7 @@ export class SubagentManager {
   register(params: {
     taskId: string
     agentId?: string
+    taskName?: string
     threadId?: string
     parentThreadId?: string
     depth?: number
@@ -351,6 +362,7 @@ export class SubagentManager {
       ...existing,
       taskId: params.taskId,
       agentId: params.agentId ?? params.taskId,
+      taskName: params.taskName ?? existing?.taskName,
       threadId,
       parentThreadId,
       depth: params.depth ?? existing?.depth ?? (parentThreadId ? 1 : 0),
@@ -546,7 +558,7 @@ export class SubagentManager {
 
   get(taskId: string): SubagentRegistryRecord | undefined {
     this.ensureLoaded()
-    return this.records.get(taskId)
+    return this.findByGraphId(taskId)
   }
 
   list({
@@ -579,6 +591,17 @@ export class SubagentManager {
 
   countRunning(sessionId?: string): number {
     return this.list({ runningOnly: true, sessionId }).length
+  }
+
+  hasPendingTerminalMailboxItems(): boolean {
+    this.ensureLoaded()
+    return this.latestTerminalMailboxSeq() > this.consumedTerminalMailboxSeq
+  }
+
+  consumeTerminalMailboxItems(): number {
+    this.ensureLoaded()
+    this.consumedTerminalMailboxSeq = this.latestTerminalMailboxSeq()
+    return this.consumedTerminalMailboxSeq
   }
 
   private terminal(
@@ -620,6 +643,7 @@ export class SubagentManager {
       ...(record.events ?? []),
       {
         id: eventId(record.taskId),
+        seq: ++this.mailboxSeq,
         taskId: record.taskId,
         timestamp: now(),
         ...event,
@@ -656,10 +680,30 @@ export class SubagentManager {
       [...this.records.values()].find(
         record =>
           record.agentId === id ||
+          record.taskName === id ||
           record.threadId === id ||
           record.sessionId === id,
       )
     )
+  }
+
+  private latestTerminalMailboxSeq(): number {
+    let latest = 0
+    for (const record of this.records.values()) {
+      for (const event of record.events) {
+        if (
+          (event.type === 'completed' ||
+            event.type === 'blocked' ||
+            event.type === 'failed' ||
+            event.type === 'cancelled' ||
+            event.type === 'interrupted') &&
+          typeof event.seq === 'number'
+        ) {
+          latest = Math.max(latest, event.seq)
+        }
+      }
+    }
+    return latest
   }
 }
 
@@ -697,6 +741,7 @@ export function parseSubagentProtocolResult(
 export function registerSubagentRecord(params: {
   taskId: string
   agentId?: string
+  taskName?: string
   threadId?: string
   parentThreadId?: string
   depth?: number
@@ -768,6 +813,14 @@ export function getSubagentRecord(
   taskId: string,
 ): SubagentRegistryRecord | undefined {
   return subagentManager.get(taskId)
+}
+
+export function hasPendingSubagentMailboxItems(): boolean {
+  return subagentManager.hasPendingTerminalMailboxItems()
+}
+
+export function consumeSubagentMailboxItems(): number {
+  return subagentManager.consumeTerminalMailboxItems()
 }
 
 export function listSubagentRecords({

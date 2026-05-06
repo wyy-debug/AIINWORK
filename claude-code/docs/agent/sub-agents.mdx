@@ -1,72 +1,94 @@
 ---
 title: "Subagent 机制 - Codex 风格协作工具"
-description: "Argus 的 subagent 实现对齐 OpenAI Codex：协作工具、线程图、运行时状态和历史恢复。"
-keywords: ["subagent", "spawn_agent", "AgentGraphStore", "Codex"]
+description: "Argus 的 subagent 目标是对齐 OpenAI Codex：协作工具、线程图、运行时状态、Mailbox 通知和历史恢复。"
+keywords: ["subagent", "spawn_agent", "AgentRegistry", "Mailbox", "Codex"]
 ---
 
 ## 当前协议
 
-Argus 只暴露 Codex 风格协作工具：
+Argus 的新会话只对齐 OpenAI Codex `multi_agents_v2` 风格的协作工具：
 
 - `spawn_agent`
-- `send_input`
-- `wait_agent`
 - `list_agents`
+- `wait_agent`
+- `send_message`
 - `close_agent`
 - `resume_agent`
 
-旧的 `AgentDispatchPlan -> dispatch_ticket -> WorkerRuntime/OpenMythos auto-dispatch` 链路已经移除。旧 transcript 只做只读降级渲染，不再参与新会话工具列表，也不再作为执行入口。
+早期实验性的旧别名、派发票据和自然语言门禁不再作为新会话工具面。旧 transcript 只做只读降级渲染，不参与新工具列表，也不作为执行入口。
+
+Release 包默认关闭 subagent 工具。Debug/test 通道可以开启，用于验证协议、状态、UI 和历史恢复。
 
 ## Spawn 输入
 
-`spawn_agent` 使用 Codex 参数：
+`spawn_agent` 使用 Codex 风格参数：
 
 ```json
 {
   "message": "Review the runtime permission changes and report risks.",
+  "task_name": "review-runtime-permissions",
   "agent_type": "explorer",
-  "fork_context": true,
+  "fork_turns": "all",
   "model": "gpt-5.2",
   "reasoning_effort": "high"
 }
 ```
 
-也可以用 `items` 传结构化输入。`agent_type` 默认是 `default`，常用角色是 `explorer` 和 `worker`。
+字段说明：
+
+- `message`：交给子 agent 的完整任务说明。
+- `task_name`：父线程后续引用该 agent 的稳定名称。
+- `agent_type`：可选，默认 `default`，常用值包括 `explorer`、`worker`、`reviewer`。
+- `fork_turns`：可选，`none`、`all` 或正整数，表示继承多少父线程上下文。
+- `model` / `reasoning_effort`：可选，未指定时继承当前会话模型配置。
+
+`fork_context` 和 `items` 属于旧协议，新会话会拒绝。
 
 ## Spawn 输出
 
-`spawn_agent` 只返回：
+`spawn_agent` 只返回模型可继续引用的任务名称和可选昵称：
 
 ```json
 {
-  "agent_id": "agent_123",
+  "task_name": "review-runtime-permissions",
   "nickname": "Explorer"
 }
 ```
 
-后续结果通过 `wait_agent`、`send_input`、`close_agent`、`resume_agent` 获取或控制。
+内部 thread id、agent id、output file、启动控制文本不进入用户可见正文，也不作为模型可见结果。
+
+## 控制工具
+
+- `wait_agent({ "timeout_ms": 30000 })`：等待 Mailbox 有新事件，返回 `Wait completed.` 或 `Wait timed out.`。
+- `list_agents({})`：列出当前线程图中的 agents。
+- `send_message({ "target": "review-runtime-permissions", "message": "..." })`：给指定 agent 发送具体补充信息。
+- `close_agent({ "target": "review-runtime-permissions" })`：关闭该 agent 及其 live descendants。
+- `resume_agent({ "id": "review-runtime-permissions" })`：恢复已关闭或 interrupted 的 agent。
+
+父线程不应该把“我在等结果”“进度如何”这类轮询写进用户正文。等待结果必须走 `wait_agent`，补充具体信息才使用 `send_message`。
 
 ## 使用约束
 
-只有用户明确要求 subagents、delegation、parallel agent work 时，模型才应该调用 `spawn_agent`。复杂、深入、彻底分析本身不等于授权派生子智能体。
+只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才应该调用 `spawn_agent`。复杂、深入、彻底分析本身不等于授权派生子智能体。
 
-默认禁止 nested subagents。高级配置打开后，也必须受 depth limit 和 session concurrency limit 约束。
+默认禁止 nested subagents。高级配置打开后，也必须受 depth limit、session concurrency limit 和 duplicate objective guard 约束。
 
-## Thread Graph
+## Thread Graph And Mailbox
 
-每个 subagent 都是独立 thread。运行时持久化 parent-child edge：
+每个 subagent 都是独立 thread，并通过 parent-child edge 连接到父 thread：
 
 ```text
 parent_thread_id -> child_thread_id
 edge_status: open | closed
 ```
 
-运行时支持：
+运行时能力目标：
 
 - children / descendants 查询
 - close subtree
-- resume closed agent
+- resume closed 或 interrupted agent
 - status watcher
+- Mailbox / sequence notification
 - max concurrent threads per session
 - duplicate objective guard
 
@@ -80,6 +102,6 @@ edge_status: open | closed
 - `Shutdown`
 - `NotFound`
 
-## OpenMythos 的边界
+## OpenMythos 边界
 
-OpenMythos 现在只做建议层：可以给出任务拆分建议和诊断预览，但不生成 ticket、不写 worker plan、不自动 spawn。真正的执行只能通过 Codex 风格工具完成。
+OpenMythos 只做建议层：可以给出任务拆分建议和诊断预览，但不能自动 spawn。真正执行只能通过 Codex 风格协作工具完成。

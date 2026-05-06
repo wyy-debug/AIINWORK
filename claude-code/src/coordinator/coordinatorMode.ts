@@ -1,4 +1,4 @@
-import { feature } from 'bun:bundle'
+﻿import { feature } from 'bun:bundle'
 import { ASYNC_AGENT_ALLOWED_TOOLS } from '../constants/tools.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
@@ -8,7 +8,7 @@ import {
 import { AGENT_SPAWN_TOOL_NAME as AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
 import {
   AGENT_CLOSE_TOOL_NAME,
-  AGENT_SEND_INPUT_TOOL_NAME as SEND_MESSAGE_TOOL_NAME,
+  AGENT_SEND_MESSAGE_TOOL_NAME as SEND_MESSAGE_TOOL_NAME,
   AGENT_WAIT_TOOL_NAME,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { BASH_TOOL_NAME } from '@mtl-code/builtin-tools/tools/BashTool/toolName.js'
@@ -52,7 +52,7 @@ export function isCoordinatorMode(): boolean {
 export function matchSessionMode(
   sessionMode: 'coordinator' | 'normal' | undefined,
 ): string | undefined {
-  // No stored mode (old session before mode tracking) 鈥?do nothing
+  // No stored mode (old session before mode tracking): do nothing
   if (!sessionMode) {
     return undefined
   }
@@ -64,7 +64,7 @@ export function matchSessionMode(
     return undefined
   }
 
-  // Flip the env var 鈥?isCoordinatorMode() reads it live, no caching
+  // Flip the env var; isCoordinatorMode() reads it live, no caching
   if (sessionIsCoordinator) {
     process.env.MTL_CODE_COORDINATOR_MODE = '1'
   } else {
@@ -105,7 +105,7 @@ export function getCoordinatorUserContext(
   }
 
   if (scratchpadDir && isScratchpadGateEnabled()) {
-    content += `\n\nScratchpad directory: ${scratchpadDir}\nWorkers can read and write here without permission prompts. Use this for durable cross-worker knowledge 鈥?structure files however fits the work.`
+    content += `\n\nScratchpad directory: ${scratchpadDir}\nWorkers can read and write here without permission prompts. Use this for durable cross-worker knowledge; structure files however fits the work.`
   }
 
   return { workerToolsContext: content }
@@ -127,9 +127,9 @@ export function getCoordinatorSystemPrompt(): string {
 
 ## Tools
 
-- ${AGENT_TOOL_NAME}({ message | items, agent_type?, fork_context?, model?, reasoning_effort? }) starts an agent and returns { agent_id, nickname }.
-- ${AGENT_WAIT_TOOL_NAME}({ targets?, timeout_ms? }) waits for one or more agents and returns final statuses when ready.
-- ${SEND_MESSAGE_TOOL_NAME}({ target, message | items, interrupt? }) sends concrete follow-up instructions.
+- ${AGENT_TOOL_NAME}({ task_name, message, agent_type?, fork_turns?, model?, reasoning_effort? }) starts an agent and returns { task_name, nickname }.
+- ${AGENT_WAIT_TOOL_NAME}({ timeout_ms? }) waits for mailbox updates and returns whether new agent output is available.
+- ${SEND_MESSAGE_TOOL_NAME}({ target, message, interrupt? }) sends concrete follow-up instructions.
 - ${AGENT_CLOSE_TOOL_NAME}({ target }) closes an agent and its descendants.
 - list_agents lists known agents; resume_agent reopens a closed agent.
 
@@ -138,7 +138,7 @@ When using ${AGENT_TOOL_NAME}:
 - Prefer a small number of independent agents launched in one message when parallelism is explicitly requested.
 - For code edits, define the files or responsibility owned by each worker and tell it not to revert unrelated changes.
 - Do not set model unless the user explicitly asks for a different model or the task clearly requires one.
-- Use fork_context only when the child must inherit the exact parent context.
+- Use fork_turns only when the child must inherit parent context.
 - After launching, continue useful non-overlapping work. Use ${AGENT_WAIT_TOOL_NAME} sparingly, only when the result is needed.
 
 ## Roles

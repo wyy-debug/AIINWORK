@@ -13,13 +13,14 @@ describe('spawn_agent Codex schema', () => {
     const text = schemaText(inputSchema())
 
     expect(text).toContain('message')
-    expect(text).toContain('items')
+    expect(text).toContain('task_name')
     expect(text).toContain('agent_type')
-    expect(text).toContain('fork_context')
+    expect(text).toContain('fork_turns')
     expect(text).not.toContain('dispatch_ticket')
     expect(text).not.toContain('dispatchTicket')
     expect(text).not.toContain('subagent_type')
-    expect(text).not.toContain('fork_turns')
+    expect(text).not.toContain('fork_context')
+    expect(text).not.toContain('items')
     expect(text).not.toContain('run_in_background')
     expect(text).not.toContain('prompt')
     expect(text).not.toContain('team_name')
@@ -30,8 +31,9 @@ describe('spawn_agent Codex schema', () => {
   test('accepts Codex-style message and agent_type input', () => {
     const parsed = inputSchema().safeParse({
       message: 'Review the runtime permission changes and report risks.',
+      task_name: 'runtime-review',
       agent_type: 'reviewer',
-      fork_context: true,
+      fork_turns: 'all',
       model: 'gpt-5.2',
       reasoning_effort: 'high',
     })
@@ -39,11 +41,29 @@ describe('spawn_agent Codex schema', () => {
     expect(parsed.success).toBe(true)
   })
 
-  test('spawn output exposes Codex-style agent_id and nickname only', () => {
+  test('rejects fork_context and items from the old protocol', () => {
+    expect(
+      inputSchema().safeParse({
+        message: 'Review the runtime permission changes.',
+        task_name: 'runtime-review',
+        fork_context: true,
+      }).success,
+    ).toBe(false)
+    expect(
+      inputSchema().safeParse({
+        items: [{ type: 'text', text: 'Review the runtime permission changes.' }],
+        task_name: 'runtime-review',
+      }).success,
+    ).toBe(false)
+  })
+
+  test('spawn output exposes Codex-style task_name and nickname only', () => {
     const text = schemaText(outputSchema())
 
-    expect(text).toContain('agent_id')
+    expect(text).toContain('task_name')
     expect(text).toContain('nickname')
+    expect(text).not.toContain('agent_id')
+    expect(text).not.toContain('agentId')
     expect(text).not.toContain('agentId')
     expect(text).not.toContain('outputFile')
     expect(text).not.toContain('target')

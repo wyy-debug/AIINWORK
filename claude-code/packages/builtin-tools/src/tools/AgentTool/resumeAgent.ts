@@ -24,6 +24,7 @@ import {
 } from 'src/utils/sessionStorage.js'
 import { buildEffectiveSystemPrompt } from 'src/utils/systemPrompt.js'
 import type { SystemPrompt } from 'src/utils/systemPromptType.js'
+import { getEmptyToolPermissionContext } from 'src/Tool.js'
 import { getParentSessionId } from 'src/utils/teammate.js'
 import { reconstructForSubagentResume } from 'src/utils/toolResultStorage.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
@@ -56,7 +57,9 @@ export async function resumeAgentBackground({
   // reaches the root store so task registration/progress/kill stay visible.
   const rootSetAppState =
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
-  const permissionMode = appState.toolPermissionContext.mode
+  const toolPermissionContext =
+    appState.toolPermissionContext ?? getEmptyToolPermissionContext()
+  const permissionMode = toolPermissionContext.mode
 
   const [transcript, meta] = await Promise.all([
     getAgentTranscript(asAgentId(agentId)),
@@ -122,7 +125,7 @@ export async function resumeAgentBackground({
           )
         : undefined
       const additionalWorkingDirectories = Array.from(
-        appState.toolPermissionContext.additionalWorkingDirectories.keys(),
+        toolPermissionContext.additionalWorkingDirectories.keys(),
       )
       const defaultSystemPrompt = await getSystemPrompt(
         toolUseContext.options.tools,
@@ -154,7 +157,7 @@ export async function resumeAgentBackground({
   )
 
   const workerPermissionContext = {
-    ...appState.toolPermissionContext,
+    ...toolPermissionContext,
     mode: selectedAgent.permissionMode ?? 'acceptEdits',
   }
   const workerTools = isResumedFork

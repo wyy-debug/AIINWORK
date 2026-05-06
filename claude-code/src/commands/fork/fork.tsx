@@ -39,10 +39,18 @@ export async function call(
   }
 
   try {
-    // Reuse Codex-style spawn_agent with explicit fork_context.
+    const slug = directive
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48)
+    const taskName = `fork-${slug || 'task'}`
+
+    // Reuse Codex-style spawn_agent with explicit fork_turns.
     const input = {
       message: directive,
-      fork_context: true,
+      task_name: taskName,
+      fork_turns: 'all',
     }
 
     // Call AgentTool with proper parameters:

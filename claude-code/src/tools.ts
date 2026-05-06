@@ -5,7 +5,7 @@ import {
   CloseAgentTool,
   ListAgentsTool,
   ResumeAgentTool,
-  SendInputAgentTool,
+  SendMessageAgentTool,
   WaitAgentTool,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
 import { SkillTool } from '@mtl-code/builtin-tools/tools/SkillTool/SkillTool.js'
@@ -212,7 +212,7 @@ export function getAllBaseTools(): Tools {
         ListAgentsTool,
         WaitAgentTool,
         CloseAgentTool,
-        SendInputAgentTool,
+        SendMessageAgentTool,
         ResumeAgentTool,
       ]
 
@@ -313,7 +313,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
           ListAgentsTool,
           WaitAgentTool,
           CloseAgentTool,
-          SendInputAgentTool,
+          SendMessageAgentTool,
           ResumeAgentTool,
           getSendMessageTool(),
         )
@@ -335,7 +335,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
         ListAgentsTool,
         WaitAgentTool,
         CloseAgentTool,
-        SendInputAgentTool,
+        SendMessageAgentTool,
         ResumeAgentTool,
         getSendMessageTool(),
       )

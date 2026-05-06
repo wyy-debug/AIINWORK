@@ -8,7 +8,7 @@ import {
   CloseAgentTool,
   ListAgentsTool,
   ResumeAgentTool,
-  SendInputAgentTool,
+  SendMessageAgentTool,
   WaitAgentTool,
 } from '../AgentControlTools.js'
 
@@ -23,7 +23,7 @@ describe('Codex collaborative agent control tools', () => {
     expect(ListAgentsTool.name).toBe('list_agents')
     expect(WaitAgentTool.name).toBe('wait_agent')
     expect(CloseAgentTool.name).toBe('close_agent')
-    expect(SendInputAgentTool.name).toBe('send_input')
+    expect(SendMessageAgentTool.name).toBe('send_message')
     expect(ResumeAgentTool.name).toBe('resume_agent')
 
     const legacyNames = [
@@ -36,12 +36,13 @@ describe('Codex collaborative agent control tools', () => {
       'agent_wait',
       'agent_cancel',
       'agent_send_input',
+      'send_input',
     ]
     for (const tool of [
       ListAgentsTool,
       WaitAgentTool,
       CloseAgentTool,
-      SendInputAgentTool,
+      SendMessageAgentTool,
       ResumeAgentTool,
     ]) {
       expect(tool.aliases ?? []).toEqual([])
@@ -52,15 +53,30 @@ describe('Codex collaborative agent control tools', () => {
     }
   })
 
-  test('wait_agent schema matches Codex targets and timeout shape', () => {
+  test('wait_agent schema matches Codex mailbox timeout shape', () => {
     const text = schemaText(WaitAgentTool.inputSchema)
 
-    expect(text).toContain('targets')
     expect(text).toContain('timeout_ms')
+    expect(text).not.toContain('targets')
     expect(text).not.toContain('task_id')
     expect(text).not.toContain('task_ids')
     expect(text).not.toContain('agent_ids')
     expect(text).not.toContain('wait_mode')
+  })
+
+  test('control schemas do not ask the model for internal agent ids', () => {
+    const text = schemaText({
+      close: CloseAgentTool.inputSchema,
+      send: SendMessageAgentTool.inputSchema,
+      resume: ResumeAgentTool.inputSchema,
+      listOutput: ListAgentsTool.outputSchema,
+    })
+
+    expect(text).not.toContain('Agent id')
+    expect(text).not.toContain('agent_id')
+    expect(text).not.toContain('thread_id')
+    expect(text).not.toContain('parent_thread_id')
+    expect(text).not.toContain('taskId')
   })
 
   test('list_agents returns Codex-style agents array', async () => {
@@ -75,13 +91,16 @@ describe('Codex collaborative agent control tools', () => {
 
     const result = await ListAgentsTool.call({} as any)
 
-    expect(result.data.agents?.map(agent => agent.agent_id)).toEqual([
-      'agent-running',
+    expect(result.data.agents?.map(agent => agent.task_name)).toEqual([
+      'Fetch crash page',
     ])
+    expect(schemaText(result.data)).not.toContain('agent_id')
+    expect(schemaText(result.data)).not.toContain('thread_id')
+    expect(schemaText(result.data)).not.toContain('parent_thread_id')
     expect(schemaText(result.data)).not.toContain('records')
   })
 
-  test('wait_agent returns completed status map and timed_out=false', async () => {
+  test('wait_agent returns mailbox completion message when new events exist', async () => {
     registerSubagentRecord({
       taskId: 'agent-done',
       agentId: 'agent-done',
@@ -93,18 +112,12 @@ describe('Codex collaborative agent control tools', () => {
       content: [{ type: 'text', text: '### STATUS\nDONE\n### SUMMARY\nComplete.' }],
     } as any)
 
-    const result = await WaitAgentTool.call(
-      {
-        targets: ['agent-done'],
-        timeout_ms: 1000,
-      } as any,
-      { getAppState: () => ({ tasks: {} }) } as any,
-    )
+    const result = await WaitAgentTool.call({
+      timeout_ms: 1000,
+    } as any)
 
     expect(result.data).toEqual({
-      status: {
-        'agent-done': { completed: 'Complete.' },
-      },
+      message: 'Wait completed.',
       timed_out: false,
     })
   })
@@ -117,16 +130,12 @@ describe('Codex collaborative agent control tools', () => {
       sessionId: 'child-thread',
     })
 
-    const result = await WaitAgentTool.call(
-      {
-        targets: ['agent-running'],
-        timeout_ms: 10,
-      } as any,
-      { getAppState: () => ({ tasks: {} }) } as any,
-    )
+    const result = await WaitAgentTool.call({
+      timeout_ms: 10,
+    } as any)
 
     expect(result.data).toEqual({
-      status: {},
+      message: 'Wait timed out.',
       timed_out: true,
     })
   })
@@ -157,7 +166,7 @@ describe('Codex collaborative agent control tools', () => {
     expect(running.data.agents).toEqual([])
   })
 
-  test('send_input returns a submission id instead of exposing legacy status fields', async () => {
+  test('send_message queues input without exposing legacy submission ids', async () => {
     registerSubagentRecord({
       taskId: 'agent-running',
       agentId: 'agent-running',
@@ -165,7 +174,7 @@ describe('Codex collaborative agent control tools', () => {
       sessionId: 'child-thread',
     })
 
-    const result = await SendInputAgentTool.call(
+    const result = await SendMessageAgentTool.call(
       {
         target: 'agent-running',
         message: 'Please inspect the failing test.',
@@ -175,8 +184,8 @@ describe('Codex collaborative agent control tools', () => {
       undefined as any,
     )
 
-    expect(result.data.submission_id).toMatch(/^submission_/)
-    expect(schemaText(result.data)).not.toContain('queued')
+    expect(result.data).toEqual({ message: 'Message queued.' })
+    expect(schemaText(result.data)).not.toContain('submission_id')
   })
 
   test('resume_agent returns not_found status for unknown agents', async () => {

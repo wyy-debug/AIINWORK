@@ -12,7 +12,7 @@ export {
   CloseAgentTool,
   ListAgentsTool,
   ResumeAgentTool,
-  SendInputAgentTool,
+  SendMessageAgentTool,
   WaitAgentTool,
 } from './tools/AgentControlTool/AgentControlTools.js'
 export { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'

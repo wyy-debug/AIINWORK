@@ -12,7 +12,7 @@ const CODEX_SUBAGENT_TOOL_NAMES = [
   'list_agents',
   'wait_agent',
   'close_agent',
-  'send_input',
+  'send_message',
   'resume_agent',
 ]
 

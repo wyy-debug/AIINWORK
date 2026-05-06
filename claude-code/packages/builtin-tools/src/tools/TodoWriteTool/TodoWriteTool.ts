@@ -6,7 +6,6 @@ import { buildTool, type ToolDef } from 'src/Tool.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
 import { isTodoV2Enabled } from 'src/utils/tasks.js'
 import { TodoListSchema } from 'src/utils/todo/types.js'
-import { VERIFICATION_AGENT_TYPE } from '../AgentTool/constants.js'
 import { TODO_WRITE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, PROMPT } from './prompt.js'
 
@@ -104,7 +103,7 @@ export const TodoWriteTool = buildTool({
   mapToolResultToToolResultBlockParam({ verificationNudgeNeeded }, toolUseID) {
     const base = `Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable`
     const nudge = verificationNudgeNeeded
-      ? `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, use spawn_agent with agent_type="${VERIFICATION_AGENT_TYPE}". You cannot self-assign PARTIAL by listing caveats in your summary \u2014 only the verifier issues a verdict.`
+      ? '\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, run an explicit verification pass yourself or ask the user whether they want a separate verifier subagent. Do not spawn a subagent unless the user has explicitly requested delegation or parallel agent work.'
       : ''
     return {
       tool_use_id: toolUseID,

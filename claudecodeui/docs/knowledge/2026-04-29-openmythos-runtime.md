@@ -5,9 +5,9 @@
 
 ## 定位
 
-OpenMythos 是 Argus 的策略层。它负责生成冻结任务卡、自适应推理强度、阶段计划、专家路线和上下文诊断。它不再负责启动子智能体，也不生成旧派发协议。
+OpenMythos 是 Argus 的策略层。它负责生成冻结任务卡、自适应推理强度、阶段计划、专家路线和上下文诊断。它不负责启动子智能体，也不生成旧派发协议。
 
-Subagent 执行层已经迁移到 Codex 风格协作工具：`spawn_agent`、`send_input`、`wait_agent`、`list_agents`、`close_agent`、`resume_agent`。只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才可以调用这些工具。
+Subagent 执行层已经迁移到 Codex 风格协作工具：`spawn_agent`、`send_message`、`wait_agent`、`list_agents`、`close_agent`、`resume_agent`。只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才可以调用这些工具。
 
 ## 配置结构
 
@@ -40,14 +40,14 @@ Subagent 执行层已经迁移到 Codex 风格协作工具：`spawn_agent`、`se
 
 ## 运行行为
 
-- `adaptiveEffort` 允许 Argus 在用户没有显式设置 effort 时，根据任务风险和复杂度推断推理强度。
-- `taskCard` 控制是否附加隐藏的冻结任务卡。
-- `routingHints` 控制隐藏任务卡是否包含技能或子智能体路线建议。
-- `loopControl` 可选 `enforced` 或 `advisory`；`enforced` 会把 loop budget 映射到现有 `maxTurns` 防护。
-- `stableReinjection` 会在工具结果后重新注入目标、约束、验收标准、阶段和专家路线。
-- `phaseAdapter` 根据轮次计算当前阶段；`orient` 和 `plan` 是只读阶段。
-- `expertRouting` 是建议面，不是隐藏执行器。
-- `contextCacheDiagnostics` 显示 compact、microcompact 和工具摘要账本；它不是 MLA 或 KV cache。
+- `adaptiveEffort`：用户没有显式设置 effort 时，根据任务风险和复杂度推断推理强度。
+- `taskCard`：控制是否附加隐藏的冻结任务卡。
+- `routingHints`：控制隐藏任务卡是否包含技能或子智能体路线建议。
+- `loopControl`：可选 `enforced` 或 `advisory`；`enforced` 会把 loop budget 映射到现有 `maxTurns` 防护。
+- `stableReinjection`：在工具结果后重新注入目标、约束、验收标准、阶段和专家路线。
+- `phaseAdapter`：根据轮次计算当前阶段；`orient` 和 `plan` 是只读阶段。
+- `expertRouting`：建议层，不是隐藏执行器。
+- `contextCacheDiagnostics`：显示 compact、microcompact 和工具摘要账本；它不是 MLA 或 KV cache。
 
 ## Subagent 边界
 
@@ -76,4 +76,4 @@ OpenMythos 不自动派发子智能体。它只能提供类似“建议用 explo
 - 简单问候不应启动子智能体。
 - 复杂任务只显示 OpenMythos 建议，不应自动调用 `spawn_agent`。
 - 关闭 Subagents 后，新会话不暴露协作工具。
-- 开启 Subagents 后，下一次新会话暴露 Codex 风格工具。
+- 开启 Subagents 后，下一次新会话暴露 Codex 风格协作工具。

@@ -8,7 +8,6 @@ import {
 import type {
   AssistantMessage,
   Message as MessageType,
-  NormalizedUserMessage,
 } from 'src/types/message.js'
 import { getQuerySourceForAgent } from 'src/utils/promptCategory.js'
 import { z } from 'zod/v4'
@@ -18,7 +17,6 @@ import {
 } from 'src/bootstrap/state.js'
 import {
   enhanceSystemPromptWithEnvDetails,
-  getSystemPrompt,
 } from 'src/constants/prompts.js'
 import { isCoordinatorMode } from 'src/coordinator/coordinatorMode.js'
 import {
@@ -57,7 +55,6 @@ import {
   getDenyRuleForAgent,
 } from 'src/utils/permissions/permissions.js'
 import { sleep } from 'src/utils/sleep.js'
-import { buildEffectiveSystemPrompt } from 'src/utils/systemPrompt.js'
 import { asSystemPrompt } from 'src/utils/systemPromptType.js'
 import { getParentSessionId } from 'src/utils/teammate.js'
 import { createAgentId } from 'src/utils/uuid.js'
@@ -72,8 +69,6 @@ import {
   AGENT_TOOL_NAME,
 } from './constants.js'
 import {
-  buildForkedMessages,
-  FORK_AGENT,
   isInForkChild,
 } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -162,17 +157,17 @@ function validateSubagentSpawnLifecycle({
 
 // Base input schema without multi-agent parameters
 const baseInputSchema = lazySchema(() =>
-  z.object({
-    message: z.string().optional().describe('Codex-style task prompt for the agent'),
-    items: z.array(z.any()).optional().describe('Codex-style structured prompt items'),
+  z.strictObject({
+    message: z.string().describe('Codex-style task prompt for the agent'),
+    task_name: z.string().describe('Stable task name for the spawned agent'),
     agent_type: z
       .string()
       .optional()
       .describe('Codex-style specialized agent type to use for this task'),
-    fork_context: z
-      .boolean()
+    fork_turns: z
+      .string()
       .optional()
-      .describe('Whether to fork the current context into the spawned agent'),
+      .describe('Context fork policy: none, all, or a positive number of recent user turns'),
     reasoning_effort: z
       .string()
       .optional()
@@ -191,40 +186,47 @@ type InputSchema = ReturnType<typeof inputSchema>
 
 type AgentToolInput = z.infer<ReturnType<typeof baseInputSchema>>
 
-function textFromAgentItems(items: unknown): string | undefined {
-  if (!Array.isArray(items)) return undefined
-  const text = items
-    .map(item => {
-      if (!item || typeof item !== 'object') return undefined
-      const record = item as Record<string, unknown>
-      if (typeof record.text === 'string') return record.text
-      if (typeof record.name === 'string') return record.name
-      if (typeof record.path === 'string') return record.path
-      return undefined
-    })
-    .filter((item): item is string => Boolean(item?.trim()))
-    .join('\n')
-    .trim()
-  return text || undefined
-}
-
 function summarizeAgentPrompt(value: string): string {
   const normalized = value.trim().replace(/\s+/g, ' ')
   if (!normalized) return 'Subagent task'
   return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized
 }
 
+function parseForkTurns(value: string | undefined): 'none' | 'all' | number {
+  const normalized = value?.trim().toLowerCase() || 'all'
+  if (normalized === 'none' || normalized === 'all') return normalized
+  if (/^[1-9]\d*$/.test(normalized)) return Number.parseInt(normalized, 10)
+  throw new Error('fork_turns must be "none", "all", or a positive integer string.')
+}
+
+function selectForkContextMessages(
+  messages: MessageType[],
+  forkTurns: 'all' | number,
+): MessageType[] {
+  if (forkTurns === 'all') return messages
+  let userTurns = 0
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.type === 'user') {
+      userTurns += 1
+      if (userTurns >= forkTurns) {
+        return messages.slice(index)
+      }
+    }
+  }
+  return messages
+}
+
 // Output schema - multi-agent spawned schema added dynamically at runtime when enabled
 export const outputSchema = lazySchema(() => {
-  return z.object({
-    agent_id: z.string().describe('Agent id to pass to wait_agent, send_input, close_agent, or resume_agent.'),
+  return z.strictObject({
+    task_name: z.string().describe('Task name for list_agents, wait_agent, send_message, close_agent, or resume_agent.'),
     nickname: z.string().nullable().optional().describe('Short display nickname when available.'),
   })
 })
 type OutputSchema = ReturnType<typeof outputSchema>
 type CodexSpawnOutput = z.input<OutputSchema>
 type AsyncLaunchInternalOutput = {
-  agent_id: string
+  task_name: string
   nickname?: string | null
   isAsync: true
   status: 'async_launched'
@@ -290,9 +292,9 @@ export const AgentTool = buildTool({
   async call(
     {
       message,
-      items,
+      task_name,
       agent_type,
-      fork_context,
+      fork_turns,
       model: modelParam,
     }: AgentToolInput,
     toolUseContext,
@@ -301,11 +303,17 @@ export const AgentTool = buildTool({
     onProgress?,
   ) {
     assertSubagentsEnabled()
-    const prompt = message ?? textFromAgentItems(items)
-    if (!prompt?.trim()) {
-      throw new Error('spawn_agent requires message or items.')
+    const prompt = message.trim()
+    const taskName = task_name.trim()
+    if (!prompt) {
+      throw new Error('spawn_agent requires message.')
     }
-    const description = summarizeAgentPrompt(prompt)
+    if (!taskName) {
+      throw new Error('spawn_agent requires task_name.')
+    }
+    const description = summarizeAgentPrompt(taskName)
+    const forkTurns = parseForkTurns(fork_turns)
+    const shouldForkContext = forkTurns !== 'none'
     const requestedAgentType = agent_type
     const startTime = Date.now()
     const model = isCoordinatorMode() ? undefined : modelParam
@@ -361,14 +369,10 @@ export const AgentTool = buildTool({
       }
     }
 
-    // Codex fork_context explicitly requests a child thread with inherited
-    // context. Without it, use the requested agent_type or the default
-    // collaborative agent.
-    const isForkPath = fork_context === true
-    const effectiveType = isForkPath ? undefined : requestedAgentType ?? 'default'
+    const effectiveType = requestedAgentType ?? 'default'
 
     let selectedAgent: AgentDefinition
-    if (isForkPath) {
+    if (shouldForkContext) {
       // Recursive fork guard: fork children keep the Agent tool in their
       // pool for cache-identical tool defs, so reject fork attempts at call
       // time. Primary check is querySource (compaction-resistant; set on
@@ -377,15 +381,15 @@ export const AgentTool = buildTool({
       // wasn't threaded.
       if (
         toolUseContext.options.querySource ===
-          `agent:builtin:${FORK_AGENT.agentType}` ||
+          'agent:builtin:fork' ||
         isInForkChild(toolUseContext.messages)
       ) {
         throw new Error(
           'Fork is not available inside a forked worker. Complete your task directly using your tools.',
         )
       }
-      selectedAgent = FORK_AGENT
-    } else {
+    }
+    {
       // Filter agents to exclude those denied via Agent(AgentName) syntax
       const allAgents = toolUseContext.options.agentDefinitions.activeAgents
       const { allowedAgentTypes } = toolUseContext.options.agentDefinitions
@@ -516,7 +520,7 @@ export const AgentTool = buildTool({
     const resolvedAgentModel = getAgentModel(
       selectedAgent.model,
       toolUseContext.options.mainLoopModel,
-      isForkPath ? undefined : (model as Parameters<typeof getAgentModel>[2]),
+      model as Parameters<typeof getAgentModel>[2],
       permissionMode,
     )
 
@@ -532,89 +536,43 @@ export const AgentTool = buildTool({
       is_built_in_agent: isBuiltInAgent(selectedAgent),
       is_resume: false,
       is_async: true,
-      is_fork: isForkPath,
+      is_fork: shouldForkContext,
     })
 
-    // System prompt + prompt messages: branch on fork path.
-    //
-    // Fork path: child inherits the PARENT's system prompt (not FORK_AGENT's)
-    // for cache-identical API request prefixes. Prompt messages are built via
-    // buildForkedMessages() which clones the parent's full assistant message
-    // (all tool_use blocks) + placeholder tool_results + per-child directive.
-    //
-    // Normal path: build the selected agent's own system prompt with env
-    // details, and use a simple user message for the prompt.
     let enhancedSystemPrompt: string[] | undefined
-    let forkParentSystemPrompt:
-      | ReturnType<typeof buildEffectiveSystemPrompt>
-      | undefined
     let promptMessages: MessageType[]
 
-    if (isForkPath) {
-      if (toolUseContext.renderedSystemPrompt) {
-        forkParentSystemPrompt = toolUseContext.renderedSystemPrompt
-      } else {
-        // Fallback: recompute. May diverge from parent's cached bytes if
-        // GrowthBook state changed between parent turn-start and fork spawn.
-        const mainThreadAgentDefinition = appState.agent
-          ? appState.agentDefinitions.activeAgents.find(
-              a => a.agentType === appState.agent,
-            )
-          : undefined
-        const additionalWorkingDirectories = Array.from(
-          appState.toolPermissionContext.additionalWorkingDirectories.keys(),
-        )
-        const defaultSystemPrompt = await getSystemPrompt(
-          toolUseContext.options.tools,
-          toolUseContext.options.mainLoopModel,
-          additionalWorkingDirectories,
-          toolUseContext.options.mcpClients,
-        )
-        forkParentSystemPrompt = buildEffectiveSystemPrompt({
-          mainThreadAgentDefinition,
-          toolUseContext,
-          customSystemPrompt: toolUseContext.options.customSystemPrompt,
-          defaultSystemPrompt,
-          appendSystemPrompt: toolUseContext.options.appendSystemPrompt,
+    try {
+      const additionalWorkingDirectories = Array.from(
+        appState.toolPermissionContext.additionalWorkingDirectories.keys(),
+      )
+
+      const agentPrompt = selectedAgent.getSystemPrompt({ toolUseContext })
+
+      if (selectedAgent.memory) {
+        logEvent('tengu_agent_memory_loaded', {
+          ...(process.env.USER_TYPE === 'ant' && {
+            agent_type:
+              selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          }),
+          scope:
+            selectedAgent.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          source:
+            'subagent' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         })
       }
-      promptMessages = buildForkedMessages(prompt, assistantMessage)
-    } else {
-      try {
-        const additionalWorkingDirectories = Array.from(
-          appState.toolPermissionContext.additionalWorkingDirectories.keys(),
-        )
 
-        // All agents have getSystemPrompt - pass toolUseContext to all
-        const agentPrompt = selectedAgent.getSystemPrompt({ toolUseContext })
-
-        // Log agent memory loaded event for subagents
-        if (selectedAgent.memory) {
-          logEvent('tengu_agent_memory_loaded', {
-            ...(process.env.USER_TYPE === 'ant' && {
-              agent_type:
-                selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            }),
-            scope:
-              selectedAgent.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            source:
-              'subagent' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          })
-        }
-
-        // Apply environment details enhancement
-        enhancedSystemPrompt = await enhanceSystemPromptWithEnvDetails(
-          [agentPrompt],
-          resolvedAgentModel,
-          additionalWorkingDirectories,
-        )
-      } catch (error) {
-        logForDebugging(
-          `Failed to get system prompt for agent ${selectedAgent.agentType}: ${errorMessage(error)}`,
-        )
-      }
-      promptMessages = [createUserMessage({ content: prompt })]
+      enhancedSystemPrompt = await enhanceSystemPromptWithEnvDetails(
+        [agentPrompt],
+        resolvedAgentModel,
+        additionalWorkingDirectories,
+      )
+    } catch (error) {
+      logForDebugging(
+        `Failed to get system prompt for agent ${selectedAgent.agentType}: ${errorMessage(error)}`,
+      )
     }
+    promptMessages = [createUserMessage({ content: prompt })]
 
     const metadata = {
       prompt,
@@ -661,7 +619,7 @@ export const AgentTool = buildTool({
           selectedAgent.agentType,
           isBuiltInAgent(selectedAgent),
         ),
-      model: isForkPath ? undefined : (model as Parameters<typeof getAgentModel>[2]),
+      model: model as Parameters<typeof getAgentModel>[2],
       // Fork path: pass parent's system prompt AND parent's exact tool
       // array (cache-identical prefix). workerTools is rebuilt under
       // permissionMode 'bubble' which differs from the parent's mode, so
@@ -669,16 +627,14 @@ export const AgentTool = buildTool({
       // differing tool. useExactTools also inherits the parent's
       // thinkingConfig and isNonInteractiveSession (see runAgent.ts).
       //
-      override: isForkPath
-        ? { systemPrompt: forkParentSystemPrompt }
-        : enhancedSystemPrompt
+      override: enhancedSystemPrompt
           ? { systemPrompt: asSystemPrompt(enhancedSystemPrompt) }
           : undefined,
-      availableTools: isForkPath ? toolUseContext.options.tools : workerTools,
-      // Pass parent conversation when the fork-subagent path needs full
-      // context. useExactTools inherits thinkingConfig (runAgent.ts:624).
-      forkContextMessages: isForkPath ? toolUseContext.messages : undefined,
-      ...(isForkPath && { useExactTools: true }),
+      availableTools: workerTools,
+      forkContextMessages:
+        shouldForkContext
+          ? selectForkContextMessages(toolUseContext.messages, forkTurns)
+          : undefined,
       description,
     }
 
@@ -738,6 +694,7 @@ export const AgentTool = buildTool({
           // They are killed explicitly via chat:killAgents.
           toolUseId: toolUseContext.toolUseId,
           sessionId: getParentSessionId(),
+          taskName,
         })
       } catch (error) {
         releaseParentSubagentBudget(parentBudgetRegistration)
@@ -787,7 +744,7 @@ export const AgentTool = buildTool({
               agentIdForCleanup: asyncAgentId,
               enableSummarization:
                 isCoordinator ||
-                isForkPath ||
+                shouldForkContext ||
                 getSdkAgentProgressSummariesEnabled(),
               getWorktreeResult: cleanupWorktreeIfNeeded,
             })
@@ -801,7 +758,7 @@ export const AgentTool = buildTool({
         data: {
           isAsync: true as const,
           status: 'async_launched' as const,
-          agent_id: agentBackgroundTask.agentId,
+          task_name: taskName,
           nickname: selectedAgent.agentType ?? null,
           description: description,
           prompt: prompt,
@@ -816,7 +773,7 @@ export const AgentTool = buildTool({
     const i = input as AgentToolInput
     const tags = [i.agent_type].filter((t): t is string => t !== undefined)
     const prefix = tags.length > 0 ? `(${tags.join(', ')}): ` : ': '
-    return `${prefix}${i.message ?? textFromAgentItems(i.items) ?? ''}`
+    return `${prefix}${i.message ?? ''}`
   },
   isConcurrencySafe() {
     return true
@@ -824,7 +781,7 @@ export const AgentTool = buildTool({
   userFacingName,
   userFacingNameBackgroundColor,
   getActivityDescription(input) {
-    return input?.message ?? textFromAgentItems(input?.items) ?? 'Running agent'
+    return input?.task_name ?? input?.message ?? 'Running agent'
   },
   async checkPermissions(input, context): Promise<PermissionResult> {
     const appState = context.getAppState()
@@ -851,7 +808,7 @@ export const AgentTool = buildTool({
         tool_use_id: toolUseID,
         type: 'tool_result',
         content: jsonStringify({
-          agent_id: data.agent_id,
+          task_name: data.task_name,
           nickname: data.nickname ?? null,
         }),
       }

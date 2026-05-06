@@ -610,6 +610,7 @@ export function registerAsyncAgent({
   parentAbortController,
   toolUseId,
   sessionId,
+  taskName,
 }: {
   agentId: string
   description: string
@@ -619,6 +620,7 @@ export function registerAsyncAgent({
   parentAbortController?: AbortController
   toolUseId?: string
   sessionId?: string
+  taskName?: string
 }): LocalAgentTaskState {
   void initTaskOutputAsSymlink(
     agentId,
@@ -660,6 +662,7 @@ export function registerAsyncAgent({
   registerSubagentRecord({
     taskId: agentId,
     agentId,
+    taskName,
     threadId: agentId,
     parentThreadId: sessionId,
     parentSessionId: sessionId,
@@ -691,6 +694,7 @@ export function registerAgentForeground({
   autoBackgroundMs,
   toolUseId,
   sessionId,
+  taskName,
 }: {
   agentId: string
   description: string
@@ -700,6 +704,7 @@ export function registerAgentForeground({
   autoBackgroundMs?: number
   toolUseId?: string
   sessionId?: string
+  taskName?: string
 }): {
   taskId: string
   backgroundSignal: Promise<void>
@@ -746,6 +751,7 @@ export function registerAgentForeground({
   registerSubagentRecord({
     taskId: agentId,
     agentId,
+    taskName,
     threadId: agentId,
     parentThreadId: sessionId,
     parentSessionId: sessionId,

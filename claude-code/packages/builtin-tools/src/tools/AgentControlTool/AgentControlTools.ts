@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { randomUUID } from 'crypto'
 import { z } from 'zod/v4'
 import { isTerminalTaskStatus } from 'src/Task.js'
 import { buildTool, type ToolDef } from 'src/Tool.js'
@@ -10,7 +9,9 @@ import {
 } from 'src/tasks/LocalAgentTask/LocalAgentTask.js'
 import {
   closeSubagentSubtree,
+  consumeSubagentMailboxItems,
   getSubagentRecord,
+  hasPendingSubagentMailboxItems,
   listSubagentRecords,
   type SubagentRegistryRecord,
 } from 'src/tasks/subagentRegistry.js'
@@ -28,7 +29,7 @@ const WAIT_INTERVAL_MS = 100
 export const AGENT_LIST_TOOL_NAME = 'list_agents'
 export const AGENT_WAIT_TOOL_NAME = 'wait_agent'
 export const AGENT_CLOSE_TOOL_NAME = 'close_agent'
-export const AGENT_SEND_INPUT_TOOL_NAME = 'send_input'
+export const AGENT_SEND_MESSAGE_TOOL_NAME = 'send_message'
 export const AGENT_RESUME_TOOL_NAME = 'resume_agent'
 
 const agentStatusSchema = z.union([
@@ -52,7 +53,6 @@ type ListInputSchema = ReturnType<typeof listInputSchema>
 
 const waitInputSchema = lazySchema(() =>
   z.strictObject({
-    targets: z.array(z.string()).optional().describe('Agent ids to wait for.'),
     timeout_ms: z.number().optional().describe('Maximum wait time in milliseconds.'),
   }),
 )
@@ -60,16 +60,15 @@ type WaitInputSchema = ReturnType<typeof waitInputSchema>
 
 const closeInputSchema = lazySchema(() =>
   z.strictObject({
-    target: z.string().describe('Agent id to close.'),
+    target: z.string().describe('Agent task_name, nickname, path, or handle to close.'),
   }),
 )
 type CloseInputSchema = ReturnType<typeof closeInputSchema>
 
 const sendInputSchema = lazySchema(() =>
   z.strictObject({
-    target: z.string().describe('Agent id to message.'),
+    target: z.string().describe('Agent task_name, nickname, path, or handle to message.'),
     message: z.string().optional().describe('Plain-text input to send.'),
-    items: z.array(z.any()).optional().describe('Structured input items to send.'),
     interrupt: z.boolean().optional().describe('Interrupt current work before sending this input.'),
   }),
 )
@@ -77,7 +76,7 @@ type SendInputSchema = ReturnType<typeof sendInputSchema>
 
 const resumeInputSchema = lazySchema(() =>
   z.strictObject({
-    id: z.string().describe('Agent id to resume.'),
+    id: z.string().describe('Agent task_name, nickname, path, or handle to resume.'),
   }),
 )
 type ResumeInputSchema = ReturnType<typeof resumeInputSchema>
@@ -86,12 +85,10 @@ const listOutputSchema = lazySchema(() =>
   z.object({
     agents: z.array(
       z.object({
-        agent_id: z.string(),
+        task_name: z.string(),
         nickname: z.string().nullable().optional(),
         status: agentStatusSchema,
         role: z.string().optional(),
-        thread_id: z.string().optional(),
-        parent_thread_id: z.string().optional(),
         depth: z.number().optional(),
       }),
     ),
@@ -102,7 +99,7 @@ type ListOutput = z.infer<ListOutputSchema>
 
 const waitOutputSchema = lazySchema(() =>
   z.object({
-    status: z.record(z.string(), agentStatusSchema),
+    message: z.string(),
     timed_out: z.boolean(),
   }),
 )
@@ -119,7 +116,7 @@ type CloseOutput = z.infer<CloseOutputSchema>
 
 const sendInputOutputSchema = lazySchema(() =>
   z.object({
-    submission_id: z.string(),
+    message: z.string(),
   }),
 )
 type SendInputOutputSchema = ReturnType<typeof sendInputOutputSchema>
@@ -136,17 +133,6 @@ type ResumeOutput = z.infer<ResumeOutputSchema>
 function clampTimeout(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_WAIT_TIMEOUT_MS
   return Math.max(10, Math.min(MAX_WAIT_TIMEOUT_MS, Math.floor(value!)))
-}
-
-function isTerminalRecord(record: SubagentRegistryRecord | undefined): boolean {
-  return Boolean(record && record.status !== 'running')
-}
-
-function syncTerminalTaskToRegistry(task: TaskState | undefined): void {
-  if (!task || !isTerminalTaskStatus(task.status)) return
-  if (task.status === 'killed') {
-    closeSubagentSubtree(task.id, 'Agent was stopped.')
-  }
 }
 
 function agentStatusFromRecord(
@@ -177,12 +163,10 @@ function agentStatusFromRecord(
 
 function toAgentSummary(record: SubagentRegistryRecord) {
   return {
-    agent_id: record.agentId,
+    task_name: record.taskName ?? record.objective,
     nickname: record.agentNickname ?? null,
     status: agentStatusFromRecord(record),
     role: record.agentRole ?? record.agentType,
-    thread_id: record.threadId,
-    parent_thread_id: record.parentThreadId,
     depth: record.depth,
   }
 }
@@ -214,23 +198,6 @@ function renderControlToolUseMessage(input: Record<string, unknown>): React.Reac
         ? input.id
         : ''
   return React.createElement('span', null, target ? ` ${target}` : '')
-}
-
-function textFromItems(items: unknown): string | undefined {
-  if (!Array.isArray(items)) return undefined
-  const text = items
-    .map(item => {
-      if (!item || typeof item !== 'object') return undefined
-      const record = item as Record<string, unknown>
-      if (typeof record.text === 'string') return record.text
-      if (typeof record.name === 'string') return record.name
-      if (typeof record.path === 'string') return record.path
-      return undefined
-    })
-    .filter((item): item is string => Boolean(item?.trim()))
-    .join('\n')
-    .trim()
-  return text || undefined
 }
 
 function liveTaskStatus(task: TaskState | undefined): AgentStatus | undefined {
@@ -286,10 +253,10 @@ export const WaitAgentTool = buildTool({
     return waitOutputSchema()
   },
   async description() {
-    return 'Wait for one or more collaborative agents to finish.'
+    return 'Wait for collaborative agent mailbox events.'
   },
   async prompt() {
-    return 'Wait for spawned agents by id. If no targets are provided, wait on currently running agents.'
+    return 'Wait for the next spawned-agent mailbox event. Use list_agents for the current snapshot.'
   },
   isReadOnly() {
     return true
@@ -297,39 +264,19 @@ export const WaitAgentTool = buildTool({
   isConcurrencySafe() {
     return true
   },
-  async call(input, { getAppState }): Promise<{ data: WaitOutput }> {
-    const targets =
-      input.targets && input.targets.length > 0
-        ? input.targets
-        : listSubagentRecords({ runningOnly: true }).map(record => record.agentId)
+  async call(input): Promise<{ data: WaitOutput }> {
     const timeoutMs = clampTimeout(input.timeout_ms)
     const deadline = Date.now() + timeoutMs
-    const finalStatuses: Record<string, AgentStatus> = {}
-
-    if (targets.length === 0) {
-      return { data: { status: {}, timed_out: false } }
-    }
 
     while (Date.now() <= deadline) {
-      for (const target of targets) {
-        if (finalStatuses[target]) continue
-        syncTerminalTaskToRegistry(getAppState().tasks?.[target] as TaskState | undefined)
-        const record = getSubagentRecord(target)
-        if (!record) {
-          finalStatuses[target] = 'not_found'
-          continue
-        }
-        if (isTerminalRecord(record)) {
-          finalStatuses[target] = agentStatusFromRecord(record)
-        }
-      }
-      if (Object.keys(finalStatuses).length > 0) {
-        return { data: { status: finalStatuses, timed_out: false } }
+      if (hasPendingSubagentMailboxItems()) {
+        consumeSubagentMailboxItems()
+        return { data: { message: 'Wait completed.', timed_out: false } }
       }
       await sleep(WAIT_INTERVAL_MS)
     }
 
-    return { data: { status: {}, timed_out: true } }
+    return { data: { message: 'Wait timed out.', timed_out: true } }
   },
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
@@ -363,12 +310,14 @@ export const CloseAgentTool = buildTool({
   },
   async call(input, { getAppState, setAppState }): Promise<{ data: CloseOutput }> {
     const target = input.target.trim()
+    const record = getSubagentRecord(target)
+    const taskKey = record?.agentId ?? target
     const previousStatus =
-      liveTaskStatus(getAppState().tasks?.[target] as TaskState | undefined) ??
-      agentStatusFromRecord(getSubagentRecord(target))
-    const task = getAppState().tasks?.[target] as TaskState | undefined
+      liveTaskStatus(getAppState().tasks?.[taskKey] as TaskState | undefined) ??
+      agentStatusFromRecord(record)
+    const task = getAppState().tasks?.[taskKey] as TaskState | undefined
     if (task && !isTerminalTaskStatus(task.status)) {
-      await stopTask(target, { getAppState, setAppState })
+      await stopTask(taskKey, { getAppState, setAppState })
     }
     closeSubagentSubtree(target, 'Agent was closed.')
     return { data: { previous_status: previousStatus } }
@@ -377,8 +326,8 @@ export const CloseAgentTool = buildTool({
   mapToolResultToToolResultBlockParam: toolResult,
 } satisfies ToolDef<CloseInputSchema, CloseOutput>)
 
-export const SendInputAgentTool = buildTool({
-  name: AGENT_SEND_INPUT_TOOL_NAME,
+export const SendMessageAgentTool = buildTool({
+  name: AGENT_SEND_MESSAGE_TOOL_NAME,
   aliases: [],
   searchHint: 'message collaborative agent',
   maxResultSizeChars: 100_000,
@@ -401,27 +350,24 @@ export const SendInputAgentTool = buildTool({
     if (!input.target?.trim()) {
       return { result: false, message: 'Missing required parameter: target', errorCode: 1 }
     }
-    if (!input.message?.trim() && !textFromItems(input.items)) {
-      return {
-        result: false,
-        message: 'send_input requires message or items.',
-        errorCode: 2,
-      }
+    if (!input.message?.trim()) {
+      return { result: false, message: 'send_message requires message.', errorCode: 2 }
     }
     return { result: true }
   },
   async call(input, context, canUseTool, assistantMessage): Promise<{ data: SendInputOutput }> {
     const target = input.target.trim()
-    const agentId = asAgentId(target)
-    const message = input.message?.trim() || textFromItems(input.items) || ''
-    const task = context.getAppState().tasks?.[target] as TaskState | undefined
+    const record = getSubagentRecord(target)
+    const agentId = asAgentId(record?.agentId ?? target)
+    const message = input.message?.trim() || ''
+    const task = context.getAppState().tasks?.[record?.agentId ?? target] as TaskState | undefined
     if (isLocalAgentTask(task) && task.status === 'running') {
       queuePendingMessage(
         agentId,
         message,
         context.setAppStateForTasks ?? context.setAppState,
       )
-    } else {
+    } else if (record?.status !== 'running') {
       await resumeAgentBackground({
         agentId,
         prompt: message,
@@ -430,7 +376,7 @@ export const SendInputAgentTool = buildTool({
         invokingRequestId: assistantMessage?.requestId as string | undefined,
       })
     }
-    return { data: { submission_id: `submission_${randomUUID()}` } }
+    return { data: { message: 'Message queued.' } }
   },
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
@@ -472,7 +418,7 @@ export const ResumeAgentTool = buildTool({
       return { data: { status: 'running' } }
     }
     await resumeAgentBackground({
-      agentId: asAgentId(target),
+      agentId: asAgentId(record.agentId),
       prompt: 'Resume the assigned objective and return a final status.',
       toolUseContext: context,
       canUseTool,

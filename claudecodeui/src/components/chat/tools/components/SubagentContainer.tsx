@@ -32,6 +32,7 @@ const parseObject = (value: unknown): PlainObject => {
       return {};
     }
   }
+
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as PlainObject)
     : {};
@@ -72,7 +73,7 @@ const extractTextContent = (value: unknown): string => {
 };
 
 const isAsyncLaunchNoise = (text: string): boolean =>
-  /Async agent launched successfully|agentId: .*internal ID|The agent is working in the background/i.test(text);
+  /Async agent launched successfully|agentId: .*internal ID|The agent is working in the background|output_file/i.test(text);
 
 const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => {
   const input = parseObject(toolInput);
@@ -102,7 +103,8 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
     case 'Agent':
     case 'Task':
     case 'spawn_agent':
-      return pick('description', 'agent_type', 'message');
+      return pick('task_name', 'description', 'agent_type', 'message');
+    case 'send_message':
     case 'send_input':
     case 'SendMessage':
       return pick('summary', 'message', 'content');
@@ -133,9 +135,9 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
   subagentState,
 }) => {
   const parsedInput = parseObject(toolInput);
-  const subagentType = stringifyValue(parsedInput.agent_type)
-    || 'Agent';
-  const description = stringifyValue(parsedInput.description)
+  const subagentType = stringifyValue(parsedInput.agent_type) || 'Agent';
+  const description = stringifyValue(parsedInput.task_name)
+    || stringifyValue(parsedInput.description)
     || stringifyValue(parsedInput.message)
     || '后台任务';
   const prompt = stringifyValue(parsedInput.prompt) || stringifyValue(parsedInput.message);

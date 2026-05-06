@@ -593,7 +593,7 @@ export default function OpenMythosRuntimeContent() {
           <RuntimeToggleRow
             icon={Route}
             title="启用子智能体工具"
-            description="开启后下一次新会话会暴露 spawn_agent、wait_agent、send_input 等 Codex 风格协作工具；当前会话不会热切换。"
+            description="开启后下一次新会话会暴露 spawn_agent、wait_agent、send_message 等 Codex 风格协作工具；当前会话不会热切换。"
             checked={subagentConfig.enabled}
             disabled={disabled}
             onChange={(enabled) => updateSubagentConfig({ enabled })}

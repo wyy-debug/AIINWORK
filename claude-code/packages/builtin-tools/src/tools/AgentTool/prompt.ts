@@ -55,7 +55,7 @@ export async function getPrompt(
     : `Available agent types and the tools they have access to:
 ${effectiveAgents.map(agent => formatAgentLine(agent)).join('\n')}`
 
-  return `Spawn a sub-agent for a well-scoped task. Returns the spawned agent id plus the user-facing nickname when available. Spawned agents inherit your current model by default. Omit \`model\` to use that preferred default; set \`model\` only when an explicit override is needed.
+  return `Spawn a sub-agent for a well-scoped task. Returns the task name plus the user-facing nickname when available. Spawned agents inherit your current model by default. Omit \`model\` to use that preferred default; set \`model\` only when an explicit override is needed.
 
 ${agentListSection}
 
@@ -69,12 +69,13 @@ This spawn_agent tool provides access to collaborative sub-agents. Follow these 
 - Keep delegated tasks self-contained and avoid duplicating work between the parent and child agents.
 - For coding subtasks, specify the files or modules the worker owns, and tell the worker not to revert unrelated changes.
 - After spawning, continue useful non-overlapping local work. Use wait_agent sparingly, only when you need the result for the next critical step.
-- Use send_input only for concrete new instructions. Do not use it for progress polling.
+- Use send_message only for concrete new instructions. Do not use it for progress polling.
 - Use close_agent for agents that are no longer needed. Use resume_agent to reopen a closed agent.
 
 Use the Codex-style parameters only:
-- \`message\` or \`items\` for the task input.
+- \`message\` for the task input.
+- \`task_name\` for the stable handle used by list_agents, wait_agent, send_message, close_agent, and resume_agent.
 - \`agent_type\` for the role, when a specific role is useful.
-- \`fork_context\` only when the child needs the exact parent context.
+- \`fork_turns\` as \`none\`, \`all\`, or a positive integer string when controlling inherited context.
 - \`model\` and \`reasoning_effort\` only when the user explicitly requests them or the task clearly requires them.`
 }
