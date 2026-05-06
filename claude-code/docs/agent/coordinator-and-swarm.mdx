@@ -1,48 +1,48 @@
 ---
-title: "协作式 Agent 编排"
-description: "Argus 以 Codex 风格 collaborative agent tools 作为 subagent 执行协议。"
-keywords: ["Coordinator", "Subagent", "Codex", "AgentRegistry"]
+title: "Coordinator And Subagent Orchestration"
+description: "Coordinator mode uses the Codex MultiAgentV2 collaborative agent tools."
+keywords: ["Coordinator", "Subagent", "Codex", "Mailbox"]
 ---
 
-## 当前结论
+## Current Model
 
-Argus 的新 subagent 行为统一走 Codex 风格协作工具：
+Argus uses the Codex MultiAgentV2 collaborative tool surface:
 
 - `spawn_agent`
-- `list_agents`
-- `wait_agent`
 - `send_message`
+- `followup_task`
+- `wait_agent`
 - `close_agent`
-- `resume_agent`
+- `list_agents`
 
-父线程负责判断是否真的需要并行工作。只有用户明确要求 subagents、delegation 或 parallel agent work 时，父线程才能调用 `spawn_agent`。
+The parent thread decides whether parallel work is actually useful. The model may call `spawn_agent` only when the user explicitly asks for subagents, delegation, or parallel agent work.
 
-## 推荐流程
+## Recommended Flow
 
 ```text
-用户明确授权并行
-  -> 父线程识别可并行、非阻塞、互不重复的独立任务
-  -> spawn_agent({ task_name, message, agent_type?, fork_turns? }) 创建 child thread
-  -> list_agents / wait_agent 观察 Mailbox 和状态
-  -> send_message 发送后续具体补充信息
-  -> close_agent 关闭不再需要的分支
-  -> 父线程汇总最终结果、证据和阻塞原因
+User explicitly authorizes parallel work
+  -> identify independent non-blocking tasks
+  -> spawn_agent({ task_name, message, agent_type?, fork_turns? })
+  -> continue useful local work
+  -> wait_agent for mailbox update drains when needed
+  -> send_message({ target, message }) for queue-only information
+  -> followup_task({ target, message }) for concrete follow-up work
+  -> close_agent({ target }) for branches that are no longer needed
+  -> summarize final results, evidence, and blockers for the user
 ```
 
-父线程不应该把“我在等结果”“进度如何”这类轮询写进用户正文。等待结果应走 `wait_agent`，补充具体信息才使用 `send_message`。
+Use the canonical path returned by `spawn_agent` or `list_agents` as `target`, for example `/root/read_runtime`. Bare relative names are accepted from the current agent path; nicknames and internal ids are not public target handles.
+
+Do not expose internal task ids, thread ids, or agent self-talk to the user. Summarize outcomes in normal assistant prose.
 
 ## Thread Graph
 
-每个 child agent 是独立 thread，并通过 graph edge 连接到 parent thread。UI 和历史恢复都基于 thread graph 与 subagent snapshot，而不是解析旧文本通知。
+Every child agent is an independent thread connected to the parent by `agentPath` and `parentAgentPath`. UI, recovery, list, close, and target resolution should prefer canonical paths and mailbox events over transcript text or legacy thread ids.
 
 ```text
-main thread
-  -> explorer child thread
-  -> worker child thread
+/root
+  -> /root/read_runtime
+  -> /root/fix_tests
 ```
 
-edge 只有 `open` 和 `closed` 两种持久状态；运行态由 watcher / registry / mailbox 事件提供。
-
-## OpenMythos
-
-OpenMythos 只提供拆分建议。它不会自动创建 worker，也不会绕过 feature gate。是否派发由父线程在 Codex 工具规则下决定。
+OpenMythos may suggest task decomposition, but it does not authorize or start agents automatically.

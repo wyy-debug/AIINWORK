@@ -11,6 +11,11 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { LLMProvider } from '../types/app';
 import { apiFetch } from '../utils/api';
+import {
+  appendRealtimeMessage,
+  computeMergedMessages,
+  retainRealtimeAfterServerRefresh,
+} from './sessionMessageMerge';
 
 // NormalizedMessage mirrors server/adapters/types.js.
 
@@ -132,12 +137,7 @@ function createEmptySlot(): SessionSlot {
  * Realtime messages that aren't yet in server stay (in-flight streaming).
  */
 function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  if (realtime.length === 0) return server;
-  if (server.length === 0) return realtime;
-  const serverIds = new Set(server.map(m => m.id));
-  const extra = realtime.filter(m => !serverIds.has(m.id) && !hasServerEchoForOptimisticUser(server, m));
-  if (extra.length === 0) return server;
-  return [...server, ...extra];
+  return computeMergedMessages(server, realtime);
 }
 
 /**
@@ -207,83 +207,6 @@ function reassignSessionMessages(
 const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
-const USER_ECHO_DEDUPE_WINDOW_MS = 5_000;
-
-function normalizeUserContent(content: unknown): string | null {
-  if (typeof content !== 'string') return null;
-  const normalized = content.replace(/\r\n/g, '\n').trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function timestampMs(message: NormalizedMessage): number | null {
-  const value = new Date(message.timestamp).getTime();
-  return Number.isFinite(value) ? value : null;
-}
-
-function isUserTextMessage(message: NormalizedMessage): boolean {
-  return message.kind === 'text' && message.role === 'user' && Boolean(normalizeUserContent(message.content));
-}
-
-function isOptimisticUserMessage(message: NormalizedMessage): boolean {
-  return isUserTextMessage(message)
-    && (message.id.startsWith('client_user_') || message.id.startsWith('local_'));
-}
-
-function hasSameRecentUserContent(a: NormalizedMessage, b: NormalizedMessage): boolean {
-  const aContent = normalizeUserContent(a.content);
-  const bContent = normalizeUserContent(b.content);
-  if (!aContent || !bContent || aContent !== bContent) return false;
-
-  const aTimestamp = timestampMs(a);
-  const bTimestamp = timestampMs(b);
-  if (aTimestamp === null || bTimestamp === null) return false;
-
-  return Math.abs(aTimestamp - bTimestamp) <= USER_ECHO_DEDUPE_WINDOW_MS;
-}
-
-function isControlMessage(message: NormalizedMessage): boolean {
-  return message.kind === 'session_created'
-    || message.kind === 'status'
-    || message.kind === 'complete'
-    || message.kind === 'permission_request'
-    || message.kind === 'permission_cancelled'
-    || message.kind === 'stream_end';
-}
-
-function findRecentOptimisticUserEcho(
-  messages: NormalizedMessage[],
-  incoming: NormalizedMessage,
-): number {
-  if (!isUserTextMessage(incoming)) return -1;
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const existing = messages[index];
-    if (
-      (isOptimisticUserMessage(existing) || isOptimisticUserMessage(incoming))
-      && isUserTextMessage(existing)
-      && hasSameRecentUserContent(existing, incoming)
-    ) {
-      return index;
-    }
-
-    if (!isControlMessage(existing)) {
-      return -1;
-    }
-  }
-
-  return -1;
-}
-
-function hasServerEchoForOptimisticUser(
-  server: NormalizedMessage[],
-  realtimeMessage: NormalizedMessage,
-): boolean {
-  return isOptimisticUserMessage(realtimeMessage)
-    && server.some((serverMessage) =>
-      isUserTextMessage(serverMessage) && hasSameRecentUserContent(serverMessage, realtimeMessage)
-    );
-}
-
 // Hook.
 
 export function useSessionStore() {
@@ -443,22 +366,7 @@ export function useSessionStore() {
    */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
-    const existingIndex = slot.realtimeMessages.findIndex((message) => message.id === msg.id);
-    const optimisticEchoIndex = existingIndex >= 0
-      ? existingIndex
-      : findRecentOptimisticUserEcho(slot.realtimeMessages, msg);
-
-    let updated: NormalizedMessage[];
-    if (optimisticEchoIndex >= 0) {
-      updated = [...slot.realtimeMessages];
-      updated[optimisticEchoIndex] = msg;
-    } else {
-      updated = [...slot.realtimeMessages, msg];
-    }
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
-    }
-    slot.realtimeMessages = updated;
+    slot.realtimeMessages = appendRealtimeMessage(slot.realtimeMessages, msg);
     recomputeMergedIfNeeded(slot);
     notify(sessionId);
   }, [getSlot, notify]);
@@ -563,8 +471,8 @@ export function useSessionStore() {
       } else if (data.contextBudget) {
         slot.contextBudget = data.contextBudget;
       }
-      // drop realtime messages that the server has caught up with to prevent unbounded growth.
-      slot.realtimeMessages = [];
+      // Drop only realtime messages that the server has caught up with.
+      slot.realtimeMessages = retainRealtimeAfterServerRefresh(slot.serverMessages, slot.realtimeMessages);
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     } catch (error) {

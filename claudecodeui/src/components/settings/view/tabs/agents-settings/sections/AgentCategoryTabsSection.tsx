@@ -10,6 +10,7 @@ const CATEGORY_LABELS: Record<AgentCategory, { key: string; defaultValue: string
   permissions: { key: 'tabs.permissions', defaultValue: '权限' },
   mcp: { key: 'tabs.mcpServers', defaultValue: 'MCP 服务器' },
   repository: { key: 'tabs.repository', defaultValue: '仓库' },
+  usage: { key: 'tabs.usage', defaultValue: '用量' },
 };
 
 export default function AgentCategoryTabsSection({

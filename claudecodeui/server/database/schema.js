@@ -212,6 +212,27 @@ export const ACTION_RUN_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS action_ru
 
 export const ACTION_RUN_EVENTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_action_run_events_run ON action_run_events(run_id, created_at);`;
 
+export const HUB_USAGE_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS hub_usage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  usage_date TEXT NOT NULL,
+  user_id INTEGER,
+  ip_address TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  session_id TEXT,
+  project_name TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  used_mcp INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT
+);`;
+
+export const HUB_USAGE_EVENTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_hub_usage_events_day_ip_user
+  ON hub_usage_events(usage_date, ip_address, user_id, provider);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -317,6 +338,10 @@ ${ACTION_RUNS_INDEX_SQL}
 ${ACTION_RUN_EVENTS_TABLE_SQL}
 
 ${ACTION_RUN_EVENTS_INDEX_SQL}
+
+${HUB_USAGE_EVENTS_TABLE_SQL}
+
+${HUB_USAGE_EVENTS_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

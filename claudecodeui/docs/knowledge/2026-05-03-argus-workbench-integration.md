@@ -46,7 +46,7 @@ Automations stay implemented in backend/API storage but are hidden from default 
 
 - `claude-code/scripts/defines.ts` compiles in `COORDINATOR_MODE`; actual activation is runtime-gated by `MTL_CODE_COORDINATOR_MODE`.
 - OpenMythos is an advisory strategy layer. It can suggest expert routes, but it does not create tickets, worker plans, or automatic spawns.
-- Subagent execution is Codex-style collaborative tooling: `spawn_agent`, `send_message`, `wait_agent`, `list_agents`, `close_agent`, and `resume_agent`.
+- Subagent execution is Codex-style collaborative tooling: `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `list_agents`, and `close_agent`.
 - Subagent tools are feature-gated separately from OpenMythos and are only exposed in new sessions after the setting is enabled.
 - `TaskStop` is idempotent for terminal tasks. Calling it on a completed, failed, or killed task returns a no-op success instead of a tool error.
 - User-facing chat must not render internal agent-control failure narration such as self-control/debug monologues or "replace the whole file manually" fallback text. The provider history adapter and `useChatMessages` filter known leaked internal narration, and OpenMythos reminds the coordinator to continue locally with concise actionable status instead.

@@ -7,6 +7,7 @@ import {
   captureViewportAnchor,
   getRestoredScrollTop,
   shouldAutoFillHistory,
+  shouldDeferInitialScrollToBottom,
   shouldPreserveViewport,
 } from './chatScrollRestore';
 
@@ -109,6 +110,24 @@ describe('chat scroll restoration', () => {
     expect(shouldAutoFillHistory({ ...base, pagesLoadedForSession: 0 })).toBe(true);
     expect(shouldAutoFillHistory({ ...base, pagesLoadedForSession: 1 })).toBe(false);
     expect(shouldAutoFillHistory({ ...base, pagesLoadedForSession: 0, scrollHeight: 700 })).toBe(false);
+  });
+
+  it('keeps initial scroll pending until the first messages render', () => {
+    expect(shouldDeferInitialScrollToBottom({
+      hasPendingInitialScroll: true,
+      isSessionLoading: false,
+      messageCount: 0,
+    })).toBe(true);
+    expect(shouldDeferInitialScrollToBottom({
+      hasPendingInitialScroll: true,
+      isSessionLoading: true,
+      messageCount: 20,
+    })).toBe(true);
+    expect(shouldDeferInitialScrollToBottom({
+      hasPendingInitialScroll: true,
+      isSessionLoading: false,
+      messageCount: 20,
+    })).toBe(false);
   });
 });
 

@@ -31,14 +31,48 @@ describe('spawn_agent Codex schema', () => {
   test('accepts Codex-style message and agent_type input', () => {
     const parsed = inputSchema().safeParse({
       message: 'Review the runtime permission changes and report risks.',
-      task_name: 'runtime-review',
+      task_name: 'runtime_review',
       agent_type: 'reviewer',
-      fork_turns: 'all',
+      fork_turns: 'none',
       model: 'gpt-5.2',
       reasoning_effort: 'high',
     })
 
     expect(parsed.success).toBe(true)
+  })
+
+  test('requires lowercase underscore task names', () => {
+    expect(
+      inputSchema().safeParse({
+        message: 'Review the runtime permission changes.',
+        task_name: 'runtime_review_2',
+      }).success,
+    ).toBe(true)
+    for (const task_name of ['runtime-review', '/root/runtime_review', 'RuntimeReview']) {
+      expect(
+        inputSchema().safeParse({
+          message: 'Review the runtime permission changes.',
+          task_name,
+        }).success,
+      ).toBe(false)
+    }
+  })
+
+  test('full-history fork rejects role model and reasoning overrides', () => {
+    for (const extra of [
+      { agent_type: 'reviewer' },
+      { model: 'gpt-5.2' },
+      { reasoning_effort: 'high' },
+    ]) {
+      expect(
+        inputSchema().safeParse({
+          message: 'Review the runtime permission changes.',
+          task_name: 'runtime_review',
+          fork_turns: 'all',
+          ...extra,
+        }).success,
+      ).toBe(false)
+    }
   })
 
   test('rejects fork_context and items from the old protocol', () => {

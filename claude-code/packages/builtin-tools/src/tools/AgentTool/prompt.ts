@@ -69,12 +69,13 @@ This spawn_agent tool provides access to collaborative sub-agents. Follow these 
 - Keep delegated tasks self-contained and avoid duplicating work between the parent and child agents.
 - For coding subtasks, specify the files or modules the worker owns, and tell the worker not to revert unrelated changes.
 - After spawning, continue useful non-overlapping local work. Use wait_agent sparingly, only when you need the result for the next critical step.
-- Use send_message only for concrete new instructions. Do not use it for progress polling.
-- Use close_agent for agents that are no longer needed. Use resume_agent to reopen a closed agent.
+- Use send_message only to queue information for an existing agent. Do not use it for progress polling.
+- Use followup_task for concrete follow-up work that should trigger an agent turn.
+- Use close_agent for agents that are no longer needed.
 
 Use the Codex-style parameters only:
 - \`message\` for the task input.
-- \`task_name\` for the stable handle used by list_agents, wait_agent, send_message, close_agent, and resume_agent.
+- \`task_name\` for the stable handle used by list_agents, wait_agent, send_message, followup_task, and close_agent.
 - \`agent_type\` for the role, when a specific role is useful.
 - \`fork_turns\` as \`none\`, \`all\`, or a positive integer string when controlling inherited context.
 - \`model\` and \`reasoning_effort\` only when the user explicitly requests them or the task clearly requires them.`

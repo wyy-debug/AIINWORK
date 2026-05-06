@@ -102,3 +102,16 @@ export function shouldAutoFillHistory({
   if (pagesLoadedForSession >= maxPagesPerSession) return false;
   return scrollHeight <= clientHeight + slack;
 }
+
+export function shouldDeferInitialScrollToBottom({
+  hasPendingInitialScroll,
+  isSessionLoading,
+  messageCount,
+}: {
+  hasPendingInitialScroll: boolean;
+  isSessionLoading: boolean;
+  messageCount: number;
+}): boolean {
+  if (!hasPendingInitialScroll) return true;
+  return isSessionLoading || messageCount === 0;
+}

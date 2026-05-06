@@ -3,8 +3,8 @@ import { feature } from 'bun:bundle'
 import { TASK_OUTPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskOutputTool/constants.js'
 import {
   AGENT_CLOSE_TOOL_NAME,
+  AGENT_FOLLOWUP_TASK_TOOL_NAME,
   AGENT_LIST_TOOL_NAME,
-  AGENT_RESUME_TOOL_NAME,
   AGENT_SEND_MESSAGE_TOOL_NAME,
   AGENT_WAIT_TOOL_NAME,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
@@ -49,7 +49,7 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   AGENT_WAIT_TOOL_NAME,
   AGENT_CLOSE_TOOL_NAME,
   AGENT_SEND_MESSAGE_TOOL_NAME,
-  AGENT_RESUME_TOOL_NAME,
+  AGENT_FOLLOWUP_TASK_TOOL_NAME,
   EXIT_PLAN_MODE_V2_TOOL_NAME,
   ENTER_PLAN_MODE_TOOL_NAME,
   // Allow Agent tool for agents when user is ant (enables nested agents)
@@ -123,6 +123,8 @@ export const COORDINATOR_MODE_ALLOWED_TOOLS = new Set([
   AGENT_LIST_TOOL_NAME,
   AGENT_WAIT_TOOL_NAME,
   AGENT_CLOSE_TOOL_NAME,
+  AGENT_SEND_MESSAGE_TOOL_NAME,
+  AGENT_FOLLOWUP_TASK_TOOL_NAME,
   TASK_STOP_TOOL_NAME,
   SEND_MESSAGE_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,

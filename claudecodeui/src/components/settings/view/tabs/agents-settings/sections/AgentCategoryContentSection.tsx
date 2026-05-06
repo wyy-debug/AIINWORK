@@ -4,6 +4,7 @@ import { McpServers } from '../../../../../mcp';
 import ModelConfigContent from './content/ModelConfigContent';
 import PermissionsContent from './content/PermissionsContent';
 import RepositoryContent from './content/RepositoryContent';
+import HubUsageContent from './content/HubUsageContent';
 
 export default function AgentCategoryContentSection({
   selectedAgent,
@@ -75,6 +76,10 @@ export default function AgentCategoryContentSection({
 
       {selectedCategory === 'repository' && selectedAgent === 'claude' && (
         <RepositoryContent projects={projects} />
+      )}
+
+      {selectedCategory === 'usage' && selectedAgent === 'claude' && (
+        <HubUsageContent />
       )}
     </div>
   );

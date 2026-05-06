@@ -10,8 +10,8 @@
 export { SpawnAgentTool, AgentTool } from './tools/AgentTool/AgentTool.js'
 export {
   CloseAgentTool,
+  FollowupTaskAgentTool,
   ListAgentsTool,
-  ResumeAgentTool,
   SendMessageAgentTool,
   WaitAgentTool,
 } from './tools/AgentControlTool/AgentControlTools.js'

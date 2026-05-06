@@ -18,9 +18,38 @@ import { notifyRunFailed, notifyRunStopped } from './services/notification-orche
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { createNormalizedMessage } from './shared/utils.js';
+import { hubUsageDb } from './database/db.js';
 
 // Track active sessions
 const activeCodexSessions = new Map();
+
+function readNonNegativeInteger(value) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function recordCodexHubUsage({ usage, ws, options, sessionId, usedMcp }) {
+  try {
+    const inputTokens = readNonNegativeInteger(usage?.input_tokens ?? usage?.inputTokens);
+    const outputTokens = readNonNegativeInteger(usage?.output_tokens ?? usage?.outputTokens);
+    hubUsageDb.recordUsage({
+      userId: ws?.userId ?? null,
+      ipAddress: ws?.ipAddress || 'unknown',
+      provider: 'codex',
+      sessionId,
+      projectName: options.projectName || options.projectPath || options.cwd || null,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      usedMcp,
+      metadata: {
+        model: options.model || null,
+      },
+    });
+  } catch (error) {
+    console.warn('[HubUsage] Failed to record Codex token usage:', error?.message || error);
+  }
+}
 
 /**
  * Transform Codex SDK event to WebSocket message format
@@ -209,6 +238,7 @@ export async function queryCodex(command, options = {}, ws) {
   let thread;
   let currentSessionId = sessionId;
   let terminalFailure = null;
+  let usedMcpThisTurn = false;
   const abortController = new AbortController();
 
   try {
@@ -263,6 +293,12 @@ export async function queryCodex(command, options = {}, ws) {
       }
 
       const transformed = transformCodexEvent(event);
+      if (
+        (event.type === 'item.completed' || event.type === 'item.updated') &&
+        event.item?.type === 'mcp_tool_call'
+      ) {
+        usedMcpThisTurn = true;
+      }
 
       // Normalize the transformed event into NormalizedMessage(s) via adapter
       const normalizedMsgs = sessionsService.normalizeMessage('codex', transformed, currentSessionId);
@@ -285,6 +321,14 @@ export async function queryCodex(command, options = {}, ws) {
       if (event.type === 'turn.completed' && event.usage) {
         const totalTokens = (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0);
         sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: { used: totalTokens, total: 200000 }, sessionId: currentSessionId, provider: 'codex' }));
+        recordCodexHubUsage({
+          usage: event.usage,
+          ws,
+          options,
+          sessionId: currentSessionId,
+          usedMcp: usedMcpThisTurn,
+        });
+        usedMcpThisTurn = false;
       }
     }
 

@@ -15,6 +15,8 @@ describe('subagent thread graph', () => {
     const record = registerSubagentRecord({
       taskId: 'agent-review',
       agentId: 'agent-review',
+      agentPath: '/root/review_migration',
+      parentAgentPath: '/root',
       parentThreadId: 'parent-thread',
       sessionId: 'child-thread',
       objective: 'Review the migration',
@@ -23,6 +25,8 @@ describe('subagent thread graph', () => {
       agentNickname: 'migration-review',
     })
 
+    expect(record.agentPath).toBe('/root/review_migration')
+    expect(record.parentAgentPath).toBe('/root')
     expect(record.threadId).toBe('child-thread')
     expect(record.parentThreadId).toBe('parent-thread')
     expect(record.depth).toBe(1)
@@ -35,6 +39,8 @@ describe('subagent thread graph', () => {
     registerSubagentRecord({
       taskId: 'agent-parent',
       agentId: 'agent-parent',
+      agentPath: '/root/a',
+      parentAgentPath: '/root',
       parentThreadId: 'root-thread',
       sessionId: 'parent-thread',
       objective: 'Parent agent',
@@ -43,13 +49,26 @@ describe('subagent thread graph', () => {
     registerSubagentRecord({
       taskId: 'agent-child',
       agentId: 'agent-child',
+      agentPath: '/root/a/child',
+      parentAgentPath: '/root/a',
       parentThreadId: 'parent-thread',
       sessionId: 'child-thread',
       objective: 'Child agent',
       depth: 2,
     })
 
-    const closed = closeSubagentSubtree('agent-parent', 'Closed by parent.')
+    registerSubagentRecord({
+      taskId: 'agent-aa',
+      agentId: 'agent-aa',
+      agentPath: '/root/aa',
+      parentAgentPath: '/root',
+      parentThreadId: 'root-thread',
+      sessionId: 'aa-thread',
+      objective: 'Sibling prefix agent',
+      depth: 1,
+    })
+
+    const closed = closeSubagentSubtree('/root/a', 'Closed by parent.')
     const running = listSubagentRecords({ runningOnly: true })
 
     expect(closed.map(record => record.taskId).sort()).toEqual([
@@ -57,6 +76,6 @@ describe('subagent thread graph', () => {
       'agent-parent',
     ])
     expect(closed.every(record => record.graphStatus === 'closed')).toBe(true)
-    expect(running).toEqual([])
+    expect(running.map(record => record.agentPath)).toEqual(['/root/aa'])
   })
 })

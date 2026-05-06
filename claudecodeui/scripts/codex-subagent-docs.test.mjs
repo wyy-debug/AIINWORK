@@ -47,12 +47,18 @@ describe('Codex subagent documentation alignment', () => {
       'list_agents',
       'wait_agent',
       'send_message',
+      'followup_task',
       'close_agent',
-      'resume_agent',
     ]) {
       expect(text).toContain(`\`${toolName}\``);
     }
+    expect(text).not.toContain('`resume_agent`');
     expect(text).toContain('Mailbox');
     expect(text).toContain('Thread graph');
+    expect(text).toContain('SubagentControl');
+    expect(text).toContain('agentPath');
+    expect(text).toContain('parentAgentPath');
+    expect(text).toContain('sequence');
+    expect(text).toContain('updates');
   });
 });

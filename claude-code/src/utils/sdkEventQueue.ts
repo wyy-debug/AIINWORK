@@ -1,7 +1,7 @@
 import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import { getIsNonInteractiveSession, getSessionId } from '../bootstrap/state.js'
-import { getSubagentRecord } from '../tasks/subagentRegistry.js'
+import { getSubagentRecordByInternalId } from '../tasks/subagentRegistry.js'
 import type { SdkWorkflowProgress } from '../types/tools.js'
 
 type TaskStartedEvent = {
@@ -128,7 +128,7 @@ export function emitTaskTerminatedSdk(
     usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
   },
 ): void {
-  const record = getSubagentRecord(taskId)
+  const record = getSubagentRecordByInternalId(taskId)
   enqueueSdkEvent({
     type: 'system',
     subtype: 'task_notification',

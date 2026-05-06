@@ -188,6 +188,14 @@ export const api = {
     });
   },
   agentRepositoryCatalog: () => apiFetch('/api/agent-repository/catalog'),
+  hubUsage: ({ days = 7, from = '', to = '' } = {}) => {
+    const params = new URLSearchParams();
+    if (days) params.set('days', String(days));
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const query = params.toString();
+    return apiFetch(`/api/hub/usage${query ? `?${query}` : ''}`);
+  },
   installAgentRepositoryItem: (payload = {}) =>
     apiFetch('/api/agent-repository/install', {
       method: 'POST',

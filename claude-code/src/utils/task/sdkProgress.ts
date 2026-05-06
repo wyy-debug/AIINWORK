@@ -1,6 +1,6 @@
 import type { SdkWorkflowProgress } from '../../types/tools.js'
 import type { SubagentRuntimeSnapshot } from '@mtl-code/builtin-tools/tools/AgentTool/subagentRuntimeGuard.js'
-import { getSubagentRecord } from '../../tasks/subagentRegistry.js'
+import { getSubagentRecordByInternalId } from '../../tasks/subagentRegistry.js'
 import { enqueueSdkEvent } from '../sdkEventQueue.js'
 
 /**
@@ -21,7 +21,7 @@ export function emitTaskProgress(params: {
   workflowProgress?: SdkWorkflowProgress[]
   subagentRuntime?: SubagentRuntimeSnapshot
 }): void {
-  const record = getSubagentRecord(params.taskId)
+  const record = getSubagentRecordByInternalId(params.taskId)
   enqueueSdkEvent({
     type: 'system',
     subtype: 'task_progress',

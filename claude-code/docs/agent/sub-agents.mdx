@@ -1,107 +1,68 @@
 ---
-title: "Subagent 机制 - Codex 风格协作工具"
-description: "Argus 的 subagent 目标是对齐 OpenAI Codex：协作工具、线程图、运行时状态、Mailbox 通知和历史恢复。"
-keywords: ["subagent", "spawn_agent", "AgentRegistry", "Mailbox", "Codex"]
+title: "Subagents - Codex MultiAgentV2"
+description: "Argus subagents expose the Codex MultiAgentV2 collaborative tool surface."
+keywords: ["subagent", "spawn_agent", "followup_task", "Mailbox", "Codex"]
 ---
 
-## 当前协议
+## Current Protocol
 
-Argus 的新会话只对齐 OpenAI Codex `multi_agents_v2` 风格的协作工具：
+New sessions expose only the Codex MultiAgentV2 tool surface when subagents are enabled:
 
 - `spawn_agent`
-- `list_agents`
-- `wait_agent`
 - `send_message`
+- `followup_task`
+- `wait_agent`
 - `close_agent`
-- `resume_agent`
+- `list_agents`
 
-早期实验性的旧别名、派发票据和自然语言门禁不再作为新会话工具面。旧 transcript 只做只读降级渲染，不参与新工具列表，也不作为执行入口。
+Legacy dispatch aliases, dispatch tickets, natural-language gates, and old transcript-only execution inputs are not part of the current model-visible protocol.
 
-Release 包默认关闭 subagent 工具。Debug/test 通道可以开启，用于验证协议、状态、UI 和历史恢复。
+## Spawn Input
 
-## Spawn 输入
-
-`spawn_agent` 使用 Codex 风格参数：
+`spawn_agent` accepts Codex-style parameters:
 
 ```json
 {
   "message": "Review the runtime permission changes and report risks.",
-  "task_name": "review-runtime-permissions",
+  "task_name": "review_runtime_permissions",
   "agent_type": "explorer",
-  "fork_turns": "all",
+  "fork_turns": "none",
   "model": "gpt-5.2",
   "reasoning_effort": "high"
 }
 ```
 
-字段说明：
+`task_name` must be a relative lowercase name using only letters, digits, and underscores. The tool returns the canonical path form, for example `/root/review_runtime_permissions`.
 
-- `message`：交给子 agent 的完整任务说明。
-- `task_name`：父线程后续引用该 agent 的稳定名称。
-- `agent_type`：可选，默认 `default`，常用值包括 `explorer`、`worker`、`reviewer`。
-- `fork_turns`：可选，`none`、`all` 或正整数，表示继承多少父线程上下文。
-- `model` / `reasoning_effort`：可选，未指定时继承当前会话模型配置。
+`fork_context` and `items` are old protocol fields and are rejected. A full-history fork, `fork_turns: "all"`, cannot be combined with `agent_type`, `model`, or `reasoning_effort` overrides.
 
-`fork_context` 和 `items` 属于旧协议，新会话会拒绝。
+## Spawn Output
 
-## Spawn 输出
-
-`spawn_agent` 只返回模型可继续引用的任务名称和可选昵称：
+`spawn_agent` returns only the model-visible task path and optional nickname:
 
 ```json
 {
-  "task_name": "review-runtime-permissions",
-  "nickname": "Explorer"
+  "task_name": "/root/review_runtime_permissions",
+  "nickname": "explorer"
 }
 ```
 
-内部 thread id、agent id、output file、启动控制文本不进入用户可见正文，也不作为模型可见结果。
+Internal task ids, agent ids, thread ids, output files, and launch-control details are not model-visible output.
 
-## 控制工具
+## Control Tools
 
-- `wait_agent({ "timeout_ms": 30000 })`：等待 Mailbox 有新事件，返回 `Wait completed.` 或 `Wait timed out.`。
-- `list_agents({})`：列出当前线程图中的 agents。
-- `send_message({ "target": "review-runtime-permissions", "message": "..." })`：给指定 agent 发送具体补充信息。
-- `close_agent({ "target": "review-runtime-permissions" })`：关闭该 agent 及其 live descendants。
-- `resume_agent({ "id": "review-runtime-permissions" })`：恢复已关闭或 interrupted 的 agent。
+- `send_message({ "target": "/root/review_runtime_permissions", "message": "..." })` queues information for the target and does not start a new turn.
+- `followup_task({ "target": "/root/review_runtime_permissions", "message": "..." })` assigns concrete follow-up work and starts or resumes the target when needed.
+- `wait_agent({ "timeout_ms": 30000 })` drains mailbox updates and returns `{ message, timed_out, sequence, updates }`.
+- `list_agents({})` returns `{ agents: [{ agent_name, agent_status, last_task_message }] }`, including `/root`.
+- `close_agent({ "target": "/root/review_runtime_permissions" })` closes the target and descendants.
 
-父线程不应该把“我在等结果”“进度如何”这类轮询写进用户正文。等待结果必须走 `wait_agent`，补充具体信息才使用 `send_message`。
+Targets are canonical paths such as `/root/review_runtime_permissions`, or bare relative names from the current agent path when unambiguous. Nicknames, internal task ids, and hidden agent ids are not public target handles.
 
-## 使用约束
-
-只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才应该调用 `spawn_agent`。复杂、深入、彻底分析本身不等于授权派生子智能体。
-
-默认禁止 nested subagents。高级配置打开后，也必须受 depth limit、session concurrency limit 和 duplicate objective guard 约束。
+Use `wait_agent` for results, `send_message` for queue-only information, and `followup_task` for work that should trigger an agent turn. A `wait_agent` drain consumes only model-relevant mailbox events: final notifications, inter-agent messages, and interaction events. Progress, tool start, tool completion, and token usage events remain registry telemetry and are not returned in the mailbox drain.
 
 ## Thread Graph And Mailbox
 
-每个 subagent 都是独立 thread，并通过 parent-child edge 连接到父 thread：
+Each subagent is a child thread connected to its parent by canonical agent path. The registry stores `agentPath`, `parentAgentPath`, graph status, runtime status, last task message, and mailbox sequence events. `threadId` and `parentThreadId` remain historical/debug fields; listing, target resolution, and subtree close use canonical paths as the source of truth.
 
-```text
-parent_thread_id -> child_thread_id
-edge_status: open | closed
-```
-
-运行时能力目标：
-
-- children / descendants 查询
-- close subtree
-- resume closed 或 interrupted agent
-- status watcher
-- Mailbox / sequence notification
-- max concurrent threads per session
-- duplicate objective guard
-
-状态对齐 Codex：
-
-- `PendingInit`
-- `Running`
-- `Completed(message)`
-- `Errored(message)`
-- `Interrupted`
-- `Shutdown`
-- `NotFound`
-
-## OpenMythos 边界
-
-OpenMythos 只做建议层：可以给出任务拆分建议和诊断预览，但不能自动 spawn。真正执行只能通过 Codex 风格协作工具完成。
+The visible status vocabulary follows Codex: `running`, `{ completed }`, `{ errored }`, `interrupted`, `shutdown`, and `not_found`.

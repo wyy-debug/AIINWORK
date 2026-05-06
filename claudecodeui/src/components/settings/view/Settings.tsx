@@ -12,6 +12,7 @@ import { cn } from '../../../lib/utils';
 
 const getInitialAgentCategory = (tab: string): AgentCategory => {
   if (tab === 'mcp') return 'mcp';
+  if (tab === 'usage' || tab === 'hub-usage') return 'usage';
   if (tab === 'hub' || tab === 'repository') return 'repository';
   if (tab === 'permissions') return 'permissions';
   if (tab === 'model' || tab === 'tools') return 'model';

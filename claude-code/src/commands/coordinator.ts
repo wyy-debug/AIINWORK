@@ -3,8 +3,8 @@
  *
  * When enabled, the CLI becomes an orchestrator that dispatches tasks
  * to worker agents via spawn_agent({ task_name, message, agent_type: "worker" }).
- * The coordinator can use spawn_agent, wait_agent, send_message, list_agents,
- * close_agent, and resume_agent.
+ * The coordinator can use spawn_agent, wait_agent, send_message, followup_task,
+ * list_agents, and close_agent.
  */
 import { feature } from 'bun:bundle'
 import type { ToolUseContext } from '../Tool.js'
@@ -51,7 +51,7 @@ const coordinator = {
             {
               display: 'system',
               metaMessages: [
-                '<system-reminder>\nCoordinator mode is now enabled. You are an orchestrator. Use spawn_agent({ task_name, message, agent_type: "worker" }) to spawn workers, wait_agent to wait for mailbox updates, send_message only for concrete new instructions with DONE/BLOCKED/NEED_PARENT_INPUT stop conditions, and close_agent to stop them. Do not use other tools directly.\n</system-reminder>',
+                '<system-reminder>\nCoordinator mode is now enabled. You are an orchestrator. Use spawn_agent({ task_name, message, agent_type: "worker" }) to spawn workers, wait_agent to wait for mailbox updates, send_message only to queue information, followup_task for concrete new work that should trigger an agent turn, and close_agent to stop them. Do not use other tools directly.\n</system-reminder>',
               ],
             },
           )

@@ -33,6 +33,8 @@ import {
   buildContextBudgetFromModelUsage,
   toLegacyTokenBudget,
 } from './services/context-budget-service.js';
+import { hubUsageDb } from './database/db.js';
+import { extractTokenBreakdownFromContextBudget } from './services/hub-usage-service.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -622,6 +624,35 @@ function transformMessage(sdkMessage) {
   return sdkMessage;
 }
 
+function reportHubUsageFromContextBudget({
+  writer,
+  options = {},
+  sessionId,
+  provider = 'claude',
+  contextBudget,
+}) {
+  if (!contextBudget) return;
+  try {
+    const tokenBreakdown = extractTokenBreakdownFromContextBudget(contextBudget);
+    hubUsageDb.recordUsage({
+      ...tokenBreakdown,
+      userId: writer?.userId ?? null,
+      ipAddress: writer?.ipAddress || 'unknown',
+      provider,
+      sessionId,
+      projectName: options.projectName || options.projectPath || options.cwd || null,
+      usedMcp: hasRequestedMcpBindings(options),
+      metadata: {
+        model: contextBudget.window?.model || null,
+        modelProfileId: contextBudget.window?.modelProfileId || options.modelProfileId || null,
+        contextWindowTokens: contextBudget.window?.tokens || null,
+      },
+    });
+  } catch (error) {
+    console.warn('[HubUsage] Failed to record token usage:', error?.message || error);
+  }
+}
+
 /**
  * Extracts context budget from Argus result messages.
  * @param {Object} resultMessage - SDK result message
@@ -1013,6 +1044,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       if (contextBudget && tokenBudgetData) {
         ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', contextBudget, tokenBudget: tokenBudgetData, sessionId: sid, provider: 'claude' }));
       }
+      reportHubUsageFromContextBudget({
+        writer: ws,
+        options,
+        sessionId: sid,
+        provider: 'claude',
+        contextBudget,
+      });
       closeMtlCodeInput(child);
     }
   };
@@ -1406,6 +1444,13 @@ async function queryClaudeSDKLegacy(command, options = {}, ws) {
         if (contextBudget && tokenBudgetData) {
           ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', contextBudget, tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
+        reportHubUsageFromContextBudget({
+          writer: ws,
+          options,
+          sessionId: capturedSessionId || sessionId || null,
+          provider: 'claude',
+          contextBudget,
+        });
       }
     }
 

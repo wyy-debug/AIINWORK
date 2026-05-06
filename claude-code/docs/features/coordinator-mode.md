@@ -1,17 +1,13 @@
 # Coordinator Mode
 
-Coordinator Mode is now defined as Codex-style collaborative agent control. Argus no longer documents the earlier experimental dispatch designs as the active model.
-
-## Current Tool Surface
-
-New sessions expose only the Codex-style collaborative tools when subagents are enabled:
+Coordinator Mode is defined as Codex MultiAgentV2 collaborative agent control. New sessions expose only these tools when subagents are enabled:
 
 - `spawn_agent`
 - `send_message`
+- `followup_task`
 - `wait_agent`
 - `list_agents`
 - `close_agent`
-- `resume_agent`
 
 The removed experimental aliases and plan-gate designs are not callable in new sessions. Old transcripts may still be rendered for compatibility, but they are not execution inputs.
 
@@ -27,11 +23,12 @@ OpenMythos is advisory only. It may suggest task decomposition and runtime diagn
 
 ## State Recovery
 
-History recovery is based on the thread graph:
+History recovery is based on the thread graph and mailbox sequence:
 
 ```text
-parent_thread_id -> child_thread_id
-edge_status: open | closed
+/root -> /root/review_runtime
+agentPath + parentAgentPath
+graphStatus: open | closed
 ```
 
-The UI should prefer graph state and runtime watcher updates over transcript text when displaying running, completed, failed, closed, and interrupted agents.
+The UI should prefer canonical path graph state and runtime watcher updates over transcript text when displaying running, completed, failed, closed, and interrupted agents. `threadId` and `parentThreadId` are historical/debug fields and are not target resolution inputs.

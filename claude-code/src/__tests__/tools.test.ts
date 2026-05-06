@@ -13,7 +13,7 @@ const CODEX_SUBAGENT_TOOL_NAMES = [
   'wait_agent',
   'close_agent',
   'send_message',
-  'resume_agent',
+  'followup_task',
 ]
 
 const LEGACY_SUBAGENT_TOOL_NAMES = [
@@ -26,6 +26,7 @@ const LEGACY_SUBAGENT_TOOL_NAMES = [
   'AgentCancel',
   'AgentSendInput',
   'AgentResume',
+  'resume_agent',
   'Task',
 ]
 

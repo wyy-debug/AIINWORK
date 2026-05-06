@@ -3,8 +3,8 @@ import { toolMatchesName, type Tool, type Tools } from './Tool.js'
 import { SpawnAgentTool } from '@mtl-code/builtin-tools/tools/AgentTool/AgentTool.js'
 import {
   CloseAgentTool,
+  FollowupTaskAgentTool,
   ListAgentsTool,
-  ResumeAgentTool,
   SendMessageAgentTool,
   WaitAgentTool,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
@@ -213,7 +213,7 @@ export function getAllBaseTools(): Tools {
         WaitAgentTool,
         CloseAgentTool,
         SendMessageAgentTool,
-        ResumeAgentTool,
+        FollowupTaskAgentTool,
       ]
 
   return [
@@ -314,7 +314,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
           WaitAgentTool,
           CloseAgentTool,
           SendMessageAgentTool,
-          ResumeAgentTool,
+          FollowupTaskAgentTool,
           getSendMessageTool(),
         )
       }
@@ -336,7 +336,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
         WaitAgentTool,
         CloseAgentTool,
         SendMessageAgentTool,
-        ResumeAgentTool,
+        FollowupTaskAgentTool,
         getSendMessageTool(),
       )
     }

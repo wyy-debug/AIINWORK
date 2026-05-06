@@ -37,8 +37,11 @@ import {
   ACTION_RUNS_INDEX_SQL,
   ACTION_RUN_EVENTS_TABLE_SQL,
   ACTION_RUN_EVENTS_INDEX_SQL,
+  HUB_USAGE_EVENTS_TABLE_SQL,
+  HUB_USAGE_EVENTS_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
+import { createHubUsageStore } from '../services/hub-usage-service.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // The compiled backend lives under dist-server/server/database, but the install root we log
@@ -214,6 +217,8 @@ const runMigrations = () => {
     db.exec(ACTION_RUNS_INDEX_SQL);
     db.exec(ACTION_RUN_EVENTS_TABLE_SQL);
     db.exec(ACTION_RUN_EVENTS_INDEX_SQL);
+    db.exec(HUB_USAGE_EVENTS_TABLE_SQL);
+    db.exec(HUB_USAGE_EVENTS_INDEX_SQL);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -946,6 +951,8 @@ const githubTokensDb = {
   }
 };
 
+const hubUsageDb = createHubUsageStore(db);
+
 export {
   db,
   initializeDatabase,
@@ -959,5 +966,6 @@ export {
   worktreeDispatchesDb,
   applyCustomSessionNames,
   appConfigDb,
+  hubUsageDb,
   githubTokensDb // Backward compatibility
 };

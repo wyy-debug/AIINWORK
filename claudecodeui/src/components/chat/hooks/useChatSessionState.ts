@@ -10,6 +10,7 @@ import {
   captureViewportAnchor,
   getRestoredScrollTop,
   shouldAutoFillHistory,
+  shouldDeferInitialScrollToBottom,
   shouldPreserveViewport,
   type ScrollAnchorBox,
   type ScrollRestoreState,
@@ -474,8 +475,12 @@ export function useChatSessionState({
 
   // Initial scroll to bottom
   useEffect(() => {
-    if (!pendingInitialScrollRef.current || !scrollContainerRef.current || isLoadingSessionMessages) return;
-    if (chatMessages.length === 0) { pendingInitialScrollRef.current = false; return; }
+    if (!scrollContainerRef.current) return;
+    if (shouldDeferInitialScrollToBottom({
+      hasPendingInitialScroll: pendingInitialScrollRef.current,
+      isSessionLoading: isLoadingSessionMessages,
+      messageCount: chatMessages.length,
+    })) return;
     pendingInitialScrollRef.current = false;
     if (!searchScrollActiveRef.current) {
       if (initialScrollTimerRef.current) clearTimeout(initialScrollTimerRef.current);

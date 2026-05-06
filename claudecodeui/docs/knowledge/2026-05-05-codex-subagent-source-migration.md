@@ -1,98 +1,47 @@
-# Codex 风格 Subagent 迁移
+# Codex MultiAgentV2 Subagent Migration
 
-日期：2026-05-05
+Date: 2026-05-05
 
-本轮把 Argus Subagent 收敛到 OpenAI Codex 当前协作智能体协议：`spawn_agent`、`list_agents`、`wait_agent`、`send_message`、`close_agent`、`resume_agent`，以及 parent-child thread graph、Mailbox 通知和状态恢复。
+Argus subagents are aligned to the current OpenAI Codex MultiAgentV2 observable protocol: `spawn_agent`, `list_agents`, `wait_agent`, `send_message`, `followup_task`, and `close_agent`.
 
-早期实验性的自动派发路线已经退出新会话执行链路。Release 包默认关闭 Subagents；debug/test 通道可以开启，用于验证协议、状态、UI 和历史恢复。
+The active contract is the MultiAgentV2 behavior plus the local control-plane implementation. The local TypeScript control layer maps Codex concepts onto canonical agent paths, a path-first Thread graph, and an independently drained Mailbox sequence.
 
-## 当前规则
+## Current Rules
 
-- Subagents 默认关闭；开启后只对新会话生效。
-- 工具名只暴露 Codex 风格名称，不暴露旧 callable alias。
-- `spawn_agent` 只接受 Codex 参数：`message`、`task_name`、`agent_type`、`fork_turns`、`model`、`reasoning_effort`。
-- `wait_agent` 只接收 `timeout_ms`，由 Mailbox sequence 驱动。
-- `send_message` 用于向指定 agent 发送具体补充信息，不能用来轮询“进度如何”。
-- 只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才可以调用 `spawn_agent`。
-- OpenMythos 只做任务拆分建议和诊断预览，不自动 spawn。
-- 主聊天不显示内部控制 XML、output file、task id、agent id、worker 自述或等待废话。
+- Subagent tools remain feature-gated.
+- Enabled sessions publish only the Codex tool names.
+- `spawn_agent` accepts `message`, `task_name`, `agent_type`, `fork_turns`, `model`, and `reasoning_effort`.
+- `task_name` is a relative lowercase name using letters, digits, and underscores. Public references use canonical paths such as `/root/review_runtime`, or bare relative names from the current agent path.
+- `send_message` is queue-only and has no model-visible result payload.
+- `followup_task` sends concrete follow-up work and starts or resumes a known non-root target when needed.
+- `list_agents` returns `agents: [{ agent_name, agent_status, last_task_message }]` and includes `/root`.
+- `wait_agent` uses the registry Mailbox sequence and locally returns `{ message, timed_out, sequence, updates }`.
+- Nicknames, internal task ids, and hidden agent ids are not public target handles.
 
 ## Codex Alignment Matrix
 
-| 能力 | Codex 源码参考 | Argus 目标 | 当前状态 |
+| Capability | Codex source area | Local target | Status |
 | --- | --- | --- | --- |
-| `spawn_agent` | `multi_agents_v2/spawn.rs` | 创建独立 child thread，继承父会话模型、权限、cwd 和运行时策略，可按需覆盖 role/model/effort | 已对齐基础 schema，继续补历史恢复验收 |
-| `list_agents` | `multi_agents_v2/list_agents.rs` | 从 SubagentManager / thread graph 读取 agent 列表，不从聊天文本推断 | 部分对齐 |
-| `wait_agent` | `multi_agents_v2/wait.rs` | 等待 Mailbox sequence 变化，返回 compact 状态，不输出等待废话 | 部分对齐 |
-| `send_message` | `multi_agents_v2/send_message.rs` | 向目标 agent 队列发送具体补充信息，不用于开放式轮询 | 部分对齐 |
-| `close_agent` | `agent/control.rs` | 关闭目标 agent 及 descendants，释放并发槽位 | 部分对齐 |
-| `resume_agent` | `agent/control.rs` | 恢复 closed/interrupted agent，继续原目标并返回结构化结果 | 部分对齐 |
-| Thread graph | `agent/registry.rs`、state migrations | 持久化 parent-child edge、nickname、role、last task | 部分对齐 |
-| Mailbox | `agent/mailbox.rs` | 由 typed event / sequence 通知父线程结果到达 | 部分对齐 |
-| UI 噪声过滤 | TUI snapshots / collab events | 只展示计划摘要、运行摘要、证据和阻塞原因 | 部分对齐 |
-| Release gate | Codex feature flags | Release 默认关闭，debug/test 可开启 | 已对齐 |
+| `spawn_agent` | `multi_agents_v2/spawn.rs` | Create a child task with canonical `/root/...` path, task message, optional role/model/effort controls, and fork policy validation | Aligned |
+| `list_agents` | `multi_agents_v2/list_agents.rs` | Read the Thread graph and return `{ agent_name, agent_status, last_task_message }`, including `/root` | Aligned |
+| `wait_agent` | `multi_agents_v2/wait.rs` | Drain Mailbox sequence updates; local output includes `sequence` and typed `updates` in addition to compact timeout status | Locally extended |
+| `send_message` | `multi_agents_v2/send_message.rs` | Queue information only; never trigger or resume an agent turn | Aligned |
+| `followup_task` | `multi_agents_v2/followup_task.rs` | Assign concrete follow-up work to a known non-root agent and trigger/resume as needed | Aligned |
+| `close_agent` | `agent/control.rs` | Close the target agent and descendants and report previous status | Aligned |
+| Thread graph | `agent/registry.rs` | Persist `agentPath` and `parentAgentPath`; list, close, and target resolution use canonical paths instead of legacy thread ids | Aligned |
+| Mailbox | `agent/mailbox.rs` | Use typed events and sequence counters for final notifications and agent messages | Aligned |
+| Control layer | `agent/control.rs` | Route list, target resolution, queue-only message delivery, follow-up trigger, and subtree close through `SubagentControl` | Aligned |
 
-## 后端边界
+## Backend Boundary
 
-工具发布入口在 `claude-code/src/tools.ts`：
+Tool publishing is owned by `claude-code/src/tools.ts`:
 
-- 关闭时不发布 subagent 工具。
-- 开启时发布：`spawn_agent`、`list_agents`、`wait_agent`、`close_agent`、`send_message`、`resume_agent`。
-- 旧会话 transcript 只做只读展示兼容，不再参与新工具列表。
+- Disabled sessions publish no subagent tools.
+- Enabled sessions publish `spawn_agent`, `list_agents`, `wait_agent`, `close_agent`, `send_message`, and `followup_task`.
+- Internal recovery helpers can remain private if they are not exported, documented, or visible as tools.
 
-Subagent 状态保存在 `claude-code/src/tasks/subagentRegistry.ts`，核心字段包括：
+Subagent state lives in `claude-code/src/tasks/subagentRegistry.ts`, with orchestration in `claude-code/src/tasks/subagentControl.ts`. The important public-facing fields are canonical `agentPath`, `parentAgentPath`, graph status, runtime status, last task message, and mailbox sequence.
 
-- `taskName`
-- `threadId`
-- `parentThreadId`
-- `depth`
-- `agentNickname`
-- `agentRole`
-- `graphStatus`
-- `source`
+## UI Boundary
 
-`closeSubagentSubtree()` 会关闭目标 agent 及其 descendants，并释放运行槽位。
-
-## OpenMythos 边界
-
-OpenMythos 是策略层，不是执行层：
-
-- 可以提示“建议拆分为 explorer / worker 等任务”。
-- 不自动调用 `spawn_agent`。
-- 不绕过 Codex 工具规则。
-
-复杂任务只会得到建议；是否真的派发，必须由主模型在用户明确授权后按 Codex 规则调用 `spawn_agent`。
-
-## 前端显示
-
-消息归一化由 `claudecodeui/src/components/chat/hooks/useChatMessages.ts` 负责：
-
-- `spawn_agent` 和旧历史工具名都归一为 subagent container。
-- 内部 task notification 即使以 user text 形式进入历史，也要过滤，不渲染成蓝色用户气泡。
-- Subagent 状态区显示运行中、已完成、已关闭、失败、被中断数量。
-
-运行诊断面板显示：
-
-- Subagents 是否启用。
-- 单会话最大并发。
-- 最大嵌套深度。
-- OpenMythos 当前仅作为建议层。
-
-## 设置页
-
-`Model / Hub > 运行时` 只保留一组 Subagent 配置：
-
-- 启用子智能体工具。
-- 单会话最大并发。
-- 最大嵌套深度。
-
-这不是旧 Agent 管理页，也不是 OpenMythos 自动派发开关。
-
-## 验证
-
-必须保持：
-
-- 文档不再把早期实验协议描述为现行模型。
-- Focused subagent bun suites 通过。
-- 前端消息恢复 smoke 通过。
-- 打包后开启/关闭 subagents 的新会话工具列表 smoke 通过。
+The UI should render `spawn_agent` and current control tools as subagent activity. It should not infer active protocol behavior from old transcript text, internal task ids, or hidden recovery helpers.

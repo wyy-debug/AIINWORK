@@ -9,7 +9,104 @@ import type {
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 import { extractTextContent } from '../utils/messages.js'
 
-export const SUBAGENT_STATE_SCHEMA_VERSION = 1
+export const SUBAGENT_STATE_SCHEMA_VERSION = 2
+export const ROOT_AGENT_NAME = '/root'
+export const ROOT_LAST_TASK_MESSAGE = 'Main thread'
+export const MAILBOX_DELIVERY_QUEUE_ONLY = 'queue_only'
+export const MAILBOX_DELIVERY_TRIGGER_TURN = 'trigger_turn'
+
+const SUBAGENT_TASK_NAME_PATTERN = /^[a-z0-9_]+$/
+const INVALID_AGENT_PATH_PREFIX = `${ROOT_AGENT_NAME}/__invalid_`
+
+export function validateSubagentTaskName(taskName: string): string {
+  const normalized = taskName.trim()
+  if (!SUBAGENT_TASK_NAME_PATTERN.test(normalized)) {
+    throw new Error('task_name must use only lowercase letters, digits, and underscores.')
+  }
+  return normalized
+}
+
+function normalizeAgentPath(path: string): string {
+  const normalized = path.trim().replace(/\/+/g, '/').replace(/\/$/, '')
+  if (!normalized || normalized === '/') return ROOT_AGENT_NAME
+  return normalized.startsWith('/') ? normalized : `${ROOT_AGENT_NAME}/${normalized}`
+}
+
+function isCanonicalAgentPath(path: string | undefined): path is string {
+  if (!path) return false
+  const normalized = normalizeAgentPath(path)
+  if (normalized === ROOT_AGENT_NAME) return true
+  if (!normalized.startsWith(`${ROOT_AGENT_NAME}/`)) return false
+  return normalized
+    .slice(`${ROOT_AGENT_NAME}/`.length)
+    .split('/')
+    .every(segment => SUBAGENT_TASK_NAME_PATTERN.test(segment))
+}
+
+function parentAgentPathFromPath(agentPath: string): string {
+  const normalized = normalizeAgentPath(agentPath)
+  if (normalized === ROOT_AGENT_NAME) return ROOT_AGENT_NAME
+  const index = normalized.lastIndexOf('/')
+  if (index <= ROOT_AGENT_NAME.length) return ROOT_AGENT_NAME
+  return normalized.slice(0, index)
+}
+
+function invalidAgentPath(taskId: string): string {
+  const fallback = taskId.toLowerCase().replace(/[^a-z0-9_]+/g, '_') || 'agent'
+  return `${INVALID_AGENT_PATH_PREFIX}${fallback}`
+}
+
+export function canonicalSubagentTaskName(
+  taskName: string,
+  parentPath = ROOT_AGENT_NAME,
+): string {
+  const normalizedTaskName = validateSubagentTaskName(taskName)
+  const normalizedParent = normalizeAgentPath(parentPath)
+  if (normalizedParent === ROOT_AGENT_NAME) {
+    return `${ROOT_AGENT_NAME}/${normalizedTaskName}`
+  }
+  return `${normalizedParent}/${normalizedTaskName}`
+}
+
+function normalizeRecordTaskName(taskName: string | undefined): string | undefined {
+  if (!taskName?.trim()) return undefined
+  const normalized = taskName.trim()
+  if (normalized.startsWith('/')) {
+    const path = normalizeAgentPath(normalized)
+    return isCanonicalAgentPath(path) ? path : undefined
+  }
+  try {
+    return canonicalSubagentTaskName(normalized)
+  } catch {
+    return undefined
+  }
+}
+
+export type SubagentMessageDeliveryMode =
+  | typeof MAILBOX_DELIVERY_QUEUE_ONLY
+  | typeof MAILBOX_DELIVERY_TRIGGER_TURN
+
+export type SubagentMailboxAgentStatus =
+  | 'pending_init'
+  | 'running'
+  | 'interrupted'
+  | 'shutdown'
+  | 'not_found'
+  | { completed: string | null }
+  | { errored: string }
+
+export type SubagentMailboxUpdate = {
+  seq: number
+  type: SubagentEventType
+  agent_name: string
+  agent_status?: SubagentMailboxAgentStatus
+  last_task_message?: string
+  message?: string
+  from_agent_name?: string
+  to_agent_name?: string
+  delivery_mode?: SubagentMessageDeliveryMode
+  timestamp_ms: number
+}
 
 export type SubagentRegistryStatus =
   | 'running'
@@ -49,6 +146,7 @@ export type SubagentEventType =
   | 'cancelled'
   | 'interrupted'
   | 'token_usage'
+  | 'message'
 
 export type SubagentEventV1 = {
   id: string
@@ -57,6 +155,9 @@ export type SubagentEventV1 = {
   type: SubagentEventType
   timestamp: number
   message?: string
+  fromAgentName?: string
+  toAgentName?: string
+  deliveryMode?: SubagentMessageDeliveryMode
   toolName?: string
   summary?: string
   runtime?: SubagentRuntimeSnapshot
@@ -79,6 +180,8 @@ export type SubagentProtocolResult = {
 export type SubagentRegistryRecord = {
   taskId: string
   agentId: string
+  agentPath: string
+  parentAgentPath: string
   taskName?: string
   threadId: string
   parentThreadId?: string
@@ -93,6 +196,7 @@ export type SubagentRegistryRecord = {
   userTurnId?: string
   objective: string
   prompt?: string
+  lastTaskMessage?: string
   role: SubagentRole
   agentType: string
   status: SubagentRegistryStatus
@@ -123,6 +227,11 @@ export type SubagentRecordV1 = SubagentRegistryRecord
 
 type PersistedSubagentStateV1 = {
   schemaVersion: 1
+  records: unknown[]
+}
+
+type PersistedSubagentStateV2 = {
+  schemaVersion: 2
   records: SubagentRecordV1[]
 }
 
@@ -191,7 +300,7 @@ function normalizeRole(agentType: string | undefined): SubagentRole {
   return 'general'
 }
 
-function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
+function coerceRecord(value: unknown, schemaVersion: 1 | 2): SubagentRegistryRecord | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
   const taskId = typeof record.taskId === 'string' ? record.taskId : undefined
@@ -199,8 +308,7 @@ function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
   const status = typeof record.status === 'string'
     ? (record.status as SubagentRegistryStatus)
     : 'interrupted'
-  const normalizedStatus =
-    status === 'running' ? 'interrupted' : status
+  let normalizedStatus = status === 'running' ? 'interrupted' : status
   const timestamp = now()
   const agentType = typeof record.agentType === 'string' ? record.agentType : 'general-purpose'
   const sessionId = typeof record.sessionId === 'string' ? record.sessionId : undefined
@@ -213,12 +321,32 @@ function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
     typeof record.threadId === 'string'
       ? record.threadId
       : sessionId ?? taskId
-  const graphStatus =
+  const rawAgentPath =
+    typeof record.agentPath === 'string'
+      ? normalizeRecordTaskName(record.agentPath)
+      : undefined
+  const taskName = normalizeRecordTaskName(
+    typeof record.taskName === 'string' ? record.taskName : undefined,
+  )
+  let agentPath = rawAgentPath ?? taskName
+  let parentAgentPath =
+    typeof record.parentAgentPath === 'string' &&
+    isCanonicalAgentPath(record.parentAgentPath)
+      ? normalizeAgentPath(record.parentAgentPath)
+      : undefined
+  let graphStatus: AgentThreadGraphStatus =
     record.graphStatus === 'open' || record.graphStatus === 'closed'
       ? record.graphStatus
       : status === 'running'
         ? 'open'
         : 'closed'
+  if (!agentPath) {
+    agentPath = invalidAgentPath(taskId)
+    parentAgentPath = ROOT_AGENT_NAME
+    normalizedStatus = 'interrupted'
+    graphStatus = 'closed'
+  }
+  parentAgentPath ??= parentAgentPathFromPath(agentPath)
   const source =
     record.source === 'review' ||
     record.source === 'compact' ||
@@ -230,7 +358,9 @@ function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
   return {
     taskId,
     agentId: typeof record.agentId === 'string' ? record.agentId : taskId,
-    taskName: typeof record.taskName === 'string' ? record.taskName : undefined,
+    agentPath,
+    parentAgentPath,
+    taskName,
     threadId,
     parentThreadId,
     depth: typeof record.depth === 'number' ? record.depth : parentThreadId ? 1 : 0,
@@ -244,6 +374,14 @@ function coerceRecord(value: unknown): SubagentRegistryRecord | undefined {
     userTurnId: typeof record.userTurnId === 'string' ? record.userTurnId : undefined,
     objective: typeof record.objective === 'string' ? record.objective : 'Subagent task',
     prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
+    lastTaskMessage:
+      typeof record.lastTaskMessage === 'string'
+        ? record.lastTaskMessage
+        : typeof record.prompt === 'string'
+          ? summarizeText(record.prompt)
+          : typeof record.objective === 'string'
+            ? record.objective
+            : undefined,
     role: normalizeRole(typeof record.role === 'string' ? record.role : agentType),
     agentType,
     status: normalizedStatus,
@@ -290,7 +428,7 @@ export class SubagentManager {
   private readonly filePath: string
   private loaded = false
   private mailboxSeq = 0
-  private consumedTerminalMailboxSeq = 0
+  private consumedMailboxSeq = 0
 
   constructor(filePath = stateFilePath()) {
     this.filePath = filePath
@@ -302,12 +440,15 @@ export class SubagentManager {
     if (!existsSync(this.filePath)) return
     try {
       const raw = readFileSync(this.filePath, 'utf-8')
-      const parsed = JSON.parse(raw) as Partial<PersistedSubagentStateV1>
-      if (parsed.schemaVersion !== SUBAGENT_STATE_SCHEMA_VERSION || !Array.isArray(parsed.records)) {
+      const parsed = JSON.parse(raw) as Partial<PersistedSubagentStateV1 | PersistedSubagentStateV2>
+      if (
+        (parsed.schemaVersion !== 1 && parsed.schemaVersion !== SUBAGENT_STATE_SCHEMA_VERSION) ||
+        !Array.isArray(parsed.records)
+      ) {
         return
       }
       for (const entry of parsed.records) {
-        const record = coerceRecord(entry)
+        const record = coerceRecord(entry, parsed.schemaVersion)
         if (record) {
           this.records.set(record.taskId, record)
           for (const event of record.events) {
@@ -327,11 +468,15 @@ export class SubagentManager {
   clearForTests(): void {
     this.records.clear()
     this.loaded = true
+    this.mailboxSeq = 0
+    this.consumedMailboxSeq = 0
   }
 
   register(params: {
     taskId: string
     agentId?: string
+    agentPath?: string
+    parentAgentPath?: string
     taskName?: string
     threadId?: string
     parentThreadId?: string
@@ -354,15 +499,33 @@ export class SubagentManager {
     const existing = this.records.get(params.taskId)
     const agentType = params.selectedAgent?.agentType ?? existing?.agentType ?? 'general-purpose'
     const threadId = params.threadId ?? params.sessionId ?? existing?.threadId ?? params.taskId
+    const agentPath =
+      normalizeRecordTaskName(params.agentPath) ??
+      normalizeRecordTaskName(params.taskName) ??
+      existing?.agentPath
+    if (!agentPath) {
+      throw new Error('Subagent registry records require a canonical agentPath.')
+    }
+    const parentAgentPath =
+      params.parentAgentPath && isCanonicalAgentPath(params.parentAgentPath)
+        ? normalizeAgentPath(params.parentAgentPath)
+        : existing?.parentAgentPath ?? parentAgentPathFromPath(agentPath)
+    const taskName = normalizeRecordTaskName(params.taskName) ?? agentPath
     const parentThreadId =
       params.parentThreadId ??
       params.parentSessionId ??
       existing?.parentThreadId
+    const lastTaskMessage =
+      summarizeText(params.prompt) ??
+      summarizeText(params.objective) ??
+      existing?.lastTaskMessage
     const record: SubagentRegistryRecord = {
       ...existing,
       taskId: params.taskId,
       agentId: params.agentId ?? params.taskId,
-      taskName: params.taskName ?? existing?.taskName,
+      agentPath,
+      parentAgentPath,
+      taskName,
       threadId,
       parentThreadId,
       depth: params.depth ?? existing?.depth ?? (parentThreadId ? 1 : 0),
@@ -376,6 +539,7 @@ export class SubagentManager {
       userTurnId: params.userTurnId ?? existing?.userTurnId,
       objective: params.objective.trim() || existing?.objective || 'Subagent task',
       prompt: params.prompt ?? existing?.prompt,
+      lastTaskMessage,
       role: params.role ?? normalizeRole(agentType),
       agentType,
       status: 'running',
@@ -438,7 +602,7 @@ export class SubagentManager {
       recentActions: runtime.recentActions,
       updatedAt: timestamp,
       ...(mappedStatus && mappedStatus !== 'running' && !existing.endedAt
-        ? { endedAt: timestamp, hasLiveHandle: false, graphStatus: 'closed' as const }
+        ? { endedAt: timestamp, hasLiveHandle: false }
         : {}),
     }
     record.events = this.appendEvent(record, {
@@ -479,6 +643,37 @@ export class SubagentManager {
     return record
   }
 
+  recordMessage({
+    target,
+    message,
+    fromAgentPath = ROOT_AGENT_NAME,
+    deliveryMode,
+  }: {
+    target: string
+    message: string
+    fromAgentPath?: string
+    deliveryMode?: SubagentMessageDeliveryMode
+  }): SubagentRegistryRecord | undefined {
+    this.ensureLoaded()
+    const existing = this.resolveAgentPath(target, fromAgentPath)
+    if (!existing) return undefined
+    const record: SubagentRegistryRecord = {
+      ...existing,
+      lastTaskMessage: summarizeText(message) ?? existing.lastTaskMessage,
+      updatedAt: now(),
+    }
+    record.events = this.appendEvent(record, {
+      type: 'message',
+      message: record.lastTaskMessage,
+      fromAgentName: normalizeAgentPath(fromAgentPath),
+      toAgentName: record.agentPath,
+      deliveryMode,
+    })
+    this.records.set(record.taskId, record)
+    this.persist()
+    return record
+  }
+
   complete(result: AgentToolResult): SubagentRegistryRecord | undefined {
     this.ensureLoaded()
     const taskId = result.agentId
@@ -501,7 +696,7 @@ export class SubagentManager {
       updatedAt: timestamp,
       endedAt: timestamp,
       hasLiveHandle: false,
-      graphStatus: 'closed',
+      graphStatus: existing.graphStatus,
     }
     record.events = this.appendEvent(record, {
       type: record.status === 'blocked' ? 'blocked' : 'completed',
@@ -528,23 +723,16 @@ export class SubagentManager {
 
   closeSubtree(rootId: string, reason = 'Subagent was closed.'): SubagentRegistryRecord[] {
     this.ensureLoaded()
-    const root = this.findByGraphId(rootId)
+    const root = this.resolveAgentPath(rootId)
     if (!root) return []
     const closed: SubagentRegistryRecord[] = []
-    const threadIdsToClose = [root.threadId]
-    const taskIdsToClose = new Set<string>([root.taskId])
-    for (let index = 0; index < threadIdsToClose.length; index += 1) {
-      const parentThreadId = threadIdsToClose[index]
-      for (const record of this.records.values()) {
-        if (
-          record.parentThreadId === parentThreadId &&
-          !taskIdsToClose.has(record.taskId)
-        ) {
-          taskIdsToClose.add(record.taskId)
-          threadIdsToClose.push(record.threadId)
-        }
-      }
-    }
+    const rootPath = root.agentPath
+    const taskIdsToClose = [...this.records.values()]
+      .filter(record =>
+        record.graphStatus === 'open' &&
+        (record.agentPath === rootPath || record.agentPath.startsWith(`${rootPath}/`)),
+      )
+      .map(record => record.taskId)
     for (const taskId of taskIdsToClose) {
       const record = this.terminal(taskId, 'cancelled', reason, 'cancelled')
       if (record) closed.push(record)
@@ -575,7 +763,7 @@ export class SubagentManager {
     this.ensureLoaded()
     return [...this.records.values()]
       .filter(record => !runningOnly || record.status === 'running')
-      .filter(record => includeArchived || record.status === 'running')
+      .filter(record => includeArchived || record.graphStatus === 'open')
       .filter(record => !parentToolUseId || record.parentToolUseId === parentToolUseId)
       .filter(record => !sessionId || record.sessionId === sessionId || record.parentSessionId === sessionId)
       .sort((a, b) => b.startedAt - a.startedAt)
@@ -593,15 +781,14 @@ export class SubagentManager {
     return this.list({ runningOnly: true, sessionId }).length
   }
 
-  hasPendingTerminalMailboxItems(): boolean {
+  drainMailboxItems(): { sequence: number; updates: SubagentMailboxUpdate[] } {
     this.ensureLoaded()
-    return this.latestTerminalMailboxSeq() > this.consumedTerminalMailboxSeq
-  }
-
-  consumeTerminalMailboxItems(): number {
-    this.ensureLoaded()
-    this.consumedTerminalMailboxSeq = this.latestTerminalMailboxSeq()
-    return this.consumedTerminalMailboxSeq
+    const updates = this.mailboxUpdatesAfter(this.consumedMailboxSeq)
+    this.consumedMailboxSeq = this.latestMailboxSeq()
+    return {
+      sequence: this.consumedMailboxSeq,
+      updates,
+    }
   }
 
   private terminal(
@@ -662,7 +849,7 @@ export class SubagentManager {
     }
     try {
       mkdirSync(dirname(this.filePath), { recursive: true })
-      const payload: PersistedSubagentStateV1 = {
+      const payload: PersistedSubagentStateV2 = {
         schemaVersion: SUBAGENT_STATE_SCHEMA_VERSION,
         records: [...this.records.values()],
       }
@@ -675,35 +862,101 @@ export class SubagentManager {
   }
 
   private findByGraphId(id: string): SubagentRegistryRecord | undefined {
-    return (
-      this.records.get(id) ??
-      [...this.records.values()].find(
-        record =>
-          record.agentId === id ||
-          record.taskName === id ||
-          record.threadId === id ||
-          record.sessionId === id,
-      )
+    return this.resolveAgentPath(id)
+  }
+
+  resolveAgentPath(id: string, currentAgentPath = ROOT_AGENT_NAME): SubagentRegistryRecord | undefined {
+    const target = id.trim()
+    if (!target || target === ROOT_AGENT_NAME) return undefined
+    const basePath = isCanonicalAgentPath(currentAgentPath)
+      ? normalizeAgentPath(currentAgentPath)
+      : ROOT_AGENT_NAME
+    let resolvedPath: string
+    try {
+      resolvedPath = target.startsWith('/')
+        ? normalizeAgentPath(target)
+        : canonicalSubagentTaskName(target, basePath)
+    } catch {
+      return undefined
+    }
+    return [...this.records.values()].find(
+      record => record.graphStatus === 'open' && record.agentPath === resolvedPath,
     )
   }
 
-  private latestTerminalMailboxSeq(): number {
+  getByInternalId(id: string): SubagentRegistryRecord | undefined {
+    this.ensureLoaded()
+    return this.records.get(id)
+  }
+
+  private latestMailboxSeq(): number {
     let latest = 0
     for (const record of this.records.values()) {
       for (const event of record.events) {
-        if (
-          (event.type === 'completed' ||
-            event.type === 'blocked' ||
-            event.type === 'failed' ||
-            event.type === 'cancelled' ||
-            event.type === 'interrupted') &&
-          typeof event.seq === 'number'
-        ) {
+        if (this.isMailboxEvent(event) && typeof event.seq === 'number') {
           latest = Math.max(latest, event.seq)
         }
       }
     }
     return latest
+  }
+
+  private mailboxUpdatesAfter(seq: number): SubagentMailboxUpdate[] {
+    const updates: SubagentMailboxUpdate[] = []
+    for (const record of this.records.values()) {
+      for (const event of record.events) {
+        if (!this.isMailboxEvent(event) || typeof event.seq !== 'number' || event.seq <= seq) {
+          continue
+        }
+        updates.push({
+          seq: event.seq,
+          type: event.type,
+          agent_name: record.agentPath,
+          agent_status: this.mailboxStatus(record),
+          last_task_message: record.lastTaskMessage,
+          message: event.message ?? event.summary,
+          from_agent_name: event.fromAgentName,
+          to_agent_name: event.toAgentName,
+          delivery_mode: event.deliveryMode,
+          timestamp_ms: event.timestamp,
+        })
+      }
+    }
+    return updates.sort((left, right) => left.seq - right.seq)
+  }
+
+  private isMailboxEvent(event: SubagentEventV1): boolean {
+    return (
+      event.type === 'message' ||
+      event.type === 'completed' ||
+      event.type === 'blocked' ||
+      event.type === 'failed' ||
+      event.type === 'cancelled' ||
+      event.type === 'interrupted'
+    )
+  }
+
+  private mailboxStatus(
+    record: SubagentRegistryRecord,
+  ): SubagentMailboxUpdate['agent_status'] {
+    switch (record.status) {
+      case 'completed':
+        return { completed: record.resultSummary ?? record.result ?? null }
+      case 'failed':
+      case 'blocked':
+      case 'need_parent_input':
+        return {
+          errored:
+            record.stopReason ??
+            record.resultSummary ??
+            record.blockers ??
+            'Agent stopped with an error.',
+        }
+      case 'cancelled':
+        return 'shutdown'
+      default:
+        return record.status
+    }
   }
 }
 
@@ -741,6 +994,8 @@ export function parseSubagentProtocolResult(
 export function registerSubagentRecord(params: {
   taskId: string
   agentId?: string
+  agentPath?: string
+  parentAgentPath?: string
   taskName?: string
   threadId?: string
   parentThreadId?: string
@@ -773,6 +1028,22 @@ export function recordSubagentUsage(
   usage: NonNullable<SubagentEventV1['usage']>,
 ): SubagentRegistryRecord | undefined {
   return subagentManager.recordUsage(taskId, usage)
+}
+
+export function recordSubagentMessage(
+  target: string,
+  message: string,
+  options: {
+    fromAgentPath?: string
+    deliveryMode?: SubagentMessageDeliveryMode
+  } = {},
+): SubagentRegistryRecord | undefined {
+  return subagentManager.recordMessage({
+    target,
+    message,
+    fromAgentPath: options.fromAgentPath,
+    deliveryMode: options.deliveryMode,
+  })
 }
 
 export function completeSubagentRecord(
@@ -815,12 +1086,25 @@ export function getSubagentRecord(
   return subagentManager.get(taskId)
 }
 
-export function hasPendingSubagentMailboxItems(): boolean {
-  return subagentManager.hasPendingTerminalMailboxItems()
+export function getSubagentRecordByInternalId(
+  taskId: string,
+): SubagentRegistryRecord | undefined {
+  return subagentManager.getByInternalId(taskId)
 }
 
-export function consumeSubagentMailboxItems(): number {
-  return subagentManager.consumeTerminalMailboxItems()
+export function resolveSubagentRecordByAgentPath(
+  target: string,
+  currentAgentPath = ROOT_AGENT_NAME,
+): SubagentRegistryRecord | undefined {
+  subagentManager.ensureLoaded()
+  return subagentManager.resolveAgentPath(target, currentAgentPath)
+}
+
+export function drainSubagentMailboxItems(): {
+  sequence: number
+  updates: SubagentMailboxUpdate[]
+} {
+  return subagentManager.drainMailboxItems()
 }
 
 export function listSubagentRecords({

@@ -47,6 +47,7 @@ import commandsRoutes from './routes/commands.js';
 import cursorRoutes from './routes/cursor.js';
 import geminiRoutes from './routes/gemini.js';
 import gitRoutes from './routes/git.js';
+import hubUsageRoutes from './routes/hub-usage.js';
 import ideBridgeRoutes from './routes/ide-bridge.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
 import messagesRoutes from './routes/messages.js';
@@ -74,6 +75,7 @@ import {
     toFileMutationHttpError,
 } from './services/file-mutation-service.js';
 import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig, readResolvedSubagentRuntimeConfig } from './services/mtl-code-model-service.js';
+import { getRequestIpAddress } from './services/hub-usage-service.js';
 import {
     evaluateRuntimePermission,
     resolveRuntimeShell,
@@ -375,6 +377,9 @@ app.use('/api/commands', authenticateToken, commandsRoutes);
 
 // Settings API Routes (protected)
 app.use('/api/settings', authenticateToken, settingsRoutes);
+
+// Hub usage routes (protected)
+app.use('/api/hub/usage', authenticateToken, hubUsageRoutes);
 
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
@@ -2069,10 +2074,11 @@ wss.on('connection', (ws, request) => {
  * The writer simply serialises and sends.
  */
 class WebSocketWriter {
-    constructor(ws, userId = null) {
+    constructor(ws, userId = null, ipAddress = 'unknown') {
         this.ws = ws;
         this.sessionId = null;
         this.userId = userId;
+        this.ipAddress = ipAddress;
         this.isWebSocketWriter = true;  // Marker for transport detection
     }
 
@@ -2573,7 +2579,11 @@ function handleChatConnection(ws, request) {
     connectedClients.add(ws);
 
     // Wrap WebSocket with writer for consistent interface with SSEStreamWriter
-    const writer = new WebSocketWriter(ws, request?.user?.id ?? request?.user?.userId ?? null);
+    const writer = new WebSocketWriter(
+        ws,
+        request?.user?.id ?? request?.user?.userId ?? null,
+        getRequestIpAddress(request),
+    );
 
     ws.on('message', async (message) => {
         try {

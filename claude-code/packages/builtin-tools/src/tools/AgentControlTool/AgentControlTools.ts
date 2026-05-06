@@ -4,23 +4,20 @@ import { isTerminalTaskStatus } from 'src/Task.js'
 import { buildTool, type ToolDef } from 'src/Tool.js'
 import { stopTask } from 'src/tasks/stopTask.js'
 import {
-  isLocalAgentTask,
-  queuePendingMessage,
-} from 'src/tasks/LocalAgentTask/LocalAgentTask.js'
-import {
-  closeSubagentSubtree,
-  consumeSubagentMailboxItems,
-  getSubagentRecord,
-  hasPendingSubagentMailboxItems,
-  listSubagentRecords,
+  drainSubagentMailboxItems,
+  ROOT_AGENT_NAME,
+  ROOT_LAST_TASK_MESSAGE,
   type SubagentRegistryRecord,
 } from 'src/tasks/subagentRegistry.js'
+import {
+  MAILBOX_DELIVERY_QUEUE_ONLY,
+  MAILBOX_DELIVERY_TRIGGER_TURN,
+  subagentControl,
+} from 'src/tasks/subagentControl.js'
 import type { TaskState } from 'src/tasks/types.js'
-import { asAgentId } from 'src/types/ids.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
 import { jsonStringify } from 'src/utils/slowOperations.js'
 import { sleep } from 'src/utils/sleep.js'
-import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000
 const MAX_WAIT_TIMEOUT_MS = 600_000
@@ -30,7 +27,7 @@ export const AGENT_LIST_TOOL_NAME = 'list_agents'
 export const AGENT_WAIT_TOOL_NAME = 'wait_agent'
 export const AGENT_CLOSE_TOOL_NAME = 'close_agent'
 export const AGENT_SEND_MESSAGE_TOOL_NAME = 'send_message'
-export const AGENT_RESUME_TOOL_NAME = 'resume_agent'
+export const AGENT_FOLLOWUP_TASK_TOOL_NAME = 'followup_task'
 
 const agentStatusSchema = z.union([
   z.literal('pending_init'),
@@ -60,36 +57,34 @@ type WaitInputSchema = ReturnType<typeof waitInputSchema>
 
 const closeInputSchema = lazySchema(() =>
   z.strictObject({
-    target: z.string().describe('Agent task_name, nickname, path, or handle to close.'),
+    target: z.string().describe('Canonical or relative agent path to close.'),
   }),
 )
 type CloseInputSchema = ReturnType<typeof closeInputSchema>
 
 const sendInputSchema = lazySchema(() =>
   z.strictObject({
-    target: z.string().describe('Agent task_name, nickname, path, or handle to message.'),
-    message: z.string().optional().describe('Plain-text input to send.'),
-    interrupt: z.boolean().optional().describe('Interrupt current work before sending this input.'),
+    target: z.string().describe('Canonical or relative agent path to message.'),
+    message: z.string().describe('Plain-text input to queue.'),
   }),
 )
 type SendInputSchema = ReturnType<typeof sendInputSchema>
 
-const resumeInputSchema = lazySchema(() =>
+const followupInputSchema = lazySchema(() =>
   z.strictObject({
-    id: z.string().describe('Agent task_name, nickname, path, or handle to resume.'),
+    target: z.string().describe('Canonical or relative agent path to continue.'),
+    message: z.string().describe('Concrete follow-up task input.'),
   }),
 )
-type ResumeInputSchema = ReturnType<typeof resumeInputSchema>
+type FollowupInputSchema = ReturnType<typeof followupInputSchema>
 
 const listOutputSchema = lazySchema(() =>
   z.object({
     agents: z.array(
       z.object({
-        task_name: z.string(),
-        nickname: z.string().nullable().optional(),
-        status: agentStatusSchema,
-        role: z.string().optional(),
-        depth: z.number().optional(),
+        agent_name: z.string(),
+        agent_status: agentStatusSchema,
+        last_task_message: z.string(),
       }),
     ),
   }),
@@ -101,6 +96,24 @@ const waitOutputSchema = lazySchema(() =>
   z.object({
     message: z.string(),
     timed_out: z.boolean(),
+    sequence: z.number(),
+    updates: z.array(
+      z.object({
+        seq: z.number(),
+        type: z.string(),
+        agent_name: z.string(),
+        agent_status: agentStatusSchema.optional(),
+        last_task_message: z.string().optional(),
+        message: z.string().optional(),
+        from_agent_name: z.string().optional(),
+        to_agent_name: z.string().optional(),
+        delivery_mode: z.union([
+          z.literal('queue_only'),
+          z.literal('trigger_turn'),
+        ]).optional(),
+        timestamp_ms: z.number(),
+      }),
+    ),
   }),
 )
 type WaitOutputSchema = ReturnType<typeof waitOutputSchema>
@@ -114,21 +127,7 @@ const closeOutputSchema = lazySchema(() =>
 type CloseOutputSchema = ReturnType<typeof closeOutputSchema>
 type CloseOutput = z.infer<CloseOutputSchema>
 
-const sendInputOutputSchema = lazySchema(() =>
-  z.object({
-    message: z.string(),
-  }),
-)
-type SendInputOutputSchema = ReturnType<typeof sendInputOutputSchema>
-type SendInputOutput = z.infer<SendInputOutputSchema>
-
-const resumeOutputSchema = lazySchema(() =>
-  z.object({
-    status: agentStatusSchema,
-  }),
-)
-type ResumeOutputSchema = ReturnType<typeof resumeOutputSchema>
-type ResumeOutput = z.infer<ResumeOutputSchema>
+type EmptyOutput = string
 
 function clampTimeout(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_WAIT_TIMEOUT_MS
@@ -161,32 +160,42 @@ function agentStatusFromRecord(
   }
 }
 
+function fallbackAgentName(record: SubagentRegistryRecord): string {
+  const fallback = record.taskId.toLowerCase().replace(/[^a-z0-9_]+/g, '_')
+  return `${ROOT_AGENT_NAME}/${fallback || 'agent'}`
+}
+
 function toAgentSummary(record: SubagentRegistryRecord) {
   return {
-    task_name: record.taskName ?? record.objective,
-    nickname: record.agentNickname ?? null,
-    status: agentStatusFromRecord(record),
-    role: record.agentRole ?? record.agentType,
-    depth: record.depth,
+    agent_name: record.agentPath ?? fallbackAgentName(record),
+    agent_status: agentStatusFromRecord(record),
+    last_task_message:
+      record.lastTaskMessage ??
+      summarizeLastTaskMessage(record.prompt) ??
+      summarizeLastTaskMessage(record.objective) ??
+      'Subagent task',
   }
 }
 
-function matchesPathPrefix(record: SubagentRegistryRecord, pathPrefix: string | undefined) {
-  if (!pathPrefix?.trim()) return true
-  const prefix = pathPrefix.trim()
-  return (
-    record.threadId.startsWith(prefix) ||
-    record.parentThreadId?.startsWith(prefix) ||
-    record.sessionId?.startsWith(prefix) ||
-    record.parentSessionId?.startsWith(prefix)
-  )
+function rootAgentSummary() {
+  return {
+    agent_name: ROOT_AGENT_NAME,
+    agent_status: 'running' as const,
+    last_task_message: ROOT_LAST_TASK_MESSAGE,
+  }
+}
+
+function summarizeLastTaskMessage(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\s+/g, ' ')
+  if (!normalized) return undefined
+  return normalized.length > 320 ? `${normalized.slice(0, 319)}...` : normalized
 }
 
 function toolResult(data: unknown, toolUseID: string) {
   return {
     tool_use_id: toolUseID,
     type: 'tool_result' as const,
-    content: jsonStringify(data),
+    content: typeof data === 'string' ? data : jsonStringify(data),
   }
 }
 
@@ -205,6 +214,27 @@ function liveTaskStatus(task: TaskState | undefined): AgentStatus | undefined {
   if (!isTerminalTaskStatus(task.status)) return 'running'
   if (task.status === 'killed') return 'shutdown'
   return undefined
+}
+
+function isRootTarget(target: string): boolean {
+  const normalized = target.trim()
+  return normalized === ROOT_AGENT_NAME || normalized === 'root'
+}
+
+function messageInputValidation(
+  input: { target?: string; message?: string },
+  { rejectRoot = false, toolName = 'send_message' }: { rejectRoot?: boolean; toolName?: string } = {},
+) {
+  if (!input.target?.trim()) {
+    return { result: false as const, message: 'Missing required parameter: target', errorCode: 1 }
+  }
+  if (!input.message?.trim()) {
+    return { result: false as const, message: `${toolName} requires message.`, errorCode: 2 }
+  }
+  if (rejectRoot && isRootTarget(input.target)) {
+    return { result: false as const, message: "Tasks can't be assigned to the root agent", errorCode: 3 }
+  }
+  return { result: true as const }
 }
 
 export const ListAgentsTool = buildTool({
@@ -231,11 +261,12 @@ export const ListAgentsTool = buildTool({
     return true
   },
   async call(input): Promise<{ data: ListOutput }> {
-    const agents = listSubagentRecords({ includeArchived: false })
-      .filter(record => record.graphStatus === 'open' || record.status === 'running')
-      .filter(record => matchesPathPrefix(record, input.path_prefix))
+    const agents = subagentControl
+      .listAgents(input.path_prefix)
       .map(toAgentSummary)
-    return { data: { agents } }
+    const prefix = input.path_prefix?.trim()
+    const includeRoot = !prefix || prefix === ROOT_AGENT_NAME || ROOT_AGENT_NAME.startsWith(prefix)
+    return { data: { agents: includeRoot ? [rootAgentSummary(), ...agents] : agents } }
   },
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
@@ -267,16 +298,31 @@ export const WaitAgentTool = buildTool({
   async call(input): Promise<{ data: WaitOutput }> {
     const timeoutMs = clampTimeout(input.timeout_ms)
     const deadline = Date.now() + timeoutMs
+    let drain = drainSubagentMailboxItems()
 
     while (Date.now() <= deadline) {
-      if (hasPendingSubagentMailboxItems()) {
-        consumeSubagentMailboxItems()
-        return { data: { message: 'Wait completed.', timed_out: false } }
+      if (drain.updates.length > 0) {
+        return {
+          data: {
+            message: 'Wait completed.',
+            timed_out: false,
+            sequence: drain.sequence,
+            updates: drain.updates,
+          },
+        }
       }
       await sleep(WAIT_INTERVAL_MS)
+      drain = drainSubagentMailboxItems()
     }
 
-    return { data: { message: 'Wait timed out.', timed_out: true } }
+    return {
+      data: {
+        message: 'Wait timed out.',
+        timed_out: true,
+        sequence: drain.sequence,
+        updates: [],
+      },
+    }
   },
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
@@ -308,18 +354,21 @@ export const CloseAgentTool = buildTool({
     }
     return { result: true }
   },
-  async call(input, { getAppState, setAppState }): Promise<{ data: CloseOutput }> {
+  async call(input, context): Promise<{ data: CloseOutput }> {
     const target = input.target.trim()
-    const record = getSubagentRecord(target)
+    const record = subagentControl.resolveAgentReferenceForContext(target, context)
     const taskKey = record?.agentId ?? target
     const previousStatus =
-      liveTaskStatus(getAppState().tasks?.[taskKey] as TaskState | undefined) ??
+      liveTaskStatus(context.getAppState().tasks?.[taskKey] as TaskState | undefined) ??
       agentStatusFromRecord(record)
-    const task = getAppState().tasks?.[taskKey] as TaskState | undefined
+    const task = context.getAppState().tasks?.[taskKey] as TaskState | undefined
     if (task && !isTerminalTaskStatus(task.status)) {
-      await stopTask(taskKey, { getAppState, setAppState })
+      await stopTask(taskKey, {
+        getAppState: context.getAppState,
+        setAppState: context.setAppState,
+      })
     }
-    closeSubagentSubtree(target, 'Agent was closed.')
+    subagentControl.closeAgentTree(record.agentPath)
     return { data: { previous_status: previousStatus } }
   },
   renderToolUseMessage: renderControlToolUseMessage,
@@ -334,98 +383,71 @@ export const SendMessageAgentTool = buildTool({
   get inputSchema(): SendInputSchema {
     return sendInputSchema()
   },
-  get outputSchema(): SendInputOutputSchema {
-    return sendInputOutputSchema()
-  },
   async description() {
-    return 'Send concrete input to a collaborative agent.'
+    return 'Queue concrete input for a collaborative agent.'
   },
   async prompt() {
-    return 'Send new information or instructions to an agent. Use wait_agent for results.'
+    return 'Queue new information for an agent without starting a new turn. Use followup_task to trigger work.'
   },
   isReadOnly() {
     return true
   },
   async validateInput(input) {
-    if (!input.target?.trim()) {
-      return { result: false, message: 'Missing required parameter: target', errorCode: 1 }
-    }
-    if (!input.message?.trim()) {
-      return { result: false, message: 'send_message requires message.', errorCode: 2 }
-    }
-    return { result: true }
+    return messageInputValidation(input)
   },
-  async call(input, context, canUseTool, assistantMessage): Promise<{ data: SendInputOutput }> {
-    const target = input.target.trim()
-    const record = getSubagentRecord(target)
-    const agentId = asAgentId(record?.agentId ?? target)
-    const message = input.message?.trim() || ''
-    const task = context.getAppState().tasks?.[record?.agentId ?? target] as TaskState | undefined
-    if (isLocalAgentTask(task) && task.status === 'running') {
-      queuePendingMessage(
-        agentId,
-        message,
-        context.setAppStateForTasks ?? context.setAppState,
-      )
-    } else if (record?.status !== 'running') {
-      await resumeAgentBackground({
-        agentId,
-        prompt: message,
-        toolUseContext: context,
-        canUseTool,
-        invokingRequestId: assistantMessage?.requestId as string | undefined,
-      })
-    }
-    return { data: { message: 'Message queued.' } }
+  async call(input, context, canUseTool, assistantMessage): Promise<{ data: EmptyOutput }> {
+    await subagentControl.sendInterAgentCommunication({
+      target: input.target.trim(),
+      message: input.message.trim(),
+      deliveryMode: MAILBOX_DELIVERY_QUEUE_ONLY,
+      context,
+      canUseTool,
+      assistantMessage,
+    })
+    return { data: '' }
   },
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
-} satisfies ToolDef<SendInputSchema, SendInputOutput>)
+} satisfies ToolDef<SendInputSchema, EmptyOutput>)
 
-export const ResumeAgentTool = buildTool({
-  name: AGENT_RESUME_TOOL_NAME,
+export const FollowupTaskAgentTool = buildTool({
+  name: AGENT_FOLLOWUP_TASK_TOOL_NAME,
   aliases: [],
-  searchHint: 'resume collaborative agent',
+  searchHint: 'continue collaborative agent work',
   maxResultSizeChars: 100_000,
-  get inputSchema(): ResumeInputSchema {
-    return resumeInputSchema()
-  },
-  get outputSchema(): ResumeOutputSchema {
-    return resumeOutputSchema()
+  get inputSchema(): FollowupInputSchema {
+    return followupInputSchema()
   },
   async description() {
-    return 'Resume a previously closed agent.'
+    return 'Assign concrete follow-up work to a collaborative agent.'
   },
   async prompt() {
-    return 'Resume a previously closed spawned agent.'
+    return 'Send follow-up work to a known agent. Running agents receive a queued message; stopped agents are resumed for the task.'
   },
   isConcurrencySafe() {
     return true
   },
   async validateInput(input) {
-    if (!input.id?.trim()) {
-      return { result: false, message: 'Missing required parameter: id', errorCode: 1 }
-    }
-    return { result: true }
-  },
-  async call(input, context, canUseTool, assistantMessage): Promise<{ data: ResumeOutput }> {
-    const target = input.id.trim()
-    const record = getSubagentRecord(target)
-    if (!record) {
-      return { data: { status: 'not_found' } }
-    }
-    if (record.status === 'running') {
-      return { data: { status: 'running' } }
-    }
-    await resumeAgentBackground({
-      agentId: asAgentId(record.agentId),
-      prompt: 'Resume the assigned objective and return a final status.',
-      toolUseContext: context,
-      canUseTool,
-      invokingRequestId: assistantMessage?.requestId as string | undefined,
+    return messageInputValidation(input, {
+      rejectRoot: true,
+      toolName: AGENT_FOLLOWUP_TASK_TOOL_NAME,
     })
-    return { data: { status: 'running' } }
+  },
+  async call(input, context, canUseTool, assistantMessage): Promise<{ data: EmptyOutput }> {
+    const target = input.target.trim()
+    if (isRootTarget(target)) {
+      throw new Error("Tasks can't be assigned to the root agent")
+    }
+    await subagentControl.sendInterAgentCommunication({
+      target,
+      message: input.message.trim(),
+      deliveryMode: MAILBOX_DELIVERY_TRIGGER_TURN,
+      context,
+      canUseTool,
+      assistantMessage,
+    })
+    return { data: '' }
   },
   renderToolUseMessage: renderControlToolUseMessage,
   mapToolResultToToolResultBlockParam: toolResult,
-} satisfies ToolDef<ResumeInputSchema, ResumeOutput>)
+} satisfies ToolDef<FollowupInputSchema, EmptyOutput>)

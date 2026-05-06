@@ -8,6 +8,7 @@ import {
 import { AGENT_SPAWN_TOOL_NAME as AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
 import {
   AGENT_CLOSE_TOOL_NAME,
+  AGENT_FOLLOWUP_TASK_TOOL_NAME,
   AGENT_SEND_MESSAGE_TOOL_NAME as SEND_MESSAGE_TOOL_NAME,
   AGENT_WAIT_TOOL_NAME,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
@@ -128,10 +129,13 @@ export function getCoordinatorSystemPrompt(): string {
 ## Tools
 
 - ${AGENT_TOOL_NAME}({ task_name, message, agent_type?, fork_turns?, model?, reasoning_effort? }) starts an agent and returns { task_name, nickname }.
-- ${AGENT_WAIT_TOOL_NAME}({ timeout_ms? }) waits for mailbox updates and returns whether new agent output is available.
-- ${SEND_MESSAGE_TOOL_NAME}({ target, message, interrupt? }) sends concrete follow-up instructions.
+- ${AGENT_WAIT_TOOL_NAME}({ timeout_ms? }) drains mailbox updates and returns { message, timed_out, sequence, updates }.
+- ${SEND_MESSAGE_TOOL_NAME}({ target, message }) queues information for an agent without starting a new turn.
+- ${AGENT_FOLLOWUP_TASK_TOOL_NAME}({ target, message }) sends concrete follow-up work and starts or resumes the target when needed.
 - ${AGENT_CLOSE_TOOL_NAME}({ target }) closes an agent and its descendants.
-- list_agents lists known agents; resume_agent reopens a closed agent.
+- list_agents lists known agents.
+
+Targets are canonical paths such as /root/review_runtime, or bare relative names from the current agent path. Do not use nicknames, internal task ids, or hidden agent ids as targets.
 
 When using ${AGENT_TOOL_NAME}:
 - Keep tasks self-contained and bounded.
@@ -153,7 +157,8 @@ ${workerCapabilities}
 ## Result Handling
 
 - Use ${AGENT_WAIT_TOOL_NAME} to retrieve completed results.
-- Use ${SEND_MESSAGE_TOOL_NAME} only for concrete new instructions, never progress polling.
+- Use ${SEND_MESSAGE_TOOL_NAME} only for queueing information, never progress polling.
+- Use ${AGENT_FOLLOWUP_TASK_TOOL_NAME} for concrete new instructions that should trigger agent work.
 - Use ${AGENT_CLOSE_TOOL_NAME} only for agents that are still open or no longer needed.
 - If an agent fails, summarize the concrete blocker and recovery path for the user; do not expose internal control failures or worker self-talk.`
 }

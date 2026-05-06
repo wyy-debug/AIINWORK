@@ -30,10 +30,10 @@ Subagent execution follows the Codex collaborative tool protocol:
 
 - `spawn_agent`
 - `send_message`
+- `followup_task`
 - `wait_agent`
 - `list_agents`
 - `close_agent`
-- `resume_agent`
 
 The old WorkerRuntime path has been removed. Historical transcripts may still render old records as read-only compatibility cards, but new sessions should only expose Codex-style tool names.
 

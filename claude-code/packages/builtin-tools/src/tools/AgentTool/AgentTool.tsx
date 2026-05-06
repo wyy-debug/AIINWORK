@@ -29,7 +29,11 @@ import {
 } from 'src/tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from 'src/tasks/LocalMainSessionTask.js'
 import {
+  canonicalSubagentTaskName,
   countRunningSubagents,
+  getSubagentRecordByInternalId,
+  ROOT_AGENT_NAME,
+  validateSubagentTaskName,
 } from 'src/tasks/subagentRegistry.js'
 import { assembleToolPool } from 'src/tools.js'
 import { asAgentId } from 'src/types/ids.js'
@@ -102,6 +106,14 @@ function getSpawnParentSessionId(): string {
   )
 }
 
+function getSpawnParentAgentPath(): string {
+  const context = getAgentContext()
+  if (isSubagentContext(context)) {
+    return getSubagentRecordByInternalId(context.agentId)?.agentPath ?? ROOT_AGENT_NAME
+  }
+  return ROOT_AGENT_NAME
+}
+
 type ParentSubagentBudgetRegistration = Record<string, never>
 
 function releaseParentSubagentBudget(
@@ -155,11 +167,35 @@ function validateSubagentSpawnLifecycle({
 
 // Multi-agent type constants are defined inline inside gated blocks to enable dead code elimination
 
+function hasNonEmptyOverride(value: string | undefined): boolean {
+  return Boolean(value?.trim())
+}
+
+function hasFullHistoryForkOverride(input: {
+  fork_turns?: string
+  agent_type?: string
+  model?: string
+  reasoning_effort?: string
+}): boolean {
+  const forkTurns = input.fork_turns?.trim().toLowerCase()
+  return (
+    forkTurns === 'all' &&
+    (hasNonEmptyOverride(input.agent_type) ||
+      hasNonEmptyOverride(input.model) ||
+      hasNonEmptyOverride(input.reasoning_effort))
+  )
+}
+
 // Base input schema without multi-agent parameters
 const baseInputSchema = lazySchema(() =>
   z.strictObject({
-    message: z.string().describe('Codex-style task prompt for the agent'),
-    task_name: z.string().describe('Stable task name for the spawned agent'),
+    message: z.string().describe('Codex-style task instructions for the agent'),
+    task_name: z
+      .string()
+      .refine(value => /^[a-z0-9_]+$/.test(value), {
+        message: 'task_name must use lowercase letters, digits, and underscores.',
+      })
+      .describe('Stable lowercase task name for the spawned agent'),
     agent_type: z
       .string()
       .optional()
@@ -176,6 +212,8 @@ const baseInputSchema = lazySchema(() =>
       .string()
       .optional()
       .describe('Optional model override for the spawned agent.'),
+  }).refine(input => !hasFullHistoryForkOverride(input), {
+    message: 'fork_turns="all" cannot be combined with agent_type, model, or reasoning_effort.',
   }),
 )
 
@@ -219,8 +257,8 @@ function selectForkContextMessages(
 // Output schema - multi-agent spawned schema added dynamically at runtime when enabled
 export const outputSchema = lazySchema(() => {
   return z.strictObject({
-    task_name: z.string().describe('Task name for list_agents, wait_agent, send_message, close_agent, or resume_agent.'),
-    nickname: z.string().nullable().optional().describe('Short display nickname when available.'),
+    task_name: z.string().describe('Canonical task name for list_agents, send_message, followup_task, wait_agent, or close_agent.'),
+    nickname: z.string().nullable().describe('Short display nickname when available.'),
   })
 })
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -295,6 +333,7 @@ export const AgentTool = buildTool({
       task_name,
       agent_type,
       fork_turns,
+      reasoning_effort,
       model: modelParam,
     }: AgentToolInput,
     toolUseContext,
@@ -311,8 +350,21 @@ export const AgentTool = buildTool({
     if (!taskName) {
       throw new Error('spawn_agent requires task_name.')
     }
-    const description = summarizeAgentPrompt(taskName)
+    const relativeTaskName = validateSubagentTaskName(taskName)
     const forkTurns = parseForkTurns(fork_turns)
+    if (hasFullHistoryForkOverride({
+      fork_turns,
+      agent_type,
+      model: modelParam,
+      reasoning_effort,
+    })) {
+      throw new Error('fork_turns="all" cannot be combined with agent_type, model, or reasoning_effort.')
+    }
+    const canonicalTaskName = canonicalSubagentTaskName(
+      relativeTaskName,
+      getSpawnParentAgentPath(),
+    )
+    const description = summarizeAgentPrompt(relativeTaskName)
     const shouldForkContext = forkTurns !== 'none'
     const requestedAgentType = agent_type
     const startTime = Date.now()
@@ -694,7 +746,7 @@ export const AgentTool = buildTool({
           // They are killed explicitly via chat:killAgents.
           toolUseId: toolUseContext.toolUseId,
           sessionId: getParentSessionId(),
-          taskName,
+          taskName: canonicalTaskName,
         })
       } catch (error) {
         releaseParentSubagentBudget(parentBudgetRegistration)
@@ -758,7 +810,7 @@ export const AgentTool = buildTool({
         data: {
           isAsync: true as const,
           status: 'async_launched' as const,
-          task_name: taskName,
+          task_name: canonicalTaskName,
           nickname: selectedAgent.agentType ?? null,
           description: description,
           prompt: prompt,

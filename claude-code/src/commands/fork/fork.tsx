@@ -41,10 +41,10 @@ export async function call(
   try {
     const slug = directive
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
       .slice(0, 48)
-    const taskName = `fork-${slug || 'task'}`
+    const taskName = `fork_${slug || 'task'}`
 
     // Reuse Codex-style spawn_agent with explicit fork_turns.
     const input = {

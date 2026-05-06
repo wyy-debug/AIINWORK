@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -29,6 +29,8 @@ describe('SubagentManager', () => {
     manager.register({
       taskId: 'agent-1',
       agentId: 'agent-1',
+      agentPath: '/root/fetch_crash_page',
+      parentAgentPath: '/root',
       sessionId: 'session-a',
       objective: 'Fetch crash page',
       prompt: 'Fetch the page and report evidence.',
@@ -36,8 +38,10 @@ describe('SubagentManager', () => {
     })
 
     const restored = new SubagentManager(filePath)
-    const record = restored.get('agent-1')
+    const record = restored.get('/root/fetch_crash_page')
 
+    expect(record?.agentPath).toBe('/root/fetch_crash_page')
+    expect(record?.parentAgentPath).toBe('/root')
     expect(record?.status).toBe('interrupted')
     expect(record?.runtimeStatus).toBe('BLOCKED')
     expect(record?.hasLiveHandle).toBe(false)
@@ -50,6 +54,8 @@ describe('SubagentManager', () => {
     manager.register({
       taskId: 'agent-2',
       agentId: 'agent-2',
+      agentPath: '/root/review_auth_migration',
+      parentAgentPath: '/root',
       objective: 'Review auth migration',
     })
 
@@ -92,6 +98,8 @@ describe('SubagentManager', () => {
     const manager = new SubagentManager(statePath())
     manager.register({
       taskId: 'agent-3',
+      agentPath: '/root/read_skill',
+      parentAgentPath: '/root',
       sessionId: 'session-a',
       objective: 'Read SKILL.md',
     })
@@ -105,6 +113,8 @@ describe('SubagentManager', () => {
     manager.register({
       taskId: 'agent-4',
       agentId: 'agent-4',
+      agentPath: '/root/fetch_crash_page',
+      parentAgentPath: '/root',
       objective: 'Fetch crash page',
     })
 
@@ -138,7 +148,7 @@ describe('SubagentManager', () => {
       toolUses: 2,
     })
 
-    const events = manager.get('agent-4')?.events.map(event => event.type)
+    const events = manager.get('/root/fetch_crash_page')?.events.map(event => event.type)
     expect(events).toContain('tool_started')
     expect(events).toContain('tool_completed')
     expect(events).toContain('token_usage')
@@ -149,6 +159,8 @@ describe('SubagentManager', () => {
     manager.register({
       taskId: 'agent-budget',
       agentId: 'agent-budget',
+      agentPath: '/root/explore_with_budget',
+      parentAgentPath: '/root',
       sessionId: 'session-a',
       objective: 'Explore with a hard budget',
     })
@@ -170,6 +182,58 @@ describe('SubagentManager', () => {
     expect(record?.resultSummary).toBe('Reached the subagent hard budget of 15 turns.')
     expect(record?.events.at(-1)?.type).toBe('blocked')
     expect(manager.countRunning('session-a')).toBe(0)
+  })
+
+  test('strictly migrates v1 records into canonical active graph records', () => {
+    const filePath = statePath()
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        records: [
+          {
+            taskId: 'legacy-good',
+            agentId: 'legacy-good',
+            taskName: '/root/legacy_reader',
+            threadId: 'legacy-thread',
+            parentThreadId: 'root-thread',
+            objective: 'Legacy reader',
+            status: 'completed',
+            graphStatus: 'open',
+            source: 'thread_spawn',
+            agentType: 'general-purpose',
+            startedAt: 1,
+            updatedAt: 1,
+            stepBudget: 15,
+            events: [],
+          },
+          {
+            taskId: 'legacy-bad',
+            agentId: 'legacy-bad',
+            threadId: 'bad-thread',
+            objective: 'Missing path',
+            status: 'running',
+            graphStatus: 'open',
+            source: 'thread_spawn',
+            agentType: 'general-purpose',
+            startedAt: 1,
+            updatedAt: 1,
+            stepBudget: 15,
+            events: [],
+          },
+        ],
+      }),
+      'utf-8',
+    )
+
+    const manager = new SubagentManager(filePath)
+    const migrated = manager.get('/root/legacy_reader')
+    const activePaths = manager.list({ includeArchived: false }).map(record => record.agentPath)
+
+    expect(migrated?.agentPath).toBe('/root/legacy_reader')
+    expect(migrated?.parentAgentPath).toBe('/root')
+    expect(manager.get('legacy-good')).toBeUndefined()
+    expect(activePaths).toEqual(['/root/legacy_reader'])
   })
 })
 
