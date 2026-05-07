@@ -386,6 +386,9 @@ export function useChatRealtimeHandlers({
       }
 
       case 'status': {
+        if (msg.text === 'obsidian_auto_capture_result' || msg.event === 'obsidian_auto_capture_result') {
+          break;
+        }
         if (msg.text === 'token_budget' && (msg.contextBudget || msg.tokenBudget)) {
           setTokenBudget({
             ...(msg.tokenBudget && typeof msg.tokenBudget === 'object' ? msg.tokenBudget as Record<string, unknown> : {}),

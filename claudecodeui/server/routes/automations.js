@@ -5,6 +5,8 @@ import express from 'express';
 
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { db, worktreeDispatchesDb } from '../database/db.js';
+import { createArtifact } from '../services/artifact-service.js';
+
 import { createManagedWorktreeDispatch } from './worktrees.js';
 
 const router = express.Router();
@@ -152,47 +154,22 @@ const createTriageItem = ({ sourceId, title, body }) => {
   return id;
 };
 
-const createArtifactLink = ({ artifactId, sourceType, sourceId, sessionId, projectName }) => {
-  db.prepare(`
-    INSERT INTO artifact_links (id, artifact_id, source_type, source_id, session_id, project_name)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    createId('artifact_link'),
-    artifactId,
-    sourceType,
-    sourceId || null,
-    sessionId || null,
-    projectName || null,
-  );
-};
-
-const createAutomationArtifact = ({ automation, run, metadata = {} }) => {
-  const artifactId = createId('artifact');
-  db.prepare(`
-    INSERT INTO artifacts (id, kind, title, project_name, session_id, content, metadata_json)
-    VALUES (?, 'automation-run', ?, ?, ?, ?, ?)
-  `).run(
-    artifactId,
-    `${automation.name} ${run.status}`.slice(0, 240),
-    automation.projectName || null,
-    run.sessionId || metadata.sessionId || null,
-    run.output || run.error || '',
-    JSON.stringify({
+const createAutomationArtifact = async ({ automation, run, metadata = {} }) => {
+  const result = await createArtifact({
+    kind: 'automation-run',
+    title: `${automation.name} ${run.status}`.slice(0, 240),
+    projectName: automation.projectName || '',
+    sessionId: run.sessionId || metadata.sessionId || '',
+    content: run.output || run.error || '',
+    metadata: {
       source: 'automation',
       automationId: automation.id,
       runId: run.id,
       targetMode: automation.targetMode,
       ...metadata,
-    }),
-  );
-  createArtifactLink({
-    artifactId,
-    sourceType: 'automation',
-    sourceId: run.id,
-    sessionId: run.sessionId || metadata.sessionId || '',
-    projectName: automation.projectName || '',
+    },
   });
-  return artifactId;
+  return result.artifact.id;
 };
 
 const createAutomationWriter = (runId) => {
@@ -380,7 +357,7 @@ const executeRun = async ({ runId, automation, trigger }) => {
     title: `${automation.name} ${status}`,
     body: output,
   });
-  createAutomationArtifact({ automation, run, metadata });
+  await createAutomationArtifact({ automation, run, metadata });
 };
 
 const drainQueue = () => {

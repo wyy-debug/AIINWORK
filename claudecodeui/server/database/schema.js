@@ -172,6 +172,19 @@ export const ARTIFACT_LINKS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS artifact_lin
 
 export const ARTIFACT_LINKS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_artifact_links_source ON artifact_links(source_type, source_id, created_at);`;
 
+export const OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS obsidian_auto_capture_keys (
+  idempotency_key TEXT PRIMARY KEY,
+  source_id TEXT UNIQUE,
+  content_hash TEXT UNIQUE,
+  artifact_id TEXT,
+  status TEXT NOT NULL DEFAULT 'in_progress',
+  error_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const OBSIDIAN_AUTO_CAPTURE_KEYS_SOURCE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_obsidian_auto_capture_keys_source ON obsidian_auto_capture_keys(source_id);`;
+
 export const REVIEW_COMMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS review_comments (
   id TEXT PRIMARY KEY,
   project_name TEXT NOT NULL,
@@ -326,6 +339,10 @@ ${ARTIFACTS_INDEX_SQL}
 ${ARTIFACT_LINKS_TABLE_SQL}
 
 ${ARTIFACT_LINKS_INDEX_SQL}
+
+${OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL}
+
+${OBSIDIAN_AUTO_CAPTURE_KEYS_SOURCE_INDEX_SQL}
 
 ${REVIEW_COMMENTS_TABLE_SQL}
 

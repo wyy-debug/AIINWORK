@@ -3,7 +3,9 @@ import { ShieldCheck } from 'lucide-react';
 
 import { Button } from '../../../../shared/view/ui';
 import { apiFetch } from '../../../../utils/api';
+
 import OpenMythosRuntimeContent from './agents-settings/sections/content/OpenMythosRuntimeContent';
+import ObsidianBridgeSettingsContent from './runtime-settings/ObsidianBridgeSettingsContent';
 
 type RuntimePermissions = {
   terminal: string;
@@ -107,6 +109,8 @@ export default function RuntimeSettingsTab() {
       )}
 
       <OpenMythosRuntimeContent />
+
+      <ObsidianBridgeSettingsContent />
 
       <div className="border-t border-border/70 pt-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

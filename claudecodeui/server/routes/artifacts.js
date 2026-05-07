@@ -1,120 +1,29 @@
-import crypto from 'crypto';
-import fs from 'fs/promises';
-import path from 'path';
-
 import express from 'express';
 
-import { db } from '../database/db.js';
+import {
+  createArtifact,
+  createArtifactLink,
+  deleteArtifact,
+  exportArtifactToObsidian,
+  exportArtifactToObsidianModes,
+  getArtifact,
+  listArtifacts,
+} from '../services/artifact-service.js';
 
 const router = express.Router();
-const ARTIFACTS_DIR = path.resolve(process.env.APP_DATA_DIR || process.cwd(), 'artifacts');
-const MAX_INLINE_CONTENT = 2_000_000;
 
-const createId = () => `artifact_${crypto.randomUUID()}`;
-
-const safeJson = (value) => {
-  try {
-    return JSON.stringify(value || {});
-  } catch {
-    return '{}';
-  }
-};
-
-const parseJson = (value) => {
-  try {
-    return value ? JSON.parse(value) : {};
-  } catch {
-    return {};
-  }
-};
-
-const resolveManagedArtifactPath = (filePath) => {
-  if (typeof filePath !== 'string' || !filePath.trim()) {
-    return '';
-  }
-
-  const resolvedPath = path.resolve(filePath);
-  const relativePath = path.relative(ARTIFACTS_DIR, resolvedPath);
-  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    return '';
-  }
-  return resolvedPath;
-};
-
-const mapArtifact = (row, includeContent = false) => ({
-  id: row.id,
-  kind: row.kind,
-  title: row.title,
-  projectName: row.project_name || '',
-  sessionId: row.session_id || '',
-  content: includeContent ? row.content || '' : undefined,
-  filePath: resolveManagedArtifactPath(row.file_path) || '',
-  metadata: parseJson(row.metadata_json),
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
-
-const createArtifactLink = ({ artifactId, sourceType, sourceId = '', sessionId = '', projectName = '' }) => {
-  if (!artifactId || !sourceType) {
-    return;
-  }
-  db.prepare(`
-    INSERT INTO artifact_links (id, artifact_id, source_type, source_id, session_id, project_name)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(createId(), artifactId, sourceType, sourceId || null, sessionId || null, projectName || null);
-};
-
-const sourceFilterSql = (source) => {
-  if (!source) return { clause: '', params: [] };
-  return {
-    clause: ` AND (
-      json_extract(COALESCE(metadata_json, '{}'), '$.source') = ?
-      OR kind = ?
-      OR kind LIKE ?
-    )`,
-    params: [source, source, `${source}-%`],
-  };
-};
-
-const persistLargeContent = async (artifactId, content) => {
-  if (!content || content.length <= MAX_INLINE_CONTENT) {
-    return { content, filePath: null };
-  }
-
-  await fs.mkdir(ARTIFACTS_DIR, { recursive: true });
-  const filePath = path.join(ARTIFACTS_DIR, `${artifactId}.txt`);
-  await fs.writeFile(filePath, content, 'utf8');
-  return { content: '', filePath };
-};
-
-const hydrateArtifactContent = async (artifact) => {
-  if (!artifact.content && artifact.filePath) {
-    try {
-      artifact.content = await fs.readFile(artifact.filePath, 'utf8');
-    } catch {
-      artifact.content = '';
-    }
-  }
-  return artifact;
-};
+const readMetadata = (value) => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+);
 
 router.get('/', async (req, res) => {
   try {
-    const projectName = String(req.query.projectName || '');
-    const sessionId = String(req.query.sessionId || '');
-    const source = String(req.query.source || '');
-    const sourceSql = sourceFilterSql(source);
-    const rows = projectName || sessionId || source
-      ? db.prepare(`
-          SELECT * FROM artifacts
-          WHERE (? = '' OR project_name = ?)
-            AND (? = '' OR session_id = ?)
-            ${sourceSql.clause}
-          ORDER BY created_at DESC
-          LIMIT 100
-        `).all(projectName, projectName, sessionId, sessionId, ...sourceSql.params)
-      : db.prepare('SELECT * FROM artifacts ORDER BY created_at DESC LIMIT 100').all();
-    res.json({ success: true, artifacts: rows.map((row) => mapArtifact(row)) });
+    const artifacts = await listArtifacts({
+      projectName: String(req.query.projectName || ''),
+      sessionId: String(req.query.sessionId || ''),
+      source: String(req.query.source || ''),
+    });
+    res.json({ success: true, artifacts });
   } catch (error) {
     console.error('Artifacts list error:', error);
     res.status(500).json({ error: error.message || 'Failed to list artifacts' });
@@ -123,40 +32,23 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : 'note';
     const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
     if (!title) {
       return res.status(400).json({ error: 'Artifact title is required' });
     }
 
-    const id = createId();
-    const rawContent = typeof req.body?.content === 'string' ? req.body.content : '';
-    const stored = await persistLargeContent(id, rawContent);
-    db.prepare(`
-      INSERT INTO artifacts (id, kind, title, project_name, session_id, content, file_path, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      kind,
+    const result = await createArtifact({
+      kind: typeof req.body?.kind === 'string' ? req.body.kind.trim() : 'note',
       title,
-      req.body?.projectName || null,
-      req.body?.sessionId || null,
-      stored.content || null,
-      stored.filePath || null,
-      safeJson(req.body?.metadata),
-    );
-    const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
-    const sourceType = typeof metadata.source === 'string' && metadata.source ? metadata.source : kind;
-    createArtifactLink({
-      artifactId: id,
-      sourceType,
-      sourceId: typeof metadata.runId === 'string' ? metadata.runId : typeof metadata.sourceId === 'string' ? metadata.sourceId : '',
-      sessionId: req.body?.sessionId || '',
       projectName: req.body?.projectName || '',
+      sessionId: req.body?.sessionId || '',
+      content: typeof req.body?.content === 'string' ? req.body.content : '',
+      metadata: readMetadata(req.body?.metadata),
     });
     res.json({
       success: true,
-      artifact: mapArtifact(db.prepare('SELECT * FROM artifacts WHERE id = ?').get(id), true),
+      artifact: result.artifact,
+      obsidianBridge: result.obsidianBridge,
     });
   } catch (error) {
     console.error('Artifact create error:', error);
@@ -166,23 +58,22 @@ router.post('/', async (req, res) => {
 
 router.post('/:id/attach-to-session', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM artifacts WHERE id = ?').get(req.params.id);
-    if (!row) {
+    const artifact = await getArtifact(req.params.id, { includeContent: true });
+    if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
     }
     const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
-    const projectName = typeof req.body?.projectName === 'string' ? req.body.projectName.trim() : row.project_name || '';
+    const projectName = typeof req.body?.projectName === 'string' ? req.body.projectName.trim() : artifact.projectName || '';
     if (!sessionId) {
       return res.status(400).json({ error: 'sessionId is required' });
     }
     createArtifactLink({
-      artifactId: row.id,
+      artifactId: artifact.id,
       sourceType: 'chat',
       sourceId: sessionId,
       sessionId,
       projectName,
     });
-    const artifact = await hydrateArtifactContent(mapArtifact(row, true));
     const summary = [
       `Artifact: ${artifact.title}`,
       `Kind: ${artifact.kind}`,
@@ -195,13 +86,43 @@ router.post('/:id/attach-to-session', async (req, res) => {
   }
 });
 
-router.get('/:id', async (req, res) => {
+router.post('/:id/send-to-obsidian', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM artifacts WHERE id = ?').get(req.params.id);
-    if (!row) {
+    const artifact = await getArtifact(req.params.id, { includeContent: true });
+    if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
     }
-    const artifact = await hydrateArtifactContent(mapArtifact(row, true));
+    const requestedMode = typeof req.body?.mode === 'string' ? req.body.mode : 'auto';
+    const obsidianBridge = requestedMode === 'auto'
+      ? await exportArtifactToObsidianModes(artifact, {
+        automatic: false,
+      })
+      : await exportArtifactToObsidian(artifact, {
+        mode: requestedMode,
+        automatic: false,
+      });
+    const updated = await getArtifact(req.params.id, { includeContent: true });
+    return res.json({
+      success: true,
+      artifact: updated,
+      obsidianBridge,
+    });
+  } catch (error) {
+    console.error('Artifact Obsidian export error:', error);
+    return res.status(error?.statusCode || 500).json({
+      success: false,
+      error: error.message || 'Failed to send artifact to Obsidian',
+      code: error?.code || 'OBSIDIAN_ARTIFACT_EXPORT_FAILED',
+    });
+  }
+});
+
+router.get('/:id', async (req, res) => {
+  try {
+    const artifact = await getArtifact(req.params.id, { includeContent: true });
+    if (!artifact) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
     res.json({ success: true, artifact });
   } catch (error) {
     console.error('Artifact get error:', error);
@@ -211,14 +132,9 @@ router.get('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM artifacts WHERE id = ?').get(req.params.id);
-    if (!row) {
+    const deleted = await deleteArtifact(req.params.id);
+    if (!deleted) {
       return res.status(404).json({ error: 'Artifact not found' });
-    }
-    db.prepare('DELETE FROM artifacts WHERE id = ?').run(req.params.id);
-    const managedPath = resolveManagedArtifactPath(row.file_path);
-    if (managedPath) {
-      await fs.unlink(managedPath).catch(() => undefined);
     }
     res.json({ success: true });
   } catch (error) {

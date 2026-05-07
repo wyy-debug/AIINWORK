@@ -24,6 +24,13 @@ import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustom
 import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
+import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
+import {
+    createObsidianAutoCaptureOrchestrator,
+    createObsidianAutoCaptureStatusMessage,
+} from './services/obsidian-auto-capture-orchestrator.js';
+import { runObsidianAutoCaptureBackfill } from './services/obsidian-auto-capture-backfill-service.js';
+import { readObsidianBridgeConfig } from './services/obsidian-bridge-service.js';
 import {
     getProjects,
     getSessions,
@@ -51,6 +58,8 @@ import hubUsageRoutes from './routes/hub-usage.js';
 import ideBridgeRoutes from './routes/ide-bridge.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
 import messagesRoutes from './routes/messages.js';
+import obsidianBridgeRoutes from './routes/obsidian-bridge.js';
+import obsidianBridgeIngressRoutes from './routes/obsidian-bridge-ingress.js';
 import pluginsRoutes from './routes/plugins.js';
 import projectActionsRoutes from './routes/project-actions.js';
 import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
@@ -353,6 +362,9 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Local Obsidian plugin ingress uses the bridge pairing token, not Argus JWT/API keys.
+app.use('/api/obsidian-bridge-ingress', obsidianBridgeIngressRoutes);
+
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
 
@@ -371,6 +383,7 @@ app.use('/api/automations', authenticateToken, automationsRoutes);
 app.use('/api/triage', authenticateToken, triageRoutes);
 app.use('/api/artifacts', authenticateToken, artifactsRoutes);
 app.use('/api/ide-bridge', authenticateToken, ideBridgeRoutes);
+app.use('/api/obsidian-bridge', authenticateToken, obsidianBridgeRoutes);
 
 // Cursor API Routes (protected)
 app.use('/api/cursor', authenticateToken, cursorRoutes);
@@ -2138,12 +2151,25 @@ class WebSocketWriter {
         this.userId = userId;
         this.ipAddress = ipAddress;
         this.isWebSocketWriter = true;  // Marker for transport detection
+        this.pendingAutoCaptureContext = null;
+        this.autoCapture = createObsidianAutoCaptureOrchestrator({
+            broadcast: (event) => this.send(createObsidianAutoCaptureStatusMessage(event)),
+        });
     }
 
     send(data) {
         if (this.ws.readyState === 1) { // WebSocket.OPEN
             this.ws.send(JSON.stringify(data));
         }
+        if (data?.kind === 'session_created' && data.newSessionId && this.pendingAutoCaptureContext) {
+            this.setAutoCaptureContext({
+                ...this.pendingAutoCaptureContext,
+                sessionId: data.newSessionId,
+            });
+        }
+        void this.autoCapture.observeMessage(data).catch((error) => {
+            console.warn('[Obsidian Bridge] Server-side auto-capture failed:', error?.message || error);
+        });
     }
 
     updateWebSocket(newRawWs) {
@@ -2156,6 +2182,19 @@ class WebSocketWriter {
 
     getSessionId() {
         return this.sessionId;
+    }
+
+    setAutoCaptureContext(context = {}) {
+        const provider = context.provider || 'claude';
+        const sessionId = context.sessionId || this.sessionId || null;
+        this.pendingAutoCaptureContext = {
+            ...context,
+            provider,
+            sessionId,
+        };
+        if (sessionId) {
+            this.autoCapture.setContext(this.pendingAutoCaptureContext);
+        }
     }
 }
 
@@ -2172,6 +2211,17 @@ function getConcreteCommandSessionId(data) {
         return null;
     }
     return String(sessionId);
+}
+
+function setWriterAutoCaptureContext(writer, data, provider) {
+    writer.setAutoCaptureContext({
+        provider,
+        sessionId: getConcreteCommandSessionId(data) || data?.sessionId || data?.options?.sessionId || null,
+        projectName: data?.options?.projectName || data?.projectName || '',
+        projectPath: data?.options?.projectPath || data?.options?.cwd || '',
+        userPrompt: typeof data?.command === 'string' ? data.command : '',
+        timestamp: new Date().toISOString(),
+    });
 }
 
 const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
@@ -2648,9 +2698,10 @@ function handleChatConnection(ws, request) {
             const data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
-                const commandData = applyUploadedFilesToChatCommand(
+                setWriterAutoCaptureContext(writer, data, 'claude');
+                const commandData = await applyObsidianContextToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(data)),
-                );
+                ));
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
@@ -2713,7 +2764,10 @@ function handleChatConnection(ws, request) {
                     }
                 }
             } else if (data.type === 'cursor-command') {
-                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
+                setWriterAutoCaptureContext(writer, data, 'cursor');
+                const commandData = await applyObsidianContextToChatCommand(
+                    applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
+                );
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
@@ -2721,7 +2775,10 @@ function handleChatConnection(ws, request) {
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await spawnCursor(commandData.command, commandData.options, writer);
             } else if (data.type === 'codex-command') {
-                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
+                setWriterAutoCaptureContext(writer, data, 'codex');
+                const commandData = await applyObsidianContextToChatCommand(
+                    applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
+                );
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
@@ -2729,7 +2786,10 @@ function handleChatConnection(ws, request) {
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await queryCodex(commandData.command, commandData.options, writer);
             } else if (data.type === 'gemini-command') {
-                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
+                setWriterAutoCaptureContext(writer, data, 'gemini');
+                const commandData = await applyObsidianContextToChatCommand(
+                    applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
+                );
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
@@ -3714,6 +3774,25 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
+function scheduleObsidianAutoCaptureBackfill() {
+    const timer = setTimeout(() => {
+        try {
+            const config = readObsidianBridgeConfig();
+            if (!config.enabled || !config.autoExportKnowledgeArtifacts) {
+                return;
+            }
+            runObsidianAutoCaptureBackfill({ getProjects }).catch((error) => {
+                console.error('[Obsidian] Auto-capture backfill failed:', error?.message || error);
+            });
+        } catch (error) {
+            console.error('[Obsidian] Failed to schedule auto-capture backfill:', error?.message || error);
+        }
+    }, 3000);
+    if (typeof timer.unref === 'function') {
+        timer.unref();
+    }
+}
+
 // Initialize database and start server
 async function startServer() {
     try {
@@ -3758,6 +3837,8 @@ async function startServer() {
             startEnabledPluginServers().catch(err => {
                 console.error('[Plugins] Error during startup:', err.message);
             });
+
+            scheduleObsidianAutoCaptureBackfill();
         });
 
         // Clean up plugin processes on shutdown

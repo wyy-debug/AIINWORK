@@ -9,6 +9,7 @@ import express from 'express';
 
 import { db } from '../database/db.js';
 import { extractProjectDirectory } from '../projects.js';
+import { createArtifact } from '../services/artifact-service.js';
 import {
   evaluateRuntimePermission,
   resolveRuntimeShell,
@@ -178,22 +179,19 @@ const persistRunEvent = (runId, eventType, payload = {}) => {
   return event;
 };
 
-const persistActionArtifact = (run) => {
+const persistActionArtifact = async (run) => {
   if (!run?.id || run.artifactStored) {
     return;
   }
   run.artifactStored = true;
   const title = `${ACTION_TYPES.includes(run.actionType) ? run.actionType : 'action'} ${run.status}: ${run.command}`;
-  db.prepare(`
-    INSERT INTO artifacts (id, kind, title, project_name, session_id, content, metadata_json)
-    VALUES (?, 'action-log', ?, ?, ?, ?, ?)
-  `).run(
-    createId('artifact'),
-    title.slice(0, 240),
-    run.projectName || null,
-    run.sessionId || null,
-    trimLog(run.output || ''),
-    JSON.stringify({
+  await createArtifact({
+    kind: 'action-log',
+    title: title.slice(0, 240),
+    projectName: run.projectName || '',
+    sessionId: run.sessionId || '',
+    content: trimLog(run.output || ''),
+    metadata: {
       source: 'actions',
       runId: run.id,
       actionType: run.actionType,
@@ -201,8 +199,8 @@ const persistActionArtifact = (run) => {
       status: run.status,
       exitCode: run.exitCode ?? null,
       projectPath: run.projectPath,
-    }),
-  );
+    },
+  });
 };
 
 router.get('/config', async (req, res) => {
@@ -308,7 +306,7 @@ router.post('/run', async (req, res) => {
 	      run.finishedAt = new Date().toISOString();
 	      persistRun(run);
         persistRunEvent(run.id, 'status', { status: run.status, error: error.message, finishedAt: run.finishedAt });
-	      persistActionArtifact(run);
+	      void persistActionArtifact(run);
 	      runningActions.delete(run.id);
 	    });
 	    child.once('close', (code, signal) => {
@@ -318,7 +316,7 @@ router.post('/run', async (req, res) => {
 	      run.finishedAt = new Date().toISOString();
 	      persistRun(run);
         persistRunEvent(run.id, 'status', { status: run.status, exitCode: code, signal: signal || null, finishedAt: run.finishedAt });
-	      persistActionArtifact(run);
+	      void persistActionArtifact(run);
 	      runningActions.delete(run.id);
 	    });
 

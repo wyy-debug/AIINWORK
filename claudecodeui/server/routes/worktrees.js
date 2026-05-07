@@ -1,9 +1,10 @@
-import express from 'express';
 import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
+
+import express from 'express';
 
 import { queryClaudeSDK } from '../claude-sdk.js';
 import {
@@ -12,6 +13,7 @@ import {
   extractProjectDirectory,
 } from '../projects.js';
 import { db, sessionAgentBindingsDb, worktreeDispatchesDb } from '../database/db.js';
+import { createArtifact } from '../services/artifact-service.js';
 import {
   evaluateRuntimePermission,
   resolveRuntimeShell,
@@ -359,24 +361,21 @@ function persistActionRun(run) {
   );
 }
 
-function persistActionArtifact(run) {
-  db.prepare(`
-    INSERT INTO artifacts (id, kind, title, project_name, content, metadata_json)
-    VALUES (?, 'action-log', ?, ?, ?, ?)
-  `).run(
-    createId('artifact'),
-    `worktree setup ${run.status}: ${run.command}`.slice(0, 240),
-    run.projectName || null,
-    run.output || '',
-    JSON.stringify({
+async function persistActionArtifact(run) {
+  await createArtifact({
+    kind: 'action-log',
+    title: `worktree setup ${run.status}: ${run.command}`.slice(0, 240),
+    projectName: run.projectName || '',
+    content: run.output || '',
+    metadata: {
       source: 'actions',
       runId: run.id,
       actionType: run.actionType,
       status: run.status,
       exitCode: run.exitCode ?? null,
       projectPath: run.projectPath,
-    }),
-  );
+    },
+  });
 }
 
 router.post('/projects/:projectName/worktrees', async (req, res) => {
@@ -498,7 +497,7 @@ router.post('/worktrees/:id/run-setup', async (req, res) => {
     run.exitCode = exitCode;
     run.finishedAt = new Date().toISOString();
     persistActionRun(run);
-    persistActionArtifact(run);
+    await persistActionArtifact(run);
     worktreeDispatchesDb.updateActionRun(worktree.id, run.id, 'setup');
     res.json({ success: true, run });
   } catch (error) {

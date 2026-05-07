@@ -171,6 +171,15 @@ export default tseslint.config(
           mode: "file",
         },
         {
+          type: "backend-legacy-service", // legacy services consumed by runtime/database files before the backend module split is complete
+          pattern: [
+            "server/services/context-budget-service.js",
+            "server/services/hub-usage-service.js",
+            "server/services/mtl-code-model-service.js",
+          ],
+          mode: "file",
+        },
+        {
           type: "backend-module", // logical element name used by boundaries rules below
           pattern: "server/modules/*", // each direct folder in server/modules is treated as one module boundary
           mode: "folder", // classify dependencies at folder-module level (not per individual file)

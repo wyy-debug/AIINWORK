@@ -46,7 +46,54 @@ type InteractiveOption = {
 };
 
 type PermissionGrantState = 'idle' | 'granted' | 'error';
+type ObsidianCaptureStatus = {
+  status?: string;
+  mode?: string;
+  routingMode?: string;
+  routingModes?: string[];
+  routingReason?: string;
+  artifactId?: string;
+  obsidianPath?: string;
+  obsidianTargets?: Array<{
+    mode?: string;
+    path?: string;
+    fallbackPath?: string;
+    error?: string;
+    destination?: string;
+  }>;
+  obsidianPaths?: Record<string, string>;
+  fallbackPath?: string;
+  error?: string;
+};
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
+
+const OBSIDIAN_CAPTURE_STATUS_LABELS: Record<string, string> = {
+  synced: '已保存到 Obsidian',
+  captured: '已保存到 Obsidian',
+  fallback: '已回退到 docs/knowledge',
+  failed: '保存失败',
+  skipped: '未保存',
+  duplicate: '已保存过',
+  candidate: '待确认记忆',
+  in_progress: '正在保存',
+};
+
+const OBSIDIAN_CAPTURE_MODE_LABELS: Record<string, string> = {
+  'project-knowledge': '项目知识库',
+  'second-brain': '第二大脑',
+  'ai-memory': 'AI 记忆',
+};
+
+const labelForObsidianMode = (mode: string) => OBSIDIAN_CAPTURE_MODE_LABELS[mode] || mode;
+
+const uniqueStrings = (values: Array<string | undefined>) => {
+  const seen = new Set<string>();
+  return values.filter((value): value is string => {
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+};
 
 function formatFileSize(size?: number) {
   if (!size || !Number.isFinite(size) || size <= 0) {
@@ -86,6 +133,41 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
     !message.isThinking;
+  const obsidianCaptureStatus = (message.obsidianCaptureStatus || null) as ObsidianCaptureStatus | null;
+  const obsidianCaptureLabel = obsidianCaptureStatus?.status
+    ? OBSIDIAN_CAPTURE_STATUS_LABELS[obsidianCaptureStatus.status] || obsidianCaptureStatus.status
+    : '';
+  const obsidianCaptureMode = obsidianCaptureStatus?.routingMode || obsidianCaptureStatus?.mode || '';
+  const obsidianCaptureModes = uniqueStrings([
+    ...(Array.isArray(obsidianCaptureStatus?.routingModes) ? obsidianCaptureStatus.routingModes : []),
+    obsidianCaptureMode,
+  ]);
+  const obsidianCaptureModeLabel = obsidianCaptureModes.map(labelForObsidianMode).join('、');
+  const obsidianCaptureReason = obsidianCaptureStatus?.status === 'skipped'
+    ? '内容不像知识沉淀'
+    : '';
+  const obsidianTargetDetail = Array.isArray(obsidianCaptureStatus?.obsidianTargets)
+    ? obsidianCaptureStatus.obsidianTargets
+      .map((target) => {
+        const targetMode = target.mode ? labelForObsidianMode(target.mode) : '';
+        const targetPath = target.path || target.fallbackPath || target.error || target.destination || '';
+        return [targetMode, targetPath].filter(Boolean).join('：');
+      })
+      .filter(Boolean)
+      .join('\n')
+    : '';
+  const obsidianPathsDetail = obsidianCaptureStatus?.obsidianPaths && typeof obsidianCaptureStatus.obsidianPaths === 'object'
+    ? Object.entries(obsidianCaptureStatus.obsidianPaths)
+      .map(([mode, notePath]) => `${labelForObsidianMode(mode)}：${notePath}`)
+      .join('\n')
+    : '';
+  const obsidianCaptureDetail = obsidianTargetDetail
+    || obsidianPathsDetail
+    || obsidianCaptureStatus?.obsidianPath
+    || obsidianCaptureStatus?.fallbackPath
+    || obsidianCaptureStatus?.error
+    || obsidianCaptureStatus?.routingReason
+    || '';
 
 
   useEffect(() => {
@@ -509,6 +591,21 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                )}
+                {obsidianCaptureLabel && (
+                  <span
+                    className="truncate rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400"
+                    title={[
+                      obsidianCaptureModeLabel ? `目标：${obsidianCaptureModeLabel}` : '',
+                      obsidianCaptureReason,
+                      obsidianCaptureStatus?.routingReason || '',
+                      obsidianCaptureDetail,
+                    ].filter(Boolean).join('\n')}
+                  >
+                    {obsidianCaptureLabel}
+                    {obsidianCaptureStatus?.status !== 'skipped' && obsidianCaptureModeLabel ? ` · ${obsidianCaptureModeLabel}` : ''}
+                    {obsidianCaptureReason ? ` · ${obsidianCaptureReason}` : ''}
+                  </span>
                 )}
                 {!isGrouped && <span>{formattedTime}</span>}
               </div>

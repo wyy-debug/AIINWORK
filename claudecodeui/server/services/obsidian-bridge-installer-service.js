@@ -1,0 +1,203 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '..', '..');
+
+export const OBSIDIAN_BRIDGE_PLUGIN_ID = 'argus-bridge';
+export const BASE_OBSIDIAN_BRIDGE_PORT = 27177;
+export const DEFAULT_OBSIDIAN_BRIDGE_ENDPOINT = 'http://127.0.0.1:27177';
+
+const DEFAULT_PLUGIN_SOURCE = path.join(repoRoot, 'obsidian-plugins', 'argus-bridge');
+const RELEASE_FILES = [
+  { source: 'manifest.json', target: 'manifest.json' },
+  { source: 'main.js', target: 'main.js' },
+  { source: 'core.cjs', target: 'core.js' },
+  { source: 'core.cjs', target: 'core.cjs' },
+  { source: 'styles.css', target: 'styles.css' },
+];
+
+const readJson = async (filePath, fallback) => {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+};
+
+const writeJson = async (filePath, value) => {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+};
+
+const exists = async (filePath) => {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const chooseObsidianBridgePort = ({
+  preferredPort = 0,
+  usedPorts = [],
+} = {}) => {
+  const used = new Set((Array.isArray(usedPorts) ? usedPorts : [])
+    .map((port) => Number.parseInt(String(port), 10))
+    .filter((port) => Number.isFinite(port) && port > 0 && port < 65536));
+  const preferred = Number.parseInt(String(preferredPort || ''), 10);
+  if (Number.isFinite(preferred) && preferred > 0 && preferred < 65536 && !used.has(preferred)) {
+    return preferred;
+  }
+  for (let port = BASE_OBSIDIAN_BRIDGE_PORT; port < 65536; port += 1) {
+    if (!used.has(port)) {
+      return port;
+    }
+  }
+  throw new Error('No available Obsidian bridge port found.');
+};
+
+const defaultObsidianConfigPath = () => {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'obsidian', 'obsidian.json');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'obsidian', 'obsidian.json');
+  }
+  return path.join(os.homedir(), '.config', 'obsidian', 'obsidian.json');
+};
+
+export const buildBundledObsidianBridgeMain = async ({
+  pluginSource = DEFAULT_PLUGIN_SOURCE,
+} = {}) => {
+  const main = await fs.readFile(path.join(pluginSource, 'main.js'), 'utf8');
+  const core = await fs.readFile(path.join(pluginSource, 'core.cjs'), 'utf8');
+  const requirePattern = /const \{\n[\s\S]*?\n\} = require\('\.\/core\.js'\);/;
+  const requireMatch = main.match(requirePattern);
+  if (!requireMatch) {
+    throw new Error('Could not find Argus Bridge core require in plugin main.js.');
+  }
+
+  const bundledRequire = [
+    'const __argusBridgeCoreModule = { exports: {} };',
+    '((module) => {',
+    core,
+    '})(__argusBridgeCoreModule);',
+    requireMatch[0].replace("require('./core.js')", '__argusBridgeCoreModule.exports'),
+  ].join('\n');
+
+  return main.replace(requirePattern, () => bundledRequire);
+};
+
+const readPluginManifest = async (vaultPath) => {
+  const manifestPath = path.join(vaultPath, '.obsidian', 'plugins', OBSIDIAN_BRIDGE_PLUGIN_ID, 'manifest.json');
+  return readJson(manifestPath, null);
+};
+
+export const listObsidianVaults = async ({
+  obsidianConfigPath = defaultObsidianConfigPath(),
+} = {}) => {
+  const config = await readJson(obsidianConfigPath, null);
+  const vaults = config?.vaults && typeof config.vaults === 'object'
+    ? Object.values(config.vaults)
+    : [];
+
+  const results = [];
+  for (const vault of vaults) {
+    if (!vault?.path) {
+      continue;
+    }
+
+    const vaultPath = path.resolve(String(vault.path));
+    const manifest = await readPluginManifest(vaultPath);
+    results.push({
+      name: String(vault.name || path.basename(vaultPath)),
+      path: vaultPath,
+      open: vault.open === true,
+      hasObsidianConfig: await exists(path.join(vaultPath, '.obsidian')),
+      pluginInstalled: Boolean(manifest),
+      pluginVersion: manifest?.version || '',
+    });
+  }
+
+  return results.sort((left, right) => {
+    if (left.open !== right.open) {
+      return left.open ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name) || left.path.localeCompare(right.path);
+  });
+};
+
+export const installObsidianBridgePlugin = async ({
+  vaultPath,
+  token = '',
+  port = 0,
+  usedPorts = [],
+  enablePlugin = true,
+  pluginSource = DEFAULT_PLUGIN_SOURCE,
+} = {}) => {
+  const normalizedVaultPath = String(vaultPath || '').trim();
+  if (!normalizedVaultPath) {
+    throw new Error('Obsidian vault path is required.');
+  }
+
+  const resolvedVaultPath = path.resolve(normalizedVaultPath);
+  const vaultStats = await fs.stat(resolvedVaultPath).catch(() => null);
+  if (!vaultStats?.isDirectory()) {
+    throw new Error('Obsidian vault path must be an existing directory.');
+  }
+
+  const manifest = await readJson(path.join(pluginSource, 'manifest.json'), {});
+  const targetDir = path.join(resolvedVaultPath, '.obsidian', 'plugins', OBSIDIAN_BRIDGE_PLUGIN_ID);
+  await fs.mkdir(targetDir, { recursive: true });
+
+  for (const file of RELEASE_FILES) {
+    const targetPath = path.join(targetDir, file.target);
+    if (file.source === 'main.js') {
+      await fs.writeFile(targetPath, await buildBundledObsidianBridgeMain({ pluginSource }), 'utf8');
+    } else {
+      await fs.copyFile(path.join(pluginSource, file.source), targetPath);
+    }
+  }
+
+  const dataPath = path.join(targetDir, 'data.json');
+  const existingData = await readJson(dataPath, {});
+  const pairingToken = String(token || existingData.token || crypto.randomBytes(24).toString('hex'));
+  const bridgePort = chooseObsidianBridgePort({
+    preferredPort: port || existingData.port,
+    usedPorts,
+  });
+  await writeJson(dataPath, {
+    ...existingData,
+    token: pairingToken,
+    port: bridgePort,
+  });
+
+  if (enablePlugin) {
+    const communityPluginsPath = path.join(resolvedVaultPath, '.obsidian', 'community-plugins.json');
+    const enabledPlugins = await readJson(communityPluginsPath, []);
+    const nextEnabledPlugins = Array.isArray(enabledPlugins) ? enabledPlugins : [];
+    if (!nextEnabledPlugins.includes(OBSIDIAN_BRIDGE_PLUGIN_ID)) {
+      nextEnabledPlugins.push(OBSIDIAN_BRIDGE_PLUGIN_ID);
+    }
+    await writeJson(communityPluginsPath, nextEnabledPlugins);
+  }
+
+  return {
+    installed: true,
+    pluginId: OBSIDIAN_BRIDGE_PLUGIN_ID,
+    vaultPath: resolvedVaultPath,
+    vaultName: path.basename(resolvedVaultPath),
+    targetDir,
+    token: pairingToken,
+    tokenConfigured: true,
+    enabled: enablePlugin,
+    manifestVersion: manifest.version || 'unknown',
+    port: bridgePort,
+    endpoint: `http://127.0.0.1:${bridgePort}`,
+  };
+};

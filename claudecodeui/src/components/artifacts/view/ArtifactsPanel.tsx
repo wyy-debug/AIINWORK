@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Clipboard, FileText, MessageSquarePlus, RefreshCw, Trash2 } from 'lucide-react';
+import { BookOpen, Clipboard, FileText, MessageSquarePlus, RefreshCw, Trash2 } from 'lucide-react';
 
 import type { Project } from '../../../types/app';
 import { apiFetch } from '../../../utils/api';
@@ -16,6 +16,18 @@ type Artifact = {
   filePath?: string;
   metadata?: Record<string, unknown>;
   createdAt: string;
+};
+
+type ObsidianBridgeMode = 'auto' | 'project-knowledge' | 'second-brain' | 'ai-memory';
+
+type ObsidianBridgeStatus = {
+  destination?: string;
+  path?: string;
+  fallbackPath?: string;
+  error?: string;
+  errorCode?: string;
+  mode?: ObsidianBridgeMode;
+  updatedAt?: string;
 };
 
 type ArtifactsPanelProps = {
@@ -41,20 +53,111 @@ const sourceForArtifact = (artifact: Artifact) => {
   return 'review';
 };
 
-const SOURCE_FILTERS: Array<{ id: 'all' | 'review' | 'actions' | 'browser'; label: string }> = [
+type ArtifactSourceFilter = 'all' | 'review' | 'actions' | 'browser' | 'obsidian';
+
+const SOURCE_FILTERS: Array<{ id: ArtifactSourceFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'review', label: 'Changes' },
   { id: 'actions', label: 'Run' },
   { id: 'browser', label: 'Preview' },
+  { id: 'obsidian', label: 'Obsidian Inbox' },
 ];
+
+const OBSIDIAN_MODES: Array<{ value: ObsidianBridgeMode; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: 'project-knowledge', label: '项目知识库' },
+  { value: 'second-brain', label: '第二大脑' },
+  { value: 'ai-memory', label: 'AI 记忆' },
+];
+
+const getObsidianModeLabel = (mode?: string) => (
+  OBSIDIAN_MODES.find((entry) => entry.value === mode)?.label || mode || ''
+);
+
+const formatRoutingReason = (reason = '') => {
+  const trimmed = reason.trim();
+  if (!trimmed) return '';
+  if (/No assistant content to route\./i.test(trimmed)) {
+    return '没有可写入的 assistant 内容。';
+  }
+  const matched = trimmed.match(/^Matched (.+); routed to ([\w-]+)\.$/i);
+  if (matched) {
+    const signals = matched[1] === 'default mode' ? '默认规则' : matched[1];
+    return `命中 ${signals}，路由到 ${getObsidianModeLabel(matched[2])}。`;
+  }
+  return trimmed;
+};
+
+const getObsidianStatus = (artifact: Artifact | null) => {
+  const metadata = artifact?.metadata || {};
+  const bridge = metadata.obsidianBridge as ObsidianBridgeStatus | undefined;
+  const status = typeof metadata.obsidianStatus === 'string'
+    ? metadata.obsidianStatus
+    : bridge?.destination === 'obsidian'
+      ? 'synced'
+      : bridge?.destination === 'fallback'
+        ? 'fallback'
+        : bridge?.destination === 'error'
+          ? 'failed'
+          : 'not_sent';
+
+  if (status === 'synced') {
+    return {
+      label: '已写入 Obsidian',
+      tone: 'text-emerald-700 dark:text-emerald-300',
+      detail: bridge?.path || String(metadata.obsidianPath || ''),
+    };
+  }
+  if (status === 'fallback') {
+    return {
+      label: '已回退到 docs/knowledge',
+      tone: 'text-amber-700 dark:text-amber-300',
+      detail: bridge?.fallbackPath || String(metadata.obsidianFallbackPath || ''),
+    };
+  }
+  if (status === 'failed') {
+    return {
+      label: '同步失败',
+      tone: 'text-destructive',
+      detail: bridge?.error || String(metadata.obsidianLastError || ''),
+    };
+  }
+  if (status === 'skipped') {
+    return {
+      label: '已跳过',
+      tone: 'text-muted-foreground',
+      detail: formatRoutingReason(String(metadata.routingReason || metadata.obsidianLastError || '')),
+    };
+  }
+  if (status === 'candidate') {
+    return {
+      label: '待确认记忆',
+      tone: 'text-sky-700 dark:text-sky-300',
+      detail: formatRoutingReason(String(metadata.routingReason || '')),
+    };
+  }
+  if (status === 'duplicate') {
+    return {
+      label: '已保存过',
+      tone: 'text-muted-foreground',
+      detail: bridge?.path || String(metadata.obsidianPath || ''),
+    };
+  }
+  return {
+    label: '未发送',
+    tone: 'text-muted-foreground',
+    detail: '',
+  };
+};
 
 export default function ArtifactsPanel({ selectedProject, sessionId }: ArtifactsPanelProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null);
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'review' | 'actions' | 'browser'>('all');
+  const [sourceFilter, setSourceFilter] = useState<ArtifactSourceFilter>('all');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [obsidianMode, setObsidianMode] = useState<ObsidianBridgeMode>('auto');
 
   const filteredArtifacts = useMemo(() => (
     sourceFilter === 'all'
@@ -161,6 +264,38 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
     await navigator.clipboard?.writeText(summary);
   };
 
+  const sendArtifactToObsidian = async (artifact: Artifact) => {
+    setBusy(`obsidian:${artifact.id}`);
+    setError('');
+    try {
+      const data = await parseJson<{ artifact: Artifact; obsidianBridge: ObsidianBridgeStatus }>(
+        await apiFetch(`/api/artifacts/${encodeURIComponent(artifact.id)}/send-to-obsidian`, {
+          method: 'POST',
+          body: JSON.stringify({ mode: obsidianMode }),
+        }),
+      );
+      setSelectedArtifact(data.artifact);
+      setArtifacts((previous) => previous.map((entry) => (
+        entry.id === data.artifact.id ? data.artifact : entry
+      )));
+      if (data.obsidianBridge?.destination === 'fallback') {
+        setError(`Obsidian 不可达；已回退保存到 ${data.obsidianBridge.fallbackPath}。`);
+      }
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : '发送到 Obsidian 失败');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const obsidianStatus = activeArtifact?.metadata?.obsidianBridge as ObsidianBridgeStatus | undefined;
+  const obsidianStatusView = useMemo(() => getObsidianStatus(activeArtifact), [activeArtifact]);
+  const routingReason = typeof activeArtifact?.metadata?.routingReason === 'string'
+    ? activeArtifact.metadata.routingReason
+    : '';
+  const routingReasonText = formatRoutingReason(routingReason);
+  const obsidianModeLabel = getObsidianModeLabel(obsidianStatus?.mode || String(activeArtifact?.metadata?.routingMode || ''));
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex min-h-[64px] items-center justify-between border-b border-border/70 px-5 py-3">
@@ -233,8 +368,38 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-semibold text-foreground">{activeArtifact.title}</h3>
                   <p className="text-xs text-muted-foreground">{activeArtifact.kind}</p>
+                  <p className={cn('mt-1 truncate text-xs', obsidianStatusView.tone)} title={obsidianStatusView.detail}>
+                    {obsidianStatusView.label}
+                    {obsidianModeLabel ? ` · ${obsidianModeLabel}` : ''}
+                    {obsidianStatusView.detail ? ` · ${obsidianStatusView.detail}` : ''}
+                  </p>
+                  {routingReasonText && (
+                    <p className="mt-1 truncate text-xs text-muted-foreground" title={routingReasonText}>
+                      路由原因：{routingReasonText}
+                    </p>
+                  )}
                 </div>
 	                <div className="flex items-center gap-1">
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                    value={obsidianMode}
+                    onChange={(event) => setObsidianMode(event.target.value as ObsidianBridgeMode)}
+                    aria-label="Obsidian 写入形态"
+                  >
+                    {OBSIDIAN_MODES.map((mode) => (
+                      <option key={mode.value} value={mode.value}>{mode.label}</option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => sendArtifactToObsidian(activeArtifact)}
+                    disabled={busy === `obsidian:${activeArtifact.id}`}
+                    title="发送到 Obsidian"
+                  >
+                    <BookOpen className="h-4 w-4" />
+                    <span className="sr-only">发送到 Obsidian</span>
+                  </Button>
                   <Button variant="ghost" size="icon" onClick={() => copySummary(activeArtifact)}>
                     <Clipboard className="h-4 w-4" />
                   </Button>

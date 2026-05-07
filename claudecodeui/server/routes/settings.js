@@ -32,6 +32,11 @@ import {
   readRuntimePermissions,
   saveRuntimePermissions,
 } from '../services/runtime-permission-service.js';
+import {
+  ObsidianBridgeError,
+  readObsidianBridgeConfig,
+  saveObsidianBridgeConfig,
+} from '../services/obsidian-bridge-service.js';
 
 const router = express.Router();
 const ANTHROPIC_ENV_KEYS = {
@@ -869,6 +874,31 @@ router.put('/runtime-permissions', async (req, res) => {
   } catch (error) {
     console.error('Error saving runtime permissions:', error);
     res.status(500).json({ error: 'Failed to save runtime permissions' });
+  }
+});
+
+router.get('/obsidian-bridge', async (_req, res) => {
+  try {
+    res.json({ success: true, config: readObsidianBridgeConfig() });
+  } catch (error) {
+    console.error('Error reading Obsidian bridge settings:', error);
+    res.status(500).json({ error: 'Failed to read Obsidian bridge settings' });
+  }
+});
+
+router.put('/obsidian-bridge', async (req, res) => {
+  try {
+    res.json({ success: true, config: saveObsidianBridgeConfig(req.body || {}) });
+  } catch (error) {
+    if (error instanceof ObsidianBridgeError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: error.message,
+        code: error.code,
+      });
+    }
+    console.error('Error saving Obsidian bridge settings:', error);
+    return res.status(500).json({ error: 'Failed to save Obsidian bridge settings' });
   }
 });
 

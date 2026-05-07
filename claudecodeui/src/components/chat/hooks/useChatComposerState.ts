@@ -898,6 +898,7 @@ export function useChatComposerState({
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
+            projectName: selectedProject.name,
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: cursorModel,
@@ -921,6 +922,7 @@ export function useChatComposerState({
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
+            projectName: selectedProject.name,
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: codexModel,
@@ -943,6 +945,7 @@ export function useChatComposerState({
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
+            projectName: selectedProject.name,
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             model: geminiModel,
@@ -966,6 +969,7 @@ export function useChatComposerState({
           options: {
             projectPath: resolvedProjectPath,
             cwd: resolvedProjectPath,
+            projectName: selectedProject.name,
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             toolsSettings,

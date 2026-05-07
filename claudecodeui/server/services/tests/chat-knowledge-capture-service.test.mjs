@@ -1,0 +1,118 @@
+import Database from 'better-sqlite3';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  ARTIFACTS_TABLE_SQL,
+  ARTIFACT_LINKS_TABLE_SQL,
+  OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL,
+} from '../../database/schema.js';
+
+describe('chat knowledge capture service', () => {
+  let captureModule;
+  let database;
+
+  beforeEach(async () => {
+    captureModule = await import('../chat-knowledge-capture-service.js');
+    database = new Database(':memory:');
+    database.exec(ARTIFACTS_TABLE_SQL);
+    database.exec(ARTIFACT_LINKS_TABLE_SQL);
+    database.exec(OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL);
+  });
+
+  it('returns visible routing scores, signals, and reason for automatic mode decisions', () => {
+    const assessment = captureModule.assessChatKnowledgeCapture({
+      userPrompt: 'summarize this reading note',
+      content: [
+        '# Reading Notes: Knowledge Systems',
+        '',
+        '- Idea: separate evergreen thoughts from project implementation notes.',
+        '- Person: Tiago Forte frames capture and expression as a long-running theme.',
+        '- Reflection: this belongs in a second brain, not a project change log.',
+      ].join('\n'),
+      defaultMode: 'project-knowledge',
+    });
+
+    expect(assessment).toMatchObject({
+      shouldCapture: true,
+      mode: 'second-brain',
+      routingMode: 'second-brain',
+      routingReason: expect.stringContaining('路由到'),
+      routingConfidence: expect.any(Number),
+    });
+    expect(assessment.routingReason).toContain('reading');
+    expect(assessment.routingScores).toMatchObject({
+      'project-knowledge': expect.any(Number),
+      'second-brain': expect.any(Number),
+      'ai-memory': expect.any(Number),
+    });
+    expect(assessment.routingSignals).toEqual(expect.arrayContaining([
+      expect.stringMatching(/reading|idea|person|reflection/i),
+    ]));
+  });
+
+  it('keeps every matched Obsidian destination instead of dropping tied modes', () => {
+    const assessment = captureModule.assessChatKnowledgeCapture({
+      userPrompt: 'review GPUScene',
+      content: [
+        '# GPUScene 系统代码审查报告',
+        '',
+        '- Project: review the implementation and architecture.',
+        '- Second brain: this also contains a reusable rendering-system idea.',
+      ].join('\n'),
+      defaultMode: 'project-knowledge',
+    });
+
+    expect(assessment).toMatchObject({
+      shouldCapture: true,
+      routingMode: 'second-brain',
+      routingModes: ['second-brain', 'project-knowledge'],
+    });
+  });
+
+  it('uses the auto-capture key table to make concurrent captures idempotent', async () => {
+    let ids = 0;
+    const createArtifact = vi.fn(async (payload) => ({
+      artifact: { id: `artifact_${++ids}`, ...payload },
+      obsidianBridge: { destination: 'obsidian', path: 'Argus/Projects/App/Summary.md' },
+    }));
+    const service = captureModule.createChatKnowledgeCaptureService({
+      db: database,
+      createArtifact,
+      findExistingCapture: () => null,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        autoExportKnowledgeArtifacts: true,
+        defaultMode: 'project-knowledge',
+      }),
+    });
+    const payload = {
+      sourceId: 'chat:session-1:message-assistant-1',
+      projectName: 'App',
+      sessionId: 'session-1',
+      provider: 'claude',
+      previousUserPrompt: 'summarize this',
+      timestamp: '2026-05-07T11:21:46.862Z',
+      content: [
+        '# Project Summary',
+        '',
+        '- Summary: implemented backend Obsidian capture.',
+        '- Decision: keep automatic export server-side.',
+        '- Plan: verify routing and duplicate behavior.',
+      ].join('\n'),
+    };
+
+    const [first, second] = await Promise.all([
+      service.autoCaptureChatKnowledge(payload),
+      service.autoCaptureChatKnowledge(payload),
+    ]);
+
+    expect(first.captured || second.captured).toBe(true);
+    expect(createArtifact).toHaveBeenCalledTimes(1);
+    const rows = database.prepare('SELECT * FROM obsidian_auto_capture_keys').all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      source_id: payload.sourceId,
+      status: 'captured',
+    });
+  });
+});

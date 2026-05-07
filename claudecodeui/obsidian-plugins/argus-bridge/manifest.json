@@ -1,0 +1,10 @@
+{
+  "id": "argus-bridge",
+  "name": "Argus Bridge",
+  "version": "0.1.1",
+  "minAppVersion": "1.5.0",
+  "description": "Local-first bridge for writing Argus knowledge documents into an Obsidian vault.",
+  "author": "Argus Contributors",
+  "authorUrl": "https://github.com/mtl-code",
+  "isDesktopOnly": true
+}

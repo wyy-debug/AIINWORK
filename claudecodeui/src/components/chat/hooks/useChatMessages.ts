@@ -233,6 +233,42 @@ function taskNotificationRuntimeStatus(status: unknown): SubagentRuntimeStatus {
   return normalized === 'completed' ? 'DONE' : 'BLOCKED';
 }
 
+function isObsidianAutoCaptureStatus(message: NormalizedMessage): boolean {
+  const event = (message as any).event;
+  return message.kind === 'status'
+    && (message.text === 'obsidian_auto_capture_result' || event === 'obsidian_auto_capture_result');
+}
+
+function statusPayloadForObsidianCapture(message: NormalizedMessage): Record<string, unknown> {
+  const record = message as any;
+  return {
+    status: record.status,
+    captured: record.captured,
+    mode: record.mode,
+    routingMode: record.routingMode,
+    routingModes: record.routingModes,
+    routingReason: record.routingReason,
+    routingSignals: record.routingSignals,
+    confidence: record.confidence,
+    artifactId: record.artifactId,
+    obsidianPath: record.obsidianPath,
+    obsidianTargets: record.obsidianTargets,
+    obsidianPaths: record.obsidianPaths,
+    fallbackPath: record.fallbackPath,
+    error: record.error,
+  };
+}
+
+function nearestAssistantMessageId(messages: NormalizedMessage[], beforeIndex: number): string {
+  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (candidate?.kind === 'text' && candidate.role === 'assistant' && candidate.id) {
+      return candidate.id;
+    }
+  }
+  return '';
+}
+
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
  * that the existing UI components expect.
@@ -242,6 +278,20 @@ function taskNotificationRuntimeStatus(status: unknown): SubagentRuntimeStatus {
  */
 export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
   const converted: ChatMessage[] = [];
+  const obsidianCaptureStatusByMessageId = new Map<string, Record<string, unknown>>();
+
+  messages.forEach((msg, index) => {
+    if (!isObsidianAutoCaptureStatus(msg)) return;
+    const record = msg as any;
+    const payload = statusPayloadForObsidianCapture(msg);
+    const explicitMessageId = typeof record.messageId === 'string' ? record.messageId : '';
+    const targetMessageId = explicitMessageId && explicitMessageId !== 'stream'
+      ? explicitMessageId
+      : nearestAssistantMessageId(messages, index);
+    if (targetMessageId) {
+      obsidianCaptureStatusByMessageId.set(targetMessageId, payload);
+    }
+  });
 
   // First pass: collect tool results for attachment
   const toolResultMap = new Map<string, NormalizedMessage>();
@@ -358,6 +408,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               type: 'assistant',
               content: proposedPlan.text,
               timestamp: msg.timestamp,
+              obsidianCaptureStatus: msg.id ? obsidianCaptureStatusByMessageId.get(msg.id) : undefined,
             });
           }
           proposedPlan.plans.forEach((plan, index) => {

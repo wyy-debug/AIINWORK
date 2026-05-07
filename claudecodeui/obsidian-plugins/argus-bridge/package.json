@@ -1,0 +1,13 @@
+{
+  "name": "argus-bridge",
+  "version": "0.1.1",
+  "private": true,
+  "type": "commonjs",
+  "main": "main.js",
+  "files": [
+    "core.cjs",
+    "main.js",
+    "manifest.json",
+    "styles.css"
+  ]
+}
