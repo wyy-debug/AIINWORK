@@ -35,17 +35,27 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   isStreaming = false,
   showRawParameters = false,
   rawContent,
-  toolName: _toolName,
+  toolName,
 }) => {
   const permissionCtx = usePermission();
 
   const pendingRequest = permissionCtx?.pendingPermissionRequests.find(
     (r) => r.toolName === 'ExitPlanMode' || r.toolName === 'exit_plan_mode'
   );
+  const isProposedPlan = toolName === 'proposed_plan';
 
   const handleBuild = () => {
     if (pendingRequest && permissionCtx) {
       permissionCtx.handlePermissionDecision(pendingRequest.requestId, { allow: true });
+      return;
+    }
+    if (isProposedPlan && content.trim()) {
+      window.dispatchEvent(new CustomEvent('argus-submit-chat-input', {
+        detail: {
+          permissionMode: 'acceptEdits',
+          text: `PLEASE IMPLEMENT THIS PLAN:\n\n${content.trim()}`,
+        },
+      }));
     }
   };
 
@@ -55,6 +65,15 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
         allow: false,
         message: 'User asked to revise the plan',
       });
+      return;
+    }
+    if (isProposedPlan && content.trim()) {
+      window.dispatchEvent(new CustomEvent('argus-submit-chat-input', {
+        detail: {
+          permissionMode: 'plan',
+          text: `Please revise this plan and keep Plan Mode active:\n\n${content.trim()}`,
+        },
+      }));
     }
   };
 
@@ -113,7 +132,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
         </CollapsibleContent>
 
         {/* Footer — always visible when permission is pending */}
-        {pendingRequest && (
+        {(pendingRequest || isProposedPlan) && (
           <CardFooter className="justify-end gap-2 border-t border-border/40 px-4 pb-3 pt-3">
             <Button
               variant="ghost"

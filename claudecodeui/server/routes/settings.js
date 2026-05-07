@@ -14,13 +14,17 @@ import {
 } from '../shared/utils.js';
 import {
   OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  GOAL_RUNTIME_SETTINGS_KEY,
   SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
+  applyGoalRuntimeToEnv,
   applyOpenMythosRuntimeToEnv,
   applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
+  normalizeGoalRuntimeConfig,
   normalizeOpenMythosRuntimeConfig,
   normalizeSubagentRuntimeConfig,
+  readGoalRuntimeConfig,
   readOpenMythosRuntimeConfig,
   readSubagentRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
@@ -51,6 +55,7 @@ const MTL_CODE_ENV_KEYS = {
   subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
   subagentMaxDepth: 'MTL_CODE_SUBAGENTS_MAX_DEPTH',
   allowNestedSubagents: 'MTL_CODE_ALLOW_NESTED_SUBAGENTS',
+  goalsEnabled: 'MTL_CODE_GOALS_ENABLED',
 };
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_PAYG_ANTHROPIC_BASE_URL = 'https://api.xiaomimimo.com/anthropic';
@@ -288,6 +293,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
     },
     openMythosRuntime: readOpenMythosRuntimeConfig(settings, env),
     subagents: readSubagentRuntimeConfig(settings, env),
+    goals: readGoalRuntimeConfig(settings, env),
   };
 };
 
@@ -789,6 +795,12 @@ router.put('/mtl-code-model', async (req, res) => {
     );
     settings[SUBAGENT_RUNTIME_SETTINGS_KEY] = subagents;
     applySubagentRuntimeToEnv(env, subagents);
+    const goals = normalizeGoalRuntimeConfig(
+      readObjectRecord(req.body?.goals),
+      readGoalRuntimeConfig(settings, env),
+    );
+    settings[GOAL_RUNTIME_SETTINGS_KEY] = goals;
+    applyGoalRuntimeToEnv(env, goals);
     applyCoordinatorModeFromOpenMythosRuntime(env, openMythosRuntime);
     clearOpenAIEnv(env);
     settings.env = env;

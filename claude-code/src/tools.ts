@@ -8,6 +8,11 @@ import {
   SendMessageAgentTool,
   WaitAgentTool,
 } from '@mtl-code/builtin-tools/tools/AgentControlTool/AgentControlTools.js'
+import {
+  CreateGoalTool,
+  GetGoalTool,
+  UpdateGoalTool,
+} from '@mtl-code/builtin-tools/tools/GoalTool/GoalTools.js'
 import { SkillTool } from '@mtl-code/builtin-tools/tools/SkillTool/SkillTool.js'
 import { BashTool } from '@mtl-code/builtin-tools/tools/BashTool/BashTool.js'
 import { FileEditTool } from '@mtl-code/builtin-tools/tools/FileEditTool/FileEditTool.js'
@@ -76,6 +81,7 @@ const getSendMessageTool = () =>
     .SendMessageTool as typeof import('@mtl-code/builtin-tools/tools/SendMessageTool/SendMessageTool.js').SendMessageTool
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { AskUserQuestionTool } from '@mtl-code/builtin-tools/tools/AskUserQuestionTool/AskUserQuestionTool.js'
+import { RequestUserInputTool } from '@mtl-code/builtin-tools/tools/AskUserQuestionTool/RequestUserInputTool.js'
 import { LSPTool } from '@mtl-code/builtin-tools/tools/LSPTool/LSPTool.js'
 import { ListMcpResourcesTool } from '@mtl-code/builtin-tools/tools/ListMcpResourcesTool/ListMcpResourcesTool.js'
 import { ReadMcpResourceTool } from '@mtl-code/builtin-tools/tools/ReadMcpResourceTool/ReadMcpResourceTool.js'
@@ -154,6 +160,7 @@ import { isPowerShellToolEnabled } from './utils/shell/shellToolUtils.js'
 import { isAgentSwarmsEnabled } from './utils/agentSwarmsEnabled.js'
 import { isWorktreeModeEnabled } from './utils/worktreeModeEnabled.js'
 import { areSubagentsHardDisabled } from './utils/subagentFeatureGate.js'
+import { areGoalsHardDisabled } from './utils/goalFeatureGate.js'
 import {
   REPL_TOOL_NAME,
   REPL_ONLY_TOOLS,
@@ -215,9 +222,13 @@ export function getAllBaseTools(): Tools {
         SendMessageAgentTool,
         FollowupTaskAgentTool,
       ]
+  const goalTools = areGoalsHardDisabled()
+    ? []
+    : [GetGoalTool, CreateGoalTool, UpdateGoalTool]
 
   return [
     ...subagentTools,
+    ...goalTools,
     TaskOutputTool,
     BashTool,
     // Ant-native builds have bfs/ugrep embedded in the bun binary (same ARGV0
@@ -234,6 +245,7 @@ export function getAllBaseTools(): Tools {
     WebSearchTool,
     TaskStopTool,
     AskUserQuestionTool,
+    RequestUserInputTool,
     SkillTool,
     EnterPlanModeTool,
     ...(process.env.USER_TYPE === 'ant' ? [ConfigTool] : []),
@@ -295,6 +307,25 @@ export function filterToolsByDenyRules<
   return tools.filter(tool => !getDenyRuleForTool(permissionContext, tool))
 }
 
+const CODEX_STYLE_PLAN_MODE_TOOL_NAMES = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'WebFetch',
+  'WebSearch',
+  'AskUserQuestion',
+  'request_user_input',
+])
+
+function shouldUseCodexStylePlanToolSurface(
+  permissionContext: ToolPermissionContext,
+): boolean {
+  return (
+    process.env.MTL_CODE_CODEX_STYLE_PLAN_MODE === '1' &&
+    permissionContext.mode === 'plan'
+  )
+}
+
 export const getTools = (permissionContext: ToolPermissionContext): Tools => {
   // Simple mode: only Bash, Read, and Edit tools
   if (isEnvTruthy(process.env.MTL_CODE_SIMPLE)) {
@@ -350,7 +381,11 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
     SYNTHETIC_OUTPUT_TOOL_NAME,
   ])
 
-  const tools = getAllBaseTools().filter(tool => !specialTools.has(tool.name))
+  let tools = getAllBaseTools().filter(tool => !specialTools.has(tool.name))
+
+  if (shouldUseCodexStylePlanToolSurface(permissionContext)) {
+    tools = tools.filter(tool => CODEX_STYLE_PLAN_MODE_TOOL_NAMES.has(tool.name))
+  }
 
   // Filter out tools that are denied by the deny rules
   let allowedTools = filterToolsByDenyRules(tools, permissionContext)
@@ -393,6 +428,9 @@ export function assembleToolPool(
   mcpTools: Tools,
 ): Tools {
   const builtInTools = getTools(permissionContext)
+  if (shouldUseCodexStylePlanToolSurface(permissionContext)) {
+    return [...builtInTools].sort((a, b) => a.name.localeCompare(b.name))
+  }
 
   // Filter out MCP tools that are in the deny list
   const allowedMcpTools = filterToolsByDenyRules(mcpTools, permissionContext)

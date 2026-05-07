@@ -25,7 +25,7 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
   return (
     <div className={`space-y-2 ${className}`}>
       {questions.map((q, idx) => {
-        const answer = answers?.[q.question];
+        const answer = answers?.[q.id || q.question] || answers?.[q.question];
         const answerLabels = answer ? answer.split(', ') : [];
         const skipped = !answer;
         const isExpanded = expandedIdx === idx;

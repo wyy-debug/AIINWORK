@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { Button, Input } from '../../../../../../../shared/view/ui';
 import type { CodexPermissionMode, GeminiPermissionMode } from '../../../../../types/types';
 
+type ArgusPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+
 const COMMON_CLAUDE_TOOLS = [
   'Bash(ls:*)',
   'Bash(cat:*)',
@@ -50,6 +52,8 @@ type ClaudePermissionsProps = {
   agent: 'claude';
   skipPermissions: boolean;
   onSkipPermissionsChange: (value: boolean) => void;
+  permissionMode: ArgusPermissionMode;
+  onPermissionModeChange: (value: ArgusPermissionMode) => void;
   allowedTools: string[];
   onAllowedToolsChange: (value: string[]) => void;
   disallowedTools: string[];
@@ -59,6 +63,8 @@ type ClaudePermissionsProps = {
 function ClaudePermissions({
   skipPermissions,
   onSkipPermissionsChange,
+  permissionMode,
+  onPermissionModeChange,
   allowedTools,
   onAllowedToolsChange,
   disallowedTools,
@@ -88,8 +94,77 @@ function ClaudePermissions({
     setNewDisallowedTool('');
   };
 
+  const permissionModes: Array<{
+    id: ArgusPermissionMode;
+    title: string;
+    description: string;
+    tone: string;
+  }> = [
+    {
+      id: 'default',
+      title: '默认模式',
+      description: '按需申请工具权限，适合日常对话。',
+      tone: 'border-border bg-card/50',
+    },
+    {
+      id: 'acceptEdits',
+      title: '自动同意编辑',
+      description: '自动允许文件编辑，其他工具仍按设置处理。',
+      tone: 'border-blue-400 bg-blue-50 dark:border-blue-700 dark:bg-blue-950/20',
+    },
+    {
+      id: 'bypassPermissions',
+      title: '全权限',
+      description: '跳过权限确认，等同于危险跳过权限。',
+      tone: 'border-orange-400 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/20',
+    },
+    {
+      id: 'plan',
+      title: 'Plan 模式',
+      description: '先生成执行计划，确认后再继续。',
+      tone: 'border-indigo-400 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-950/20',
+    },
+  ];
+
   return (
     <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Shield className="h-5 w-5 text-blue-500" />
+          <h3 className="text-lg font-medium text-foreground">权限 / Plan 模式</h3>
+        </div>
+        <p className="text-sm text-muted-foreground">控制聊天栏默认权限模式；聊天栏按钮会同步这里的配置。</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          {permissionModes.map((mode) => {
+            const active = permissionMode === mode.id;
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => onPermissionModeChange(mode.id)}
+                className={`rounded-lg border p-4 text-left transition-colors ${
+                  active ? mode.tone : 'border-border bg-card/50 hover:bg-accent/40'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="radio"
+                    name="argusPermissionMode"
+                    checked={active}
+                    onChange={() => onPermissionModeChange(mode.id)}
+                    className="mt-1 h-4 w-4"
+                  />
+                  <div>
+                    <div className="font-medium text-foreground">{mode.title}</div>
+                    <div className="mt-1 text-sm text-muted-foreground">{mode.description}</div>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <AlertTriangle className="h-5 w-5 text-orange-500" />

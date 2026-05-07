@@ -6,6 +6,8 @@ export default defineConfig({
     include: [
       'src/**/*.test.ts',
       'scripts/**/*.test.mjs',
+      'server/services/tests/openmythos-runtime-env.test.ts',
+      'server/services/tests/session-goal-service.test.mjs',
     ],
   },
 });

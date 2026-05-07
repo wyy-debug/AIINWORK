@@ -14,6 +14,7 @@ import type {
   ToolResult,
 } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
+import { extractProposedPlanBlocks } from '../utils/proposedPlan';
 
 function isTaskNotificationContent(content: string): boolean {
   const trimmed = decodeHtmlEntities(content).trimStart();
@@ -350,11 +351,27 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           if (isInternalAgentFailureNarration(text) || isAgentOrchestrationChatter(text)) {
             continue;
           }
-          converted.push({
-            id: msg.id,
-            type: 'assistant',
-            content: text,
-            timestamp: msg.timestamp,
+          const proposedPlan = extractProposedPlanBlocks(text);
+          if (proposedPlan.text.trim()) {
+            converted.push({
+              id: msg.id,
+              type: 'assistant',
+              content: proposedPlan.text,
+              timestamp: msg.timestamp,
+            });
+          }
+          proposedPlan.plans.forEach((plan, index) => {
+            converted.push({
+              id: `${msg.id}-proposed-plan-${index}`,
+              type: 'assistant',
+              content: '',
+              timestamp: msg.timestamp,
+              isToolUse: true,
+              toolName: 'proposed_plan',
+              toolInput: JSON.stringify({ plan }, null, 2),
+              toolId: `${msg.id}-proposed-plan-${index}`,
+              toolResult: null,
+            });
           });
         }
         break;

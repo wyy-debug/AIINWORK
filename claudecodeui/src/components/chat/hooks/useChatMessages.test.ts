@@ -18,6 +18,29 @@ function message(overrides: Partial<NormalizedMessage>): NormalizedMessage {
 }
 
 describe('normalizedToChatMessages subagent handling', () => {
+  it('renders proposed_plan blocks as plan tool cards and removes them from assistant text', () => {
+    const messages = normalizedToChatMessages([
+      message({
+        id: 'assistant-plan',
+        role: 'assistant',
+        content: [
+          'I inspected the app.',
+          '<proposed_plan>',
+          '# Plan',
+          '',
+          '- Add button',
+          '</proposed_plan>',
+        ].join('\n'),
+      }),
+    ]);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.content).toBe('I inspected the app.');
+    expect(messages[1]?.isToolUse).toBe(true);
+    expect(messages[1]?.toolName).toBe('proposed_plan');
+    expect(JSON.parse(String(messages[1]?.toolInput))).toEqual({ plan: '# Plan\n\n- Add button' });
+  });
+
   it('prefers manager subagentSnapshot over legacy subagentRecord for status', () => {
     const messages = [
       message({

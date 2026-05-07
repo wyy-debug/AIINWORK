@@ -15,6 +15,7 @@ import {
 } from '../../../../shared/view/ui';
 
 registerPermissionPanel('AskUserQuestion', AskUserQuestionPanel);
+registerPermissionPanel('request_user_input', AskUserQuestionPanel);
 
 interface PermissionRequestsBannerProps {
   pendingPermissionRequests: PendingPermissionRequest[];

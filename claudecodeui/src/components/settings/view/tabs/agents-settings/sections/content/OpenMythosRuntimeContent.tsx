@@ -6,6 +6,7 @@ import {
   Save,
   ShieldCheck,
   Snowflake,
+  Target,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -37,6 +38,10 @@ type SubagentRuntimeConfig = {
   maxDepth: number;
 };
 
+type GoalRuntimeConfig = {
+  enabled: boolean;
+};
+
 type ModelProfile = {
   id: string;
   name: string;
@@ -65,6 +70,7 @@ type MtlCodeModelConfig = {
   };
   openMythosRuntime: OpenMythosRuntimeConfig;
   subagents: SubagentRuntimeConfig;
+  goals: GoalRuntimeConfig;
   configPath?: string;
 };
 
@@ -89,6 +95,10 @@ const DEFAULT_SUBAGENT_RUNTIME_CONFIG: SubagentRuntimeConfig = {
   enabled: false,
   maxConcurrentThreadsPerSession: 3,
   maxDepth: 1,
+};
+
+const DEFAULT_GOAL_RUNTIME_CONFIG: GoalRuntimeConfig = {
+  enabled: false,
 };
 
 const EFFORT_LABELS: Record<EffortLevel, string> = {
@@ -185,6 +195,13 @@ const normalizeSubagentRuntimeConfig = (value: unknown): SubagentRuntimeConfig =
   };
 };
 
+const normalizeGoalRuntimeConfig = (value: unknown): GoalRuntimeConfig => {
+  const data = isObjectRecord(value) ? value : {};
+  return {
+    enabled: normalizeBoolean(data.enabled, DEFAULT_GOAL_RUNTIME_CONFIG.enabled),
+  };
+};
+
 const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   id: patch.id || 'default',
   name: patch.name || 'Default model',
@@ -234,6 +251,7 @@ const createEmptyConfig = (): MtlCodeModelConfig => {
     },
     openMythosRuntime: DEFAULT_OPENMYTHOS_RUNTIME_CONFIG,
     subagents: DEFAULT_SUBAGENT_RUNTIME_CONFIG,
+    goals: DEFAULT_GOAL_RUNTIME_CONFIG,
   };
 };
 
@@ -269,6 +287,7 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
     },
     openMythosRuntime: normalizeRuntimeConfig(data.openMythosRuntime),
     subagents: normalizeSubagentRuntimeConfig(data.subagents),
+    goals: normalizeGoalRuntimeConfig(data.goals),
   };
 };
 
@@ -388,6 +407,7 @@ export default function OpenMythosRuntimeContent() {
   const [config, setConfig] = useState<MtlCodeModelConfig>(() => createEmptyConfig());
   const [runtimeConfig, setRuntimeConfig] = useState<OpenMythosRuntimeConfig>(DEFAULT_OPENMYTHOS_RUNTIME_CONFIG);
   const [subagentConfig, setSubagentConfig] = useState<SubagentRuntimeConfig>(DEFAULT_SUBAGENT_RUNTIME_CONFIG);
+  const [goalConfig, setGoalConfig] = useState<GoalRuntimeConfig>(DEFAULT_GOAL_RUNTIME_CONFIG);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [status, setStatus] = useState<'success' | 'load-error' | 'save-error' | null>(null);
@@ -410,6 +430,7 @@ export default function OpenMythosRuntimeContent() {
           setConfig(nextConfig);
           setRuntimeConfig(nextConfig.openMythosRuntime);
           setSubagentConfig(nextConfig.subagents);
+          setGoalConfig(nextConfig.goals);
         }
       } catch (error) {
         console.error(error);
@@ -437,6 +458,11 @@ export default function OpenMythosRuntimeContent() {
 
   const updateSubagentConfig = (patch: Partial<SubagentRuntimeConfig>) => {
     setSubagentConfig((current) => normalizeSubagentRuntimeConfig({ ...current, ...patch }));
+    setStatus(null);
+  };
+
+  const updateGoalConfig = (patch: Partial<GoalRuntimeConfig>) => {
+    setGoalConfig((current) => normalizeGoalRuntimeConfig({ ...current, ...patch }));
     setStatus(null);
   };
 
@@ -478,6 +504,7 @@ export default function OpenMythosRuntimeContent() {
         runtime: config.runtime,
         openMythosRuntime: runtimeConfig,
         subagents: subagentConfig,
+        goals: goalConfig,
       };
       const response = await apiFetch('/api/settings/mtl-code-model', {
         method: 'PUT',
@@ -492,6 +519,7 @@ export default function OpenMythosRuntimeContent() {
       setConfig(nextConfig);
       setRuntimeConfig(nextConfig.openMythosRuntime);
       setSubagentConfig(nextConfig.subagents);
+      setGoalConfig(nextConfig.goals);
       setStatus('success');
       window.dispatchEvent(new Event('mtlCodeModelSettingsChanged'));
     } catch (error) {
@@ -588,6 +616,20 @@ export default function OpenMythosRuntimeContent() {
           disabled={disabled || !runtimeConfig.enabled}
           onChange={(contextCacheDiagnostics) => updateRuntimeConfig({ contextCacheDiagnostics })}
         />
+
+        <div className="space-y-4 rounded-lg border border-border bg-background p-4">
+          <RuntimeToggleRow
+            icon={Target}
+            title="Goal 持久目标"
+            description="启用 Codex 风格的 get_goal、create_goal、update_goal 工具，并允许会话目标进行预算计量和空闲续跑。"
+            checked={goalConfig.enabled}
+            disabled={disabled}
+            onChange={(enabled) => updateGoalConfig({ enabled })}
+          />
+          <p className="text-xs leading-5 text-muted-foreground">
+            模型只能创建、读取和完成目标；暂停、恢复和清除只由用户界面或 API 控制，和 OpenMythos frozen goal 保持独立。
+          </p>
+        </div>
 
         <div className="space-y-4 rounded-lg border border-border bg-background p-4">
           <RuntimeToggleRow

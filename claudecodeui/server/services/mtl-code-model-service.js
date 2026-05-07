@@ -32,10 +32,12 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
   subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
   subagentMaxDepth: 'MTL_CODE_SUBAGENTS_MAX_DEPTH',
   allowNestedSubagents: 'MTL_CODE_ALLOW_NESTED_SUBAGENTS',
+  goalsEnabled: 'MTL_CODE_GOALS_ENABLED',
 };
 
 export const OPENMYTHOS_RUNTIME_SETTINGS_KEY = 'openMythosRuntime';
 export const SUBAGENT_RUNTIME_SETTINGS_KEY = 'subagents';
+export const GOAL_RUNTIME_SETTINGS_KEY = 'goals';
 
 export const OPENMYTHOS_RUNTIME_ENV_KEYS = {
   enabled: 'MTL_CODE_OPENMYTHOS_RUNTIME',
@@ -69,6 +71,10 @@ export const DEFAULT_SUBAGENT_RUNTIME_CONFIG = Object.freeze({
   enabled: false,
   maxConcurrentThreadsPerSession: 3,
   maxDepth: 1,
+});
+
+export const DEFAULT_GOAL_RUNTIME_CONFIG = Object.freeze({
+  enabled: false,
 });
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
@@ -191,6 +197,13 @@ export function normalizeSubagentRuntimeConfig(value, fallback = DEFAULT_SUBAGEN
   };
 }
 
+export function normalizeGoalRuntimeConfig(value, fallback = DEFAULT_GOAL_RUNTIME_CONFIG) {
+  const data = readObjectRecord(value) ?? {};
+  return {
+    enabled: normalizeOpenMythosBoolean(data.enabled, fallback.enabled),
+  };
+}
+
 export function readSubagentRuntimeConfig(settings = {}, env = {}) {
   const envConfig = normalizeSubagentRuntimeConfig({
     enabled: readBooleanEnv(env, MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled, DEFAULT_SUBAGENT_RUNTIME_CONFIG.enabled),
@@ -205,6 +218,20 @@ export function readSubagentRuntimeConfig(settings = {}, env = {}) {
   });
   return normalizeSubagentRuntimeConfig(
     settings?.[SUBAGENT_RUNTIME_SETTINGS_KEY],
+    envConfig,
+  );
+}
+
+export function readGoalRuntimeConfig(settings = {}, env = {}) {
+  const envConfig = normalizeGoalRuntimeConfig({
+    enabled: readBooleanEnv(
+      env,
+      MTL_CODE_MODEL_ENV_KEYS.goalsEnabled,
+      DEFAULT_GOAL_RUNTIME_CONFIG.enabled,
+    ),
+  });
+  return normalizeGoalRuntimeConfig(
+    settings?.[GOAL_RUNTIME_SETTINGS_KEY],
     envConfig,
   );
 }
@@ -256,6 +283,12 @@ export function applySubagentRuntimeToEnv(env, config) {
   );
   env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxDepth] = String(normalized.maxDepth);
   env[MTL_CODE_MODEL_ENV_KEYS.allowNestedSubagents] = normalized.maxDepth > 1 ? '1' : '0';
+  return env;
+}
+
+export function applyGoalRuntimeToEnv(env, config) {
+  const normalized = normalizeGoalRuntimeConfig(config);
+  env[MTL_CODE_MODEL_ENV_KEYS.goalsEnabled] = normalized.enabled ? '1' : '0';
   return env;
 }
 
@@ -583,6 +616,12 @@ export async function readResolvedSubagentRuntimeConfig(env = process.env) {
   return readSubagentRuntimeConfig(settings, settingsEnv);
 }
 
+export async function readResolvedGoalRuntimeConfig(env = process.env) {
+  const settings = await readMtlCodeModelSettings(env);
+  const settingsEnv = readObjectRecord(settings.env) ?? {};
+  return readGoalRuntimeConfig(settings, settingsEnv);
+}
+
 export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   const normalizedProfileId = normalizeProfileId(profileId);
   if (!normalizedProfileId) {
@@ -602,6 +641,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   const contextWindowTokens = resolveProfileContextWindow({ ...profile, model }, settingsEnv);
   const openMythosRuntime = readOpenMythosRuntimeConfig(settings, settingsEnv);
   const subagents = readSubagentRuntimeConfig(settings, settingsEnv);
+  const goals = readGoalRuntimeConfig(settings, settingsEnv);
   const coordinatorModeEnabled = false;
   const runtimeEnv = {
     [ANTHROPIC_MODEL_ENV_KEYS.baseUrl]: profile.baseUrl,
@@ -617,6 +657,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   });
   applyOpenMythosRuntimeToEnv(runtimeEnv, openMythosRuntime);
   applySubagentRuntimeToEnv(runtimeEnv, subagents);
+  applyGoalRuntimeToEnv(runtimeEnv, goals);
 
   if (profile.authToken) {
     runtimeEnv[ANTHROPIC_MODEL_ENV_KEYS.authToken] = profile.authToken;
@@ -628,5 +669,6 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     contextWindowTokens,
     openMythosRuntime,
     subagents,
+    goals,
   };
 }

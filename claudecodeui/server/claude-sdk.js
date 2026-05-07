@@ -44,6 +44,11 @@ import {
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { evaluateRuntimePermission } from './services/runtime-permission-service.js';
+import {
+  getArgusPlanModeAllowedTools,
+  getArgusPlanModeDeniedTools,
+  resolveArgusPermissionMode,
+} from './services/argus-collaboration-mode-service.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -52,7 +57,7 @@ const pendingToolApprovals = new Map();
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
+const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'request_user_input', 'ExitPlanMode']);
 const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
 const ARGUS_STALE_EXACT_TOOL_DENIES = new Set([
   'Bash',
@@ -83,6 +88,22 @@ function normalizePermissionMode(value) {
     || value === 'plan'
     ? value
     : ARGUS_DEFAULT_PERMISSION_MODE;
+}
+
+function mergeUniqueToolRules(...groups) {
+  const merged = [];
+  for (const group of groups) {
+    if (!Array.isArray(group)) {
+      continue;
+    }
+    for (const entry of group) {
+      const value = typeof entry === 'string' ? entry.trim() : '';
+      if (value && !merged.includes(value)) {
+        merged.push(value);
+      }
+    }
+  }
+  return merged;
 }
 
 function shouldBypassToolPermissions(options = {}, settings = normalizeToolSettings()) {
@@ -407,7 +428,9 @@ function getMtlCodeGlobalConfigFile(env = process.env) {
 function buildMtlCodeArgs(options = {}, env = process.env) {
   const { sessionId, toolsSettings, permissionMode } = options;
   const settings = normalizeToolSettings(toolsSettings);
-  const requestedPermissionMode = normalizePermissionMode(permissionMode);
+  const requestedPermissionMode = normalizePermissionMode(
+    resolveArgusPermissionMode({ ...options, permissionMode }),
+  );
 
   const args = [
     '--print',
@@ -448,20 +471,17 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     args.push('--dangerously-skip-permissions');
   }
 
-  const allowedTools = [...(settings.allowedTools || [])];
   if (requestedPermissionMode === 'plan') {
-    const planModeTools = ['Read', 'Agent', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
-    for (const tool of planModeTools) {
-      if (!allowedTools.includes(tool)) {
-        allowedTools.push(tool);
-      }
-    }
+    args.push('--tools', ...getArgusPlanModeAllowedTools());
+  } else if (settings.allowedTools?.length > 0) {
+    args.push('--allowedTools', ...settings.allowedTools);
   }
-  if (allowedTools.length > 0) {
-    args.push('--allowedTools', ...allowedTools);
-  }
-  if (settings.disallowedTools?.length > 0) {
-    args.push('--disallowedTools', ...settings.disallowedTools);
+
+  const disallowedTools = requestedPermissionMode === 'plan'
+    ? mergeUniqueToolRules(settings.disallowedTools, getArgusPlanModeDeniedTools())
+    : settings.disallowedTools;
+  if (disallowedTools?.length > 0) {
+    args.push('--disallowedTools', ...disallowedTools);
   }
 
   if (options.appendSystemPrompt && typeof options.appendSystemPrompt === 'string') {
@@ -533,6 +553,9 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     ...(modelRuntime?.env || {}),
     MTLCODE: '1'
   };
+  if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
+    spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';
+  }
   if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
     spawnEnv.MTL_CODE_COORDINATOR_MODE = '0';
   }

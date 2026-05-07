@@ -123,6 +123,13 @@ import {
   type OpenMythosContextCacheDiagnostics,
   type OpenMythosRuntimeState,
 } from './utils/openmythosRuntime.js'
+import { areGoalsEnabled } from './utils/goalFeatureGate.js'
+import {
+  accountThreadGoalUsage,
+  buildGoalBudgetLimitPrompt,
+  buildGoalContinuationPrompt,
+  getThreadGoal,
+} from './tasks/threadGoalStore.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -227,6 +234,47 @@ type State = {
   // Why the previous iteration continued. Undefined on first iteration.
   // Lets tests assert recovery paths fired without inspecting message contents.
   transition: Continue | undefined
+}
+
+function getAssistantTokenUsage(assistantMessages: AssistantMessage[]): {
+  inputTokens: number
+  outputTokens: number
+} {
+  let inputTokens = 0
+  let outputTokens = 0
+  for (const assistantMessage of assistantMessages) {
+    const usage = assistantMessage.message?.usage as
+      | Record<string, number | undefined>
+      | undefined
+    if (!usage) continue
+    inputTokens += Math.max(0, Math.floor(usage.input_tokens ?? 0))
+    outputTokens += Math.max(0, Math.floor(usage.output_tokens ?? 0))
+  }
+  return { inputTokens, outputTokens }
+}
+
+function accountGoalForAssistantMessages(
+  toolUseContext: ToolUseContext,
+  assistantMessages: AssistantMessage[],
+  elapsedMs: number,
+) {
+  if (!areGoalsEnabled() || toolUseContext.agentId || assistantMessages.length === 0) {
+    return null
+  }
+  const { inputTokens, outputTokens } = getAssistantTokenUsage(assistantMessages)
+  return accountThreadGoalUsage(getSessionId(), {
+    inputTokens,
+    outputTokens,
+    elapsedMs,
+  })
+}
+
+function getActiveIdleGoal(toolUseContext: ToolUseContext) {
+  if (!areGoalsEnabled() || toolUseContext.agentId) {
+    return null
+  }
+  const goal = getThreadGoal(getSessionId())
+  return goal?.status === 'active' ? goal : null
 }
 
 function createOpenMythosCanUseTool(
@@ -441,6 +489,7 @@ async function* queryLoop(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    const iterationStartedAtMs = Date.now()
     // Destructure state at the top of each iteration. toolUseContext alone
     // is reassigned within an iteration (queryTracking, messages updates);
     // the rest are read-only between continue sites.
@@ -1182,6 +1231,36 @@ async function* queryLoop(
       )
     }
 
+    const accountedGoal = accountGoalForAssistantMessages(
+      toolUseContext,
+      assistantMessages,
+      Date.now() - iterationStartedAtMs,
+    )
+
+    if (accountedGoal?.status === 'budget_limited' && needsFollowUp) {
+      const next: State = {
+        messages: [
+          ...messagesForQuery,
+          ...assistantMessages,
+          createUserMessage({
+            content: buildGoalBudgetLimitPrompt(accountedGoal),
+            isMeta: true,
+          }),
+        ],
+        toolUseContext,
+        autoCompactTracking: tracking,
+        maxOutputTokensRecoveryCount: 0,
+        hasAttemptedReactiveCompact: false,
+        maxOutputTokensOverride: undefined,
+        pendingToolUseSummary: undefined,
+        stopHookActive: undefined,
+        turnCount,
+        transition: { reason: 'goal_budget_limit' },
+      }
+      state = next
+      continue
+    }
+
     // We need to handle a streaming abort before anything else.
     // When using streamingToolExecutor, we must consume getRemainingResults() so the
     // executor can generate synthetic tool_result blocks for queued/in-progress tools.
@@ -1526,6 +1605,31 @@ async function* queryLoop(
             queryDepth: queryTracking.depth,
           })
         }
+      }
+
+      const idleGoal = getActiveIdleGoal(toolUseContext)
+      if (idleGoal) {
+        const next: State = {
+          messages: [
+            ...messagesForQuery,
+            ...assistantMessages,
+            createUserMessage({
+              content: buildGoalContinuationPrompt(idleGoal),
+              isMeta: true,
+            }),
+          ],
+          toolUseContext,
+          autoCompactTracking: tracking,
+          maxOutputTokensRecoveryCount: 0,
+          hasAttemptedReactiveCompact: false,
+          maxOutputTokensOverride: undefined,
+          pendingToolUseSummary: undefined,
+          stopHookActive: undefined,
+          turnCount,
+          transition: { reason: 'goal_idle_continuation' },
+        }
+        state = next
+        continue
       }
 
       return { reason: 'completed' }

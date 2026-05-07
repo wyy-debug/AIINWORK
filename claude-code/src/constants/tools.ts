@@ -14,7 +14,13 @@ import {
   AGENT_SPAWN_TOOL_NAME,
   AGENT_TOOL_NAME,
 } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import {
+  CREATE_GOAL_TOOL_NAME,
+  GET_GOAL_TOOL_NAME,
+  UPDATE_GOAL_TOOL_NAME,
+} from '@mtl-code/builtin-tools/tools/GoalTool/GoalTools.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AskUserQuestionTool/prompt.js'
+import { REQUEST_USER_INPUT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AskUserQuestionTool/RequestUserInputTool.js'
 import { TASK_STOP_TOOL_NAME } from '@mtl-code/builtin-tools/tools/TaskStopTool/prompt.js'
 import { FILE_READ_TOOL_NAME } from '@mtl-code/builtin-tools/tools/FileReadTool/prompt.js'
 import { WEB_SEARCH_TOOL_NAME } from '@mtl-code/builtin-tools/tools/WebSearchTool/prompt.js'
@@ -55,6 +61,10 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   // Allow Agent tool for agents when user is ant (enables nested agents)
   ...(process.env.USER_TYPE === 'ant' ? [] : [AGENT_TOOL_NAME, AGENT_SPAWN_TOOL_NAME]),
   ASK_USER_QUESTION_TOOL_NAME,
+  REQUEST_USER_INPUT_TOOL_NAME,
+  GET_GOAL_TOOL_NAME,
+  CREATE_GOAL_TOOL_NAME,
+  UPDATE_GOAL_TOOL_NAME,
   TASK_STOP_TOOL_NAME,
   // Prevent recursive workflow execution inside subagents.
   ...(feature('WORKFLOW_SCRIPTS') ? [WORKFLOW_TOOL_NAME] : []),
