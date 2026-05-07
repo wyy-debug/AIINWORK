@@ -33,6 +33,10 @@ import {
   ShieldIcon,
   SquareIcon,
   CopyIcon,
+  TargetIcon,
+  PauseIcon,
+  PlayIcon,
+  Trash2Icon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -84,6 +88,14 @@ interface SlashCommand {
   [key: string]: unknown;
 }
 
+type SessionGoal = {
+  objective: string;
+  status: 'active' | 'paused' | 'budget_limited' | 'complete';
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+};
+
 interface ChatComposerProps {
   pendingPermissionRequests: PendingPermissionRequest[];
   handlePermissionDecision: (
@@ -113,6 +125,16 @@ interface ChatComposerProps {
   showRuntimeDiagnostics: boolean;
   agentRuntimeDiagnostics: AgentRuntimeDiagnostics | null;
   subagentActivity?: SubagentActivitySummary;
+  subagentsEnabled?: boolean;
+  subagentDispatchRequested: boolean;
+  onSubagentDispatchRequestedChange: (value: boolean) => void;
+  goalsEnabled?: boolean;
+  sessionGoal?: SessionGoal | null;
+  onSetGoal?: (objective: string, tokenBudget?: number | null) => Promise<void> | void;
+  onPauseGoal?: () => Promise<void> | void;
+  onResumeGoal?: () => Promise<void> | void;
+  onCompleteGoal?: () => Promise<void> | void;
+  onClearGoal?: () => Promise<void> | void;
   onStopSubagents?: (taskIds?: string[]) => void;
   onReuseSubagentObjective?: (text: string) => void;
   tokenBudget: Record<string, unknown> | null;
@@ -194,6 +216,16 @@ export default function ChatComposer({
   showRuntimeDiagnostics,
   agentRuntimeDiagnostics,
   subagentActivity,
+  subagentsEnabled = false,
+  subagentDispatchRequested,
+  onSubagentDispatchRequestedChange,
+  goalsEnabled = false,
+  sessionGoal,
+  onSetGoal,
+  onPauseGoal,
+  onResumeGoal,
+  onCompleteGoal,
+  onClearGoal,
   onStopSubagents,
   onReuseSubagentObjective,
   tokenBudget,
@@ -354,6 +386,27 @@ export default function ChatComposer({
     };
   });
   const hasRuntimeBindings = Boolean(selectedAgent || selectedMcpBindings.length > 0 || selectedSkillSummaries.length > 0);
+  const activeGoalRemainingTokens = typeof sessionGoal?.tokenBudget === 'number'
+    ? Math.max(0, sessionGoal.tokenBudget - sessionGoal.tokensUsed)
+    : null;
+  const handleGoalButtonClick = async () => {
+    if (!goalsEnabled || !onSetGoal) {
+      return;
+    }
+    const objective = window.prompt('设置本会话 Goal');
+    if (!objective?.trim()) {
+      return;
+    }
+    const budgetText = window.prompt('Token 预算，可留空');
+    const tokenBudget = budgetText?.trim()
+      ? Number.parseInt(budgetText.trim(), 10)
+      : null;
+    await onSetGoal(
+      objective.trim(),
+      Number.isFinite(tokenBudget) && tokenBudget! > 0 ? tokenBudget : null,
+    );
+    textareaRef.current?.focus();
+  };
   const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
   const normalizedPermissionMode: PermissionMode = (
     permissionMode === 'acceptEdits'
@@ -1360,6 +1413,46 @@ export default function ChatComposer({
             />
         </PromptInputBody>
 
+        {goalsEnabled && sessionGoal && (
+          <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <TargetIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium text-foreground">{sessionGoal.objective}</div>
+              <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
+                <span>{sessionGoal.status}</span>
+                <span>{sessionGoal.tokensUsed} tokens</span>
+                {activeGoalRemainingTokens !== null && <span>剩余 {activeGoalRemainingTokens}</span>}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => (sessionGoal.status === 'paused' || sessionGoal.status === 'budget_limited' ? onResumeGoal?.() : onPauseGoal?.())}
+              title={sessionGoal.status === 'paused' || sessionGoal.status === 'budget_limited' ? '恢复 Goal' : '暂停 Goal'}
+            >
+              {sessionGoal.status === 'paused' || sessionGoal.status === 'budget_limited'
+                ? <PlayIcon className="h-3.5 w-3.5" />
+                : <PauseIcon className="h-3.5 w-3.5" />}
+            </button>
+            <button
+              type="button"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => onCompleteGoal?.()}
+              title="完成 Goal"
+            >
+              <CheckIcon className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => onClearGoal?.()}
+              title="清除 Goal"
+            >
+              <Trash2Icon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         <PromptInputFooter className="gap-3">
           <PromptInputTools className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden pr-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <PromptInputButton
@@ -1406,6 +1499,49 @@ export default function ChatComposer({
                 <ChevronDownIcon className={cn('h-3.5 w-3.5 shrink-0 transition-transform', isAgentMenuOpen && 'rotate-180')} />
               </button>
             )}
+
+            <PromptInputButton
+              tooltip={{
+                content: subagentsEnabled
+                  ? (subagentDispatchRequested ? '本条消息已允许多任务分发' : '本条消息允许多任务分发')
+                  : '先在设置里开启 Subagent',
+              }}
+              onClick={() => {
+                if (!subagentsEnabled) {
+                  return;
+                }
+                onSubagentDispatchRequestedChange(!subagentDispatchRequested);
+                textareaRef.current?.focus();
+              }}
+              disabled={isLoading || !subagentsEnabled}
+              aria-pressed={subagentDispatchRequested}
+              className={cn(
+                subagentDispatchRequested
+                  ? 'bg-primary/10 text-primary hover:bg-primary/15'
+                  : 'text-muted-foreground',
+              )}
+            >
+              <BotIcon />
+            </PromptInputButton>
+
+            <PromptInputButton
+              tooltip={{
+                content: goalsEnabled
+                  ? (sessionGoal ? '设置新的持久 Goal' : '设置本会话持久 Goal')
+                  : '先在运行时设置里开启 Goal',
+              }}
+              onClick={() => {
+                void handleGoalButtonClick();
+              }}
+              disabled={isLoading || !goalsEnabled}
+              className={cn(
+                sessionGoal
+                  ? 'bg-primary/10 text-primary hover:bg-primary/15'
+                  : 'text-muted-foreground',
+              )}
+            >
+              <TargetIcon />
+            </PromptInputButton>
 
             <button
               ref={permissionMenuButtonRef}

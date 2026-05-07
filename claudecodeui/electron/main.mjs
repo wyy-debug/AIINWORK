@@ -6,6 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { maybePromptForStartupUpdate } from './auto-update-service.mjs';
 
 const electronDir = path.dirname(fileURLToPath(import.meta.url));
 const sourceAppRoot = path.resolve(electronDir, '..');
@@ -551,6 +552,21 @@ const stopBackend = () => {
   backendProcess = null;
 };
 
+const checkStartupUpdate = async () => {
+  try {
+    const result = await maybePromptForStartupUpdate({
+      app,
+      dialog,
+      shell,
+      currentVersion: app.getVersion(),
+    });
+    return result?.launched === true;
+  } catch (error) {
+    console.warn('[auto-update] startup check failed:', error?.message || error);
+    return false;
+  }
+};
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -567,6 +583,11 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     try {
+      const updateLaunched = await checkStartupUpdate();
+      if (updateLaunched) {
+        return;
+      }
+
       const url = await startBackend();
       await createMainWindow(url);
     } catch (error) {

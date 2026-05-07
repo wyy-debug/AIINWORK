@@ -30,6 +30,10 @@ export default function AgentCategoryContentSection({
           onSkipPermissionsChange={(value) => {
             onClaudePermissionsChange({ ...claudePermissions, skipPermissions: value });
           }}
+          permissionMode={claudePermissions.permissionMode || 'acceptEdits'}
+          onPermissionModeChange={(value) => {
+            onClaudePermissionsChange({ ...claudePermissions, permissionMode: value });
+          }}
           allowedTools={claudePermissions.allowedTools}
           onAllowedToolsChange={(value) => {
             onClaudePermissionsChange({ ...claudePermissions, allowedTools: value });

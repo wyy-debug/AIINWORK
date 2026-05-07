@@ -75,7 +75,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       const isOther = otherActive.get(idx) || false;
       const otherText = (otherTexts.get(idx) || '').trim();
       if (isOther && otherText) selected.push(otherText);
-      if (selected.length > 0) answers[q.question] = selected.join(', ');
+      if (selected.length > 0) answers[q.id || q.question] = selected.join(', ');
     });
     return answers;
   }, [questions, selections, otherActive, otherTexts]);

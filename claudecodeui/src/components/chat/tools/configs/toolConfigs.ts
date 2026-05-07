@@ -517,6 +517,30 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     }
   },
 
+  request_user_input: {
+    input: {
+      type: 'collapsible',
+      title: (input: any) => {
+        const count = input.questions?.length || 0;
+        const hasAnswers = input.answers && Object.keys(input.answers).length > 0;
+        if (count === 1) {
+          const header = input.questions[0]?.header || 'Question';
+          return hasAnswers ? `${header} - answered` : header;
+        }
+        return hasAnswers ? `${count} questions - answered` : `${count} questions`;
+      },
+      defaultOpen: true,
+      contentType: 'question-answer',
+      getContentProps: (input: any) => ({
+        questions: input.questions || [],
+        answers: input.answers || {}
+      }),
+    },
+    result: {
+      hideOnSuccess: true
+    }
+  },
+
   // ============================================================================
   // PLAN TOOLS
   // ============================================================================
@@ -541,6 +565,21 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     input: {
       type: 'plan',
       title: 'Implementation plan',
+      defaultOpen: true,
+      contentType: 'markdown',
+      getContentProps: (input) => ({
+        content: input.plan?.replace(/\\n/g, '\n') || input.plan
+      })
+    },
+    result: {
+      hidden: true
+    }
+  },
+
+  proposed_plan: {
+    input: {
+      type: 'plan',
+      title: 'Plan',
       defaultOpen: true,
       contentType: 'markdown',
       getContentProps: (input) => ({

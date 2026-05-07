@@ -41,6 +41,16 @@ type PendingViewSession = {
 
 type ConversationAgentChoiceState = 'pending' | 'default' | 'agent';
 
+type SessionGoal = {
+  threadId: string;
+  goalId: string;
+  objective: string;
+  status: 'active' | 'paused' | 'budget_limited' | 'complete';
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+};
+
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
@@ -175,6 +185,9 @@ function ChatInterface({
   const selectedProjectSkillNamesRef = useRef<string[]>([]);
   const [defaultModelProfileId, setDefaultModelProfileId] = useState('');
   const [selectedModelProfileId, setSelectedModelProfileId] = useState('');
+  const [subagentsEnabled, setSubagentsEnabled] = useState(false);
+  const [goalsEnabled, setGoalsEnabled] = useState(false);
+  const [sessionGoal, setSessionGoal] = useState<SessionGoal | null>(null);
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
   const [agentRuntimeDiagnostics, setAgentRuntimeDiagnostics] = useState<AgentRuntimeDiagnostics | null>(null);
   const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
@@ -579,6 +592,8 @@ function ChatInterface({
           return;
         }
         setDefaultModelProfileId(nextProfileId);
+        setSubagentsEnabled(Boolean(data?.config?.subagents?.enabled));
+        setGoalsEnabled(Boolean(data?.config?.goals?.enabled));
         if (!activeConversationSessionId) {
           setSelectedModelProfileId(nextProfileId);
         } else {
@@ -595,6 +610,68 @@ function ChatInterface({
       cancelled = true;
       window.removeEventListener('mtlCodeModelSettingsChanged', loadDefaultModelProfile);
     };
+  }, [activeConversationSessionId]);
+
+  const loadSessionGoal = useCallback(async () => {
+    if (!activeConversationSessionId) {
+      setSessionGoal(null);
+      return;
+    }
+    try {
+      const response = await api.sessionGoal(activeConversationSessionId);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to load session goal');
+      }
+      setSessionGoal(data?.goal || null);
+    } catch (error) {
+      console.warn('Failed to load session goal:', error);
+      setSessionGoal(null);
+    }
+  }, [activeConversationSessionId]);
+
+  useEffect(() => {
+    void loadSessionGoal();
+  }, [loadSessionGoal]);
+
+  const handleSetSessionGoal = useCallback(async (objective: string, tokenBudget?: number | null) => {
+    if (!activeConversationSessionId) {
+      return;
+    }
+    const response = await api.setSessionGoal(activeConversationSessionId, {
+      objective,
+      tokenBudget,
+      status: 'active',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || 'Failed to set session goal');
+    }
+    setSessionGoal(data?.goal || null);
+  }, [activeConversationSessionId]);
+
+  const handleSessionGoalAction = useCallback(async (action: 'pause' | 'resume' | 'complete') => {
+    if (!activeConversationSessionId) {
+      return;
+    }
+    const response = await api.setSessionGoal(activeConversationSessionId, { action });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || `Failed to ${action} session goal`);
+    }
+    setSessionGoal(data?.goal || null);
+  }, [activeConversationSessionId]);
+
+  const handleClearSessionGoal = useCallback(async () => {
+    if (!activeConversationSessionId) {
+      return;
+    }
+    const response = await api.clearSessionGoal(activeConversationSessionId);
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || 'Failed to clear session goal');
+    }
+    setSessionGoal(null);
   }, [activeConversationSessionId]);
 
   useEffect(() => {
@@ -1104,6 +1181,8 @@ function ChatInterface({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
+    subagentDispatchRequested,
+    setSubagentDispatchRequested,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -1437,6 +1516,16 @@ function ChatInterface({
           showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0 || Boolean(agentRuntimeDiagnostics)}
           agentRuntimeDiagnostics={agentRuntimeDiagnostics}
           subagentActivity={subagentActivity ?? undefined}
+          subagentsEnabled={subagentsEnabled}
+          subagentDispatchRequested={subagentDispatchRequested}
+          onSubagentDispatchRequestedChange={setSubagentDispatchRequested}
+          goalsEnabled={goalsEnabled}
+          sessionGoal={sessionGoal}
+          onSetGoal={handleSetSessionGoal}
+          onPauseGoal={() => handleSessionGoalAction('pause')}
+          onResumeGoal={() => handleSessionGoalAction('resume')}
+          onCompleteGoal={() => handleSessionGoalAction('complete')}
+          onClearGoal={handleClearSessionGoal}
           onStopSubagents={handleStopSubagents}
           onReuseSubagentObjective={handleReuseSubagentObjective}
           tokenBudget={tokenBudget}

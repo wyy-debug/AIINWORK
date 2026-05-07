@@ -14,4 +14,15 @@ describe('OpenMythos runtime settings content', () => {
     expect(source).not.toContain('previewPrompt');
     expect(source).not.toContain('PreviewList');
   });
+
+  it('wires the Goal feature gate into runtime settings', () => {
+    const currentFile = fileURLToPath(import.meta.url);
+    const sourcePath = resolve(dirname(currentFile), 'OpenMythosRuntimeContent.tsx');
+    const source = readFileSync(sourcePath, 'utf8');
+
+    expect(source).toContain('normalizeGoalRuntimeConfig');
+    expect(source).toContain('goalConfig');
+    expect(source).toContain('get_goal');
+    expect(source).toContain('goals: goalConfig');
+  });
 });

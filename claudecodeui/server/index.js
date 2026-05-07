@@ -63,6 +63,7 @@ import userRoutes from './routes/user.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
+import { applyArgusCollaborationModeOptions } from './services/argus-collaboration-mode-service.js';
 import {
     buildContextBudgetFromFlatUsage,
     buildContextBudgetFromJsonlLines,
@@ -76,6 +77,14 @@ import {
 } from './services/file-mutation-service.js';
 import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig, readResolvedSubagentRuntimeConfig } from './services/mtl-code-model-service.js';
 import { getRequestIpAddress } from './services/hub-usage-service.js';
+import {
+    clearSessionGoal,
+    completeSessionGoal,
+    getSessionGoal,
+    pauseSessionGoal,
+    replaceSessionGoal,
+    resumeSessionGoal,
+} from './services/session-goal-service.js';
 import {
     evaluateRuntimePermission,
     resolveRuntimeShell,
@@ -645,6 +654,55 @@ app.patch('/api/sessions/:sessionId/metadata', authenticateToken, async (req, re
     } catch (error) {
         console.error(`[API] Error updating session metadata ${req.params.sessionId}:`, error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => {
+    try {
+        const goal = await getSessionGoal(req.params.sessionId);
+        res.json({ success: true, goal });
+    } catch (error) {
+        const status = /invalid sessionid/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+});
+
+app.put('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const action = String(body.action || '').trim().toLowerCase();
+        let goal;
+
+        if (action === 'pause') {
+            goal = await pauseSessionGoal(req.params.sessionId);
+        } else if (action === 'resume') {
+            goal = await resumeSessionGoal(req.params.sessionId);
+        } else if (action === 'complete') {
+            goal = await completeSessionGoal(req.params.sessionId);
+        } else {
+            goal = await replaceSessionGoal(req.params.sessionId, {
+                objective: body.objective,
+                tokenBudget: body.tokenBudget,
+                status: body.status || 'active',
+            });
+        }
+
+        res.json({ success: true, goal });
+    } catch (error) {
+        const status = /invalid sessionid|objective|token budget|goal status|no goal exists/i.test(error.message)
+            ? 400
+            : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+});
+
+app.delete('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => {
+    try {
+        await clearSessionGoal(req.params.sessionId);
+        res.json({ success: true });
+    } catch (error) {
+        const status = /invalid sessionid/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 });
 
@@ -2590,7 +2648,9 @@ function handleChatConnection(ws, request) {
             const data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
-                const commandData = applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data));
+                const commandData = applyUploadedFilesToChatCommand(
+                    applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(data)),
+                );
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');

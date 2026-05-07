@@ -217,6 +217,7 @@ export function useChatComposerState({
   const [fileAttachmentErrors, setFileAttachmentErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
+  const [subagentDispatchRequested, setSubagentDispatchRequested] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
@@ -224,6 +225,7 @@ export function useChatComposerState({
   const handleSubmitRef = useRef<
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
+  const oneShotPermissionModeRef = useRef<PermissionMode | string | null>(null);
   const inputValueRef = useRef(input);
 
   const handleBuiltInCommand = useCallback(
@@ -879,10 +881,11 @@ export function useChatComposerState({
       };
 
       const toolsSettings = getToolsSettings();
+      const permissionModeForSend = oneShotPermissionModeRef.current || permissionMode;
       const skipToolPermissions = Boolean(
         toolsSettings?.skipPermissions
         || toolsSettings?.permissionMode === 'bypassPermissions'
-        || permissionMode === 'bypassPermissions',
+        || permissionModeForSend === 'bypassPermissions',
       );
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
@@ -927,7 +930,7 @@ export function useChatComposerState({
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
-            permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
+            permissionMode: permissionModeForSend === 'plan' ? 'default' : permissionModeForSend,
             files: uploadedFiles,
             clientMessageId,
           },
@@ -949,7 +952,7 @@ export function useChatComposerState({
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
-            permissionMode,
+            permissionMode: permissionModeForSend,
             skipPermissions: skipToolPermissions,
             toolsSettings,
             files: uploadedFiles,
@@ -966,7 +969,7 @@ export function useChatComposerState({
             sessionId: backendSessionId,
             resume: Boolean(backendSessionId),
             toolsSettings,
-            permissionMode,
+            permissionMode: permissionModeForSend,
             skipPermissions: skipToolPermissions,
             model: claudeModel,
             modelProfileId,
@@ -979,6 +982,7 @@ export function useChatComposerState({
             files: uploadedFiles,
             clientMessageId,
             clientSessionId: sessionToActivate,
+            ...(subagentDispatchRequested ? { subagentDispatch: true } : {}),
           },
         });
       }
@@ -993,6 +997,8 @@ export function useChatComposerState({
       setFileAttachmentErrors(new Map());
       setIsTextareaExpanded(false);
       setThinkingMode('none');
+      setSubagentDispatchRequested(false);
+      oneShotPermissionModeRef.current = null;
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -1024,6 +1030,7 @@ export function useChatComposerState({
       selectedAgentAppBindings,
       selectedSkillNames,
       getSelectedSkillNames,
+      subagentDispatchRequested,
       modelProfileId,
       allowSessionAgentBinding,
       sendMessage,
@@ -1058,6 +1065,26 @@ export function useChatComposerState({
 
     window.addEventListener('argus-append-chat-input', handleAppendChatInput);
     return () => window.removeEventListener('argus-append-chat-input', handleAppendChatInput);
+  }, []);
+
+  useEffect(() => {
+    const handleSubmitChatInput = (event: Event) => {
+      const detail = (event as CustomEvent<{ text?: string; permissionMode?: PermissionMode | string }>).detail || {};
+      const text = typeof detail.text === 'string' ? detail.text.trim() : '';
+      if (!text) {
+        return;
+      }
+
+      setInput(text);
+      inputValueRef.current = text;
+      oneShotPermissionModeRef.current = detail.permissionMode || null;
+      window.setTimeout(() => {
+        void handleSubmitRef.current?.(createFakeSubmitEvent());
+      }, 0);
+    };
+
+    window.addEventListener('argus-submit-chat-input', handleSubmitChatInput);
+    return () => window.removeEventListener('argus-submit-chat-input', handleSubmitChatInput);
   }, []);
 
   useEffect(() => {
@@ -1301,6 +1328,8 @@ export function useChatComposerState({
     isTextareaExpanded,
     thinkingMode,
     setThinkingMode,
+    subagentDispatchRequested,
+    setSubagentDispatchRequested,
     slashCommandsCount,
     filteredCommands,
     frequentCommands,

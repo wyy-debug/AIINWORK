@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
   parseToolPreset,
+  assembleToolPool,
   filterToolsByDenyRules,
   getAllBaseTools,
   getTools,
@@ -28,6 +29,12 @@ const LEGACY_SUBAGENT_TOOL_NAMES = [
   'AgentResume',
   'resume_agent',
   'Task',
+]
+
+const CODEX_GOAL_TOOL_NAMES = [
+  'get_goal',
+  'create_goal',
+  'update_goal',
 ]
 
 const originalEnv = { ...process.env }
@@ -150,5 +157,96 @@ describe('subagent publishing gate', () => {
       expect(baseToolNames).not.toContain(toolName)
       expect(enabledToolNames).not.toContain(toolName)
     }
+  })
+})
+
+describe('goal publishing gate', () => {
+  test('does not expose Codex goal tools by default', () => {
+    delete process.env.MTL_CODE_GOALS_ENABLED
+
+    const baseToolNames = getAllBaseTools().map(tool => tool.name)
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    for (const toolName of CODEX_GOAL_TOOL_NAMES) {
+      expect(baseToolNames).not.toContain(toolName)
+      expect(enabledToolNames).not.toContain(toolName)
+    }
+  })
+
+  test('exposes Codex goal tools when the goals feature gate is enabled', () => {
+    process.env.MTL_CODE_GOALS_ENABLED = '1'
+
+    const baseToolNames = getAllBaseTools().map(tool => tool.name)
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    for (const toolName of CODEX_GOAL_TOOL_NAMES) {
+      expect(baseToolNames).toContain(toolName)
+      expect(enabledToolNames).toContain(toolName)
+    }
+  })
+})
+
+describe('Codex-style plan mode tools', () => {
+  test('publishes request_user_input alongside legacy AskUserQuestion', () => {
+    const baseToolNames = getAllBaseTools().map(tool => tool.name)
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    expect(baseToolNames).toContain('AskUserQuestion')
+    expect(baseToolNames).toContain('request_user_input')
+    expect(enabledToolNames).toContain('AskUserQuestion')
+    expect(enabledToolNames).toContain('request_user_input')
+  })
+
+  test('hard-filters legacy approval and write tools in Argus Codex-style plan mode', () => {
+    process.env.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1'
+    const planPermissionContext = {
+      ...getEmptyToolPermissionContext(),
+      mode: 'plan',
+    } as any
+
+    const enabledToolNames = getTools(planPermissionContext).map(tool => tool.name)
+
+    expect(enabledToolNames).toContain('Read')
+    expect(enabledToolNames).toContain('request_user_input')
+    expect(enabledToolNames).toContain('AskUserQuestion')
+    expect(enabledToolNames).not.toContain('ExitPlanMode')
+    expect(enabledToolNames).not.toContain('TodoWrite')
+    expect(enabledToolNames).not.toContain('Write')
+    expect(enabledToolNames).not.toContain('Edit')
+    expect(enabledToolNames).not.toContain('MultiEdit')
+    expect(enabledToolNames).not.toContain('Bash')
+  })
+
+  test('does not merge MCP tools into Argus Codex-style plan mode', () => {
+    process.env.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1'
+    const planPermissionContext = {
+      ...getEmptyToolPermissionContext(),
+      mode: 'plan',
+    } as any
+
+    const tools = assembleToolPool(planPermissionContext, [
+      {
+        name: 'mcp__writer__mutate',
+        description: async () => 'mutates',
+        prompt: async () => 'mutates',
+        inputSchema: {} as any,
+        userFacingName: () => 'mutate',
+        isEnabled: () => true,
+        isReadOnly: () => false,
+        isConcurrencySafe: () => false,
+        needsPermissions: () => true,
+        validateInput: async () => ({ result: true as const }),
+        call: async () => ({ content: 'ok' }),
+        mcpInfo: { serverName: 'writer', toolName: 'mutate' },
+      } as any,
+    ]).map(tool => tool.name)
+
+    expect(tools).not.toContain('mcp__writer__mutate')
   })
 })

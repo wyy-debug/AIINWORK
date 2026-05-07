@@ -54,6 +54,17 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ provider, ...metadata }),
     }),
+  sessionGoal: (sessionId) =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/goal`),
+  setSessionGoal: (sessionId, payload) =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/goal`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  clearSessionGoal: (sessionId) =>
+    apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/goal`, {
+      method: 'DELETE',
+    }),
   deleteCodexSession: (sessionId) =>
     apiFetch(`/api/codex/sessions/${sessionId}`, {
       method: 'DELETE',

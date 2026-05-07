@@ -52,10 +52,10 @@ describe("Tool chain: registration and discovery", () => {
 
   test("findToolByName resolves via toolMatchesName", () => {
     const tools = getAllBaseTools();
-    const agent = findToolByName(tools, "Agent");
-    expect(agent).toBeDefined();
+    const requestInput = findToolByName(tools, "request_user_input");
+    expect(requestInput).toBeDefined();
     // Verify it can also find by checking name directly
-    expect(tools.some(t => t.name === "Agent")).toBe(true);
+    expect(tools.some(t => t.name === "request_user_input")).toBe(true);
   });
 
   test("tool names are unique across the base tool list", () => {

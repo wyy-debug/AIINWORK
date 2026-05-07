@@ -1,12 +1,20 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import { expect, test } from 'vitest';
+import {
+  ANTHROPIC_MODEL_ENV_KEYS,
+  MTL_CODE_MODEL_ENV_KEYS,
+  OPENMYTHOS_RUNTIME_ENV_KEYS,
+  OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  applyAnthropicRuntimeModelDefaults,
+  applyGoalRuntimeToEnv,
+  applyOpenMythosRuntimeToEnv,
+  applySubagentRuntimeToEnv,
+  normalizeGoalRuntimeConfig,
+  normalizeSubagentRuntimeConfig,
+  readOpenMythosRuntimeConfig,
+  repairAnthropicRuntimeModelEnv,
+} from '../mtl-code-model-service.js';
 
 test('OpenMythos runtime settings are normalized and written to MTL_CODE_OPENMYTHOS env keys', async () => {
-  const {
-    applyOpenMythosRuntimeToEnv,
-    OPENMYTHOS_RUNTIME_ENV_KEYS,
-  } = await import(`../mtl-code-model-service.js?openmythosEnv=${Date.now()}`);
-
   const env: Record<string, string> = {};
   applyOpenMythosRuntimeToEnv(env, {
     enabled: true,
@@ -22,27 +30,21 @@ test('OpenMythos runtime settings are normalized and written to MTL_CODE_OPENMYT
     maxEffort: 'high',
   });
 
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.enabled], '1');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.adaptiveEffort], '0');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.taskCard], '1');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.routingHints], '0');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.loopControl], 'advisory');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.stableReinjection], '0');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter], '1');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting], '0');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics], '1');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort], 'medium');
-  assert.equal(env[OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort], 'high');
-  assert.equal('MTL_CODE_OPENMYTHOS_AUTO_DISPATCH' in env, false);
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.enabled]).toBe('1');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.adaptiveEffort]).toBe('0');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.taskCard]).toBe('1');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.routingHints]).toBe('0');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.loopControl]).toBe('advisory');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.stableReinjection]).toBe('0');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter]).toBe('1');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting]).toBe('0');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics]).toBe('1');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort]).toBe('medium');
+  expect(env[OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort]).toBe('high');
+  expect('MTL_CODE_OPENMYTHOS_AUTO_DISPATCH' in env).toBe(false);
 });
 
 test('Subagent runtime settings are normalized and written to Codex-style env keys', async () => {
-  const {
-    MTL_CODE_MODEL_ENV_KEYS,
-    applySubagentRuntimeToEnv,
-    normalizeSubagentRuntimeConfig,
-  } = await import(`../mtl-code-model-service.js?subagentRuntime=${Date.now()}`);
-
   const env: Record<string, string> = {};
   const config = normalizeSubagentRuntimeConfig({
     enabled: true,
@@ -51,19 +53,23 @@ test('Subagent runtime settings are normalized and written to Codex-style env ke
   });
   applySubagentRuntimeToEnv(env, config);
 
-  assert.equal(config.enabled, true);
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled], '1');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxConcurrentThreadsPerSession], '5');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxDepth], '2');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.allowNestedSubagents], '1');
+  expect(config.enabled).toBe(true);
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled]).toBe('1');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxConcurrentThreadsPerSession]).toBe('5');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxDepth]).toBe('2');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.allowNestedSubagents]).toBe('1');
+});
+
+test('Goal runtime settings are normalized and written to Codex-style env keys', async () => {
+  const env: Record<string, string> = {};
+  const config = normalizeGoalRuntimeConfig({ enabled: true });
+  applyGoalRuntimeToEnv(env, config);
+
+  expect(config.enabled).toBe(true);
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.goalsEnabled]).toBe('1');
 });
 
 test('OpenMythos runtime settings override stale env values when read back', async () => {
-  const {
-    OPENMYTHOS_RUNTIME_SETTINGS_KEY,
-    readOpenMythosRuntimeConfig,
-  } = await import(`../mtl-code-model-service.js?openmythosRead=${Date.now()}`);
-
   const env = {
     MTL_CODE_OPENMYTHOS_RUNTIME: '0',
     MTL_CODE_OPENMYTHOS_LOOP_CONTROL: 'advisory',
@@ -81,20 +87,14 @@ test('OpenMythos runtime settings override stale env values when read back', asy
 
   const config = readOpenMythosRuntimeConfig(settings, env);
 
-  assert.equal(config.enabled, true);
-  assert.equal('autoDispatchSubagents' in config, false);
-  assert.equal(config.loopControl, 'enforced');
-  assert.equal(config.minEffort, 'high');
-  assert.equal(config.maxEffort, 'xhigh');
+  expect(config.enabled).toBe(true);
+  expect('autoDispatchSubagents' in config).toBe(false);
+  expect(config.loopControl).toBe('enforced');
+  expect(config.minEffort).toBe('high');
+  expect(config.maxEffort).toBe('xhigh');
 });
 
 test('Anthropic runtime defaults force subagents to the active model instead of stale small-model env', async () => {
-  const {
-    ANTHROPIC_MODEL_ENV_KEYS,
-    MTL_CODE_MODEL_ENV_KEYS,
-    applyAnthropicRuntimeModelDefaults,
-  } = await import(`../mtl-code-model-service.js?activeSubagentModel=${Date.now()}`);
-
   const env: Record<string, string> = {
     [ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel]: 'deepseek-v4-flash',
     [MTL_CODE_MODEL_ENV_KEYS.subagentModel]: 'deepseek-v4-flash',
@@ -106,19 +106,14 @@ test('Anthropic runtime defaults force subagents to the active model instead of 
     model: 'deepseek-v4-pro',
   });
 
-  assert.equal(env[ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel], 'deepseek-v4-pro');
-  assert.equal(env[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel], 'deepseek-v4-pro');
-  assert.equal(env[ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel], 'deepseek-v4-pro');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentModel], 'deepseek-v4-pro');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel], 'deepseek-v4-pro');
+  expect(env[ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel]).toBe('deepseek-v4-pro');
+  expect(env[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel]).toBe('deepseek-v4-pro');
+  expect(env[ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel]).toBe('deepseek-v4-pro');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.subagentModel]).toBe('deepseek-v4-pro');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel]).toBe('deepseek-v4-pro');
 });
 
 test('Anthropic runtime defaults clear stale DeepSeek subagent model when switching to MiMo', async () => {
-  const {
-    MTL_CODE_MODEL_ENV_KEYS,
-    applyAnthropicRuntimeModelDefaults,
-  } = await import(`../mtl-code-model-service.js?mimoSubagentModel=${Date.now()}`);
-
   const env: Record<string, string> = {
     [MTL_CODE_MODEL_ENV_KEYS.subagentModel]: 'deepseek-v4-flash',
     [MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel]: 'deepseek-v4-flash',
@@ -131,18 +126,13 @@ test('Anthropic runtime defaults clear stale DeepSeek subagent model when switch
     model: 'mimo-v2.5',
   });
 
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentModel], 'mimo-v2.5');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel], 'mimo-v2.5');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.effortLevel], undefined);
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.legacyEffortLevel], undefined);
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.subagentModel]).toBe('mimo-v2.5');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel]).toBe('mimo-v2.5');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.effortLevel]).toBe(undefined);
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.legacyEffortLevel]).toBe(undefined);
 });
 
 test('runtime env repair derives subagent model from active Anthropic env values', async () => {
-  const {
-    MTL_CODE_MODEL_ENV_KEYS,
-    repairAnthropicRuntimeModelEnv,
-  } = await import(`../mtl-code-model-service.js?repairSubagentModel=${Date.now()}`);
-
   const env: Record<string, string> = {
     ANTHROPIC_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/anthropic',
     ANTHROPIC_MODEL: 'mimo-v2.5-pro',
@@ -152,6 +142,6 @@ test('runtime env repair derives subagent model from active Anthropic env values
 
   repairAnthropicRuntimeModelEnv(env);
 
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.subagentModel], 'mimo-v2.5-pro');
-  assert.equal(env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel], 'mimo-v2.5-pro');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.subagentModel]).toBe('mimo-v2.5-pro');
+  expect(env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel]).toBe('mimo-v2.5-pro');
 });
