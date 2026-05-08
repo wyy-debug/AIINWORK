@@ -212,6 +212,31 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       })];
     }
 
+    if (
+      raw.type === 'system' &&
+      (
+        raw.subtype === 'thread_goal_updated' ||
+        raw.subtype === 'thread_goal_cleared' ||
+        raw.subtype === 'thread_goal_lifecycle'
+      )
+    ) {
+      const eventType = raw.subtype;
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId: typeof raw.session_id === 'string' ? raw.session_id : sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'status',
+        type: eventType,
+        event: eventType,
+        eventId: typeof raw.event_id === 'number' ? raw.event_id : undefined,
+        goalId: typeof raw.goal_id === 'string' ? raw.goal_id : null,
+        goal: raw.goal ?? null,
+        lifecycleType: typeof raw.lifecycle_type === 'string' ? raw.lifecycle_type : null,
+        payload: raw.payload ?? null,
+      })];
+    }
+
     if (isCompactBoundaryRecord(raw)) {
       const compactMetadata = raw.compactMetadata || raw.compact_metadata || {};
       const microcompactMetadata = raw.microcompactMetadata || raw.microcompact_metadata || {};

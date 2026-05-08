@@ -51,6 +51,11 @@ type SessionGoal = {
   timeUsedSeconds: number;
 };
 
+type DraftSessionGoal = {
+  objective: string;
+  tokenBudget: number | null;
+};
+
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
@@ -170,6 +175,7 @@ function ChatInterface({
   const projectSkillBindingLoadKeyRef = useRef('');
   const projectSkillBindingPersistKeyRef = useRef('');
   const projectSkillBindingHydratedKeyRef = useRef('');
+  const draftSessionGoalPersistKeyRef = useRef('');
   const lastQuickStartAgentRequestRef = useRef(0);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
@@ -188,6 +194,7 @@ function ChatInterface({
   const [subagentsEnabled, setSubagentsEnabled] = useState(false);
   const [goalsEnabled, setGoalsEnabled] = useState(false);
   const [sessionGoal, setSessionGoal] = useState<SessionGoal | null>(null);
+  const [draftSessionGoal, setDraftSessionGoal] = useState<DraftSessionGoal | null>(null);
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
   const [agentRuntimeDiagnostics, setAgentRuntimeDiagnostics] = useState<AgentRuntimeDiagnostics | null>(null);
   const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
@@ -507,6 +514,24 @@ function ChatInterface({
     [currentSessionId, selectedSession?.id],
   );
 
+  const displayedSessionGoal = useMemo<SessionGoal | null>(() => {
+    if (sessionGoal) {
+      return sessionGoal;
+    }
+    if (!draftSessionGoal) {
+      return null;
+    }
+    return {
+      threadId: 'draft',
+      goalId: 'draft',
+      objective: draftSessionGoal.objective,
+      status: 'active',
+      tokenBudget: draftSessionGoal.tokenBudget,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+    };
+  }, [draftSessionGoal, sessionGoal]);
+
   const subagentActivity = useMemo(
     () => (SUBAGENT_UI_HARD_DISABLED ? null : summarizeSubagentActivity(chatMessages)),
     [chatMessages],
@@ -634,13 +659,86 @@ function ChatInterface({
     void loadSessionGoal();
   }, [loadSessionGoal]);
 
-  const handleSetSessionGoal = useCallback(async (objective: string, tokenBudget?: number | null) => {
-    if (!activeConversationSessionId) {
+  useEffect(() => {
+    if (!activeConversationSessionId || !draftSessionGoal) {
+      return undefined;
+    }
+
+    const persistKey = `${activeConversationSessionId}:${draftSessionGoal.objective}:${draftSessionGoal.tokenBudget ?? ''}`;
+    if (draftSessionGoalPersistKeyRef.current === persistKey) {
+      return undefined;
+    }
+    draftSessionGoalPersistKeyRef.current = persistKey;
+
+    let cancelled = false;
+    const persistDraftGoal = async () => {
+      try {
+        const response = await api.setSessionGoal(activeConversationSessionId, {
+          objective: draftSessionGoal.objective,
+          tokenBudget: draftSessionGoal.tokenBudget,
+          status: 'active',
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to set session goal');
+        }
+        if (!cancelled) {
+          setSessionGoal(data?.goal || null);
+          setDraftSessionGoal(null);
+        }
+      } catch (error) {
+        console.warn('Failed to persist draft session goal:', error);
+        if (!cancelled) {
+          draftSessionGoalPersistKeyRef.current = '';
+        }
+      }
+    };
+
+    void persistDraftGoal();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversationSessionId, draftSessionGoal]);
+
+  useEffect(() => {
+    if (!latestMessage || !activeConversationSessionId) {
       return;
     }
+    const msg = latestMessage as {
+      type?: string;
+      event?: string;
+      sessionId?: string;
+      goal?: SessionGoal | null;
+    };
+    const eventType = msg.type || msg.event || '';
+    if (msg.sessionId !== activeConversationSessionId) {
+      return;
+    }
+    if (eventType === 'thread_goal_updated') {
+      setSessionGoal(msg.goal || null);
+      return;
+    }
+    if (eventType === 'thread_goal_cleared') {
+      setSessionGoal(null);
+    }
+  }, [activeConversationSessionId, latestMessage]);
+
+  const handleSetSessionGoal = useCallback(async (objective: string, tokenBudget?: number | null) => {
+    const normalizedTokenBudget = typeof tokenBudget === 'number' && Number.isFinite(tokenBudget) && tokenBudget > 0
+      ? tokenBudget
+      : null;
+    if (!objective.trim()) {
+      return;
+    }
+    if (!activeConversationSessionId) {
+      setDraftSessionGoal({ objective: objective.trim(), tokenBudget: normalizedTokenBudget });
+      setSessionGoal(null);
+      return;
+    }
+    setDraftSessionGoal(null);
     const response = await api.setSessionGoal(activeConversationSessionId, {
-      objective,
-      tokenBudget,
+      objective: objective.trim(),
+      tokenBudget: normalizedTokenBudget,
       status: 'active',
     });
     const data = await response.json();
@@ -652,6 +750,9 @@ function ChatInterface({
 
   const handleSessionGoalAction = useCallback(async (action: 'pause' | 'resume' | 'complete') => {
     if (!activeConversationSessionId) {
+      if (action === 'complete') {
+        setDraftSessionGoal(null);
+      }
       return;
     }
     const response = await api.setSessionGoal(activeConversationSessionId, { action });
@@ -664,6 +765,7 @@ function ChatInterface({
 
   const handleClearSessionGoal = useCallback(async () => {
     if (!activeConversationSessionId) {
+      setDraftSessionGoal(null);
       return;
     }
     const response = await api.clearSessionGoal(activeConversationSessionId);
@@ -672,6 +774,7 @@ function ChatInterface({
       throw new Error(data?.error || 'Failed to clear session goal');
     }
     setSessionGoal(null);
+    setDraftSessionGoal(null);
   }, [activeConversationSessionId]);
 
   useEffect(() => {
@@ -1522,7 +1625,7 @@ function ChatInterface({
           subagentDispatchRequested={subagentDispatchRequested}
           onSubagentDispatchRequestedChange={setSubagentDispatchRequested}
           goalsEnabled={goalsEnabled}
-          sessionGoal={sessionGoal}
+          sessionGoal={displayedSessionGoal}
           onSetGoal={handleSetSessionGoal}
           onPauseGoal={() => handleSessionGoalAction('pause')}
           onResumeGoal={() => handleSessionGoalAction('resume')}

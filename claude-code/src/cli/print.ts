@@ -87,6 +87,12 @@ import {
 } from 'src/services/mcp/channelAllowlist.js'
 import { parsePluginIdentifier } from 'src/utils/plugins/pluginIdentifier.js'
 import { validateUuid } from 'src/utils/uuid.js'
+import { areGoalsEnabled } from 'src/utils/goalFeatureGate.js'
+import {
+  recordThreadGoalLifecycleEvent,
+  subscribeThreadGoalEvents,
+} from 'src/tasks/threadGoalStore.js'
+import { goalEventToSdkSystemMessage } from 'src/tasks/threadGoalRuntime.js'
 import { fromArray } from 'src/utils/generators.js'
 import { ask } from 'src/QueryEngine.js'
 import type { PermissionPromptTool } from 'src/utils/queryHelpers.js'
@@ -634,6 +640,11 @@ export async function runHeadless(
   }
 
   if (options.outputFormat === 'stream-json' && options.verbose) {
+    subscribeThreadGoalEvents(event => {
+      void structuredIO.write(
+        goalEventToSdkSystemMessage(event) as unknown as StdoutMessage,
+      )
+    })
     registerHookEventHandler(event => {
       const message: StdoutMessage = (() => {
         switch (event.type) {
@@ -707,6 +718,13 @@ export async function runHeadless(
   // alone (an attachment, not a turn) would leave the REPL with nothing to
   // respond to. The hook promise is awaited inside loadInitialMessages, so the
   // module-level pending value is set by the time we get here.
+  if (areGoalsEnabled() && options.resume) {
+    recordThreadGoalLifecycleEvent(getSessionId(), 'ThreadResumed', {
+      resume: typeof options.resume === 'string' ? options.resume : true,
+      resumeSessionAt: options.resumeSessionAt ?? null,
+    })
+  }
+
   const hookInitialUserMessage = takeInitialUserMessage()
   if (hookInitialUserMessage) {
     structuredIO.prependUserMessage(hookInitialUserMessage)

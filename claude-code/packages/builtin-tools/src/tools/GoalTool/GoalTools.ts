@@ -8,6 +8,7 @@ import {
   getCompletionBudgetReport,
   getRemainingGoalTokens,
   getThreadGoal,
+  recordThreadGoalLifecycleEvent,
   type ThreadGoal,
 } from 'src/tasks/threadGoalStore.js'
 import { lazySchema } from 'src/utils/lazySchema.js'
@@ -36,11 +37,16 @@ type CreateGoalInputSchema = ReturnType<typeof createGoalInputSchema>
 const updateGoalInputSchema = lazySchema(() =>
   z.strictObject({
     status: z.literal('complete').describe('Only complete is model-settable.'),
+    expected_goal_id: z
+      .string()
+      .optional()
+      .describe('Optional goal id read from get_goal, used to prevent stale completion updates.'),
   }),
 )
 type UpdateGoalInputSchema = ReturnType<typeof updateGoalInputSchema>
 
 type GoalPayload = {
+  goal_id: string
   objective: string
   status: ThreadGoal['status']
   token_budget: number | null
@@ -57,6 +63,7 @@ type GoalToolResponse = {
 function toGoalPayload(goal: ThreadGoal | null): GoalPayload | null {
   if (!goal) return null
   return {
+    goal_id: goal.goalId,
     objective: goal.objective,
     status: goal.status,
     token_budget: goal.tokenBudget,
@@ -152,13 +159,20 @@ export const UpdateGoalTool = buildTool({
     return 'Update the current persistent goal.'
   },
   async prompt() {
-    return 'Mark the current persistent thread goal complete. The model cannot pause, resume, or clear goals.'
+    return 'Mark the current persistent thread goal complete. Pass expected_goal_id from get_goal when available. The model cannot pause, resume, or clear goals.'
   },
-  async call(): Promise<{ data: GoalToolResponse }> {
-    const goal = completeThreadGoal(getSessionId())
+  async call(input = { status: 'complete' }): Promise<{ data: GoalToolResponse }> {
+    const goal = completeThreadGoal(getSessionId(), {
+      expectedGoalId: input.expected_goal_id,
+    })
     if (!goal) {
-      throw new Error('No goal exists for this thread.')
+      throw new Error('No goal exists for this thread, or the current goal changed before update_goal could complete it.')
     }
+    recordThreadGoalLifecycleEvent(getSessionId(), 'ToolCompletedGoal', {
+      tool: UPDATE_GOAL_TOOL_NAME,
+      status: 'complete',
+      expectedGoalId: input.expected_goal_id ?? null,
+    })
     return { data: goalToolResponse(goal) }
   },
   renderToolUseMessage: renderGoalToolUseMessage,

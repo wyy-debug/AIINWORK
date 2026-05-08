@@ -90,7 +90,9 @@ import { getRequestIpAddress } from './services/hub-usage-service.js';
 import {
     clearSessionGoal,
     completeSessionGoal,
+    getLatestSessionGoalEvent,
     getSessionGoal,
+    listSessionGoalEventsAfter,
     pauseSessionGoal,
     replaceSessionGoal,
     resumeSessionGoal,
@@ -170,6 +172,9 @@ let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
+const GOAL_EVENT_POLL_INTERVAL_MS = 500;
+let goalEventPoller = null;
+let lastSeenGoalEventId = 0;
 
 // Broadcast progress to all connected WebSocket clients
 function broadcastProgress(progress) {
@@ -182,6 +187,57 @@ function broadcastProgress(progress) {
             client.send(message);
         }
     });
+}
+
+function broadcastGoalEvent(event, sessionId, goal = null, eventRecord = null) {
+    const eventId = eventRecord?.eventId || null;
+    if (eventId) {
+        lastSeenGoalEventId = Math.max(lastSeenGoalEventId, eventId);
+    }
+    const message = JSON.stringify({
+        type: event,
+        event,
+        sessionId,
+        goal,
+        eventId,
+        goalId: eventRecord?.goalId || goal?.goalId || null,
+        lifecycleType: eventRecord?.lifecycleType || null,
+        payload: eventRecord?.payload || null,
+    });
+    connectedClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    });
+}
+
+function broadcastGoalStoreEvent(eventRecord) {
+    if (!eventRecord || eventRecord.eventId <= lastSeenGoalEventId) {
+        return;
+    }
+    broadcastGoalEvent(
+        eventRecord.eventType,
+        eventRecord.threadId,
+        eventRecord.goal || null,
+        eventRecord,
+    );
+}
+
+function startGoalEventPoller() {
+    if (goalEventPoller) {
+        return;
+    }
+    goalEventPoller = setInterval(async () => {
+        try {
+            const events = await listSessionGoalEventsAfter(lastSeenGoalEventId, 100);
+            for (const eventRecord of events) {
+                broadcastGoalStoreEvent(eventRecord);
+            }
+        } catch (error) {
+            console.warn('[session-goal-service] Failed to poll goal events:', error.message);
+        }
+    }, GOAL_EVENT_POLL_INTERVAL_MS);
+    goalEventPoller.unref?.();
 }
 
 // Setup file system watchers for Claude, Cursor, and Codex project/session folders
@@ -688,11 +744,11 @@ app.put('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => 
         let goal;
 
         if (action === 'pause') {
-            goal = await pauseSessionGoal(req.params.sessionId);
+            goal = await pauseSessionGoal(req.params.sessionId, { expectedGoalId: body.expectedGoalId || body.expected_goal_id });
         } else if (action === 'resume') {
-            goal = await resumeSessionGoal(req.params.sessionId);
+            goal = await resumeSessionGoal(req.params.sessionId, { expectedGoalId: body.expectedGoalId || body.expected_goal_id });
         } else if (action === 'complete') {
-            goal = await completeSessionGoal(req.params.sessionId);
+            goal = await completeSessionGoal(req.params.sessionId, { expectedGoalId: body.expectedGoalId || body.expected_goal_id });
         } else {
             goal = await replaceSessionGoal(req.params.sessionId, {
                 objective: body.objective,
@@ -701,9 +757,16 @@ app.put('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => 
             });
         }
 
-        res.json({ success: true, goal });
+        const eventRecord = await getLatestSessionGoalEvent(req.params.sessionId);
+        broadcastGoalEvent('thread_goal_updated', req.params.sessionId, goal, eventRecord);
+        res.json({
+            success: true,
+            event: 'thread_goal_updated',
+            eventId: eventRecord?.eventId || null,
+            goal
+        });
     } catch (error) {
-        const status = /invalid sessionid|objective|token budget|goal status|no goal exists/i.test(error.message)
+        const status = /invalid sessionid|objective|token budget|goal status|no goal exists|stale goal|expected goal/i.test(error.message)
             ? 400
             : 500;
         res.status(status).json({ success: false, error: error.message });
@@ -712,10 +775,17 @@ app.put('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => 
 
 app.delete('/api/sessions/:sessionId/goal', authenticateToken, async (req, res) => {
     try {
-        await clearSessionGoal(req.params.sessionId);
-        res.json({ success: true });
+        const body = req.body || {};
+        await clearSessionGoal(req.params.sessionId, { expectedGoalId: body.expectedGoalId || body.expected_goal_id });
+        const eventRecord = await getLatestSessionGoalEvent(req.params.sessionId);
+        broadcastGoalEvent('thread_goal_cleared', req.params.sessionId, null, eventRecord);
+        res.json({
+            success: true,
+            event: 'thread_goal_cleared',
+            eventId: eventRecord?.eventId || null
+        });
     } catch (error) {
-        const status = /invalid sessionid/i.test(error.message) ? 400 : 500;
+        const status = /invalid sessionid|stale goal|expected goal/i.test(error.message) ? 400 : 500;
         res.status(status).json({ success: false, error: error.message });
     }
 });
@@ -3818,6 +3888,7 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
         startAutomationScheduler();
+        startGoalEventPoller();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();

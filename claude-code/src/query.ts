@@ -129,7 +129,16 @@ import {
   buildGoalBudgetLimitPrompt,
   buildGoalContinuationPrompt,
   getThreadGoal,
+  recordThreadGoalLifecycleEvent,
+  type ThreadGoal,
 } from './tasks/threadGoalStore.js'
+import {
+  emptyGoalUsageSnapshot,
+  getAssistantUsageSnapshot,
+  getGoalUsageDelta,
+  shouldStartIdleGoalContinuation,
+  type GoalUsageSnapshot,
+} from './tasks/threadGoalRuntime.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -236,45 +245,110 @@ type State = {
   transition: Continue | undefined
 }
 
-function getAssistantTokenUsage(assistantMessages: AssistantMessage[]): {
-  inputTokens: number
-  outputTokens: number
-} {
-  let inputTokens = 0
-  let outputTokens = 0
-  for (const assistantMessage of assistantMessages) {
-    const usage = assistantMessage.message?.usage as
-      | Record<string, number | undefined>
-      | undefined
-    if (!usage) continue
-    inputTokens += Math.max(0, Math.floor(usage.input_tokens ?? 0))
-    outputTokens += Math.max(0, Math.floor(usage.output_tokens ?? 0))
-  }
-  return { inputTokens, outputTokens }
+type GoalAccountingState = {
+  goalId: string
+  snapshot: GoalUsageSnapshot
+  budgetLimitPrompted: boolean
 }
 
 function accountGoalForAssistantMessages(
   toolUseContext: ToolUseContext,
   assistantMessages: AssistantMessage[],
   elapsedMs: number,
+  accountingState: GoalAccountingState | null,
 ) {
-  if (!areGoalsEnabled() || toolUseContext.agentId || assistantMessages.length === 0) {
+  if (!accountingState || toolUseContext.agentId || assistantMessages.length === 0) {
     return null
   }
-  const { inputTokens, outputTokens } = getAssistantTokenUsage(assistantMessages)
+  const currentSnapshot = getAssistantUsageSnapshot(assistantMessages)
+  const usageDelta = getGoalUsageDelta(accountingState.snapshot, currentSnapshot)
+  accountingState.snapshot = currentSnapshot
   return accountThreadGoalUsage(getSessionId(), {
-    inputTokens,
-    outputTokens,
+    ...usageDelta,
     elapsedMs,
+    expectedGoalId: accountingState.goalId,
   })
 }
 
-function getActiveIdleGoal(toolUseContext: ToolUseContext) {
+function createGoalAccountingState(toolUseContext: ToolUseContext): GoalAccountingState | null {
   if (!areGoalsEnabled() || toolUseContext.agentId) {
     return null
   }
   const goal = getThreadGoal(getSessionId())
-  return goal?.status === 'active' ? goal : null
+  if (goal?.status !== 'active') {
+    return null
+  }
+  return {
+    goalId: goal.goalId,
+    snapshot: emptyGoalUsageSnapshot(),
+    budgetLimitPrompted: false,
+  }
+}
+
+function createGoalAccountingStateFromSnapshot(
+  toolUseContext: ToolUseContext,
+  snapshot: GoalUsageSnapshot,
+): GoalAccountingState | null {
+  if (!areGoalsEnabled() || toolUseContext.agentId) {
+    return null
+  }
+  const goal = getThreadGoal(getSessionId())
+  if (goal?.status !== 'active') {
+    return null
+  }
+  return {
+    goalId: goal.goalId,
+    snapshot,
+    budgetLimitPrompted: false,
+  }
+}
+
+function refreshGoalAccountingStateAfterTools(
+  toolUseContext: ToolUseContext,
+  assistantMessages: AssistantMessage[],
+  accountingState: GoalAccountingState | null,
+): GoalAccountingState | null {
+  if (accountingState) return accountingState
+  return createGoalAccountingStateFromSnapshot(
+    toolUseContext,
+    getAssistantUsageSnapshot(assistantMessages),
+  )
+}
+
+function recordGoalLifecycleEvent(
+  toolUseContext: ToolUseContext,
+  lifecycleType: Parameters<typeof recordThreadGoalLifecycleEvent>[1],
+  payload: Record<string, unknown> | null = null,
+): void {
+  if (!areGoalsEnabled() || toolUseContext.agentId) return
+  recordThreadGoalLifecycleEvent(getSessionId(), lifecycleType, payload)
+}
+
+function hasQueuedGoalContinuationInput(): boolean {
+  return getCommandsByMaxPriority('next').some(command =>
+    !isSlashCommand(command) &&
+    (command.mode === 'prompt' || command.mode === 'task-notification'),
+  )
+}
+
+function getActiveIdleGoal(
+  toolUseContext: ToolUseContext,
+  expectedGoalId: string | null | undefined,
+  materialized: boolean,
+): ThreadGoal | null {
+  const appState = toolUseContext.getAppState()
+  const goal = expectedGoalId ? getThreadGoal(getSessionId()) : null
+  return shouldStartIdleGoalContinuation({
+    goalsEnabled: areGoalsEnabled(),
+    isMainThread: !toolUseContext.agentId,
+    permissionMode: appState.toolPermissionContext.mode,
+    hasRunningTurn: false,
+    hasQueuedPromptOrTask: hasQueuedGoalContinuationInput(),
+    aborted: toolUseContext.abortController.signal.aborted,
+    materialized,
+    expectedGoalId,
+    goal,
+  }) ? goal : null
 }
 
 function createOpenMythosCanUseTool(
@@ -462,6 +536,13 @@ async function* queryLoop(
     transition: undefined,
   }
   const budgetTracker = feature('TOKEN_BUDGET') ? createBudgetTracker() : null
+  let goalAccountingState = createGoalAccountingState(params.toolUseContext)
+  if (goalAccountingState) {
+    recordGoalLifecycleEvent(params.toolUseContext, 'TurnStarted', {
+      goalId: goalAccountingState.goalId,
+      baseline: goalAccountingState.snapshot,
+    })
+  }
 
   // task_budget.remaining tracking across compaction boundaries. Undefined
   // until first compact fires — while context is uncompacted the server can
@@ -1235,30 +1316,16 @@ async function* queryLoop(
       toolUseContext,
       assistantMessages,
       Date.now() - iterationStartedAtMs,
+      goalAccountingState,
     )
-
-    if (accountedGoal?.status === 'budget_limited' && needsFollowUp) {
-      const next: State = {
-        messages: [
-          ...messagesForQuery,
-          ...assistantMessages,
-          createUserMessage({
-            content: buildGoalBudgetLimitPrompt(accountedGoal),
-            isMeta: true,
-          }),
-        ],
-        toolUseContext,
-        autoCompactTracking: tracking,
-        maxOutputTokensRecoveryCount: 0,
-        hasAttemptedReactiveCompact: false,
-        maxOutputTokensOverride: undefined,
-        pendingToolUseSummary: undefined,
-        stopHookActive: undefined,
-        turnCount,
-        transition: { reason: 'goal_budget_limit' },
-      }
-      state = next
-      continue
+    const budgetLimitedGoalForFollowUp =
+      accountedGoal?.status === 'budget_limited' &&
+      goalAccountingState &&
+      !goalAccountingState.budgetLimitPrompted
+        ? accountedGoal
+        : null
+    if (budgetLimitedGoalForFollowUp && goalAccountingState) {
+      goalAccountingState.budgetLimitPrompted = true
     }
 
     // We need to handle a streaming abort before anything else.
@@ -1301,6 +1368,10 @@ async function* queryLoop(
           toolUse: false,
         })
       }
+      recordGoalLifecycleEvent(toolUseContext, 'TaskAborted', {
+        reason: 'aborted_streaming',
+      })
+      goalAccountingState = null
       return { reason: 'aborted_streaming' }
     }
 
@@ -1313,6 +1384,30 @@ async function* queryLoop(
     }
 
     if (!needsFollowUp) {
+      if (budgetLimitedGoalForFollowUp) {
+        const next: State = {
+          messages: [
+            ...messagesForQuery,
+            ...assistantMessages,
+            createUserMessage({
+              content: buildGoalBudgetLimitPrompt(budgetLimitedGoalForFollowUp),
+              isMeta: true,
+            }),
+          ],
+          toolUseContext,
+          autoCompactTracking: tracking,
+          maxOutputTokensRecoveryCount: 0,
+          hasAttemptedReactiveCompact: false,
+          maxOutputTokensOverride: undefined,
+          pendingToolUseSummary: undefined,
+          stopHookActive: undefined,
+          turnCount,
+          transition: { reason: 'goal_budget_limit' },
+        }
+        state = next
+        continue
+      }
+
       const lastMessage = assistantMessages.at(-1)
 
       // Prompt-too-long recovery: the streaming loop withheld the error
@@ -1607,7 +1702,11 @@ async function* queryLoop(
         }
       }
 
-      const idleGoal = getActiveIdleGoal(toolUseContext)
+      const idleGoal = getActiveIdleGoal(
+        toolUseContext,
+        goalAccountingState?.goalId,
+        messagesForQuery.length > 0,
+      )
       if (idleGoal) {
         const next: State = {
           messages: [
@@ -1790,8 +1889,26 @@ async function* queryLoop(
           turnCount: nextTurnCountOnAbort,
         })
       }
+      recordGoalLifecycleEvent(toolUseContext, 'TaskAborted', {
+        reason: 'aborted_tools',
+      })
+      goalAccountingState = null
       return { reason: 'aborted_tools' }
     }
+
+    if (toolUseBlocks.length > 0) {
+      recordGoalLifecycleEvent(toolUseContext, 'ToolCompleted', {
+        tools: toolUseBlocks.map(block => ({
+          id: block.id,
+          name: block.name,
+        })),
+      })
+    }
+    goalAccountingState = refreshGoalAccountingStateAfterTools(
+      toolUseContext,
+      assistantMessages,
+      goalAccountingState,
+    )
 
     // If a hook indicated to prevent continuation, stop here
     if (shouldPreventContinuation) {
@@ -1989,9 +2106,19 @@ async function* queryLoop(
       return { reason: 'max_turns', turnCount: nextTurnCount }
     }
 
+    const nextMessages = [...messagesForQuery, ...assistantMessages, ...toolResults]
+    if (budgetLimitedGoalForFollowUp) {
+      nextMessages.push(
+        createUserMessage({
+          content: buildGoalBudgetLimitPrompt(budgetLimitedGoalForFollowUp),
+          isMeta: true,
+        }),
+      )
+    }
+
     queryCheckpoint('query_recursive_call')
     const next: State = {
-      messages: [...messagesForQuery, ...assistantMessages, ...toolResults],
+      messages: nextMessages,
       toolUseContext: toolUseContextWithQueryTracking,
       autoCompactTracking: tracking,
       turnCount: nextTurnCount,
@@ -2000,7 +2127,9 @@ async function* queryLoop(
       pendingToolUseSummary: nextPendingToolUseSummary,
       maxOutputTokensOverride: undefined,
       stopHookActive,
-      transition: { reason: 'next_turn' },
+      transition: {
+        reason: budgetLimitedGoalForFollowUp ? 'goal_budget_limit' : 'next_turn',
+      },
     }
     state = next
   } // while (true)
