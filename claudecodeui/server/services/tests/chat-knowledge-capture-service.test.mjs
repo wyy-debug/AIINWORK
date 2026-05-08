@@ -115,4 +115,73 @@ describe('chat knowledge capture service', () => {
       status: 'captured',
     });
   });
+
+  it('routes captured assistant knowledge through the Wiki Compiler primary pipeline', async () => {
+    const createArtifact = vi.fn(async () => {
+      throw new Error('direct artifact creation should not be used by wiki-primary capture');
+    });
+    const ingestKnowledgeSourceToWiki = vi.fn(async (payload) => ({
+      success: true,
+      captured: true,
+      artifact: { id: 'artifact_wiki_1', metadata: payload.metadata },
+      artifactId: 'artifact_wiki_1',
+      obsidianBridge: {
+        destination: 'obsidian',
+        rawPath: 'Argus/Raw/App/2026-05-08/Summary.md',
+        wikiPath: 'Argus/Wiki/App/Summary.md',
+        indexPaths: ['Argus/Projects/App/Index.md'],
+        viewModes: ['project-knowledge'],
+      },
+    }));
+    const service = captureModule.createChatKnowledgeCaptureService({
+      db: database,
+      createArtifact,
+      ingestKnowledgeSourceToWiki,
+      findExistingCapture: () => null,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        autoExportKnowledgeArtifacts: true,
+        wikiPrimaryEnabled: true,
+        defaultMode: 'project-knowledge',
+      }),
+    });
+
+    const result = await service.autoCaptureChatKnowledge({
+      sourceId: 'chat:session-1:message-wiki-primary',
+      projectName: 'App',
+      sessionId: 'session-1',
+      provider: 'claude',
+      previousUserPrompt: 'summarize this project decision',
+      timestamp: '2026-05-08T09:10:11.000Z',
+      content: [
+        '# Project Summary',
+        '',
+        '- Summary: Wiki Compiler is now the canonical knowledge layer.',
+        '- Decision: Projects should only maintain index links.',
+        '- Plan: inject Wiki context in future chat requests.',
+      ].join('\n'),
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      captured: true,
+      artifactId: 'artifact_wiki_1',
+      obsidianBridge: {
+        wikiPath: 'Argus/Wiki/App/Summary.md',
+        indexPaths: ['Argus/Projects/App/Index.md'],
+      },
+    });
+    expect(createArtifact).not.toHaveBeenCalled();
+    expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'chat-auto-capture',
+      title: 'Project Summary',
+      projectName: 'App',
+      sessionId: 'session-1',
+      metadata: expect.objectContaining({
+        source: 'chat-auto-capture',
+        sourceId: 'chat:session-1:message-wiki-primary',
+        obsidianModes: expect.arrayContaining(['project-knowledge']),
+      }),
+    }));
+  });
 });

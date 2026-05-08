@@ -41,7 +41,11 @@ type ObsidianBridgeConfig = {
   dailyNoteFolder: string;
   dailyNoteHeading: string;
   mcpEnabled: boolean;
+  wikiPrimaryEnabled: boolean;
   wikiCompilerEnabled: boolean;
+  wikiReadbackEnabled: boolean;
+  wikiReadbackIncludeRaw: boolean;
+  wikiReadbackMaxResults: number;
   wikiRawFolder: string;
   wikiFolder: string;
   wikiIndexFolder: string;
@@ -102,19 +106,23 @@ const DEFAULT_CONFIG: ObsidianBridgeConfig = {
   timeoutMs: 5000,
   tokenConfigured: false,
   autoExportKnowledgeArtifacts: true,
-  readableVaultFolders: ['Argus/Projects', 'Argus/AIMemory', 'Argus/SecondBrain'],
+  readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
   fallbackToProjectKnowledge: true,
   lastConnection: '',
   lastError: '',
   pluginVersion: '',
-  aiMemoryReadbackEnabled: false,
-  aiMemoryMaxResults: 5,
+  aiMemoryReadbackEnabled: true,
+  aiMemoryMaxResults: 8,
   aiMemoryProjectScopeEnabled: true,
   activeNoteReadbackEnabled: false,
   dailyNoteFolder: 'Daily',
   dailyNoteHeading: 'Argus',
   mcpEnabled: false,
+  wikiPrimaryEnabled: true,
   wikiCompilerEnabled: true,
+  wikiReadbackEnabled: true,
+  wikiReadbackIncludeRaw: false,
+  wikiReadbackMaxResults: 8,
   wikiRawFolder: 'Argus/Raw',
   wikiFolder: 'Argus/Wiki',
   wikiIndexFolder: 'Argus/_Indexes',
@@ -933,6 +941,36 @@ export default function ObsidianBridgeSettingsContent() {
             onChange={(wikiCompilerEnabled) => setConfig((previous) => ({ ...previous, wikiCompilerEnabled }))}
             ariaLabel="启用 Wiki Compiler"
           />
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={config.wikiPrimaryEnabled}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiPrimaryEnabled: event.target.checked }))}
+            />
+            Wiki 作为唯一正文
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={config.wikiReadbackEnabled}
+              onChange={(event) => setConfig((previous) => ({
+                ...previous,
+                wikiReadbackEnabled: event.target.checked,
+                aiMemoryReadbackEnabled: event.target.checked,
+              }))}
+            />
+            默认回读 Wiki 注入对话
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={config.wikiReadbackIncludeRaw}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiReadbackIncludeRaw: event.target.checked }))}
+            />
+            回读包含 Raw
+          </label>
         </div>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <label className="text-sm font-medium text-foreground">

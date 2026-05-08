@@ -8,6 +8,7 @@ const {
   buildContextFromSearchResults,
   buildDocumentPath,
   buildProjectIndex,
+  buildWikiViewIndex,
   buildWikiIndexPath,
   buildWikiPath,
   buildWikiRawPath,
@@ -33,7 +34,7 @@ const DEFAULT_SETTINGS = {
   port: 27177,
   token: '',
   baseFolder: 'Argus',
-  readableFolders: ['Argus/Projects', 'Argus/AIMemory', 'Argus/SecondBrain'],
+  readableFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
   templates: {
     'project-knowledge': '{{content}}',
     'second-brain': '{{content}}',
@@ -115,6 +116,17 @@ module.exports = class ArgusBridgePlugin extends Plugin {
     this.settings.readableFolders = this.settings.readableFolders
       .map((folder) => this.normalizeVaultFolder(folder))
       .filter(Boolean);
+    const requiredReadableFolders = [
+      `${this.settings.baseFolder}/Wiki`,
+      `${this.settings.baseFolder}/_Indexes`,
+      `${this.settings.baseFolder}/AIMemory`,
+    ].map((folder) => this.normalizeVaultFolder(folder)).filter(Boolean);
+    for (const folder of requiredReadableFolders) {
+      if (!this.settings.readableFolders.includes(folder)) {
+        this.settings.readableFolders.push(folder);
+        changed = true;
+      }
+    }
     this.settings.templates = {
       ...DEFAULT_SETTINGS.templates,
       ...(this.settings.templates && typeof this.settings.templates === 'object' ? this.settings.templates : {}),
@@ -371,9 +383,23 @@ module.exports = class ArgusBridgePlugin extends Plugin {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/argus/v1/wiki/views/update') {
+        const payload = await readRequestBody(req);
+        const result = await this.updateWikiViews(payload);
+        sendJson(res, 200, { success: true, ...result });
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/argus/v1/wiki/lint') {
         const payload = await readRequestBody(req);
         const result = await this.lintWiki(payload);
+        sendJson(res, 200, { success: true, ...result });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/argus/v1/wiki/migrate-legacy') {
+        const payload = await readRequestBody(req);
+        const result = await this.migrateLegacyDirectWrites(payload);
         sendJson(res, 200, { success: true, ...result });
         return;
       }
@@ -592,6 +618,13 @@ module.exports = class ArgusBridgePlugin extends Plugin {
       wikiPath,
       wikiStatus: 'compiled',
     });
+    const viewResult = await this.updateWikiViews({
+      ...payload,
+      title,
+      wikiPath,
+      rawPath: payload.rawPath || '',
+      viewModes: payload.viewModes || payload.classificationModes || [payload.classificationMode].filter(Boolean),
+    });
     await this.afterWikiWrite(wikiPath, {
       title,
       mode: 'wiki',
@@ -603,8 +636,102 @@ module.exports = class ArgusBridgePlugin extends Plugin {
       wikiPath,
       rawPath: payload.rawPath || '',
       argusId: payload.argusId || '',
+      indexPaths: viewResult.indexPaths,
       updated,
       vaultName: this.app.vault.getName(),
+    };
+  }
+
+  wikiViewPath(mode = 'project-knowledge', projectName = 'General') {
+    const project = sanitizePathSegment(projectName, 'General');
+    if (mode === 'second-brain') {
+      return `${this.settings.baseFolder}/SecondBrain/${new Date().getFullYear()}/Index.md`;
+    }
+    if (mode === 'ai-memory') {
+      return `${this.settings.baseFolder}/AIMemory/${project}/Index.md`;
+    }
+    return `${this.settings.baseFolder}/Projects/${project}/Index.md`;
+  }
+
+  async updateWikiViews(payload = {}) {
+    const viewModes = Array.isArray(payload.viewModes) && payload.viewModes.length > 0
+      ? payload.viewModes
+      : Array.isArray(payload.classificationModes) && payload.classificationModes.length > 0
+        ? payload.classificationModes
+        : [payload.classificationMode || 'project-knowledge'];
+    const entry = {
+      title: String(payload.title || '').trim() || 'Untitled',
+      wikiPath: assertSafeVaultPath(payload.wikiPath || payload.path || ''),
+      rawPath: payload.rawPath ? assertSafeVaultPath(payload.rawPath) : '',
+      kind: payload.kind || payload.classificationMode || '',
+      classificationReason: payload.classificationReason || payload.routingReason || '',
+    };
+    const indexPaths = [];
+    for (const mode of [...new Set(viewModes.filter(Boolean))]) {
+      const indexPath = assertSafeVaultPath(this.wikiViewPath(mode, payload.projectName || entry.title));
+      await this.ensureFolderForPath(indexPath);
+      const existing = this.app.vault.getAbstractFileByPath(indexPath);
+      const content = buildWikiViewIndex({
+        mode,
+        projectName: payload.projectName || 'General',
+        entries: [entry],
+        existingContent: existing ? await this.app.vault.cachedRead(existing) : '',
+      });
+      if (existing) {
+        await this.app.vault.process(existing, () => content);
+      } else {
+        await this.app.vault.create(indexPath, content);
+      }
+      indexPaths.push(indexPath);
+    }
+    return {
+      indexPaths,
+      viewModes,
+      vaultName: this.app.vault.getName(),
+    };
+  }
+
+  async migrateLegacyDirectWrites(payload = {}) {
+    const archive = payload.archive === true;
+    const date = new Date().toISOString().slice(0, 10);
+    const legacyFolders = [
+      `${this.settings.baseFolder}/Projects`,
+      `${this.settings.baseFolder}/SecondBrain`,
+      `${this.settings.baseFolder}/AIMemory`,
+    ];
+    const candidates = [];
+    const moves = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!legacyFolders.some((folder) => file.path === folder || file.path.startsWith(`${folder}/`))) {
+        continue;
+      }
+      if (file.path.endsWith('/Index.md')) {
+        continue;
+      }
+      const content = await this.app.vault.cachedRead(file);
+      const type = readProperty(content, 'type');
+      const wikiPath = readProperty(content, 'wikiPath');
+      if (!['project-knowledge', 'second-brain', 'ai-memory'].includes(type) || wikiPath) {
+        continue;
+      }
+      const target = `${this.settings.baseFolder}/_legacy-direct-writes/${date}/${file.path.split('/').pop()}`;
+      candidates.push({ path: file.path, type, target });
+    }
+    if (archive) {
+      for (const candidate of candidates) {
+        const file = this.app.vault.getAbstractFileByPath(candidate.path);
+        if (!file) continue;
+        const target = resolveUniquePath(assertSafeVaultPath(candidate.target), (path) => Boolean(this.app.vault.getAbstractFileByPath(path)));
+        await this.ensureFolderForPath(target);
+        await this.app.vault.rename(file, target);
+        moves.push({ from: candidate.path, to: target });
+      }
+    }
+    return {
+      checked: candidates.length,
+      candidates,
+      moves,
+      archive,
     };
   }
 

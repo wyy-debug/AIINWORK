@@ -4,6 +4,11 @@ import { appConfigDb } from '../database/db.js';
 
 import { sendObsidianDocument as defaultSendObsidianDocument } from './obsidian-bridge-service.js';
 
+const defaultIngestKnowledgeSourceToWiki = async (...args) => {
+  const module = await import('./obsidian-wiki-service.js');
+  return module.ingestKnowledgeSourceToWiki(...args);
+};
+
 const CONFIG_KEY = 'obsidian_memory_candidates';
 
 let memoryStore = appConfigDb;
@@ -124,6 +129,7 @@ const titleForCandidate = (candidate) => {
 
 export const commitMemoryCandidates = async (payload = {}, {
   sendObsidianDocument = defaultSendObsidianDocument,
+  ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
 } = {}) => {
   const candidateIds = Array.isArray(payload.candidateIds) ? new Set(payload.candidateIds.map(readString)) : new Set();
   const candidates = readCandidates();
@@ -133,23 +139,51 @@ export const commitMemoryCandidates = async (payload = {}, {
     if (!candidateIds.has(candidate.id) || candidate.status === 'rejected' || candidate.status === 'expired') {
       continue;
     }
-    await sendObsidianDocument({
-      title: titleForCandidate(candidate),
+    const title = titleForCandidate(candidate);
+    const projectName = readString(payload.projectName) || readString(candidate.source?.projectName);
+    const wikiResult = await ingestKnowledgeSourceToWiki({
+      source: 'ai-memory',
+      sourceId: `memory:${candidate.stableKey}`,
+      title,
       content: candidate.text,
       mode: 'ai-memory',
-      projectName: readString(payload.projectName) || readString(candidate.source?.projectName),
-      argusId: `memory:${candidate.stableKey}`,
+      projectName,
       kind: candidate.kind,
-      status: 'active',
-      tags: ['argus', 'ai-memory', candidate.kind],
-      confidence: candidate.confidence,
       metadata: {
+        source: 'ai-memory',
+        sourceId: `memory:${candidate.stableKey}`,
         memoryStableKey: candidate.stableKey,
         memoryCandidateId: candidate.id,
         memorySource: candidate.source,
+        obsidianMode: 'ai-memory',
+        obsidianModes: ['ai-memory'],
+        confidence: candidate.confidence,
       },
+      modes: ['ai-memory'],
+    }).catch(async (error) => {
+      if (!sendObsidianDocument) throw error;
+      await sendObsidianDocument({
+        title,
+        content: candidate.text,
+        mode: 'ai-memory',
+        projectName,
+        argusId: `memory:${candidate.stableKey}`,
+        kind: candidate.kind,
+        status: 'active',
+        tags: ['argus', 'ai-memory', candidate.kind],
+        confidence: candidate.confidence,
+        metadata: {
+          memoryStableKey: candidate.stableKey,
+          memoryCandidateId: candidate.id,
+          memorySource: candidate.source,
+        },
+      });
+      return {};
     });
     candidate.status = 'accepted';
+    candidate.wikiPath = wikiResult.wikiPath || '';
+    candidate.rawPath = wikiResult.rawPath || '';
+    candidate.indexPaths = wikiResult.indexPaths || [];
     candidate.updatedAt = new Date().toISOString();
     committed.push(candidate);
   }

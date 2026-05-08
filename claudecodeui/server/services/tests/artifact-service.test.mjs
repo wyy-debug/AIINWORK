@@ -77,6 +77,68 @@ describe('artifact service', () => {
     });
   });
 
+  it('auto-exports knowledge artifacts through the Wiki Compiler primary pipeline', async () => {
+    const createKnowledgeDocumentFromArtifact = vi.fn(async () => {
+      throw new Error('direct Obsidian document writes should not be used');
+    });
+    const ingestKnowledgeSourceToWiki = vi.fn(async (payload) => ({
+      destination: 'obsidian',
+      rawPath: 'Argus/Raw/App/2026-05-08/Review notes.md',
+      wikiPath: 'Argus/Wiki/App/Review notes.md',
+      indexPaths: ['Argus/Projects/App/Index.md'],
+      viewModes: ['project-knowledge'],
+      mode: payload.metadata.obsidianMode,
+      modes: payload.metadata.obsidianModes,
+    }));
+    const service = serviceModule.createArtifactService({
+      db: database,
+      createId: (prefix) => `${prefix}_${++ids}`,
+      extractProjectDirectory: async () => projectRoot,
+      createKnowledgeDocumentFromArtifact,
+      ingestKnowledgeSourceToWiki,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        autoExportKnowledgeArtifacts: true,
+        wikiPrimaryEnabled: true,
+        defaultMode: 'project-knowledge',
+      }),
+    });
+
+    const result = await service.createArtifact({
+      kind: 'review-notes',
+      title: 'Review notes',
+      projectName: 'App',
+      sessionId: 'session-1',
+      content: '# Review',
+      metadata: { source: 'review', runId: 'run-1' },
+    });
+
+    expect(createKnowledgeDocumentFromArtifact).not.toHaveBeenCalled();
+    expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
+      artifact: expect.objectContaining({ id: result.artifact.id, title: 'Review notes' }),
+      source: 'artifact',
+      projectName: 'App',
+      sessionId: 'session-1',
+      metadata: expect.objectContaining({
+        obsidianMode: 'project-knowledge',
+        obsidianModes: ['project-knowledge'],
+      }),
+    }));
+    expect(result.obsidianBridge).toMatchObject({
+      destination: 'obsidian',
+      wikiPath: 'Argus/Wiki/App/Review notes.md',
+      indexPaths: ['Argus/Projects/App/Index.md'],
+      viewModes: ['project-knowledge'],
+      automatic: true,
+    });
+    expect(result.artifact.metadata).toMatchObject({
+      obsidianStatus: 'synced',
+      obsidianMode: 'project-knowledge',
+      wikiPath: 'Argus/Wiki/App/Review notes.md',
+      obsidianPath: 'Argus/Wiki/App/Review notes.md',
+    });
+  });
+
   it('marks non-knowledge artifacts as not sent without calling Obsidian', async () => {
     const createKnowledgeDocumentFromArtifact = vi.fn();
     const service = serviceModule.createArtifactService({
