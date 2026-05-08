@@ -1,6 +1,6 @@
 {
   "name": "mtl-code-ui",
-  "version": "1.30.6",
+  "version": "1.30.7",
   "description": "A local-first web UI for the Argus backend",
   "type": "module",
   "main": "dist-server/server/index.js",
