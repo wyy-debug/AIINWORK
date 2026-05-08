@@ -38,6 +38,7 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
 export const OPENMYTHOS_RUNTIME_SETTINGS_KEY = 'openMythosRuntime';
 export const SUBAGENT_RUNTIME_SETTINGS_KEY = 'subagents';
 export const GOAL_RUNTIME_SETTINGS_KEY = 'goals';
+export const SMALL_MODEL_RUNTIME_SETTINGS_KEY = 'smallModelRuntime';
 
 export const OPENMYTHOS_RUNTIME_ENV_KEYS = {
   enabled: 'MTL_CODE_OPENMYTHOS_RUNTIME',
@@ -75,6 +76,16 @@ export const DEFAULT_SUBAGENT_RUNTIME_CONFIG = Object.freeze({
 
 export const DEFAULT_GOAL_RUNTIME_CONFIG = Object.freeze({
   enabled: false,
+});
+
+export const DEFAULT_SMALL_MODEL_RUNTIME_CONFIG = Object.freeze({
+  enabled: true,
+  profileId: 'auto',
+  protocol: 'anthropic',
+  requestModel: '',
+  timeoutMs: 2500,
+  useForWikiRouting: true,
+  useForWikiReadback: true,
 });
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
@@ -155,6 +166,22 @@ function normalizeSubagentPositiveInteger(value, fallback, max = 16) {
   return Math.min(parsed, max);
 }
 
+function normalizeTimeoutMs(value, fallback, min = 1000, max = 15000) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function normalizeSmallModelProtocol(value, fallback = 'anthropic') {
+  const normalized = (readOptionalString(value) || '').toLowerCase();
+  if (normalized === 'anthropic' || normalized === 'openai-compatible') {
+    return normalized;
+  }
+  return fallback === 'openai-compatible' ? fallback : 'anthropic';
+}
+
 function normalizeOpenMythosEffortBounds(config) {
   const minIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(config.minEffort);
   const maxIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(config.maxEffort);
@@ -204,6 +231,23 @@ export function normalizeGoalRuntimeConfig(value, fallback = DEFAULT_GOAL_RUNTIM
   };
 }
 
+export function normalizeSmallModelRuntimeConfig(value, fallback = DEFAULT_SMALL_MODEL_RUNTIME_CONFIG) {
+  const data = readObjectRecord(value) ?? {};
+  const profileId = readOptionalString(data.profileId) || fallback.profileId || 'auto';
+  const requestModel = Object.prototype.hasOwnProperty.call(data, 'requestModel')
+    ? readOptionalString(data.requestModel) || ''
+    : fallback.requestModel || '';
+  return {
+    enabled: normalizeOpenMythosBoolean(data.enabled, fallback.enabled),
+    profileId,
+    protocol: normalizeSmallModelProtocol(data.protocol, fallback.protocol),
+    requestModel,
+    timeoutMs: normalizeTimeoutMs(data.timeoutMs, fallback.timeoutMs),
+    useForWikiRouting: normalizeOpenMythosBoolean(data.useForWikiRouting, fallback.useForWikiRouting),
+    useForWikiReadback: normalizeOpenMythosBoolean(data.useForWikiReadback, fallback.useForWikiReadback),
+  };
+}
+
 export function readSubagentRuntimeConfig(settings = {}, env = {}) {
   const envConfig = normalizeSubagentRuntimeConfig({
     enabled: readBooleanEnv(env, MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled, DEFAULT_SUBAGENT_RUNTIME_CONFIG.enabled),
@@ -233,6 +277,13 @@ export function readGoalRuntimeConfig(settings = {}, env = {}) {
   return normalizeGoalRuntimeConfig(
     settings?.[GOAL_RUNTIME_SETTINGS_KEY],
     envConfig,
+  );
+}
+
+export function readSmallModelRuntimeConfig(settings = {}) {
+  return normalizeSmallModelRuntimeConfig(
+    settings?.[SMALL_MODEL_RUNTIME_SETTINGS_KEY],
+    DEFAULT_SMALL_MODEL_RUNTIME_CONFIG,
   );
 }
 
@@ -514,6 +565,17 @@ function normalizeProfileId(value) {
     .replace(/^-+|-+$/g, '');
 }
 
+function readModelProtocol(value) {
+  const normalized = readOptionalString(value);
+  return normalized === 'openai-compatible' || normalized === 'openai-responses' || normalized === 'anthropic'
+    ? normalized
+    : undefined;
+}
+
+function normalizeModelProtocol(value) {
+  return readModelProtocol(value) || 'anthropic';
+}
+
 function getMimoContextWindow(model) {
   return MIMO_MODEL_CONTEXT_WINDOWS[canonicalizeAnthropicModel(model)] || null;
 }
@@ -553,8 +615,10 @@ function createProfileFromEnv(settings, env) {
     id: 'default',
     name: model ? `Default (${model})` : 'Default model',
     provider: 'anthropic',
+    protocol: 'anthropic',
     baseUrl,
     model,
+    requestModel: '',
     authToken,
     contextWindowTokens: resolveProfileContextWindow({ model }, env),
     bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_MODEL_ENV_KEYS.uiBareMode),
@@ -577,8 +641,10 @@ export function readStoredModelProfiles(settings, env = {}) {
         id,
         name,
         provider: 'anthropic',
+        protocol: readModelProtocol(profile.protocol),
         baseUrl,
         model,
+        requestModel: readOptionalString(profile.requestModel) || '',
         authToken: readOptionalString(profile.authToken) || '',
         contextWindowTokens: resolveProfileContextWindow(profile, env),
         bareMode: profile.bareMode !== false,
@@ -638,6 +704,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   }
 
   const model = canonicalizeAnthropicModel(profile.model);
+  const requestModel = readOptionalString(profile.requestModel) || model;
   const contextWindowTokens = resolveProfileContextWindow({ ...profile, model }, settingsEnv);
   const openMythosRuntime = readOpenMythosRuntimeConfig(settings, settingsEnv);
   const subagents = readSubagentRuntimeConfig(settings, settingsEnv);
@@ -645,7 +712,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   const coordinatorModeEnabled = false;
   const runtimeEnv = {
     [ANTHROPIC_MODEL_ENV_KEYS.baseUrl]: profile.baseUrl,
-    [ANTHROPIC_MODEL_ENV_KEYS.model]: model,
+    [ANTHROPIC_MODEL_ENV_KEYS.model]: requestModel,
     [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: profile.bareMode !== false ? '1' : '0',
     [MTL_CODE_MODEL_ENV_KEYS.maxContextTokens]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
@@ -653,7 +720,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   };
   applyAnthropicRuntimeModelDefaults(runtimeEnv, {
     baseUrl: profile.baseUrl,
-    model,
+    model: requestModel,
   });
   applyOpenMythosRuntimeToEnv(runtimeEnv, openMythosRuntime);
   applySubagentRuntimeToEnv(runtimeEnv, subagents);
@@ -664,7 +731,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   }
 
   return {
-    profile: { ...profile, model, contextWindowTokens },
+    profile: { ...profile, model, requestModel: profile.requestModel || '', contextWindowTokens },
     env: Object.fromEntries(Object.entries(runtimeEnv).filter(([, value]) => Boolean(value))),
     contextWindowTokens,
     openMythosRuntime,

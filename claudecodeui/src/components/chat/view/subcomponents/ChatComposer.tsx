@@ -295,6 +295,11 @@ export default function ChatComposer({
   const [isSkillMenuOpen, setIsSkillMenuOpen] = useState(false);
   const [isSubagentDetailsOpen, setIsSubagentDetailsOpen] = useState(false);
   const [isSubagentManagerOpen, setIsSubagentManagerOpen] = useState(false);
+  const [isGoalEditorOpen, setIsGoalEditorOpen] = useState(false);
+  const [goalObjectiveDraft, setGoalObjectiveDraft] = useState('');
+  const [goalBudgetDraft, setGoalBudgetDraft] = useState('');
+  const [goalEditorError, setGoalEditorError] = useState('');
+  const [isGoalSaving, setIsGoalSaving] = useState(false);
   const [skillSearch, setSkillSearch] = useState('');
   const [skillMenuNotice, setSkillMenuNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [skillMenuPosition, setSkillMenuPosition] = useState<{ left: number; bottom: number } | null>(null);
@@ -305,6 +310,7 @@ export default function ChatComposer({
   const skillMenuButtonRef = useRef<HTMLButtonElement>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const goalObjectiveInputRef = useRef<HTMLInputElement>(null);
   const textareaRect = textareaRef.current?.getBoundingClientRect();
   const commandMenuPosition = {
     top: textareaRect ? Math.max(16, textareaRect.top - 316) : 0,
@@ -393,23 +399,57 @@ export default function ChatComposer({
   const activeGoalRemainingTokens = typeof sessionGoal?.tokenBudget === 'number'
     ? Math.max(0, sessionGoal.tokenBudget - sessionGoal.tokensUsed)
     : null;
-  const handleGoalButtonClick = async () => {
-    if (!goalsEnabled || !onSetGoal) {
+  const handleGoalButtonClick = () => {
+    if (!goalsEnabled) {
       return;
     }
-    const objective = window.prompt('设置本会话 Goal');
-    if (!objective?.trim()) {
+    setGoalObjectiveDraft(sessionGoal?.objective || '');
+    setGoalBudgetDraft(typeof sessionGoal?.tokenBudget === 'number' ? String(sessionGoal.tokenBudget) : '');
+    setGoalEditorError('');
+    setIsGoalEditorOpen(true);
+    window.setTimeout(() => goalObjectiveInputRef.current?.focus(), 0);
+  };
+
+  const handleGoalEditorSubmit = async () => {
+    if (!goalsEnabled || !onSetGoal || isGoalSaving) {
       return;
     }
-    const budgetText = window.prompt('Token 预算，可留空');
-    const tokenBudget = budgetText?.trim()
-      ? Number.parseInt(budgetText.trim(), 10)
-      : null;
-    await onSetGoal(
-      objective.trim(),
-      Number.isFinite(tokenBudget) && tokenBudget! > 0 ? tokenBudget : null,
-    );
-    textareaRef.current?.focus();
+    const objective = goalObjectiveDraft.trim();
+    if (!objective) {
+      setGoalEditorError('请输入 Goal 内容');
+      return;
+    }
+
+    const budgetText = goalBudgetDraft.trim();
+    const parsedBudget = budgetText ? Number.parseInt(budgetText, 10) : null;
+    if (budgetText && (!Number.isFinite(parsedBudget) || parsedBudget! <= 0)) {
+      setGoalEditorError('Token 预算需要是正整数，或留空');
+      return;
+    }
+
+    setIsGoalSaving(true);
+    setGoalEditorError('');
+    try {
+      await onSetGoal(objective, parsedBudget);
+      setIsGoalEditorOpen(false);
+      textareaRef.current?.focus();
+    } catch (error) {
+      setGoalEditorError(error instanceof Error ? error.message : '保存 Goal 失败');
+    } finally {
+      setIsGoalSaving(false);
+    }
+  };
+
+  const handleGoalEditorKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void handleGoalEditorSubmit();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setIsGoalEditorOpen(false);
+      textareaRef.current?.focus();
+    }
   };
   const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
   const normalizedPermissionMode: PermissionMode = (
@@ -1468,6 +1508,60 @@ export default function ChatComposer({
           </div>
         )}
 
+        {goalsEnabled && isGoalEditorOpen && (
+          <div className="mx-3 mb-2 rounded-lg border border-primary/20 bg-background px-3 py-3 text-xs shadow-sm">
+            <div className="mb-2 flex items-center gap-2 text-foreground">
+              <TargetIcon className="h-3.5 w-3.5 text-primary" />
+              <span className="font-medium">{sessionGoal ? '更新本会话 Goal' : '设置本会话 Goal'}</span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px]">
+              <input
+                ref={goalObjectiveInputRef}
+                type="text"
+                value={goalObjectiveDraft}
+                onChange={(event) => setGoalObjectiveDraft(event.target.value)}
+                onKeyDown={handleGoalEditorKeyDown}
+                placeholder="这轮对话要持续完成的目标"
+                className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-primary/15"
+              />
+              <input
+                type="number"
+                min={1}
+                inputMode="numeric"
+                value={goalBudgetDraft}
+                onChange={(event) => setGoalBudgetDraft(event.target.value)}
+                onKeyDown={handleGoalEditorKeyDown}
+                placeholder="Token 预算，可留空"
+                className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-primary/15"
+              />
+            </div>
+            {goalEditorError && (
+              <div className="mt-2 text-[11px] text-red-600 dark:text-red-400">{goalEditorError}</div>
+            )}
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGoalEditorOpen(false);
+                  setGoalEditorError('');
+                  textareaRef.current?.focus();
+                }}
+                className="h-8 rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isGoalSaving}
+                onClick={() => void handleGoalEditorSubmit()}
+                className="h-8 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-60"
+              >
+                {isGoalSaving ? '保存中...' : '保存 Goal'}
+              </button>
+            </div>
+          </div>
+        )}
+
         <PromptInputFooter className="gap-3">
           <PromptInputTools className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden pr-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <PromptInputButton
@@ -1548,7 +1642,7 @@ export default function ChatComposer({
               onClick={() => {
                 void handleGoalButtonClick();
               }}
-              disabled={isLoading || !goalsEnabled}
+              disabled={!goalsEnabled}
               className={cn(
                 sessionGoal
                   ? 'bg-primary/10 text-primary hover:bg-primary/15'

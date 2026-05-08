@@ -34,6 +34,7 @@ describe('obsidian bridge service', () => {
       wikiReadbackMaxResults: 8,
       aiMemoryMaxResults: 8,
       aiMemoryProjectScopeEnabled: true,
+      autoExportKnowledgeArtifacts: false,
       readableVaultFolders: expect.arrayContaining(['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory']),
       tokenConfigured: false,
     });
@@ -71,6 +72,22 @@ describe('obsidian bridge service', () => {
     expect(service.readObsidianBridgeConfig({ includeToken: true })).toMatchObject({
       token: 'bridge-token',
     });
+  });
+
+  it('migrates legacy automatic export settings to manual-first unless explicitly opted in', () => {
+    const legacySaved = service.saveObsidianBridgeConfig({
+      enabled: true,
+      token: 'bridge-token',
+      autoExportKnowledgeArtifacts: true,
+    });
+    expect(legacySaved.autoExportKnowledgeArtifacts).toBe(false);
+
+    const optedIn = service.saveObsidianBridgeConfig({
+      autoExportKnowledgeArtifacts: true,
+      autoExportKnowledgeArtifactsOptIn: true,
+    });
+    expect(optedIn.autoExportKnowledgeArtifacts).toBe(true);
+    expect(optedIn.autoExportKnowledgeArtifactsOptIn).toBe(true);
   });
 
   it('rejects non-loopback plugin endpoints', () => {

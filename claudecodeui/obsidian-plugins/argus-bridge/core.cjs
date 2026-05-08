@@ -262,6 +262,14 @@ const buildWikiProperties = (payload = {}, now = new Date(), type = 'raw-source'
     wikiStatus: readString(payload.wikiStatus) || (type === 'raw-source' ? 'raw' : 'compiled'),
     status: readString(payload.status) || (type === 'wiki-note' ? 'active' : ''),
     related: normalizeStringArray(payload.related),
+    compiler: readString(payload.compiler || payload.wikiCompiler),
+    compileStrategy: readString(payload.compileStrategy || payload.wikiCompileStrategy),
+    wikiCompileChunks: Number(payload.wikiCompileChunks) || undefined,
+    wikiCompileTokenBudget: payload.wikiCompileTokenBudget && typeof payload.wikiCompileTokenBudget === 'object'
+      ? payload.wikiCompileTokenBudget
+      : undefined,
+    wikiCompileModel: readString(payload.wikiCompileModel),
+    wikiCompileFallbackReason: readString(payload.wikiCompileFallbackReason),
   };
 
   return Object.fromEntries(Object.entries(properties).filter(([, value]) => !(

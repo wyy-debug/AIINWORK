@@ -78,6 +78,21 @@ describe('obsidian bridge installer service', () => {
     await expect(readFile(join(result.targetDir, 'data.json'), 'utf8')).resolves.toContain('"port": 27179');
   });
 
+  it('resolves the bundled plugin source from a packaged Electron app layout', async () => {
+    const appRoot = join(tempRoot, 'resources', 'app');
+    const pluginSource = join(appRoot, 'obsidian-plugins', 'argus-bridge');
+    await mkdir(pluginSource, { recursive: true });
+
+    expect(await service.resolveObsidianBridgePluginSource({
+      serviceDirectory: join(appRoot, 'dist-server', 'server', 'services'),
+    })).toBe(pluginSource);
+  });
+
+  it('includes the Obsidian plugin source directory in the Electron package files', async () => {
+    const packageJson = JSON.parse(await readFile(resolve('package.json'), 'utf8'));
+    expect(packageJson.build.files).toContain('obsidian-plugins/**');
+  });
+
   afterEach(async () => {
     if (tempRoot) {
       await rm(tempRoot, { recursive: true, force: true });

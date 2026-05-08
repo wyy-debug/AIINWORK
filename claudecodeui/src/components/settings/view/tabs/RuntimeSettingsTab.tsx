@@ -3,6 +3,7 @@ import { ShieldCheck } from 'lucide-react';
 
 import { Button } from '../../../../shared/view/ui';
 import { apiFetch } from '../../../../utils/api';
+import type { SettingsProject } from '../../types/types';
 
 import OpenMythosRuntimeContent from './agents-settings/sections/content/OpenMythosRuntimeContent';
 import ObsidianBridgeSettingsContent from './runtime-settings/ObsidianBridgeSettingsContent';
@@ -33,7 +34,17 @@ const parseJson = async <T,>(response: Response): Promise<T> => {
   return data as T;
 };
 
-export default function RuntimeSettingsTab() {
+type RuntimeSettingsTabProps = {
+  projects?: SettingsProject[];
+  selectedProject?: SettingsProject | null;
+  onOpenSmallModelSettings?: () => void;
+};
+
+export default function RuntimeSettingsTab({
+  projects = [],
+  selectedProject = null,
+  onOpenSmallModelSettings,
+}: RuntimeSettingsTabProps) {
   const [permissions, setPermissions] = useState<RuntimePermissions>(DEFAULT_PERMISSIONS);
   const [allowedPathsText, setAllowedPathsText] = useState('');
   const [message, setMessage] = useState('');
@@ -110,7 +121,11 @@ export default function RuntimeSettingsTab() {
 
       <OpenMythosRuntimeContent />
 
-      <ObsidianBridgeSettingsContent />
+      <ObsidianBridgeSettingsContent
+        projects={projects}
+        selectedProject={selectedProject}
+        onOpenSmallModelSettings={onOpenSmallModelSettings}
+      />
 
       <div className="border-t border-border/70 pt-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

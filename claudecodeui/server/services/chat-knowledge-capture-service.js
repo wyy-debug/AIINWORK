@@ -9,6 +9,7 @@ import {
 import { createArtifact as defaultCreateArtifact } from './artifact-service.js';
 import { createMemoryCandidates as defaultCreateMemoryCandidates } from './obsidian-memory-service.js';
 import { readObsidianBridgeConfig as defaultReadObsidianBridgeConfig } from './obsidian-bridge-service.js';
+import { classifyKnowledgeWithSmallModel as defaultClassifyKnowledgeWithSmallModel } from './small-model-service.js';
 
 const defaultIngestKnowledgeSourceToWiki = async (...args) => {
   const module = await import('./obsidian-wiki-service.js');
@@ -400,6 +401,7 @@ export const createChatKnowledgeCaptureService = ({
   createMemoryCandidates = defaultCreateMemoryCandidates,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
+  classifyKnowledgeWithSmallModel = defaultClassifyKnowledgeWithSmallModel,
   findExistingCapture = (sourceId, fingerprint) => defaultFindExistingCapture(sourceId, fingerprint, db),
   claimCaptureKey = (fingerprint) => defaultClaimCaptureKey(fingerprint, db),
   completeCaptureKey = (patch) => defaultCompleteCaptureKey(patch, db),
@@ -479,13 +481,38 @@ export const createChatKnowledgeCaptureService = ({
       };
     }
 
-    const assessment = assessChatKnowledgeCapture({
+    let assessment = assessChatKnowledgeCapture({
       content,
       userPrompt: payload.previousUserPrompt || payload.userPrompt || '',
       defaultMode: config.defaultMode || 'project-knowledge',
       timestamp: payload.timestamp,
       routingRules: config.routingRules || {},
     });
+    try {
+      const aiClassification = await classifyKnowledgeWithSmallModel({
+        title: assessment.title || buildTitle({ content, timestamp: payload.timestamp }),
+        content,
+        userPrompt: payload.previousUserPrompt || payload.userPrompt || '',
+        ruleAssessment: assessment,
+      });
+      if (aiClassification?.used && aiClassification.assessment) {
+        assessment = aiClassification.assessment;
+      }
+    } catch {
+      // Small model classification is advisory; rule-based routing remains the fallback.
+    }
+    if (assessment.shouldCapture) {
+      assessment = {
+        ...assessment,
+        title: assessment.title || buildTitle({ content, timestamp: payload.timestamp }),
+        kind: assessment.kind || chooseKind({
+          content,
+          userPrompt: payload.previousUserPrompt || payload.userPrompt || '',
+          mode: assessment.mode,
+        }),
+        memoryCapturePolicy: assessment.memoryCapturePolicy || memoryCapturePolicyForAssessment(assessment, config.routingRules || {}),
+      };
+    }
     if (!assessment.shouldCapture) {
       completeClaim({ status: 'skipped' });
       return {
@@ -500,6 +527,9 @@ export const createChatKnowledgeCaptureService = ({
         routingReason: assessment.routingReason,
         routingConfidence: assessment.routingConfidence,
         routingModes: assessment.routingModes || [assessment.mode],
+        aiRoutingUsed: assessment.aiRoutingUsed === true,
+        aiRoutingModel: assessment.aiRoutingModel || '',
+        aiRoutingReason: assessment.aiRoutingReason || '',
       };
     }
 
@@ -536,6 +566,9 @@ export const createChatKnowledgeCaptureService = ({
         routingReason: assessment.routingReason,
         routingConfidence: assessment.routingConfidence,
         routingModes: assessment.routingModes || [assessment.mode],
+        aiRoutingUsed: assessment.aiRoutingUsed === true,
+        aiRoutingModel: assessment.aiRoutingModel || '',
+        aiRoutingReason: assessment.aiRoutingReason || '',
       };
     }
 
@@ -546,6 +579,8 @@ export const createChatKnowledgeCaptureService = ({
       provider: readString(payload.provider),
       previousUserPrompt: normalizeWhitespace(payload.previousUserPrompt || payload.userPrompt || '').slice(0, 1000),
       messageTimestamp: payload.timestamp || '',
+      autoCaptureTrigger: readString(payload.autoCaptureReason || payload.captureTrigger),
+      turnKey: readString(payload.turnKey),
       obsidianMode: assessment.mode,
       obsidianModes: assessment.routingModes || [assessment.mode],
       autoCaptureReason: assessment.reason,
@@ -557,6 +592,9 @@ export const createChatKnowledgeCaptureService = ({
       routingReason: assessment.routingReason,
       routingConfidence: assessment.routingConfidence,
       memoryCapturePolicy: assessment.memoryCapturePolicy,
+      aiRoutingUsed: assessment.aiRoutingUsed === true,
+      aiRoutingModel: assessment.aiRoutingModel || '',
+      aiRoutingReason: assessment.aiRoutingReason || '',
       kind: assessment.kind,
     };
 
@@ -600,6 +638,9 @@ export const createChatKnowledgeCaptureService = ({
         routingReason: assessment.routingReason,
         routingConfidence: assessment.routingConfidence,
         routingModes: assessment.routingModes || [assessment.mode],
+        aiRoutingUsed: assessment.aiRoutingUsed === true,
+        aiRoutingModel: assessment.aiRoutingModel || '',
+        aiRoutingReason: assessment.aiRoutingReason || '',
       };
     } catch (error) {
       completeClaim({

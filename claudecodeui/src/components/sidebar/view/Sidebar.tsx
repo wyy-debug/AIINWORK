@@ -278,6 +278,7 @@ function Sidebar({
     <>
       <SidebarModals
         projects={projects}
+        selectedProject={selectedProject}
         showSettings={showSettings}
         settingsInitialTab={settingsInitialTab}
         onCloseSettings={onCloseSettings}

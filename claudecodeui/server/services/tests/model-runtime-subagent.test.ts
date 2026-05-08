@@ -46,3 +46,44 @@ test('resolveMtlCodeModelRuntime makes subagents inherit the selected session mo
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+test('resolveMtlCodeModelRuntime uses request model override for Anthropic relay routing', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
+  const configRoot = path.join(tempRoot, '.mtl-code');
+  await fs.mkdir(configRoot, { recursive: true });
+  await fs.writeFile(path.join(configRoot, 'settings.json'), JSON.stringify({
+    env: {},
+    mtlCodeModelProfiles: [
+      {
+        id: 'relay-gpt-mini',
+        name: 'Relay GPT Mini',
+        baseUrl: 'http://token.wd.com',
+        model: 'gpt-5.4-mini',
+        requestModel: 'obsidian-small-anthropic',
+        authToken: 'test-token',
+        contextWindowTokens: 200000,
+      },
+    ],
+    activeMtlCodeModelProfileId: 'relay-gpt-mini',
+  }, null, 2), 'utf8');
+
+  const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
+  process.env.MTL_CODE_CONFIG_DIR = configRoot;
+  try {
+    const { resolveMtlCodeModelRuntime } = await import(`../mtl-code-model-service.js?requestModel=${Date.now()}`);
+    const runtime = await resolveMtlCodeModelRuntime('relay-gpt-mini');
+
+    assert.equal(runtime?.profile.model, 'gpt-5.4-mini');
+    assert.equal(runtime?.profile.requestModel, 'obsidian-small-anthropic');
+    assert.equal(runtime?.env.ANTHROPIC_MODEL, 'obsidian-small-anthropic');
+    assert.equal(runtime?.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'obsidian-small-anthropic');
+    assert.equal(runtime?.env.MTL_CODE_SUBAGENT_MODEL, 'obsidian-small-anthropic');
+  } finally {
+    if (previousConfigRoot === undefined) {
+      delete process.env.MTL_CODE_CONFIG_DIR;
+    } else {
+      process.env.MTL_CODE_CONFIG_DIR = previousConfigRoot;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});

@@ -85,7 +85,12 @@ import {
     saveProjectTextFileWithGuard,
     toFileMutationHttpError,
 } from './services/file-mutation-service.js';
-import { buildOpenMythosRuntimePreview, readResolvedOpenMythosRuntimeConfig, readResolvedSubagentRuntimeConfig } from './services/mtl-code-model-service.js';
+import {
+    buildOpenMythosRuntimePreview,
+    readResolvedOpenMythosRuntimeConfig,
+    readResolvedSubagentRuntimeConfig,
+    resolveMtlCodeModelRuntime,
+} from './services/mtl-code-model-service.js';
 import { getRequestIpAddress } from './services/hub-usage-service.js';
 import {
     clearSessionGoal,
@@ -102,6 +107,7 @@ import {
     resolveRuntimeShell,
 } from './services/runtime-permission-service.js';
 import { configureWebPush } from './services/vapid-keys.js';
+import * as localToolService from './services/local-tool-service.js';
 import { c } from './utils/colors.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
@@ -1446,151 +1452,9 @@ function validateFilename(name) {
     return { valid: true };
 }
 
-function createVersionProbe(command, args = ['--version']) {
-    return new Promise((resolve) => {
-        let settled = false;
-        let timeout;
-        let stdout = '';
-        let stderr = '';
-        const child = spawn(command, args, {
-            windowsHide: true,
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        const finish = (result) => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            clearTimeout(timeout);
-            resolve({
-                ...result,
-                stdout: stdout.trim(),
-                stderr: stderr.trim(),
-            });
-        };
-
-        timeout = setTimeout(() => {
-            child.kill();
-            finish({ ok: false, error: 'Probe timed out' });
-        }, 3000);
-
-        child.stdout?.on('data', (chunk) => {
-            stdout += chunk.toString();
-        });
-        child.stderr?.on('data', (chunk) => {
-            stderr += chunk.toString();
-        });
-        child.on('error', (error) => {
-            finish({ ok: false, error: error.message });
-        });
-        child.on('close', (code) => {
-            finish({ ok: code === 0, code });
-        });
-    });
-}
-
-function getLocalToolCandidates() {
-    const localAppData = process.env.LOCALAPPDATA || '';
-    const programFiles = process.env.ProgramFiles || '';
-    const programFilesX86 = process.env['ProgramFiles(x86)'] || '';
-
-    const candidates = {
-        vscode: [
-            { command: process.platform === 'win32' ? 'code.cmd' : 'code', label: 'Visual Studio Code', source: 'PATH' },
-            { command: 'code', label: 'Visual Studio Code', source: 'PATH' },
-        ],
-        cursor: [
-            { command: process.platform === 'win32' ? 'cursor.cmd' : 'cursor', label: 'Cursor', source: 'PATH' },
-            { command: 'cursor', label: 'Cursor', source: 'PATH' },
-        ],
-    };
-
-    if (process.platform === 'win32') {
-        candidates.vscode.push(
-            { command: path.join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'), label: 'Visual Studio Code', source: 'LOCALAPPDATA' },
-            { command: path.join(programFiles, 'Microsoft VS Code', 'bin', 'code.cmd'), label: 'Visual Studio Code', source: 'Program Files' },
-            { command: path.join(programFilesX86, 'Microsoft VS Code', 'bin', 'code.cmd'), label: 'Visual Studio Code', source: 'Program Files (x86)' },
-            { command: path.join(localAppData, 'Programs', 'Microsoft VS Code', 'Code.exe'), label: 'Visual Studio Code', source: 'LOCALAPPDATA', fileOnly: true },
-            { command: path.join(programFiles, 'Microsoft VS Code', 'Code.exe'), label: 'Visual Studio Code', source: 'Program Files', fileOnly: true },
-        );
-        candidates.cursor.push(
-            { command: path.join(localAppData, 'Programs', 'Cursor', 'resources', 'app', 'bin', 'cursor.cmd'), label: 'Cursor', source: 'LOCALAPPDATA' },
-            { command: path.join(localAppData, 'Programs', 'Cursor', 'Cursor.exe'), label: 'Cursor', source: 'LOCALAPPDATA', fileOnly: true },
-        );
-    }
-
-    return candidates;
-}
-
-async function diagnoseLocalTool(toolId) {
-    const candidates = getLocalToolCandidates()[toolId] || [];
-
-    for (const candidate of candidates) {
-        if (path.isAbsolute(candidate.command) && !fs.existsSync(candidate.command)) {
-            continue;
-        }
-
-        if (candidate.fileOnly) {
-            return {
-                id: toolId,
-                label: candidate.label,
-                available: true,
-                command: candidate.command,
-                source: candidate.source,
-                version: null,
-            };
-        }
-
-        const probe = await createVersionProbe(candidate.command);
-        if (probe.ok) {
-            return {
-                id: toolId,
-                label: candidate.label,
-                available: true,
-                command: candidate.command,
-                source: candidate.source,
-                version: probe.stdout.split(/\r?\n/)[0] || null,
-            };
-        }
-    }
-
-    return {
-        id: toolId,
-        label: toolId === 'cursor' ? 'Cursor' : 'Visual Studio Code',
-        available: false,
-        command: null,
-        source: null,
-        version: null,
-    };
-}
-
-async function getLocalToolDiagnostics() {
-    const [vscode, cursor] = await Promise.all([
-        diagnoseLocalTool('vscode'),
-        diagnoseLocalTool('cursor'),
-    ]);
-
-    return { tools: [vscode, cursor] };
-}
-
-function buildEditorOpenArgs(resolvedPath, line, column, isDirectory) {
-    if (isDirectory) {
-        return [resolvedPath];
-    }
-
-    const parsedLine = Number.parseInt(String(line || ''), 10);
-    const parsedColumn = Number.parseInt(String(column || ''), 10);
-    const target = Number.isFinite(parsedLine) && parsedLine > 0
-        ? `${resolvedPath}:${parsedLine}:${Number.isFinite(parsedColumn) && parsedColumn > 0 ? parsedColumn : 1}`
-        : resolvedPath;
-
-    return ['-g', target];
-}
-
 app.get('/api/local-tools', authenticateToken, async (req, res) => {
     try {
-        res.json(await getLocalToolDiagnostics());
+        res.json(await localToolService.getLocalToolDiagnostics());
     } catch (error) {
         console.error('Error diagnosing local tools:', error);
         res.status(500).json({ error: error.message || 'Failed to diagnose local tools' });
@@ -1611,7 +1475,11 @@ app.post('/api/local-tools/open-file', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'filePath is required' });
         }
 
-        const targetTool = tool === 'cursor' ? 'cursor' : 'vscode';
+        const targetTool = localToolService.normalizeLocalToolId(tool);
+        if (!localToolService.isEditorLocalTool(targetTool)) {
+            return res.status(400).json({ error: 'tool must be an editor local tool' });
+        }
+
         const resolvedInfo = projectName
             ? await resolveReadableProjectPath(projectName, filePath)
             : await resolvePathInRegisteredProjects(filePath);
@@ -1621,20 +1489,24 @@ app.post('/api/local-tools/open-file', authenticateToken, async (req, res) => {
         }
 
         const stats = await fsPromises.stat(resolvedInfo.resolved);
-        const diagnostics = await getLocalToolDiagnostics();
+        const diagnostics = await localToolService.getLocalToolDiagnostics();
         const selectedTool = diagnostics.tools.find((item) => item.id === targetTool);
 
         if (!selectedTool?.available || !selectedTool.command) {
             return res.status(404).json({
-                error: targetTool === 'cursor'
-                    ? 'Cursor is not available on this machine'
-                    : 'Visual Studio Code is not available on this machine',
+                error: localToolService.getLocalToolUnavailableMessage(targetTool),
                 diagnostics,
             });
         }
 
-        const args = buildEditorOpenArgs(resolvedInfo.resolved, line, column, stats.isDirectory());
-        const child = spawn(selectedTool.command, args, {
+        const args = localToolService.buildEditorOpenArgs({
+            toolId: targetTool,
+            resolvedPath: resolvedInfo.resolved,
+            line,
+            column,
+            isDirectory: stats.isDirectory(),
+        });
+        const child = localToolService.createLocalToolProcess(selectedTool.command, args, {
             detached: true,
             stdio: 'ignore',
             windowsHide: true,
@@ -1655,6 +1527,74 @@ app.post('/api/local-tools/open-file', authenticateToken, async (req, res) => {
             res.status(404).json({ error: 'File not found' });
         } else {
             res.status(500).json({ error: error.message || 'Failed to open file' });
+        }
+    }
+});
+
+app.post('/api/local-tools/open-terminal', authenticateToken, async (req, res) => {
+    try {
+        const {
+            tool = 'git-bash',
+            filePath,
+            projectName,
+        } = req.body || {};
+
+        if (!filePath || typeof filePath !== 'string') {
+            return res.status(400).json({ error: 'filePath is required' });
+        }
+
+        const targetTool = localToolService.normalizeLocalToolId(tool);
+        if (!localToolService.isTerminalLocalTool(targetTool)) {
+            return res.status(400).json({ error: 'tool must be a terminal local tool' });
+        }
+
+        const resolvedInfo = projectName
+            ? await resolveReadableProjectPath(projectName, filePath)
+            : await resolvePathInRegisteredProjects(filePath);
+
+        if (!resolvedInfo) {
+            return res.status(403).json({ error: 'Path must be under a registered project root' });
+        }
+
+        const stats = await fsPromises.stat(resolvedInfo.resolved);
+        const cwd = stats.isDirectory() ? resolvedInfo.resolved : path.dirname(resolvedInfo.resolved);
+        const diagnostics = await localToolService.getLocalToolDiagnostics();
+        const selectedTool = diagnostics.tools.find((item) => item.id === targetTool);
+
+        if (!selectedTool?.available || !selectedTool.command) {
+            return res.status(404).json({
+                error: localToolService.getLocalToolUnavailableMessage(targetTool),
+                diagnostics,
+            });
+        }
+
+        const args = localToolService.buildTerminalOpenArgs({
+            toolId: targetTool,
+            cwd,
+            command: selectedTool.command,
+        });
+        const child = localToolService.createLocalToolProcess(selectedTool.command, args, {
+            cwd,
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+        });
+        child.unref();
+
+        res.json({
+            success: true,
+            tool: selectedTool,
+            path: cwd,
+            projectName: resolvedInfo.projectName,
+        });
+    } catch (error) {
+        console.error('Error opening terminal in local tool:', error);
+        if (error.statusCode) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'Path not found' });
+        } else {
+            res.status(500).json({ error: error.message || 'Failed to open terminal' });
         }
     }
 });
@@ -1698,7 +1638,7 @@ app.post('/api/local-tools/open-path', authenticateToken, async (req, res) => {
             args = [stats.isDirectory() ? resolvedInfo.resolved : path.dirname(resolvedInfo.resolved)];
         }
 
-        const child = spawn(command, args, {
+        const child = localToolService.createLocalToolProcess(command, args, {
             detached: true,
             stdio: 'ignore',
             windowsHide: true,
@@ -2243,6 +2183,14 @@ class WebSocketWriter {
         });
     }
 
+    waitForPendingObsidianCapture({ provider = 'claude', sessionId = '', timeoutMs = 1500 } = {}) {
+        return this.autoCapture.waitForPendingCapture({ provider, sessionId, timeoutMs });
+    }
+
+    flushPendingObsidianCapture({ provider = 'claude', sessionId = '', reason = 'manual_flush' } = {}) {
+        return this.autoCapture.flushPendingCaptures({ provider, sessionId, reason });
+    }
+
     updateWebSocket(newRawWs) {
         this.ws = newRawWs;
     }
@@ -2292,6 +2240,16 @@ function setWriterAutoCaptureContext(writer, data, provider) {
         projectPath: data?.options?.projectPath || data?.options?.cwd || '',
         userPrompt: typeof data?.command === 'string' ? data.command : '',
         timestamp: new Date().toISOString(),
+    });
+}
+
+async function waitForWriterAutoCaptureBarrier(writer, data, provider) {
+    const sessionId = getConcreteCommandSessionId(data);
+    if (!sessionId) return;
+    await writer.waitForPendingObsidianCapture({
+        provider,
+        sessionId,
+        timeoutMs: 1500,
     });
 }
 
@@ -2540,6 +2498,19 @@ async function applyAgentRuntimeToChatCommand(data) {
     const sessionModelProfileId = normalizeModelProfileId(
         optionModelProfileId || sessionConfiguration?.modelProfileId || ''
     );
+    const sessionModelRuntime = provider === 'claude' && sessionModelProfileId
+        ? await resolveMtlCodeModelRuntime(sessionModelProfileId).catch((error) => {
+            console.warn('[Argus Runtime] Failed to resolve session model profile:', error?.message || error);
+            return null;
+        })
+        : null;
+    const resolvedSessionModel = sessionModelRuntime?.env?.ANTHROPIC_MODEL
+        || sessionModelRuntime?.profile?.requestModel
+        || sessionModelRuntime?.profile?.model
+        || '';
+    const resolvedContextWindowTokens = sessionModelRuntime?.contextWindowTokens
+        || data?.options?.contextWindowTokens
+        || null;
     const agentId = data?.options?.agentId || (allowSessionAgentBinding ? storedBinding?.agentId : '') || '';
     const sessionSkills = Array.isArray(sessionConfiguration?.skills)
         ? sessionConfiguration.skills.filter((skill) => typeof skill === 'string' && skill.trim()).slice(0, 60)
@@ -2560,6 +2531,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                 options: {
                     ...(data.options || {}),
                     ...(sessionModelProfileId ? { modelProfileId: sessionModelProfileId } : {}),
+                    ...(data.type === 'claude-command' && resolvedSessionModel ? { model: resolvedSessionModel } : {}),
                     runtimeDiagnostics: {
                         type: 'runtime',
                         allowSessionAgentBinding,
@@ -2573,8 +2545,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                         skillPromptLength: 0,
                         mcpDiagnosticsSummary: [],
                         appendSystemPromptLength: 0,
-                        contextWindowTokens: data?.options?.contextWindowTokens || null,
-                        model: data?.options?.model || '',
+                        contextWindowTokens: resolvedContextWindowTokens,
+                        model: resolvedSessionModel || data?.options?.model || '',
                         modelProfileId: sessionModelProfileId || '',
                         openMythosRuntime,
                         subagents: subagentRuntime,
@@ -2599,6 +2571,7 @@ async function applyAgentRuntimeToChatCommand(data) {
         const options = {
             ...(data.options || {}),
             modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
+            ...(data.type === 'claude-command' && resolvedSessionModel ? { model: resolvedSessionModel } : {}),
             sessionSkills,
             runtimeDiagnostics: {
                 type: 'skills',
@@ -2613,8 +2586,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                 skillPromptLength: skillReferences.promptLength,
                 mcpDiagnosticsSummary: [],
                 appendSystemPromptLength: appendSystemPrompt.length,
-                contextWindowTokens: data?.options?.contextWindowTokens || null,
-                model: data?.options?.model || '',
+                contextWindowTokens: resolvedContextWindowTokens,
+                model: resolvedSessionModel || data?.options?.model || '',
                 modelProfileId: sessionModelProfileId || '',
                 openMythosRuntime,
                 subagents: subagentRuntime,
@@ -2657,6 +2630,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             const options = {
                 ...(data.options || {}),
                 modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
+                ...(data.type === 'claude-command' && resolvedSessionModel ? { model: resolvedSessionModel } : {}),
                 sessionSkills,
                 runtimeDiagnostics: {
                     type: 'skills',
@@ -2671,8 +2645,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                     skillPromptLength: skillReferences.promptLength,
                     mcpDiagnosticsSummary: [],
                     appendSystemPromptLength: appendSystemPrompt.length,
-                    contextWindowTokens: data?.options?.contextWindowTokens || null,
-                    model: data?.options?.model || '',
+                    contextWindowTokens: resolvedContextWindowTokens,
+                    model: resolvedSessionModel || data?.options?.model || '',
                     modelProfileId: sessionModelProfileId || '',
                     openMythosRuntime,
                     subagents: subagentRuntime,
@@ -2724,16 +2698,18 @@ async function applyAgentRuntimeToChatCommand(data) {
             skillDetails: skillReferences.details,
             skillPromptLength: skillReferences.promptLength,
             appendSystemPromptLength: runtime.appendSystemPrompt.length,
-            contextWindowTokens: runtime.contextWindowTokens,
-            model: runtime.model || data?.options?.model || '',
+            contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
+            model: resolvedSessionModel || runtime.model || data?.options?.model || '',
             modelProfileId: sessionModelProfileId || '',
             openMythosRuntime,
             subagents: subagentRuntime,
         },
-        contextWindowTokens: runtime.contextWindowTokens,
+        contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
     };
 
-    if (data.type === 'claude-command' && runtime.model) {
+    if (data.type === 'claude-command' && resolvedSessionModel) {
+        options.model = resolvedSessionModel;
+    } else if (data.type === 'claude-command' && runtime.model) {
         options.model = runtime.model;
     }
 
@@ -2770,6 +2746,7 @@ function handleChatConnection(ws, request) {
 
             if (data.type === 'claude-command') {
                 setWriterAutoCaptureContext(writer, data, 'claude');
+                await waitForWriterAutoCaptureBarrier(writer, data, 'claude');
                 const commandData = await applyObsidianContextToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(data)),
                 ));
@@ -2836,6 +2813,7 @@ function handleChatConnection(ws, request) {
                 }
             } else if (data.type === 'cursor-command') {
                 setWriterAutoCaptureContext(writer, data, 'cursor');
+                await waitForWriterAutoCaptureBarrier(writer, data, 'cursor');
                 const commandData = await applyObsidianContextToChatCommand(
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
@@ -2847,6 +2825,7 @@ function handleChatConnection(ws, request) {
                 await spawnCursor(commandData.command, commandData.options, writer);
             } else if (data.type === 'codex-command') {
                 setWriterAutoCaptureContext(writer, data, 'codex');
+                await waitForWriterAutoCaptureBarrier(writer, data, 'codex');
                 const commandData = await applyObsidianContextToChatCommand(
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
@@ -2858,6 +2837,7 @@ function handleChatConnection(ws, request) {
                 await queryCodex(commandData.command, commandData.options, writer);
             } else if (data.type === 'gemini-command') {
                 setWriterAutoCaptureContext(writer, data, 'gemini');
+                await waitForWriterAutoCaptureBarrier(writer, data, 'gemini');
                 const commandData = await applyObsidianContextToChatCommand(
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );

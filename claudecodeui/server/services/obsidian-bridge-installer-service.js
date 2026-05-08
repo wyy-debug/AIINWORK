@@ -42,6 +42,32 @@ const exists = async (filePath) => {
   }
 };
 
+export const resolveObsidianBridgePluginSource = async ({
+  pluginSource = '',
+  serviceDirectory = __dirname,
+} = {}) => {
+  const candidates = [
+    pluginSource,
+    process.env.ARGUS_OBSIDIAN_BRIDGE_PLUGIN_SOURCE,
+    path.resolve(serviceDirectory, '..', '..', '..', 'obsidian-plugins', 'argus-bridge'),
+    path.resolve(serviceDirectory, '..', '..', 'obsidian-plugins', 'argus-bridge'),
+    DEFAULT_PLUGIN_SOURCE,
+    path.resolve(process.cwd(), 'obsidian-plugins', 'argus-bridge'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = path.resolve(String(candidate));
+    if (await exists(resolved)) {
+      return resolved;
+    }
+  }
+
+  throw new Error([
+    'Argus Bridge for Obsidian plugin source was not found.',
+    'Reinstall Argus or run from the repository root so obsidian-plugins/argus-bridge is available.',
+  ].join(' '));
+};
+
 export const chooseObsidianBridgePort = ({
   preferredPort = 0,
   usedPorts = [],
@@ -72,11 +98,12 @@ const defaultObsidianConfigPath = () => {
 };
 
 export const buildBundledObsidianBridgeMain = async ({
-  pluginSource = DEFAULT_PLUGIN_SOURCE,
+  pluginSource = '',
 } = {}) => {
-  const main = await fs.readFile(path.join(pluginSource, 'main.js'), 'utf8');
-  const core = await fs.readFile(path.join(pluginSource, 'core.cjs'), 'utf8');
-  const requirePattern = /const \{\n[\s\S]*?\n\} = require\('\.\/core\.js'\);/;
+  const resolvedPluginSource = await resolveObsidianBridgePluginSource({ pluginSource });
+  const main = await fs.readFile(path.join(resolvedPluginSource, 'main.js'), 'utf8');
+  const core = await fs.readFile(path.join(resolvedPluginSource, 'core.cjs'), 'utf8');
+  const requirePattern = /const\s+\{\r?\n[\s\S]*?\r?\n\}\s*=\s*require\('\.\/core\.js'\);/;
   const requireMatch = main.match(requirePattern);
   if (!requireMatch) {
     throw new Error('Could not find Argus Bridge core require in plugin main.js.');
@@ -138,7 +165,7 @@ export const installObsidianBridgePlugin = async ({
   port = 0,
   usedPorts = [],
   enablePlugin = true,
-  pluginSource = DEFAULT_PLUGIN_SOURCE,
+  pluginSource = '',
 } = {}) => {
   const normalizedVaultPath = String(vaultPath || '').trim();
   if (!normalizedVaultPath) {
@@ -151,16 +178,17 @@ export const installObsidianBridgePlugin = async ({
     throw new Error('Obsidian vault path must be an existing directory.');
   }
 
-  const manifest = await readJson(path.join(pluginSource, 'manifest.json'), {});
+  const resolvedPluginSource = await resolveObsidianBridgePluginSource({ pluginSource });
+  const manifest = await readJson(path.join(resolvedPluginSource, 'manifest.json'), {});
   const targetDir = path.join(resolvedVaultPath, '.obsidian', 'plugins', OBSIDIAN_BRIDGE_PLUGIN_ID);
   await fs.mkdir(targetDir, { recursive: true });
 
   for (const file of RELEASE_FILES) {
     const targetPath = path.join(targetDir, file.target);
     if (file.source === 'main.js') {
-      await fs.writeFile(targetPath, await buildBundledObsidianBridgeMain({ pluginSource }), 'utf8');
+      await fs.writeFile(targetPath, await buildBundledObsidianBridgeMain({ pluginSource: resolvedPluginSource }), 'utf8');
     } else {
-      await fs.copyFile(path.join(pluginSource, file.source), targetPath);
+      await fs.copyFile(path.join(resolvedPluginSource, file.source), targetPath);
     }
   }
 

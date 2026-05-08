@@ -111,6 +111,7 @@ claudecodeui/.worktrees/
 claudecodeui/electron-resources/
 claudecodeui/tasks/
 claudecodeui/tasks.json
+**/docs/knowledge/wiki-fallback/
 
 # Reference-only upstream checkout used for OpenMythos runtime ideas.
 OpenMythos/

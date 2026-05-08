@@ -396,6 +396,11 @@ describe('argus bridge Obsidian core', () => {
       rawPath: 'Argus/Raw/GPUScene/2026-05-07/Design.md',
       sourceIds: ['artifact-1'],
       related: ['[[GPUScene Index]]'],
+      compiler: 'small-model',
+      compileStrategy: 'quality',
+      wikiCompileChunks: 3,
+      wikiCompileModel: 'mimo-flash',
+      wikiCompileFallbackReason: '',
       argusId: 'wiki:GPUScene:Design',
     }, fixedDate);
 
@@ -404,6 +409,10 @@ describe('argus bridge Obsidian core', () => {
     expect(compiled).toContain('rawPath: Argus/Raw/GPUScene/2026-05-07/Design.md');
     expect(compiled).toContain('wikiStatus: compiled');
     expect(compiled).toContain('related:\n  - "[[GPUScene Index]]"');
+    expect(compiled).toContain('compiler: small-model');
+    expect(compiled).toContain('compileStrategy: quality');
+    expect(compiled).toContain('wikiCompileChunks: 3');
+    expect(compiled).toContain('wikiCompileModel: mimo-flash');
   });
 
   it('lints wiki files for missing properties, uncompiled raw notes, duplicate topics, and broken links', () => {

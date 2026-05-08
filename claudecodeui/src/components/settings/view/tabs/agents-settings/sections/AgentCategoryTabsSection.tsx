@@ -7,8 +7,9 @@ import type { AgentCategoryTabsSectionProps } from '../types';
 
 const CATEGORY_LABELS: Record<AgentCategory, { key: string; defaultValue: string }> = {
   model: { key: 'tabs.model', defaultValue: '模型' },
+  'small-model': { key: 'tabs.smallModel', defaultValue: '小模型' },
   permissions: { key: 'tabs.permissions', defaultValue: '权限' },
-  mcp: { key: 'tabs.mcpServers', defaultValue: 'MCP 服务器' },
+  mcp: { key: 'tabs.mcpServers', defaultValue: 'MCP 服务' },
   repository: { key: 'tabs.repository', defaultValue: '仓库' },
   usage: { key: 'tabs.usage', defaultValue: '用量' },
 };

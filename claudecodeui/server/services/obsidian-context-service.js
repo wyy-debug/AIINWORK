@@ -5,6 +5,7 @@ import {
   getActiveObsidianNote as defaultGetActiveObsidianNote,
   readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
 } from './obsidian-bridge-service.js';
+import { refineWikiReadbackContext as defaultRefineWikiReadbackContext } from './small-model-service.js';
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -75,6 +76,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   buildObsidianContext = defaultBuildObsidianContext,
   getActiveObsidianNote = defaultGetActiveObsidianNote,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
+  refineWikiReadbackContext = defaultRefineWikiReadbackContext,
 } = {}) => {
   const command = typeof data.command === 'string' ? data.command : '';
   const options = data.options && typeof data.options === 'object' ? data.options : {};
@@ -114,12 +116,27 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       folders,
       limit,
     });
-    const context = readString(result?.context);
+    const baseContext = readString(result?.context);
+    const refinement = config.wikiReadbackRefineEnabled === false
+      ? { refined: false, context: baseContext, sources: [] }
+      : await refineWikiReadbackContext({
+        query: command.slice(0, 2000),
+        projectName,
+        context: baseContext,
+        activeNote,
+        results: result?.results,
+      });
+    const context = readString(refinement?.context) || baseContext;
     const activeBlock = buildActiveNoteBlock(activeNote);
-    const sources = buildSources({
-      activeNote,
-      results: result?.results,
-    });
+    const sources = refinement?.refined
+      ? [
+        ...buildSources({ activeNote, results: [] }),
+        ...(Array.isArray(refinement.sources) ? refinement.sources : []),
+      ]
+      : buildSources({
+        activeNote,
+        results: result?.results,
+      });
     if (!context && !activeBlock) {
       return {
         ...data,
@@ -147,6 +164,8 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
             resultCount: Array.isArray(result?.results) ? result.results.length : 0,
             projectName,
             source: 'wiki',
+            refined: Boolean(refinement?.refined),
+            refinementModel: refinement?.model || '',
             sources,
           },
         },
@@ -163,6 +182,8 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           resultCount: Array.isArray(result?.results) ? result.results.length : 0,
           projectName,
           source: 'wiki',
+          refined: Boolean(refinement?.refined),
+          refinementModel: refinement?.model || '',
           sources,
         },
       },

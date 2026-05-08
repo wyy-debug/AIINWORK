@@ -488,11 +488,18 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     args.push('--append-system-prompt', options.appendSystemPrompt);
   }
 
-  // Let Argus resolve the concrete runtime model from ~/.mtl-code/settings.json
-  // and OPENAI_* env vars unless the UI sends an explicit non-sentinel model.
   const optionModel = canonicalizeAnthropicModel(options.model);
-  if (optionModel && optionModel !== MTL_CODE_MODEL.value) {
-    args.push('--model', optionModel);
+  const resolvedSessionModel = optionModel && optionModel !== MTL_CODE_MODEL.value
+    ? optionModel
+    : canonicalizeAnthropicModel(
+      env.ANTHROPIC_MODEL
+      || env.ANTHROPIC_DEFAULT_SONNET_MODEL
+      || env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+      || env.ANTHROPIC_DEFAULT_OPUS_MODEL
+      || '',
+    );
+  if (resolvedSessionModel) {
+    args.push('--model', resolvedSessionModel);
   }
 
   return args;

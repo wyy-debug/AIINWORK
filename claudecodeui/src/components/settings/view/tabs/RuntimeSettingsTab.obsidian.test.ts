@@ -62,14 +62,52 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('测试自动路由');
     expect(source).toContain('重复笔记清理');
     expect(source).toContain('Obsidian 知识库');
-    expect(source).toContain('自动导出知识结果');
+    expect(source).toContain('手动上传/保存到 Wiki');
+    expect(source).toContain('自动判断默认关闭');
     expect(source).toContain('不可达时回退到项目文档');
     expect(source).toContain('project-knowledge');
     expect(source).toContain('second-brain');
     expect(source).toContain('ai-memory');
   });
 
-  it('wires Results artifacts to manual Obsidian export controls', () => {
+  it('keeps the Obsidian settings page compact and links to global small model settings', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(currentDir, 'runtime-settings', 'ObsidianBridgeSettingsContent.tsx'),
+      'utf8',
+    );
+    const settingsSource = readFileSync(resolve(currentDir, '..', 'Settings.tsx'), 'utf8');
+
+    expect(source).toContain('核心开关');
+    expect(source).toContain('小模型增强');
+    expect(source).toContain('打开小模型设置');
+    expect(source).toContain('高级设置');
+    expect(source).toContain('<details');
+    expect(source).toContain('onOpenSmallModelSettings');
+    expect(settingsSource).toContain('agentInitialCategory');
+    expect(settingsSource).toContain('small-model');
+  });
+
+  it('exposes a direct knowledge-base upload entry from the Obsidian settings page', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(currentDir, 'runtime-settings', 'ObsidianBridgeSettingsContent.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain('knowledgeUploadInputRef');
+    expect(source).toContain('uploadKnowledgeFiles');
+    expect(source).toContain('/api/obsidian-bridge/wiki/upload');
+    expect(source).toContain("formData.append('files'");
+    expect(source).toContain('wikiCompiler');
+    expect(source).toContain('wikiCompileChunks');
+    expect(source).toContain('小模型编译');
+    expect(source).toContain('fallback 编译');
+    expect(source).toContain('上传现有文件');
+    expect(source).toContain('Raw → Wiki → Index');
+  });
+
+  it('keeps Results focused on manual Wiki upload and implemented artifact actions', () => {
     const currentDir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(
       resolve(currentDir, '..', '..', '..', 'artifacts', 'view', 'ArtifactsPanel.tsx'),
@@ -77,23 +115,28 @@ describe('Runtime settings Obsidian bridge entry', () => {
     );
 
     expect(source).toContain('/send-to-obsidian');
-    expect(source).toContain('发送到 Obsidian');
+    expect(source).toContain('\u4fdd\u5b58\u5230 Wiki');
+    expect(source).toContain('\u4e0a\u4f20\u6587\u4ef6\u5230 Wiki');
+    expect(source).toContain('\u7ed3\u679c\u8be6\u60c5');
+    expect(source).toContain('\u590d\u5236\u5185\u5bb9');
+    expect(source).toContain('\u653e\u5165\u5bf9\u8bdd');
+    expect(source).toContain('\u5220\u9664\u7ed3\u679c');
     expect(source).toContain('obsidianBridge');
-    expect(source).toContain('已写入 Obsidian');
-    expect(source).toContain('已回退到 docs/knowledge');
-    expect(source).toContain('同步失败');
-    expect(source).toContain('未发送');
-    expect(source).toContain('路由原因');
-    expect(source).toContain('自动');
-    expect(source).toContain('项目知识库');
-    expect(source).toContain('第二大脑');
-    expect(source).toContain('AI 记忆');
-    expect(source).toContain('project-knowledge');
-    expect(source).toContain('second-brain');
-    expect(source).toContain('ai-memory');
+    expect(source).toContain('\u5df2\u4fdd\u5b58\u5230 Wiki');
+    expect(source).toContain('\u5df2\u56de\u9000\u5230 docs/knowledge');
+    expect(source).toContain('\u540c\u6b65\u5931\u8d25');
+    expect(source).toContain('\u672a\u4fdd\u5b58');
+    expect(source).toContain('\u8bf4\u660e');
     expect(source).toContain('/api/obsidian-bridge/wiki/upload');
-    expect(source).toContain('上传到知识库');
-    expect(source).toContain('自主落库');
+    expect(source).toContain('wikiCompiler');
+    expect(source).toContain('\u5c0f\u6a21\u578b\u603b\u7ed3');
+    expect(source).toContain('fallback \u603b\u7ed3');
+    expect(source).not.toContain('.pdf');
+    expect(source).not.toContain('.docx');
+    expect(source).not.toContain('.pptx');
+    expect(source).not.toContain('SOURCE_FILTERS');
+    expect(source).not.toContain('OBSIDIAN_MODES');
+    expect(source).not.toContain('Obsidian Inbox');
   });
 
   it('wires chat file attachments to the Obsidian wiki ingest toggle', () => {

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { Button } from '../../../../shared/view/ui';
 import Settings from '../../../settings/view/Settings';
 import VersionUpgradeModal from '../../../version-upgrade/view';
@@ -14,6 +15,7 @@ import ProjectCreationWizard from '../../../project-creation-wizard';
 
 type SidebarModalsProps = {
   projects: Project[];
+  selectedProject: Project | null;
   showSettings: boolean;
   settingsInitialTab: string;
   onCloseSettings: () => void;
@@ -39,6 +41,7 @@ type TypedSettingsProps = {
   isOpen: boolean;
   onClose: () => void;
   projects: SettingsProject[];
+  selectedProject?: SettingsProject | null;
   initialTab: string;
 };
 
@@ -50,6 +53,7 @@ function TypedSettings(props: TypedSettingsProps) {
 
 export default function SidebarModals({
   projects,
+  selectedProject,
   showSettings,
   settingsInitialTab,
   onCloseSettings,
@@ -75,6 +79,7 @@ export default function SidebarModals({
     () => projects.map(normalizeProjectForSettings),
     [projects],
   );
+  const settingsSelectedProject = selectedProject ? normalizeProjectForSettings(selectedProject) : null;
 
   return (
     <>
@@ -93,6 +98,7 @@ export default function SidebarModals({
             isOpen={showSettings}
             onClose={onCloseSettings}
             projects={settingsProjects}
+            selectedProject={settingsSelectedProject}
             initialTab={settingsInitialTab}
           />,
           document.body,

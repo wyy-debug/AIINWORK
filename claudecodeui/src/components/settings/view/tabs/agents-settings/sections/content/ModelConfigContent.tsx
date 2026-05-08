@@ -20,10 +20,12 @@ type ModelProfile = {
   id: string;
   name: string;
   provider: 'anthropic';
+  protocol: 'anthropic' | 'openai-compatible' | 'openai-responses';
   apiKey: string;
   apiKeyConfigured: boolean;
   baseUrl: string;
   model: string;
+  requestModel: string;
   contextWindowTokens: number;
   bareMode: boolean;
 };
@@ -103,10 +105,14 @@ const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   id: patch.id || makeId(),
   name: patch.name ?? 'Custom model',
   provider: 'anthropic',
+  protocol: patch.protocol === 'openai-compatible' || patch.protocol === 'openai-responses'
+    ? patch.protocol
+    : 'anthropic',
   apiKey: '',
   apiKeyConfigured: Boolean(patch.apiKeyConfigured),
   baseUrl: patch.baseUrl || '',
   model: patch.model || '',
+  requestModel: patch.requestModel || '',
   contextWindowTokens: patch.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
   bareMode: patch.bareMode !== false,
 });
@@ -193,9 +199,13 @@ const toProfile = (value: unknown, index: number): ModelProfile | null => {
   return createProfile({
     id: typeof data.id === 'string' && data.id ? data.id : makeId(`model-${index + 1}`),
     name: typeof data.name === 'string' && data.name ? data.name : data.model || `Model ${index + 1}`,
+    protocol: data.protocol === 'openai-compatible' || data.protocol === 'openai-responses'
+      ? data.protocol
+      : 'anthropic',
     apiKeyConfigured: Boolean(data.apiKeyConfigured),
     baseUrl: typeof data.baseUrl === 'string' ? data.baseUrl : '',
     model: typeof data.model === 'string' ? data.model : '',
+    requestModel: typeof data.requestModel === 'string' ? data.requestModel : '',
     contextWindowTokens:
       Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
@@ -218,8 +228,10 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
       apiKeyConfigured: Boolean(data?.anthropic?.apiKeyConfigured),
       baseUrl: data?.anthropic?.baseUrl || '',
       model: data?.anthropic?.model || '',
+      protocol: 'anthropic',
       contextWindowTokens: data?.runtime?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
       bareMode: data?.runtime?.bareMode !== false,
+      requestModel: '',
     });
 
   return {
@@ -451,6 +463,8 @@ export default function ModelConfigContent() {
                 name: '',
                 baseUrl: '',
                 model: '',
+                protocol: 'anthropic',
+                requestModel: '',
                 contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
                 bareMode: true,
               })}
@@ -554,6 +568,37 @@ export default function ModelConfigContent() {
                 placeholder={t('mtlCodeModel.modelPlaceholder', { defaultValue: '模型 ID' })}
                 disabled={isLoading || isSaving}
               />
+            </label>
+
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-foreground">请求协议</span>
+              <select
+                value={selectedProfile.protocol}
+                onChange={(event) => updateProfile(selectedProfile.id, {
+                  protocol: event.target.value === 'openai-compatible' || event.target.value === 'openai-responses'
+                    ? event.target.value
+                    : 'anthropic',
+                })}
+                disabled={isLoading || isSaving}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+              >
+                <option value="anthropic">Anthropic-compatible (/v1/messages)</option>
+                <option value="openai-compatible">OpenAI-compatible (/v1/chat/completions)</option>
+                <option value="openai-responses">OpenAI Responses (/v1/responses)</option>
+              </select>
+            </label>
+
+            <label className="space-y-2 md:col-span-2">
+              <span className="text-sm font-medium text-foreground">请求模型名覆盖</span>
+              <Input
+                value={selectedProfile.requestModel}
+                onChange={(event) => updateProfile(selectedProfile.id, { requestModel: event.target.value })}
+                placeholder={selectedProfile.model || '例如 obsidian-small-anthropic'}
+                disabled={isLoading || isSaving}
+              />
+              <p className="text-xs text-muted-foreground">
+                留空时使用上面的模型名；中转站按模型名分流时，可填一个实际走 Anthropic 通道的别名。
+              </p>
             </label>
 
             <label className="space-y-2 md:col-span-2">

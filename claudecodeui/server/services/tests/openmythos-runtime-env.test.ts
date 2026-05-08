@@ -1,17 +1,26 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { expect, test } from 'vitest';
+
 import {
   ANTHROPIC_MODEL_ENV_KEYS,
   MTL_CODE_MODEL_ENV_KEYS,
   OPENMYTHOS_RUNTIME_ENV_KEYS,
   OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  SMALL_MODEL_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyGoalRuntimeToEnv,
   applyOpenMythosRuntimeToEnv,
   applySubagentRuntimeToEnv,
   normalizeGoalRuntimeConfig,
+  normalizeSmallModelRuntimeConfig,
   normalizeSubagentRuntimeConfig,
   readOpenMythosRuntimeConfig,
+  readSmallModelRuntimeConfig,
   repairAnthropicRuntimeModelEnv,
+  resolveMtlCodeModelRuntime,
 } from '../mtl-code-model-service.js';
 
 test('OpenMythos runtime settings are normalized and written to MTL_CODE_OPENMYTHOS env keys', async () => {
@@ -67,6 +76,73 @@ test('Goal runtime settings are normalized and written to Codex-style env keys',
 
   expect(config.enabled).toBe(true);
   expect(env[MTL_CODE_MODEL_ENV_KEYS.goalsEnabled]).toBe('1');
+});
+
+
+test('Small model runtime settings are normalized and read from model settings', async () => {
+  const settings = {
+    [SMALL_MODEL_RUNTIME_SETTINGS_KEY]: {
+      enabled: true,
+      profileId: ' mimo-flash ',
+      requestModel: ' relay-small ',
+      timeoutMs: 999999,
+      useForWikiRouting: false,
+      useForWikiReadback: true,
+    },
+  };
+
+  expect(readSmallModelRuntimeConfig(settings)).toEqual({
+    enabled: true,
+    profileId: 'mimo-flash',
+    protocol: 'anthropic',
+    requestModel: 'relay-small',
+    timeoutMs: 15000,
+    useForWikiRouting: false,
+    useForWikiReadback: true,
+  });
+  expect(normalizeSmallModelRuntimeConfig({ timeoutMs: 100 })).toMatchObject({
+    timeoutMs: 1000,
+  });
+});
+
+test('Model profile requestModel overrides the runtime Anthropic model request name', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
+  const configRoot = path.join(tempRoot, '.mtl-code');
+  await fs.mkdir(configRoot, { recursive: true });
+  await fs.writeFile(path.join(configRoot, 'settings.json'), JSON.stringify({
+    env: {},
+    mtlCodeModelProfiles: [
+      {
+        id: 'relay-gpt-mini',
+        name: 'Relay GPT Mini',
+        baseUrl: 'http://token.wd.com',
+        model: 'gpt-5.4-mini',
+        requestModel: 'obsidian-small-anthropic',
+        authToken: 'test-token',
+        contextWindowTokens: 200000,
+      },
+    ],
+    activeMtlCodeModelProfileId: 'relay-gpt-mini',
+  }, null, 2), 'utf8');
+
+  const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
+  process.env.MTL_CODE_CONFIG_DIR = configRoot;
+  try {
+    const runtime = await resolveMtlCodeModelRuntime('relay-gpt-mini');
+
+    expect(runtime?.profile.model).toBe('gpt-5.4-mini');
+    expect(runtime?.profile.requestModel).toBe('obsidian-small-anthropic');
+    expect(runtime?.env.ANTHROPIC_MODEL).toBe('obsidian-small-anthropic');
+    expect(runtime?.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('obsidian-small-anthropic');
+    expect(runtime?.env.MTL_CODE_SUBAGENT_MODEL).toBe('obsidian-small-anthropic');
+  } finally {
+    if (previousConfigRoot === undefined) {
+      delete process.env.MTL_CODE_CONFIG_DIR;
+    } else {
+      process.env.MTL_CODE_CONFIG_DIR = previousConfigRoot;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('OpenMythos runtime settings override stale env values when read back', async () => {

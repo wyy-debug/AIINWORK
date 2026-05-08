@@ -15,6 +15,7 @@ import {
 import {
   OPENMYTHOS_RUNTIME_SETTINGS_KEY,
   GOAL_RUNTIME_SETTINGS_KEY,
+  SMALL_MODEL_RUNTIME_SETTINGS_KEY,
   SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyGoalRuntimeToEnv,
@@ -23,11 +24,14 @@ import {
   canonicalizeAnthropicModel,
   normalizeGoalRuntimeConfig,
   normalizeOpenMythosRuntimeConfig,
+  normalizeSmallModelRuntimeConfig,
   normalizeSubagentRuntimeConfig,
   readGoalRuntimeConfig,
   readOpenMythosRuntimeConfig,
+  readSmallModelRuntimeConfig,
   readSubagentRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
+import { testSmallModelRuntime } from '../services/small-model-service.js';
 import {
   readRuntimePermissions,
   saveRuntimePermissions,
@@ -198,8 +202,10 @@ const sanitizeModelProfile = (profile, env = {}) => ({
   id: profile.id,
   name: profile.name,
   provider: 'anthropic',
+  protocol: normalizeModelProtocol(profile.protocol),
   baseUrl: profile.baseUrl || '',
   model: profile.model || '',
+  requestModel: profile.requestModel || '',
   apiKey: '',
   apiKeyConfigured: Boolean(profile.authToken),
   contextWindowTokens: resolveProfileContextWindow(profile, env),
@@ -229,8 +235,10 @@ const createProfileFromEnv = (settings, env) => {
     id: 'default',
     name: model ? `Default (${model})` : 'Default model',
     provider: 'anthropic',
+    protocol: 'anthropic',
     baseUrl,
     model,
+    requestModel: '',
     authToken,
     contextWindowTokens: resolveProfileContextWindow({ model }, env),
     bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.uiBareMode),
@@ -253,8 +261,10 @@ const readStoredModelProfiles = (settings, env) => {
         id,
         name,
         provider: 'anthropic',
+        protocol: normalizeModelProtocol(profile.protocol),
         baseUrl,
         model,
+        requestModel: readOptionalString(profile.requestModel),
         authToken: readOptionalString(profile.authToken),
         contextWindowTokens: resolveProfileContextWindow(profile, env),
         bareMode: profile.bareMode !== false,
@@ -270,11 +280,27 @@ const resolveActiveModelProfile = (settings, profiles) => {
   return profiles.find((profile) => profile.id === activeId) || profiles[0];
 };
 
+const hasSmallModelHint = (profile = {}) => {
+  const haystack = [profile.id, profile.name, profile.model]
+    .map((value) => readOptionalString(value).toLowerCase())
+    .join(' ');
+  return ['flash', 'haiku', 'mini', 'small', 'lite'].some((hint) => haystack.includes(hint));
+};
+
+const resolveSmallModelProfile = (smallModelRuntime, profiles, activeProfile) => {
+  if (smallModelRuntime.profileId && smallModelRuntime.profileId !== 'auto') {
+    return profiles.find((profile) => profile.id === smallModelRuntime.profileId) || activeProfile || profiles[0] || null;
+  }
+  return profiles.find(hasSmallModelHint) || activeProfile || profiles[0] || null;
+};
+
 const toMtlCodeModelConfig = (settings, filePath) => {
   const env = readObjectRecord(settings.env) ?? {};
   const profiles = readStoredModelProfiles(settings, env);
   const activeProfile = resolveActiveModelProfile(settings, profiles);
   const activeContextWindowTokens = resolveProfileContextWindow(activeProfile, env);
+  const smallModelRuntime = readSmallModelRuntimeConfig(settings, env);
+  const smallModelProfile = resolveSmallModelProfile(smallModelRuntime, profiles, activeProfile);
 
   return {
     provider: 'anthropic',
@@ -299,6 +325,19 @@ const toMtlCodeModelConfig = (settings, filePath) => {
     openMythosRuntime: readOpenMythosRuntimeConfig(settings, env),
     subagents: readSubagentRuntimeConfig(settings, env),
     goals: readGoalRuntimeConfig(settings, env),
+    smallModelRuntime: {
+      ...smallModelRuntime,
+      resolvedProfile: smallModelProfile
+        ? {
+          id: smallModelProfile.id,
+          name: smallModelProfile.name,
+          provider: smallModelProfile.provider,
+          baseUrl: smallModelProfile.baseUrl,
+          model: smallModelProfile.model,
+          tokenConfigured: Boolean(smallModelProfile.authToken),
+        }
+        : null,
+    },
   };
 };
 
@@ -306,6 +345,12 @@ const toStringEnv = (value) => {
   const normalized = readOptionalString(value);
   return normalized || undefined;
 };
+
+const normalizeModelProtocol = (value) => (
+  ['openai-compatible', 'openai-responses'].includes(readOptionalString(value))
+    ? readOptionalString(value)
+    : 'anthropic'
+);
 
 const setOptionalEnv = (env, key, value) => {
   const normalized = toStringEnv(value);
@@ -330,6 +375,8 @@ const normalizeModelConfigInput = (body) => {
       const profile = readObjectRecord(entry);
       if (!profile) return null;
       const model = toStringEnv(canonicalizeAnthropicModel(profile.model));
+      const requestModel = toStringEnv(profile.requestModel);
+      const protocol = normalizeModelProtocol(profile.protocol);
       const baseUrl = toStringEnv(profile.baseUrl);
       const name = readOptionalString(profile.name) || model || `Model ${index + 1}`;
       const id = normalizeProfileId(profile.id || name || `model-${index + 1}`);
@@ -338,9 +385,11 @@ const normalizeModelConfigInput = (body) => {
         id,
         name,
         provider: 'anthropic',
+        protocol,
         apiKey: toStringEnv(profile.apiKey),
         baseUrl,
         model,
+        requestModel,
         contextWindowTokens: Number.isFinite(profileContextWindowTokens) && profileContextWindowTokens > 0
           ? profileContextWindowTokens
           : undefined,
@@ -354,9 +403,11 @@ const normalizeModelConfigInput = (body) => {
       id: 'default',
       name: canonicalizeAnthropicModel(anthropic.model) || 'Default model',
       provider: 'anthropic',
+      protocol: 'anthropic',
       apiKey: toStringEnv(anthropic.apiKey),
       baseUrl: toStringEnv(anthropic.baseUrl),
       model: toStringEnv(canonicalizeAnthropicModel(anthropic.model)),
+      requestModel: '',
       contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
         : undefined,
@@ -407,12 +458,16 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
     const existing = existingById.get(incoming.id) || existingById.get(id);
     const authToken = incoming.apiKey || existing?.authToken || '';
     const model = canonicalizeAnthropicModel(incoming.model) || '';
+    const requestModel = readOptionalString(incoming.requestModel) || '';
+    const protocol = normalizeModelProtocol(incoming.protocol);
     const profile = {
       id,
       name: incoming.name || model || `Model ${uniqueProfiles.length + 1}`,
       provider: 'anthropic',
+      protocol,
       baseUrl: incoming.baseUrl || '',
       model,
+      requestModel,
       authToken,
       contextWindowTokens: incoming.contextWindowTokens
         || getMimoContextWindow(model)
@@ -431,8 +486,10 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
     id: profile.id,
     name: profile.name,
     provider: profile.provider,
+    protocol: profile.protocol || 'anthropic',
     baseUrl: profile.baseUrl,
     model: profile.model,
+    requestModel: profile.requestModel || '',
     authToken: profile.authToken,
     contextWindowTokens: profile.contextWindowTokens,
     bareMode: profile.bareMode,
@@ -444,9 +501,10 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
 
 const applyActiveProfileToEnv = (settings, env, profile) => {
   settings.modelType = 'anthropic';
+  const requestModel = readOptionalString(profile.requestModel) || profile.model;
 
   setOptionalEnv(env, ANTHROPIC_ENV_KEYS.baseUrl, profile.baseUrl);
-  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, profile.model);
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, requestModel);
   env[MTL_CODE_ENV_KEYS.uiBareMode] = profile.bareMode !== false ? '1' : '0';
 
   const contextWindowTokens = resolveProfileContextWindow(profile, env);
@@ -461,7 +519,7 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
 
   applyAnthropicRuntimeModelDefaults(env, {
     baseUrl: profile.baseUrl,
-    model: profile.model,
+    model: requestModel,
   });
 
   if (profile.model) {
@@ -805,6 +863,11 @@ router.put('/mtl-code-model', async (req, res) => {
       readGoalRuntimeConfig(settings, env),
     );
     settings[GOAL_RUNTIME_SETTINGS_KEY] = goals;
+    const smallModelRuntime = normalizeSmallModelRuntimeConfig(
+      readObjectRecord(req.body?.smallModelRuntime),
+      readSmallModelRuntimeConfig(settings, env),
+    );
+    settings[SMALL_MODEL_RUNTIME_SETTINGS_KEY] = smallModelRuntime;
     applyGoalRuntimeToEnv(env, goals);
     applyCoordinatorModeFromOpenMythosRuntime(env, openMythosRuntime);
     clearOpenAIEnv(env);
@@ -874,6 +937,25 @@ router.put('/runtime-permissions', async (req, res) => {
   } catch (error) {
     console.error('Error saving runtime permissions:', error);
     res.status(500).json({ error: 'Failed to save runtime permissions' });
+  }
+});
+
+router.post('/small-model/test', async (req, res) => {
+  try {
+    const result = await testSmallModelRuntime({
+      prompt: readOptionalString(req.body?.prompt) || '',
+      readMtlCodeModelSettings: async () => {
+        const { settings } = await readMtlCodeSettings();
+        return settings;
+      },
+    });
+    res.json({
+      success: result.success,
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error testing small model:', error);
+    res.status(500).json({ error: 'Failed to test small model' });
   }
 });
 

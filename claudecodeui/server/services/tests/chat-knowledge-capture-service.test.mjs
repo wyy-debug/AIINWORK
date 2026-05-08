@@ -184,4 +184,74 @@ describe('chat knowledge capture service', () => {
       }),
     }));
   });
+
+  it('lets small model classification drive Obsidian capture when rules would skip', async () => {
+    const ingestKnowledgeSourceToWiki = vi.fn(async (payload) => ({
+      success: true,
+      captured: true,
+      artifact: { id: 'artifact_ai_routed', metadata: payload.metadata },
+      artifactId: 'artifact_ai_routed',
+      obsidianBridge: {
+        destination: 'obsidian',
+        wikiPath: 'Argus/Wiki/App/AI-Routed.md',
+      },
+    }));
+    const classifyKnowledgeWithSmallModel = vi.fn(async ({ ruleAssessment }) => ({
+      used: true,
+      model: 'gpt-5.4-mini',
+      assessment: {
+        ...ruleAssessment,
+        shouldCapture: true,
+        reason: 'knowledge',
+        mode: 'second-brain',
+        routingMode: 'second-brain',
+        routingModes: ['second-brain'],
+        routingReason: '小模型判断这是可沉淀总结。',
+        routingSignals: ['small model decision'],
+        confidence: 0.88,
+        routingConfidence: 0.88,
+        aiRoutingUsed: true,
+        aiRoutingModel: 'gpt-5.4-mini',
+      },
+    }));
+    const service = captureModule.createChatKnowledgeCaptureService({
+      db: database,
+      createArtifact: vi.fn(),
+      ingestKnowledgeSourceToWiki,
+      classifyKnowledgeWithSmallModel,
+      findExistingCapture: () => null,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        autoExportKnowledgeArtifacts: true,
+        wikiPrimaryEnabled: true,
+        defaultMode: 'project-knowledge',
+      }),
+    });
+
+    const result = await service.autoCaptureChatKnowledge({
+      sourceId: 'chat:session-small-model:turn-1',
+      projectName: 'App',
+      sessionId: 'session-small-model',
+      provider: 'claude',
+      previousUserPrompt: '总结一下',
+      timestamp: '2026-05-08T10:10:00.000Z',
+      content: '短总结。',
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      captured: true,
+      artifactId: 'artifact_ai_routed',
+      mode: 'second-brain',
+      aiRoutingUsed: true,
+    });
+    expect(classifyKnowledgeWithSmallModel).toHaveBeenCalled();
+    expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        routingMode: 'second-brain',
+        aiRoutingUsed: true,
+        aiRoutingModel: 'gpt-5.4-mini',
+      }),
+    }));
+  });
 });

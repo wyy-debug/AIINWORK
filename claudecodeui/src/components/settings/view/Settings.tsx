@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -19,8 +20,9 @@ const getInitialAgentCategory = (tab: string): AgentCategory => {
   return 'model';
 };
 
-function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
+function Settings({ isOpen, onClose, projects = [], selectedProject = null, initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
+  const [agentInitialCategory, setAgentInitialCategory] = useState<AgentCategory>(() => getInitialAgentCategory(initialTab));
   const {
     activeTab,
     setActiveTab,
@@ -97,7 +99,14 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               )}
 
               {activeTab === 'runtime' && (
-                <RuntimeSettingsTab />
+                <RuntimeSettingsTab
+                  projects={projects}
+                  selectedProject={selectedProject}
+                  onOpenSmallModelSettings={() => {
+                    setAgentInitialCategory('small-model');
+                    setActiveTab('agents');
+                  }}
+                />
               )}
 
               {activeTab === 'agents' && (
@@ -111,7 +120,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   geminiPermissionMode={geminiPermissionMode}
                   onGeminiPermissionModeChange={setGeminiPermissionMode}
                   projects={projects}
-                  initialCategory={getInitialAgentCategory(initialTab)}
+                  initialCategory={agentInitialCategory}
                 />
               )}
             </div>

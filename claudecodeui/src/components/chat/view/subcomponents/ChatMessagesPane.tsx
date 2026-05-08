@@ -78,6 +78,7 @@ type ProcessTraceGroupProps = {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
+  sessionId?: string | null;
   provider: LLMProvider;
   getMessageKey: (message: ChatMessage) => string;
   onPreserveScrollForLayoutChange?: () => void;
@@ -124,6 +125,7 @@ function areProcessTraceGroupPropsEqual(
     previous.showRawParameters === next.showRawParameters &&
     previous.showThinking === next.showThinking &&
     previous.selectedProject === next.selectedProject &&
+    previous.sessionId === next.sessionId &&
     previous.provider === next.provider &&
     previous.getMessageKey === next.getMessageKey &&
     previous.onPreserveScrollForLayoutChange === next.onPreserveScrollForLayoutChange
@@ -142,6 +144,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   showRawParameters,
   showThinking,
   selectedProject,
+  sessionId,
   provider,
   getMessageKey,
   onPreserveScrollForLayoutChange,
@@ -238,6 +241,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
                   showRawParameters={showRawParameters}
                   showThinking={showThinking}
                   selectedProject={selectedProject}
+                  sessionId={sessionId}
                   provider={provider}
                 />
               ))}
@@ -525,6 +529,7 @@ export default function ChatMessagesPane({
                   showRawParameters={showRawParameters}
                   showThinking={showThinking}
                   selectedProject={selectedProject}
+                  sessionId={currentSessionId}
                   provider={provider}
                   getMessageKey={getMessageKey}
                   onPreserveScrollForLayoutChange={onPreserveScrollForLayoutChange}
@@ -547,6 +552,7 @@ export default function ChatMessagesPane({
                 showRawParameters={showRawParameters}
                 showThinking={showThinking}
                 selectedProject={selectedProject}
+                sessionId={currentSessionId}
                 provider={provider}
               />
             );

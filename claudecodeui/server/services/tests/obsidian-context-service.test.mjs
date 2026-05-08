@@ -151,4 +151,58 @@ describe('obsidian context service', () => {
       expect.objectContaining({ kind: 'context-result', path: 'Argus/Projects/App/Plan.md' }),
     ]));
   });
+
+  it('uses the small model refinement before injecting wiki readback context', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const refineWikiReadbackContext = vi.fn(async () => ({
+      refined: true,
+      model: 'mimo-v2-flash',
+      context: 'Path: Argus/Wiki/App/Plan.md\nTitle: Plan\nRefined snippet.',
+      sources: [{
+        kind: 'context-result',
+        path: 'Argus/Wiki/App/Plan.md',
+        title: 'Plan',
+        hitReason: '小模型判断与当前问题相关',
+      }],
+    }));
+
+    const result = await service.applyObsidianContextToChatCommand({
+      type: 'codex-command',
+      command: 'Continue the plan.',
+      options: { projectName: 'App' },
+    }, {
+      buildObsidianContext: vi.fn(async () => ({
+        success: true,
+        context: 'Unrefined context',
+        results: [{ path: 'Argus/Wiki/App/Plan.md', title: 'Plan' }],
+      })),
+      refineWikiReadbackContext,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        wikiReadbackEnabled: true,
+        wikiReadbackMaxResults: 8,
+        wikiReadbackRefineEnabled: true,
+        aiMemoryProjectScopeEnabled: true,
+      }),
+    });
+
+    expect(result.command).toContain('Refined snippet.');
+    expect(result.options.obsidianContext).toMatchObject({
+      used: true,
+      refined: true,
+      refinementModel: 'mimo-v2-flash',
+      sources: [
+        expect.objectContaining({
+          path: 'Argus/Wiki/App/Plan.md',
+          hitReason: '小模型判断与当前问题相关',
+        }),
+      ],
+    });
+    expect(refineWikiReadbackContext).toHaveBeenCalledWith(expect.objectContaining({
+      query: 'Continue the plan.',
+      projectName: 'App',
+      context: 'Unrefined context',
+      results: [{ path: 'Argus/Wiki/App/Plan.md', title: 'Plan' }],
+    }));
+  });
 });

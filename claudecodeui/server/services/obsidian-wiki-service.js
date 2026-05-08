@@ -18,6 +18,22 @@ import {
   sendObsidianWikiIngest as defaultSendObsidianWikiIngest,
   updateObsidianWikiViews as defaultUpdateObsidianWikiViews,
 } from './obsidian-bridge-service.js';
+import { completeSmallModelJson as defaultCompleteSmallModelJson } from './small-model-service.js';
+
+const WIKI_UPLOAD_COMPILE_STRATEGY = 'quality';
+const WIKI_UPLOAD_CHUNK_CHARS = 6000;
+const WIKI_UPLOAD_MAX_CHUNKS = 24;
+const WIKI_UPLOAD_OVERLAP_CHARS = 300;
+const WIKI_UPLOAD_TOKEN_BUDGET = {
+  chunkChars: WIKI_UPLOAD_CHUNK_CHARS,
+  maxChunks: WIKI_UPLOAD_MAX_CHUNKS,
+  overlapChars: WIKI_UPLOAD_OVERLAP_CHARS,
+  chunkMaxTokens: 900,
+  finalMaxTokens: 2200,
+  chunkTimeoutMs: 20000,
+  finalTimeoutMs: 30000,
+  maxAttempts: 2,
+};
 
 const TEXT_EXTENSIONS = new Set([
   '.md',
@@ -222,32 +238,410 @@ const classifyWikiSource = ({
   };
 };
 
-const buildCompiledContent = ({ title, content, rawPath, sourceIds = [] }) => [
-  `# ${title}`,
-  '',
-  '> Argus Wiki Compiler 根据 Raw source 自动生成。后续可以由 AI 继续精炼、拆分和补链。',
-  '',
-  '## 摘要',
-  '',
-  String(content || '').trim().slice(0, 8000),
-  '',
-  '## 关键事实',
-  '',
-  '- 待后续编译器继续提炼。',
-  '',
-  '## 决策/结论',
-  '',
-  '- 待后续编译器继续提炼。',
-  '',
-  '## 未解决问题',
-  '',
-  '- 待补充。',
-  '',
-  '## Sources',
-  '',
-  rawPath ? `- [[${path.basename(rawPath, '.md')}]]` : '- Raw source',
-  ...sourceIds.map((sourceId) => `- ${sourceId}`),
-].join('\n');
+const splitMeaningfulLines = (content = '') => String(content || '')
+  .replace(/\r/g, '\n')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .filter((line) => !/^```/.test(line) && line !== '---');
+
+const stripMarkdownLine = (line = '') => normalizeWhitespace(String(line || '')
+  .replace(/^#{1,6}\s+/, '')
+  .replace(/^>\s*/, '')
+  .replace(/^[-*+]\s+/, '')
+  .replace(/^\d+[.)]\s+/, '')
+  .replace(/^Key fact:\s*/i, '')
+  .replace(/^Decision:\s*/i, '')
+  .replace(/^Open question:\s*/i, ''));
+
+const clampLine = (line = '', max = 320) => {
+  const clean = stripMarkdownLine(line);
+  return clean.length > max ? `${clean.slice(0, max).trim()}...` : clean;
+};
+
+const uniqueLimited = (items = [], limit = 8) => {
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const clean = clampLine(item);
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    result.push(clean);
+    if (result.length >= limit) break;
+  }
+  return result;
+};
+
+const matchingLines = (lines = [], patterns = [], limit = 8) => uniqueLimited(
+  lines.filter((line) => patterns.some((pattern) => pattern.test(line))),
+  limit,
+);
+
+const buildDeterministicSummary = (content = '') => {
+  const paragraphs = String(content || '')
+    .split(/\n{2,}/)
+    .map((block) => normalizeWhitespace(block.replace(/^#{1,6}\s+/gm, '')))
+    .filter((block) => block.length > 20 && !block.startsWith('|'));
+  const summary = paragraphs.slice(0, 3).join('\n\n')
+    || splitMeaningfulLines(content).slice(0, 8).map(clampLine).join('\n');
+  return summary.slice(0, 2600) || '原文没有可提取的正文。';
+};
+
+const buildDeterministicSections = (content = '') => {
+  const lines = splitMeaningfulLines(content);
+  const bulletLines = lines.filter((line) => /^[-*+]\s+/.test(line));
+  const facts = matchingLines(lines, [
+    /^[-*+]\s*Key fact:/i,
+    /\bfact\b/i,
+    /关键|事实|发现|风险|优化|性能|减少|降低|提升/i,
+    /\breduce|improve|risk|allocation|latency|memory\b/i,
+  ]);
+  const decisions = matchingLines(lines, [
+    /^[-*+]\s*Decision:/i,
+    /\bdecision|conclusion\b/i,
+    /决策|结论|建议|采用|保留|需要|必须|应该/i,
+    /\bshould|must|keep|use|enable|disable\b/i,
+  ]);
+  const details = matchingLines(lines, [
+    /实现|细节|架构|流程|接口|模块|路径|函数|服务/i,
+    /\bimplementation|detail|architecture|pipeline|renderer|mesh|service|API\b/i,
+  ]);
+  const questions = matchingLines(lines, [
+    /^[-*+]\s*Open question:/i,
+    /\bopen question|question|todo\b/i,
+    /未解决|问题|疑问|是否|待确认/i,
+    /[?？]/,
+  ]);
+  return {
+    facts: facts.length > 0 ? facts : uniqueLimited(bulletLines, 6),
+    decisions,
+    details,
+    questions,
+  };
+};
+
+const markdownList = (items = [], fallback = '原文未明确给出。') => (
+  items.length > 0 ? items : [fallback]
+).map((item) => `- ${item}`);
+
+const buildCompiledContent = ({ title, content, rawPath, sourceIds = [] }) => {
+  const sections = buildDeterministicSections(content);
+  return [
+    `# ${title}`,
+    '',
+    '> Argus Wiki Compiler 在小模型不可用时使用规则摘要生成，保留原始来源并尽量提取可读结论。',
+    '',
+    '## 摘要',
+    '',
+    buildDeterministicSummary(content),
+    '',
+    '## 关键事实',
+    '',
+    ...markdownList(sections.facts),
+    '',
+    '## 决策/结论',
+    '',
+    ...markdownList(sections.decisions),
+    '',
+    '## 实现细节',
+    '',
+    ...markdownList(sections.details),
+    '',
+    '## 未解决问题',
+    '',
+    ...markdownList(sections.questions),
+    '',
+    '## Sources',
+    '',
+    rawPath ? `- [[${path.basename(rawPath, '.md')}]]` : '- Raw source',
+    ...sourceIds.map((sourceId) => `- ${sourceId}`),
+  ].join('\n');
+};
+
+export const buildDeterministicCompiledContent = buildCompiledContent;
+
+export const chunkWikiSourceContent = (
+  content = '',
+  {
+    chunkChars = WIKI_UPLOAD_CHUNK_CHARS,
+    maxChunks = WIKI_UPLOAD_MAX_CHUNKS,
+    overlapChars = WIKI_UPLOAD_OVERLAP_CHARS,
+  } = {},
+) => {
+  const text = String(content || '').trim();
+  if (!text) return [];
+  const safeChunkChars = Math.max(500, Number(chunkChars) || WIKI_UPLOAD_CHUNK_CHARS);
+  const safeMaxChunks = Math.max(1, Number(maxChunks) || WIKI_UPLOAD_MAX_CHUNKS);
+  const safeOverlap = Math.max(0, Math.min(Number(overlapChars) || 0, safeChunkChars - 1));
+  const chunks = [];
+  let start = 0;
+
+  while (start < text.length && chunks.length < safeMaxChunks) {
+    const end = Math.min(text.length, start + safeChunkChars);
+    chunks.push({ start, end, text: text.slice(start, end) });
+    if (end >= text.length) break;
+    start = Math.max(end - safeOverlap, start + 1);
+  }
+
+  const truncated = chunks.length > 0 && chunks[chunks.length - 1].end < text.length;
+  const total = chunks.length;
+  return chunks.map((chunk, index) => ({
+    index: index + 1,
+    total,
+    text: chunk.text,
+    truncated,
+  }));
+};
+
+const normalizeStringList = (value) => {
+  if (typeof value === 'string') return [value.trim()].filter(Boolean);
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((entry) => readString(entry)).filter(Boolean))];
+};
+
+const normalizeChunkSummary = (value = {}, chunk = {}) => ({
+  chunkIndex: chunk.index,
+  summary: readString(value.summary) || readString(value.title) || '',
+  keyFacts: normalizeStringList(value.keyFacts || value.facts),
+  decisions: normalizeStringList(value.decisions || value.conclusions),
+  implementationDetails: normalizeStringList(value.implementationDetails || value.details),
+  openQuestions: normalizeStringList(value.openQuestions || value.questions),
+  tags: normalizeStringList(value.tags),
+  relatedTopics: normalizeStringList(value.relatedTopics || value.related),
+});
+
+const compileFallbackReason = (stage, result = {}) => `${stage}_${readString(result.reason) || 'failed'}`;
+
+const completeJsonWithRetries = async ({
+  completeJson,
+  request,
+  maxAttempts = WIKI_UPLOAD_TOKEN_BUDGET.maxAttempts,
+}) => {
+  let lastResult = null;
+  const attempts = Math.max(1, Number(maxAttempts) || 1);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      lastResult = await completeJson(request);
+    } catch (error) {
+      lastResult = {
+        success: false,
+        reason: 'request_failed',
+        error: error?.message || 'Small model request failed.',
+      };
+    }
+    if (lastResult?.success && lastResult.json) {
+      return lastResult;
+    }
+  }
+  return lastResult || { success: false, reason: 'failed' };
+};
+
+const ensureSourcesSection = (markdown = '', { rawPath = '', sourceIds = [] } = {}) => {
+  const content = String(markdown || '').trim();
+  const sourceLines = [
+    rawPath ? `- [[${path.basename(rawPath, '.md')}]]` : '- Raw source',
+    ...sourceIds.map((sourceId) => `- ${sourceId}`),
+  ];
+  if (/^##\s+Sources\b/im.test(content)) {
+    return content;
+  }
+  return [content, '', '## Sources', '', ...sourceLines].join('\n').trim();
+};
+
+const markdownFromCompiledJson = ({
+  title = 'Untitled',
+  json = {},
+  rawPath = '',
+  sourceIds = [],
+}) => {
+  const listSection = (heading, items, fallback = '原文未明确给出。') => [
+    `## ${heading}`,
+    '',
+    ...(
+      normalizeStringList(items).length > 0
+        ? normalizeStringList(items).map((item) => `- ${item}`)
+        : [`- ${fallback}`]
+    ),
+  ];
+  const lines = [
+    `# ${title}`,
+    '',
+    '## 摘要',
+    '',
+    readString(json.summary) || readString(json.overview) || '原文未明确给出摘要。',
+    '',
+    ...listSection('关键事实', json.keyFacts || json.facts),
+    '',
+    ...listSection('决策/结论', json.decisions || json.conclusions),
+    '',
+    ...listSection('实现细节', json.implementationDetails || json.details),
+    '',
+    ...listSection('未解决问题', json.openQuestions || json.questions),
+  ];
+  return ensureSourcesSection(lines.join('\n'), { rawPath, sourceIds });
+};
+
+const buildPartialCompiledContentFromSummaries = ({
+  title = 'Untitled',
+  summaries = [],
+  rawPath = '',
+  sourceIds = [],
+}) => {
+  const uniqueItems = (field) => [
+    ...new Set(summaries.flatMap((summary) => normalizeStringList(summary[field]))),
+  ];
+  const summaryText = summaries
+    .map((summary) => readString(summary.summary))
+    .filter(Boolean)
+    .join('\n\n');
+  const listSection = (heading, items) => [
+    `## ${heading}`,
+    '',
+    ...(items.length > 0 ? items.map((item) => `- ${item}`) : ['- 原文未明确给出。']),
+  ];
+  return ensureSourcesSection([
+    `# ${title}`,
+    '',
+    '> Argus Wiki Compiler used completed chunk summaries because one later model call failed.',
+    '',
+    '## 摘要',
+    '',
+    summaryText || '原文未明确给出摘要。',
+    '',
+    ...listSection('关键事实', uniqueItems('keyFacts')),
+    '',
+    ...listSection('决策/结论', uniqueItems('decisions')),
+    '',
+    ...listSection('实现细节', uniqueItems('implementationDetails')),
+    '',
+    ...listSection('未解决问题', uniqueItems('openQuestions')),
+  ].join('\n'), { rawPath, sourceIds });
+};
+
+export const compileWikiContentWithSmallModel = async ({
+  title = '',
+  content = '',
+  rawPath = '',
+  sourceIds = [],
+  projectName = '',
+  completeJson = defaultCompleteSmallModelJson,
+} = {}) => {
+  const chunks = chunkWikiSourceContent(content);
+  const deterministic = (reason = '') => ({
+    content: buildDeterministicCompiledContent({ title, content, rawPath, sourceIds }),
+    compiler: 'deterministic',
+    compileStrategy: WIKI_UPLOAD_COMPILE_STRATEGY,
+    chunks: chunks.length,
+    tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
+    model: '',
+    fallbackReason: reason,
+  });
+  const summaries = [];
+  let model = '';
+  const partial = (reason = '') => ({
+    content: buildPartialCompiledContentFromSummaries({
+      title,
+      summaries,
+      rawPath,
+      sourceIds,
+    }),
+    compiler: 'small-model',
+    compileStrategy: WIKI_UPLOAD_COMPILE_STRATEGY,
+    chunks: summaries.length,
+    tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
+    model,
+    fallbackReason: reason,
+  });
+
+  if (chunks.length === 0 || typeof completeJson !== 'function') {
+    return deterministic(chunks.length === 0 ? 'empty_content' : 'small_model_unavailable');
+  }
+
+  for (const chunk of chunks) {
+    const result = await completeJsonWithRetries({
+      completeJson,
+      request: {
+        purpose: 'wiki-upload-chunk-summary',
+        maxTokens: WIKI_UPLOAD_TOKEN_BUDGET.chunkMaxTokens,
+        timeoutMs: WIKI_UPLOAD_TOKEN_BUDGET.chunkTimeoutMs,
+        systemPrompt: [
+          'You are the Argus Wiki upload compiler.',
+          'Your main job is to produce a useful Obsidian summary, not to classify the text.',
+          'Summarize one source chunk into strict JSON only. Extract concrete facts, decisions, implementation details, risks, and open questions.',
+          'Return: {"summary":"","keyFacts":[],"decisions":[],"implementationDetails":[],"openQuestions":[],"tags":[],"relatedTopics":[]}.',
+        ].join('\n'),
+        userPrompt: JSON.stringify({
+          title,
+          projectName,
+          chunkIndex: chunk.index,
+          chunkTotal: chunk.total,
+          truncated: chunk.truncated,
+          chunkText: chunk.text,
+        }),
+      },
+    });
+    if (!result?.success || !result.json) {
+      if (summaries.length > 0) {
+        return partial(compileFallbackReason('partial_chunk_summary', result));
+      }
+      return deterministic(compileFallbackReason('chunk_summary', result));
+    }
+    model = readString(result.model || result.profileModel) || model;
+    summaries.push(normalizeChunkSummary(result.json, chunk));
+  }
+
+  const finalResult = await completeJsonWithRetries({
+    completeJson,
+    request: {
+      purpose: 'wiki-upload-final-compile',
+      maxTokens: WIKI_UPLOAD_TOKEN_BUDGET.finalMaxTokens,
+      timeoutMs: WIKI_UPLOAD_TOKEN_BUDGET.finalTimeoutMs,
+      systemPrompt: [
+        'You are the Argus Wiki compiler.',
+        'Merge chunk summaries into a polished, useful Markdown summary for an Obsidian Wiki page.',
+        'Do not leave placeholder text. If a section has no explicit items, say that briefly.',
+        'Return strict JSON only. Prefer {"markdown":"..."}; otherwise return structured fields.',
+        'The Markdown must include: 摘要, 关键事实, 决策/结论, 实现细节, 未解决问题, Sources.',
+      ].join('\n'),
+      userPrompt: JSON.stringify({
+        title,
+        projectName,
+        rawPath,
+        sourceIds,
+        chunks: summaries,
+      }),
+    },
+  });
+  if (!finalResult?.success || !finalResult.json) {
+    if (summaries.length > 0) {
+      return partial(compileFallbackReason('partial_final_compile', finalResult));
+    }
+    return deterministic(compileFallbackReason('final_compile', finalResult));
+  }
+
+  model = readString(finalResult.model || finalResult.profileModel) || model;
+  const markdown = readString(finalResult.json.markdown)
+    || markdownFromCompiledJson({
+      title,
+      json: finalResult.json,
+      rawPath,
+      sourceIds,
+    });
+  if (!markdown) {
+    return deterministic('final_compile_empty_markdown');
+  }
+
+  return {
+    content: ensureSourcesSection(markdown, { rawPath, sourceIds }),
+    compiler: 'small-model',
+    compileStrategy: WIKI_UPLOAD_COMPILE_STRATEGY,
+    chunks: chunks.length,
+    tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
+    model,
+    fallbackReason: '',
+  };
+};
 
 const normalizeModes = (value, fallback = 'project-knowledge') => {
   const candidates = Array.isArray(value) ? value : [value];
@@ -304,6 +698,8 @@ export const createObsidianWikiService = ({
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   extractProjectDirectory = defaultExtractProjectDirectory,
   findExistingImportByContentHash,
+  completeSmallModelJson = defaultCompleteSmallModelJson,
+  compileWikiContent = compileWikiContentWithSmallModel,
   now = () => new Date(),
 } = {}) => {
   const defaultFindExistingImportByContentHash = (contentHash) => {
@@ -377,6 +773,10 @@ export const createObsidianWikiService = ({
         indexPaths: existing.metadata?.indexPaths || [],
         viewModes: existing.metadata?.viewModes || existing.metadata?.classificationModes || [],
         contentHash,
+        wikiCompiler: existing.metadata?.wikiCompiler || '',
+        wikiCompileStrategy: existing.metadata?.wikiCompileStrategy || '',
+        wikiCompileChunks: existing.metadata?.wikiCompileChunks || 0,
+        wikiCompileFallbackReason: existing.metadata?.wikiCompileFallbackReason || '',
       };
     }
 
@@ -429,7 +829,17 @@ export const createObsidianWikiService = ({
     let wikiLastError = '';
     let destination = 'obsidian';
     const extractionStatus = readString(sourceMetadata.extractionStatus) || 'extracted';
-    const shouldCompile = extractionStatus === 'extracted' && normalizeWhitespace(cleanContent);
+    const shouldCompile = config.wikiCompilerEnabled !== false
+      && extractionStatus === 'extracted'
+      && normalizeWhitespace(cleanContent);
+    let wikiCompileMeta = {
+      wikiCompiler: '',
+      wikiCompileStrategy: '',
+      wikiCompileChunks: 0,
+      wikiCompileTokenBudget: null,
+      wikiCompileModel: '',
+      wikiCompileFallbackReason: '',
+    };
 
     try {
       const rawResult = await sendObsidianWikiIngest({
@@ -451,15 +861,26 @@ export const createObsidianWikiService = ({
       rawPath = rawResult.path || rawResult.rawPath || '';
 
       if (shouldCompile) {
+        const compiledContent = await compileWikiContent({
+          title: cleanTitle,
+          content: cleanContent,
+          rawPath,
+          sourceIds,
+          projectName: cleanProjectName,
+          completeJson: completeSmallModelJson,
+        });
+        wikiCompileMeta = {
+          wikiCompiler: compiledContent.compiler || 'deterministic',
+          wikiCompileStrategy: compiledContent.compileStrategy || WIKI_UPLOAD_COMPILE_STRATEGY,
+          wikiCompileChunks: Number(compiledContent.chunks) || 0,
+          wikiCompileTokenBudget: compiledContent.tokenBudget || WIKI_UPLOAD_TOKEN_BUDGET,
+          wikiCompileModel: readString(compiledContent.model),
+          wikiCompileFallbackReason: readString(compiledContent.fallbackReason),
+        };
         const compileResult = await sendObsidianWikiCompile({
           title: cleanTitle,
           projectName: cleanProjectName,
-          content: buildCompiledContent({
-            title: cleanTitle,
-            content: cleanContent,
-            rawPath,
-            sourceIds,
-          }),
+          content: compiledContent.content,
           sessionId: cleanSessionId,
           source: cleanSource,
           sourceId: cleanSourceId,
@@ -478,6 +899,14 @@ export const createObsidianWikiService = ({
           viewModes,
           kind: readString(kind) || readString(sourceMetadata.kind) || artifactRecord.kind || '',
           tags: ['argus', 'wiki'],
+          compiler: wikiCompileMeta.wikiCompiler,
+          compileStrategy: wikiCompileMeta.wikiCompileStrategy,
+          wikiCompiler: wikiCompileMeta.wikiCompiler,
+          wikiCompileStrategy: wikiCompileMeta.wikiCompileStrategy,
+          wikiCompileChunks: wikiCompileMeta.wikiCompileChunks,
+          wikiCompileTokenBudget: wikiCompileMeta.wikiCompileTokenBudget,
+          wikiCompileModel: wikiCompileMeta.wikiCompileModel,
+          wikiCompileFallbackReason: wikiCompileMeta.wikiCompileFallbackReason,
         });
         wikiPath = compileResult?.path || compileResult?.wikiPath || '';
         indexPaths = Array.isArray(compileResult?.indexPaths) ? compileResult.indexPaths : [];
@@ -534,6 +963,7 @@ export const createObsidianWikiService = ({
       obsidianFallbackPath: wikiLastError ? rawPath : '',
       obsidianLastError: wikiLastError,
       obsidianSyncedAt: wikiLastError ? '' : new Date().toISOString(),
+      ...wikiCompileMeta,
     };
     updateArtifactMetadata(artifactRecord.id, patch);
 
@@ -558,6 +988,7 @@ export const createObsidianWikiService = ({
       mode: viewModes[0],
       modes: viewModes,
       error: wikiLastError,
+      ...wikiCompileMeta,
       obsidianBridge: {
         destination,
         rawPath,
@@ -567,6 +998,7 @@ export const createObsidianWikiService = ({
         path: wikiPath,
         fallbackPath: wikiLastError ? rawPath : '',
         error: wikiLastError,
+        ...wikiCompileMeta,
         targets: viewModes.map((mode) => ({
           mode,
           destination,
@@ -601,6 +1033,10 @@ export const createObsidianWikiService = ({
         wikiPath: existing.metadata?.wikiPath || '',
         wikiStatus: existing.metadata?.wikiStatus || 'compiled',
         contentHash,
+        wikiCompiler: existing.metadata?.wikiCompiler || '',
+        wikiCompileStrategy: existing.metadata?.wikiCompileStrategy || '',
+        wikiCompileChunks: existing.metadata?.wikiCompileChunks || 0,
+        wikiCompileFallbackReason: existing.metadata?.wikiCompileFallbackReason || '',
       };
     }
 

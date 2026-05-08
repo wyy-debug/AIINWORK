@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
@@ -12,7 +13,8 @@ import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
-import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+import { Button, Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+import { apiFetch } from '../../../../utils/api';
 
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
@@ -35,6 +37,7 @@ type MessageComponentProps = {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject?: Project | null;
+  sessionId?: string | null;
   provider: Provider | string;
   messageKey?: string;
 };
@@ -52,6 +55,7 @@ type ObsidianCaptureStatus = {
   routingMode?: string;
   routingModes?: string[];
   routingReason?: string;
+  aiRoutingReason?: string;
   artifactId?: string;
   obsidianPath?: string;
   obsidianTargets?: Array<{
@@ -64,6 +68,19 @@ type ObsidianCaptureStatus = {
   obsidianPaths?: Record<string, string>;
   fallbackPath?: string;
   error?: string;
+};
+type WikiUploadSuggestion = {
+  loading: boolean;
+  shouldUpload: boolean;
+  reason: string;
+  confidence: number;
+  mode: string;
+  error: string;
+};
+type WikiUploadState = {
+  status: 'idle' | 'saving' | 'saved' | 'error';
+  path: string;
+  error: string;
 };
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
@@ -106,7 +123,34 @@ function formatFileSize(size?: number) {
   return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider, messageKey }: MessageComponentProps) => {
+const parseApiJson = async <T,>(response: Response): Promise<T> => {
+  const data = await response.json();
+  if (!response.ok || data?.error) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  return data as T;
+};
+
+const titleFromAssistantContent = (content = '') => {
+  const heading = content.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
+  const firstLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('```') && !line.startsWith('---'));
+  const title = heading || firstLine || '对话回复';
+  return title.length > 80 ? `${title.slice(0, 80).trim()}...` : title;
+};
+
+const formatWikiRoutingReason = (reason = '') => {
+  const trimmed = reason.trim();
+  if (!trimmed) return '';
+  const matched = trimmed.match(/^Matched (.+); routed to ([\w-]+)\.$/i);
+  if (!matched) return trimmed;
+  const signals = matched[1] === 'default mode' ? '默认规则' : matched[1];
+  return `命中 ${signals}，建议整理成 Wiki。`;
+};
+
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, sessionId, provider, messageKey }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -144,7 +188,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   ]);
   const obsidianCaptureModeLabel = obsidianCaptureModes.map(labelForObsidianMode).join('、');
   const obsidianCaptureReason = obsidianCaptureStatus?.status === 'skipped'
-    ? '内容不像知识沉淀'
+    ? obsidianCaptureStatus.aiRoutingReason || obsidianCaptureStatus.routingReason || '内容不像知识沉淀'
     : '';
   const obsidianTargetDetail = Array.isArray(obsidianCaptureStatus?.obsidianTargets)
     ? obsidianCaptureStatus.obsidianTargets
@@ -168,11 +212,179 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     || obsidianCaptureStatus?.error
     || obsidianCaptureStatus?.routingReason
     || '';
+  const [wikiSuggestion, setWikiSuggestion] = useState<WikiUploadSuggestion>({
+    loading: false,
+    shouldUpload: false,
+    reason: '',
+    confidence: 0,
+    mode: '',
+    error: '',
+  });
+  const [wikiUploadState, setWikiUploadState] = useState<WikiUploadState>({
+    status: 'idle',
+    path: '',
+    error: '',
+  });
+  const wikiUploadContent = assistantCopyContent.trim();
+  const shouldOfferWikiUpload = message.type === 'assistant'
+    && !message.isStreaming
+    && !message.isToolUse
+    && !message.isThinking
+    && !message.isTaskNotification
+    && wikiUploadContent.length > 0;
+  const wikiUploadSourceId = `chat:${sessionId || 'unknown'}:message:${String(message.id || messageKey || message.timestamp)}`;
+  const wikiSuggestionLabel = wikiSuggestion.loading
+    ? '判断中'
+    : wikiSuggestion.error
+      ? '建议不可用'
+      : wikiSuggestion.shouldUpload
+        ? '建议上传'
+        : '不建议上传';
+  const wikiSuggestionDetail = wikiSuggestion.reason
+    || (wikiSuggestion.shouldUpload ? '这段回答像可沉淀的知识。' : '内容不太像长期知识沉淀。');
+  const wikiUploadButtonLabel = wikiUploadState.status === 'saved'
+    ? '已上传到 Wiki'
+    : wikiUploadState.status === 'saving'
+      ? '上传中'
+      : '上传到 Wiki';
 
 
   useEffect(() => {
     setPermissionGrantState('idle');
   }, [permissionSuggestion?.entry, message.toolId]);
+
+  useEffect(() => {
+    setWikiUploadState({ status: 'idle', path: '', error: '' });
+  }, [wikiUploadSourceId]);
+
+  useEffect(() => {
+    if (!shouldOfferWikiUpload) {
+      setWikiSuggestion({
+        loading: false,
+        shouldUpload: false,
+        reason: '',
+        confidence: 0,
+        mode: '',
+        error: '',
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setWikiSuggestion((previous) => ({
+      ...previous,
+      loading: true,
+      error: '',
+    }));
+
+    const loadSuggestion = async () => {
+      try {
+        const data = await parseApiJson<{
+          shouldCapture?: boolean;
+          wouldWrite?: boolean;
+          routingReason?: string;
+          aiRoutingReason?: string;
+          routingConfidence?: number;
+          confidence?: number;
+          routingMode?: string;
+          mode?: string;
+        }>(await apiFetch('/api/obsidian-bridge/routing/preview', {
+          method: 'POST',
+          body: JSON.stringify({
+            content: wikiUploadContent,
+            userPrompt: typeof prevMessage?.content === 'string' ? prevMessage.content : '',
+            defaultMode: 'project-knowledge',
+            timestamp: message.timestamp,
+          }),
+        }));
+        if (cancelled) return;
+        const confidence = Number(data.routingConfidence ?? data.confidence ?? 0);
+        setWikiSuggestion({
+          loading: false,
+          shouldUpload: Boolean(data.shouldCapture || data.wouldWrite || confidence >= 0.55),
+          reason: data.aiRoutingReason || formatWikiRoutingReason(data.routingReason || ''),
+          confidence,
+          mode: data.routingMode || data.mode || '',
+          error: '',
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setWikiSuggestion({
+          loading: false,
+          shouldUpload: false,
+          reason: '',
+          confidence: 0,
+          mode: '',
+          error: error instanceof Error ? error.message : '判断建议失败',
+        });
+      }
+    };
+
+    void loadSuggestion();
+    return () => {
+      cancelled = true;
+    };
+  }, [message.timestamp, prevMessage?.content, shouldOfferWikiUpload, wikiUploadContent]);
+
+  const uploadAssistantReplyToWiki = async () => {
+    if (!selectedProject?.name) {
+      setWikiUploadState({ status: 'error', path: '', error: '请先选择项目后再上传到 Wiki。' });
+      return;
+    }
+    if (!wikiUploadContent) {
+      setWikiUploadState({ status: 'error', path: '', error: '没有可上传的回答内容。' });
+      return;
+    }
+
+    setWikiUploadState({ status: 'saving', path: '', error: '' });
+    try {
+      const created = await parseApiJson<{
+        artifact?: { id?: string };
+      }>(await apiFetch('/api/artifacts', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'chat-note',
+          title: titleFromAssistantContent(wikiUploadContent),
+          projectName: selectedProject.name,
+          sessionId: sessionId || '',
+          content: wikiUploadContent,
+          metadata: {
+            source: 'manual-chat-wiki-upload',
+            sourceId: wikiUploadSourceId,
+            provider: String(provider || ''),
+            messageKey: messageKey || '',
+            messageTimestamp: message.timestamp,
+            routingMode: wikiSuggestion.mode,
+            routingReason: wikiSuggestion.reason,
+            routingConfidence: wikiSuggestion.confidence,
+            obsidianStatus: 'not_sent',
+          },
+        }),
+      }));
+      const artifactId = created.artifact?.id;
+      if (!artifactId) {
+        throw new Error('创建结果记录失败。');
+      }
+      const exported = await parseApiJson<{
+        obsidianBridge?: { path?: string; wikiPath?: string; fallbackPath?: string; destination?: string };
+      }>(await apiFetch(`/api/artifacts/${encodeURIComponent(artifactId)}/send-to-obsidian`, {
+        method: 'POST',
+        body: JSON.stringify({ mode: 'auto' }),
+      }));
+      const targetPath = exported.obsidianBridge?.wikiPath
+        || exported.obsidianBridge?.path
+        || exported.obsidianBridge?.fallbackPath
+        || '';
+      setWikiUploadState({ status: 'saved', path: targetPath, error: '' });
+      window.dispatchEvent(new CustomEvent('argus-refresh-workflow-counts'));
+    } catch (error) {
+      setWikiUploadState({
+        status: 'error',
+        path: '',
+        error: error instanceof Error ? error.message : '上传到 Wiki 失败',
+      });
+    }
+  };
 
   useEffect(() => {
     const node = messageRef.current;
@@ -587,10 +799,44 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
 
-            {(shouldShowAssistantCopyControl || !isGrouped) && (
-              <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+            {(shouldShowAssistantCopyControl || shouldOfferWikiUpload || !isGrouped) && (
+              <div className="mt-1 flex w-full flex-wrap items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                )}
+                {shouldOfferWikiUpload && (
+                  <span
+                    className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-gray-200 bg-white/70 px-1.5 py-0.5 text-[11px] text-gray-600 shadow-sm dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300"
+                    title={[
+                      wikiSuggestion.error ? `建议失败：${wikiSuggestion.error}` : wikiSuggestionDetail,
+                      wikiSuggestion.confidence ? `置信度：${Math.round(wikiSuggestion.confidence * 100)}%` : '',
+                      wikiUploadState.path,
+                      wikiUploadState.error,
+                      '由你决定是否落库',
+                    ].filter(Boolean).join('\n')}
+                  >
+                    {wikiSuggestion.loading && <Loader2 className="h-3 w-3 animate-spin" />}
+                    <span className={wikiSuggestion.shouldUpload ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-500 dark:text-gray-400'}>
+                      {wikiSuggestionLabel}
+                    </span>
+                    <span className="hidden text-gray-400 sm:inline">由你决定是否落库</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 gap-1 px-1.5 text-[11px]"
+                      onClick={uploadAssistantReplyToWiki}
+                      disabled={wikiUploadState.status === 'saving' || wikiUploadState.status === 'saved'}
+                    >
+                      {wikiUploadState.status === 'saving'
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : <BookOpen className="h-3 w-3" />}
+                      {wikiUploadButtonLabel}
+                    </Button>
+                    {wikiUploadState.status === 'error' && (
+                      <span className="max-w-[180px] truncate text-destructive">{wikiUploadState.error}</span>
+                    )}
+                  </span>
                 )}
                 {obsidianCaptureLabel && (
                   <span

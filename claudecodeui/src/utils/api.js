@@ -227,6 +227,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filePath, projectName }),
     }),
+  openLocalTerminal: ({ tool = 'git-bash', filePath, projectName = '' }) =>
+    apiFetch('/api/local-tools/open-terminal', {
+      method: 'POST',
+      body: JSON.stringify({ tool, filePath, projectName }),
+    }),
   /**
    * @param {string} projectName
    * @param {string} filePath

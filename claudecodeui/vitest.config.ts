@@ -18,6 +18,8 @@ export default defineConfig({
       'server/services/tests/obsidian-wiki-service.test.mjs',
       'server/services/tests/obsidian-bridge-ingress-service.test.mjs',
       'server/services/tests/obsidian-memory-service.test.mjs',
+      'server/services/tests/small-model-service.test.mjs',
+      'server/services/tests/local-tool-service.test.mjs',
       'server/services/tests/session-goal-api-events.test.mjs',
       'server/services/tests/session-goal-service.test.mjs',
     ],

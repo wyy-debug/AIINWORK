@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { BookOpen, Brain, FolderOpen, PlugZap, RefreshCw, Save, Search, Sparkles } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { BookOpen, Brain, FolderOpen, PlugZap, RefreshCw, Save, Search, Sparkles, UploadCloud } from 'lucide-react';
 
 import SettingsToggle from '../../SettingsToggle';
 import { Button } from '../../../../../shared/view/ui';
 import { apiFetch } from '../../../../../utils/api';
+import type { SettingsProject } from '../../../types/types';
 
 type ObsidianBridgeMode = 'project-knowledge' | 'second-brain' | 'ai-memory';
 
@@ -29,6 +30,7 @@ type ObsidianBridgeConfig = {
   timeoutMs: number;
   tokenConfigured: boolean;
   autoExportKnowledgeArtifacts: boolean;
+  autoExportKnowledgeArtifactsOptIn: boolean;
   readableVaultFolders: string[];
   fallbackToProjectKnowledge: boolean;
   lastConnection: string;
@@ -105,7 +107,8 @@ const DEFAULT_CONFIG: ObsidianBridgeConfig = {
   defaultMode: 'project-knowledge',
   timeoutMs: 5000,
   tokenConfigured: false,
-  autoExportKnowledgeArtifacts: true,
+  autoExportKnowledgeArtifacts: false,
+  autoExportKnowledgeArtifactsOptIn: false,
   readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
   fallbackToProjectKnowledge: true,
   lastConnection: '',
@@ -157,7 +160,17 @@ const parseJson = async <T,>(response: Response): Promise<T> => {
   return data as T;
 };
 
-export default function ObsidianBridgeSettingsContent() {
+type ObsidianBridgeSettingsContentProps = {
+  projects?: SettingsProject[];
+  selectedProject?: SettingsProject | null;
+  onOpenSmallModelSettings?: () => void;
+};
+
+export default function ObsidianBridgeSettingsContent({
+  projects = [],
+  selectedProject = null,
+  onOpenSmallModelSettings,
+}: ObsidianBridgeSettingsContentProps) {
   const [config, setConfig] = useState<ObsidianBridgeConfig>(DEFAULT_CONFIG);
   const [token, setToken] = useState('');
   const [readableFoldersText, setReadableFoldersText] = useState(DEFAULT_CONFIG.readableVaultFolders.join('\n'));
@@ -182,6 +195,12 @@ export default function ObsidianBridgeSettingsContent() {
   const [isRunningBackfill, setIsRunningBackfill] = useState(false);
   const [isTestingWikiCompiler, setIsTestingWikiCompiler] = useState(false);
   const [wikiCompilerStatus, setWikiCompilerStatus] = useState('');
+  const [knowledgeUploadProjectName, setKnowledgeUploadProjectName] = useState(
+    () => selectedProject?.name || projects[0]?.name || '',
+  );
+  const [isUploadingKnowledgeFiles, setIsUploadingKnowledgeFiles] = useState(false);
+  const [knowledgeUploadStatus, setKnowledgeUploadStatus] = useState('');
+  const knowledgeUploadInputRef = useRef<HTMLInputElement>(null);
 
   const loadVaults = async ({ quiet = false } = {}) => {
     setIsLoadingVaults(true);
@@ -242,6 +261,14 @@ export default function ObsidianBridgeSettingsContent() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    setKnowledgeUploadProjectName((previous) => {
+      const stillExists = previous && projects.some((project) => project.name === previous);
+      if (stillExists) return previous;
+      return selectedProject?.name || projects[0]?.name || '';
+    });
+  }, [projects, selectedProject?.name]);
 
   const installPluginToVault = async () => {
     const vaultPath = selectedVaultPath.trim();
@@ -531,6 +558,72 @@ export default function ObsidianBridgeSettingsContent() {
     }
   };
 
+  const uploadKnowledgeFiles = async (files: FileList | null) => {
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) return;
+    const projectName = knowledgeUploadProjectName.trim();
+    if (!projectName) {
+      setMessage('请先选择要落库的项目。');
+      return;
+    }
+
+    setIsUploadingKnowledgeFiles(true);
+    setKnowledgeUploadStatus('');
+    try {
+      await save({ quiet: true });
+      const formData = new FormData();
+      selectedFiles.forEach((file) => {
+        formData.append('files', file);
+      });
+      formData.append('projectName', projectName);
+
+      const data = await parseJson<{
+        importBatchId?: string;
+        imported?: Array<{
+          wikiStatus?: string;
+          wikiPath?: string;
+          rawPath?: string;
+          wikiCompiler?: string;
+          wikiCompileChunks?: number;
+          wikiCompileFallbackReason?: string;
+        }>;
+      }>(
+        await apiFetch('/api/obsidian-bridge/wiki/upload', {
+          method: 'POST',
+          headers: {},
+          body: formData,
+        }),
+      );
+      const imported = Array.isArray(data.imported) ? data.imported : [];
+      const rawCount = imported.filter((entry) => entry.rawPath).length || imported.length;
+      const wikiCount = imported.filter((entry) => entry.wikiStatus === 'compiled' || entry.wikiPath).length;
+      const failedCount = imported.filter((entry) => entry.wikiStatus === 'failed').length;
+      const smallModelCount = imported.filter((entry) => entry.wikiCompiler === 'small-model').length;
+      const fallbackCount = imported.filter((entry) => (
+        entry.wikiCompiler === 'deterministic' && Boolean(entry.wikiCompileFallbackReason)
+      )).length;
+      const chunkCount = imported.reduce((total, entry) => total + (Number(entry.wikiCompileChunks) || 0), 0);
+      setKnowledgeUploadStatus([
+        `上传完成：${rawCount} 个文件进入 Raw，${wikiCount} 个已编译 Wiki`,
+        smallModelCount ? `${smallModelCount} 个小模型编译` : '',
+        fallbackCount ? `${fallbackCount} 个 fallback 编译` : '',
+        chunkCount ? `共处理 ${chunkCount} 个分块` : '',
+        failedCount ? `${failedCount} 个需稍后重试` : '',
+      ].filter(Boolean).join('，') + '。');
+      setMessage(data.importBatchId ? `导入批次：${data.importBatchId}` : '知识库上传完成。');
+      window.dispatchEvent(new CustomEvent('argus-refresh-workflow-counts'));
+    } catch (error) {
+      const nextMessage = error instanceof Error ? error.message : '上传到知识库失败。';
+      setKnowledgeUploadStatus(nextMessage);
+      setMessage(nextMessage);
+    } finally {
+      setIsUploadingKnowledgeFiles(false);
+      if (knowledgeUploadInputRef.current) {
+        knowledgeUploadInputRef.current.value = '';
+      }
+    }
+  };
+
   const installMcp = async () => {
     try {
       const data = await parseJson<{ command?: string; env?: Record<string, string> }>(
@@ -717,20 +810,28 @@ export default function ObsidianBridgeSettingsContent() {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <div className="mt-5">
+        <div className="text-sm font-semibold text-foreground">核心开关</div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          日常只需要确认这几项；目录、路由测试、MCP 和清理工具收在下面的高级设置里。
+        </p>
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
         <div className="rounded-md border border-border/70 bg-muted/20 p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-foreground">自动导出知识结果</div>
-              <p className="mt-1 text-xs text-muted-foreground">Review notes、action 总结、计划和 AI 记忆会自动导出。</p>
+              <div className="text-sm font-medium text-foreground">手动上传/保存到 Wiki</div>
+              <p className="mt-1 text-xs text-muted-foreground">默认由你主动上传文件或从结果保存；自动判断默认关闭，打开后才会自动捕获知识结果。</p>
             </div>
             <SettingsToggle
               checked={config.autoExportKnowledgeArtifacts}
               onChange={(autoExportKnowledgeArtifacts) => setConfig((previous) => ({
                 ...previous,
                 autoExportKnowledgeArtifacts,
+                autoExportKnowledgeArtifactsOptIn: autoExportKnowledgeArtifacts,
               }))}
-              ariaLabel="自动导出知识结果"
+              ariaLabel="允许自动判断写入 Wiki"
             />
           </div>
         </div>
@@ -753,96 +854,183 @@ export default function ObsidianBridgeSettingsContent() {
       </div>
 
       <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Sparkles className="h-4 w-4" />
+              <span>小模型增强</span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              小模型是全局 Agent 能力，用于 Wiki 自动分类和回读筛选；模型、协议和 token 在 Agent 设置里统一维护。
+            </p>
+          </div>
+          <Button type="button" variant="outline" onClick={onOpenSmallModelSettings}>
+            打开小模型设置
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <UploadCloud className="h-4 w-4" />
+              <span>上传现有文件</span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Markdown、PDF、Office、HTML、CSV、JSON 等文件会先进入 Raw → Wiki → Index，再由 Wiki 回读注入对话。
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            {projects.length > 0 ? (
+              <select
+                className="h-9 min-w-[180px] rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={knowledgeUploadProjectName}
+                onChange={(event) => setKnowledgeUploadProjectName(event.target.value)}
+                aria-label="选择知识库落库项目"
+              >
+                {projects.map((project) => (
+                  <option key={project.name} value={project.name}>
+                    {project.displayName || project.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="h-9 min-w-[180px] rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={knowledgeUploadProjectName}
+                onChange={(event) => setKnowledgeUploadProjectName(event.target.value)}
+                placeholder="项目名称"
+                aria-label="知识库落库项目"
+              />
+            )}
+            <input
+              ref={knowledgeUploadInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              accept=".md,.markdown,.txt,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.html,.htm,.csv,.json,.jsonl"
+              onChange={(event) => void uploadKnowledgeFiles(event.target.files)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => knowledgeUploadInputRef.current?.click()}
+              disabled={isUploadingKnowledgeFiles || !knowledgeUploadProjectName.trim()}
+            >
+              {isUploadingKnowledgeFiles ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+              上传到知识库
+            </Button>
+          </div>
+        </div>
+        {knowledgeUploadStatus && (
+          <div className="mt-3 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+            {knowledgeUploadStatus}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
               <Brain className="h-4 w-4" />
-              <span>AI 记忆读回</span>
+              <span>Wiki 回读注入</span>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">发送聊天消息时，Argus 会从授权的 Obsidian 目录读取一小段上下文。</p>
+            <p className="mt-1 text-xs text-muted-foreground">发送聊天消息时，Argus 会从 Wiki 和索引里读取一小段上下文注入本轮请求。</p>
           </div>
           <SettingsToggle
-            checked={config.aiMemoryReadbackEnabled}
-            onChange={(aiMemoryReadbackEnabled) => setConfig((previous) => ({
+            checked={config.wikiReadbackEnabled && config.aiMemoryReadbackEnabled}
+            onChange={(enabled) => setConfig((previous) => ({
               ...previous,
-              aiMemoryReadbackEnabled,
+              wikiReadbackEnabled: enabled,
+              aiMemoryReadbackEnabled: enabled,
             }))}
-            ariaLabel="启用 AI 记忆读回"
+            ariaLabel="启用 Wiki 回读注入"
           />
         </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_160px]">
-          <label className="text-xs font-medium text-muted-foreground">
-            测试查询
-            <input
-              className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={readbackQuery}
-              onChange={(event) => setReadbackQuery(event.target.value)}
-            />
-          </label>
-          <label className="text-xs font-medium text-muted-foreground">
-            最大结果数
-            <input
-              className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              type="number"
-              min={1}
-              max={20}
-              value={config.aiMemoryMaxResults}
-              onChange={(event) => setConfig((previous) => ({
-                ...previous,
-                aiMemoryMaxResults: Number.parseInt(event.target.value, 10) || DEFAULT_CONFIG.aiMemoryMaxResults,
-              }))}
-            />
-          </label>
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={config.aiMemoryProjectScopeEnabled}
-              onChange={(event) => setConfig((previous) => ({
-                ...previous,
-                aiMemoryProjectScopeEnabled: event.target.checked,
-              }))}
-            />
-            优先读取当前项目范围内的 AI 记忆目录。
-          </label>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={testSearchAndContext}
-            disabled={isSaving || isTestingReadback}
-          >
-            {isTestingReadback ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            测试 search/context
-          </Button>
-        </div>
-        <div className="mt-3 flex flex-col gap-3 rounded-md border border-border/70 bg-background/50 p-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={config.activeNoteReadbackEnabled}
-              onChange={(event) => setConfig((previous) => ({
-                ...previous,
-                activeNoteReadbackEnabled: event.target.checked,
-              }))}
-            />
-            对话读回时包含当前 Obsidian 笔记或选中文本。
-          </label>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={testActiveNote}
-            disabled={isSaving || isTestingReadback}
-          >
-            测试当前笔记
-          </Button>
-        </div>
-        {activeNotePreview && (
-          <div className="mt-2 truncate rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-            {activeNotePreview}
+        <details className="mt-3 rounded-md border border-border/70 bg-background/45 p-3">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">读回测试和当前笔记</summary>
+          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_160px]">
+            <label className="text-xs font-medium text-muted-foreground">
+              测试查询
+              <input
+                className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={readbackQuery}
+                onChange={(event) => setReadbackQuery(event.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-muted-foreground">
+              最大结果数
+              <input
+                className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                type="number"
+                min={1}
+                max={20}
+                value={config.aiMemoryMaxResults}
+                onChange={(event) => setConfig((previous) => ({
+                  ...previous,
+                  aiMemoryMaxResults: Number.parseInt(event.target.value, 10) || DEFAULT_CONFIG.aiMemoryMaxResults,
+                }))}
+              />
+            </label>
           </div>
-        )}
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={config.aiMemoryProjectScopeEnabled}
+                onChange={(event) => setConfig((previous) => ({
+                  ...previous,
+                  aiMemoryProjectScopeEnabled: event.target.checked,
+                }))}
+              />
+              优先读取当前项目范围内的 AI 记忆目录。
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={testSearchAndContext}
+              disabled={isSaving || isTestingReadback}
+            >
+              {isTestingReadback ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              测试 search/context
+            </Button>
+          </div>
+          <div className="mt-3 flex flex-col gap-3 rounded-md border border-border/70 bg-background/50 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={config.activeNoteReadbackEnabled}
+                onChange={(event) => setConfig((previous) => ({
+                  ...previous,
+                  activeNoteReadbackEnabled: event.target.checked,
+                }))}
+              />
+              对话读回时包含当前 Obsidian 笔记或选中文本。
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={testActiveNote}
+              disabled={isSaving || isTestingReadback}
+            >
+              测试当前笔记
+            </Button>
+          </div>
+          {activeNotePreview && (
+            <div className="mt-2 truncate rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+              {activeNotePreview}
+            </div>
+          )}
+        </details>
       </div>
+
+      <details className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
+        <summary className="cursor-pointer text-sm font-semibold text-foreground">高级设置</summary>
+        <p className="mt-1 text-xs text-muted-foreground">
+          只有需要调试、迁移、清理重复笔记或自定义目录时才需要展开。
+        </p>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="text-sm font-medium text-foreground">
@@ -1136,6 +1324,7 @@ export default function ObsidianBridgeSettingsContent() {
           </div>
         </div>
       </div>
+      </details>
 
       {config.lastError && (
         <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

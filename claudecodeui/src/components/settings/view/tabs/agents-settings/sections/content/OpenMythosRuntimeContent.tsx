@@ -46,10 +46,12 @@ type ModelProfile = {
   id: string;
   name: string;
   provider: 'anthropic';
+  protocol: 'anthropic' | 'openai-compatible' | 'openai-responses';
   apiKey: string;
   apiKeyConfigured: boolean;
   baseUrl: string;
   model: string;
+  requestModel: string;
   contextWindowTokens: number;
   bareMode: boolean;
 };
@@ -206,10 +208,14 @@ const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   id: patch.id || 'default',
   name: patch.name || 'Default model',
   provider: 'anthropic',
+  protocol: patch.protocol === 'openai-compatible' || patch.protocol === 'openai-responses'
+    ? patch.protocol
+    : 'anthropic',
   apiKey: '',
   apiKeyConfigured: Boolean(patch.apiKeyConfigured),
   baseUrl: patch.baseUrl || '',
   model: patch.model || '',
+  requestModel: patch.requestModel || '',
   contextWindowTokens: patch.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
   bareMode: patch.bareMode !== false,
 });
@@ -222,9 +228,13 @@ const toProfile = (value: unknown, index: number): ModelProfile | null => {
   return createProfile({
     id: typeof value.id === 'string' && value.id ? value.id : `model-${index + 1}`,
     name: typeof value.name === 'string' && value.name ? value.name : `Model ${index + 1}`,
+    protocol: value.protocol === 'openai-compatible' || value.protocol === 'openai-responses'
+      ? value.protocol
+      : 'anthropic',
     apiKeyConfigured: Boolean(value.apiKeyConfigured),
     baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
     model: typeof value.model === 'string' ? value.model : '',
+    requestModel: typeof value.requestModel === 'string' ? value.requestModel : '',
     contextWindowTokens:
       Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens

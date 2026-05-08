@@ -191,6 +191,7 @@ function ChatInterface({
   const selectedProjectSkillNamesRef = useRef<string[]>([]);
   const [defaultModelProfileId, setDefaultModelProfileId] = useState('');
   const [selectedModelProfileId, setSelectedModelProfileId] = useState('');
+  const selectedModelProfileIdRef = useRef('');
   const [subagentsEnabled, setSubagentsEnabled] = useState(false);
   const [goalsEnabled, setGoalsEnabled] = useState(false);
   const [sessionGoal, setSessionGoal] = useState<SessionGoal | null>(null);
@@ -223,6 +224,10 @@ function ChatInterface({
   useEffect(() => {
     selectedProjectSkillNamesRef.current = selectedProjectSkillNames;
   }, [selectedProjectSkillNames]);
+
+  useEffect(() => {
+    selectedModelProfileIdRef.current = selectedModelProfileId;
+  }, [selectedModelProfileId]);
 
   const loadInstalledSkills = useCallback(async () => {
     if (!selectedProject && !isConversationSpace) {
@@ -1127,10 +1132,11 @@ function ChatInterface({
 
     const bindingKey = `${provider}:${activeConversationSessionId}:project-skills`;
     const localSkills = selectedProjectSkillNamesRef.current;
+    const localModelProfileId = selectedModelProfileIdRef.current;
     const isNewlyCreatedSession = !selectedSession?.id;
-    if (isNewlyCreatedSession && (localSkills.length > 0 || selectedModelProfileId)) {
+    if (isNewlyCreatedSession && (localSkills.length > 0 || localModelProfileId)) {
       projectSkillBindingHydratedKeyRef.current = bindingKey;
-      projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills: localSkills, modelProfileId: selectedModelProfileId })}`;
+      projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills: localSkills, modelProfileId: localModelProfileId })}`;
       return undefined;
     }
 
@@ -1169,7 +1175,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, defaultModelProfileId, projectSkillBindingEnabled, provider, selectedModelProfileId, selectedSession?.id]);
+  }, [activeConversationSessionId, defaultModelProfileId, projectSkillBindingEnabled, provider, selectedSession?.id]);
 
   useEffect(() => {
     if (!projectSkillBindingEnabled) {
