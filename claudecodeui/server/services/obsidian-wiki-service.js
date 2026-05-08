@@ -3,10 +3,10 @@ import fs from 'fs/promises';
 import path from 'path';
 
 import { db as defaultDb } from '../database/db.js';
+import { extractProjectDirectory as defaultExtractProjectDirectory } from '../projects.js';
 
 import {
   createArtifact as defaultCreateArtifact,
-  exportArtifactToObsidianModes as defaultExportArtifactToObsidianModes,
   getArtifact as defaultGetArtifact,
   updateArtifactMetadata as defaultUpdateArtifactMetadata,
 } from './artifact-service.js';
@@ -16,6 +16,7 @@ import {
   readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
   sendObsidianWikiCompile as defaultSendObsidianWikiCompile,
   sendObsidianWikiIngest as defaultSendObsidianWikiIngest,
+  updateObsidianWikiViews as defaultUpdateObsidianWikiViews,
 } from './obsidian-bridge-service.js';
 
 const TEXT_EXTENSIONS = new Set([
@@ -51,6 +52,14 @@ const titleFromName = (fileName = '') => {
   const baseName = path.basename(String(fileName || 'Imported file'));
   return slug(baseName.replace(/\.[^.]+$/, ''));
 };
+
+const topicKeyFromTitle = (value = 'Untitled') => slug(value)
+  .toLowerCase()
+  .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 100) || 'untitled';
+
+const projectKey = (value = '') => slug(value || 'General');
 
 const hashText = (value) => crypto
   .createHash('sha256')
@@ -213,7 +222,7 @@ const classifyWikiSource = ({
   };
 };
 
-const buildCompiledContent = ({ title, content, rawPath }) => [
+const buildCompiledContent = ({ title, content, rawPath, sourceIds = [] }) => [
   `# ${title}`,
   '',
   '> Argus Wiki Compiler 根据 Raw source 自动生成。后续可以由 AI 继续精炼、拆分和补链。',
@@ -222,10 +231,66 @@ const buildCompiledContent = ({ title, content, rawPath }) => [
   '',
   String(content || '').trim().slice(0, 8000),
   '',
+  '## 关键事实',
+  '',
+  '- 待后续编译器继续提炼。',
+  '',
+  '## 决策/结论',
+  '',
+  '- 待后续编译器继续提炼。',
+  '',
+  '## 未解决问题',
+  '',
+  '- 待补充。',
+  '',
   '## Sources',
   '',
   rawPath ? `- [[${path.basename(rawPath, '.md')}]]` : '- Raw source',
+  ...sourceIds.map((sourceId) => `- ${sourceId}`),
 ].join('\n');
+
+const normalizeModes = (value, fallback = 'project-knowledge') => {
+  const candidates = Array.isArray(value) ? value : [value];
+  const modes = [];
+  for (const mode of [...candidates, fallback]) {
+    const clean = readString(mode);
+    if (['project-knowledge', 'second-brain', 'ai-memory'].includes(clean) && !modes.includes(clean)) {
+      modes.push(clean);
+    }
+  }
+  return modes.length > 0 ? modes : ['project-knowledge'];
+};
+
+const writeWikiFallback = async ({
+  projectRoot = '',
+  projectName = '',
+  title = '',
+  content = '',
+  metadata = {},
+  reason = '',
+} = {}) => {
+  if (!projectRoot) {
+    return '';
+  }
+  const folder = path.join(projectRoot, 'docs', 'knowledge', 'wiki-fallback', projectKey(projectName));
+  await fs.mkdir(folder, { recursive: true });
+  const filePath = path.join(folder, `${slug(title)}.md`);
+  const now = new Date().toISOString();
+  const frontmatter = [
+    '---',
+    'type: wiki-fallback',
+    `project: ${projectKey(projectName)}`,
+    `created: ${now}`,
+    `updated: ${now}`,
+    'obsidianFallback: true',
+    `obsidianFallbackReason: ${JSON.stringify(reason || 'Obsidian wiki unavailable.')}`,
+    metadata.contentHash ? `contentHash: ${metadata.contentHash}` : '',
+    metadata.sourceId ? `sourceId: ${JSON.stringify(metadata.sourceId)}` : '',
+    '---',
+  ].filter(Boolean).join('\n');
+  await fs.writeFile(filePath, `${frontmatter}\n\n${content}`, 'utf8');
+  return filePath;
+};
 
 export const createObsidianWikiService = ({
   db = defaultDb,
@@ -234,9 +299,10 @@ export const createObsidianWikiService = ({
   updateArtifactMetadata = defaultUpdateArtifactMetadata,
   sendObsidianWikiIngest = defaultSendObsidianWikiIngest,
   sendObsidianWikiCompile = defaultSendObsidianWikiCompile,
+  updateObsidianWikiViews = defaultUpdateObsidianWikiViews,
   lintObsidianWiki = defaultLintObsidianWiki,
-  exportArtifactToObsidianModes = defaultExportArtifactToObsidianModes,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
+  extractProjectDirectory = defaultExtractProjectDirectory,
   findExistingImportByContentHash,
   now = () => new Date(),
 } = {}) => {
@@ -262,6 +328,255 @@ export const createObsidianWikiService = ({
     };
   };
   const findExisting = findExistingImportByContentHash || defaultFindExistingImportByContentHash;
+
+  const resolveProjectRoot = async (projectName = '') => {
+    if (!projectName) return '';
+    try {
+      return await extractProjectDirectory(projectName);
+    } catch {
+      return '';
+    }
+  };
+
+  const ingestKnowledgeSourceToWiki = async ({
+    artifact = null,
+    source = 'artifact',
+    sourceId = '',
+    title = '',
+    projectName = '',
+    sessionId = '',
+    content = '',
+    kind = '',
+    metadata = {},
+    modes = [],
+    topicKey = '',
+    forceRecompile = false,
+    projectRoot = '',
+  } = {}) => {
+    const sourceMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+    const cleanContent = typeof content === 'string' ? content : artifact?.content || '';
+    const cleanTitle = readString(title) || readString(artifact?.title) || 'Untitled';
+    const cleanProjectName = readString(projectName) || readString(artifact?.projectName);
+    const cleanSessionId = readString(sessionId) || readString(artifact?.sessionId);
+    const cleanSource = readString(source) || readString(sourceMetadata.source) || 'artifact';
+    const cleanSourceId = readString(sourceId) || readString(sourceMetadata.sourceId) || readString(artifact?.id);
+    const contentHash = readString(sourceMetadata.contentHash) || hashText([
+      cleanSource,
+      cleanSourceId,
+      normalizeWhitespace(cleanContent),
+    ].join('\n'));
+    const existing = !artifact && !forceRecompile ? findExisting(contentHash) : null;
+    if (existing) {
+      return {
+        success: true,
+        duplicate: true,
+        destination: existing.metadata?.wikiPath ? 'obsidian' : 'not_sent',
+        artifactId: existing.id,
+        rawPath: existing.metadata?.rawPath || '',
+        wikiPath: existing.metadata?.wikiPath || '',
+        indexPaths: existing.metadata?.indexPaths || [],
+        viewModes: existing.metadata?.viewModes || existing.metadata?.classificationModes || [],
+        contentHash,
+      };
+    }
+
+    const config = readObsidianBridgeConfig();
+    const classification = classifyWikiSource({
+      title: cleanTitle,
+      content: cleanContent,
+      defaultMode: sourceMetadata.obsidianMode || config.defaultMode || 'project-knowledge',
+      routingRules: config.routingRules || {},
+      extractionStatus: sourceMetadata.extractionStatus || 'extracted',
+    });
+    const viewModes = normalizeModes(
+      modes.length > 0
+        ? modes
+        : sourceMetadata.obsidianModes || sourceMetadata.routingModes || classification.classificationModes,
+      sourceMetadata.obsidianMode || classification.classificationMode || config.defaultMode || 'project-knowledge',
+    );
+    const selectedTopicKey = readString(topicKey) || readString(sourceMetadata.topicKey) || topicKeyFromTitle(cleanTitle);
+    const artifactRecord = artifact || (await createArtifact({
+      kind: readString(kind) || readString(sourceMetadata.kind) || classification.classificationMode || 'wiki-source',
+      title: cleanTitle,
+      projectName: cleanProjectName,
+      sessionId: cleanSessionId,
+      content: cleanContent,
+      metadata: {
+        ...sourceMetadata,
+        source: cleanSource,
+        sourceId: cleanSourceId,
+        contentHash,
+        wikiStatus: 'raw',
+        classificationMode: classification.classificationMode,
+        classificationModes: viewModes,
+        classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+        routingMode: sourceMetadata.routingMode || classification.classificationMode,
+        routingModes: viewModes,
+        routingScores: sourceMetadata.routingScores || classification.routingScores,
+        routingSignals: sourceMetadata.routingSignals || classification.routingSignals,
+        routingReason: sourceMetadata.routingReason || classification.classificationReason,
+        routingConfidence: sourceMetadata.routingConfidence || classification.routingConfidence,
+        obsidianMode: viewModes[0],
+        obsidianModes: viewModes,
+        topicKey: selectedTopicKey,
+      },
+    }, { autoExport: false })).artifact;
+    const sourceIds = [...new Set([artifactRecord?.id, cleanSourceId].map(readString).filter(Boolean))];
+
+    let rawPath = '';
+    let wikiPath = '';
+    let indexPaths = [];
+    let wikiLastError = '';
+    let destination = 'obsidian';
+    const extractionStatus = readString(sourceMetadata.extractionStatus) || 'extracted';
+    const shouldCompile = extractionStatus === 'extracted' && normalizeWhitespace(cleanContent);
+
+    try {
+      const rawResult = await sendObsidianWikiIngest({
+        title: cleanTitle,
+        content: cleanContent,
+        projectName: cleanProjectName,
+        sessionId: cleanSessionId,
+        source: cleanSource,
+        sourceId: cleanSourceId,
+        importBatchId: sourceMetadata.importBatchId || '',
+        contentHash,
+        argusId: `wiki-source:${contentHash}`,
+        extractionStatus,
+        classificationMode: classification.classificationMode,
+        classificationModes: viewModes,
+        classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+        tags: ['argus', 'raw', cleanSource],
+      });
+      rawPath = rawResult.path || rawResult.rawPath || '';
+
+      if (shouldCompile) {
+        const compileResult = await sendObsidianWikiCompile({
+          title: cleanTitle,
+          projectName: cleanProjectName,
+          content: buildCompiledContent({
+            title: cleanTitle,
+            content: cleanContent,
+            rawPath,
+            sourceIds,
+          }),
+          sessionId: cleanSessionId,
+          source: cleanSource,
+          sourceId: cleanSourceId,
+          importBatchId: sourceMetadata.importBatchId || '',
+          contentHash,
+          wikiPath,
+          rawPath,
+          rawPaths: rawPath ? [rawPath] : [],
+          sourceIds,
+          compiledFrom: sourceIds,
+          topicKey: selectedTopicKey,
+          argusId: `wiki:${projectKey(cleanProjectName)}:${selectedTopicKey}`,
+          classificationMode: classification.classificationMode,
+          classificationModes: viewModes,
+          classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+          viewModes,
+          kind: readString(kind) || readString(sourceMetadata.kind) || artifactRecord.kind || '',
+          tags: ['argus', 'wiki'],
+        });
+        wikiPath = compileResult?.path || compileResult?.wikiPath || '';
+        indexPaths = Array.isArray(compileResult?.indexPaths) ? compileResult.indexPaths : [];
+
+        if (wikiPath && indexPaths.length === 0) {
+          const viewResult = await updateObsidianWikiViews({
+            title: cleanTitle,
+            projectName: cleanProjectName,
+            sessionId: cleanSessionId,
+            wikiPath,
+            rawPath,
+            sourceIds,
+            viewModes,
+            classificationMode: classification.classificationMode,
+            classificationModes: viewModes,
+            classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+            kind: readString(kind) || readString(sourceMetadata.kind) || artifactRecord.kind || '',
+          });
+          indexPaths = Array.isArray(viewResult?.indexPaths) ? viewResult.indexPaths : [];
+        }
+      }
+    } catch (error) {
+      wikiLastError = error?.message || 'Failed to write Obsidian wiki source.';
+      destination = 'fallback';
+      const root = projectRoot || await resolveProjectRoot(cleanProjectName);
+      rawPath = rawPath || await writeWikiFallback({
+        projectRoot: root,
+        projectName: cleanProjectName,
+        title: cleanTitle,
+        content: cleanContent,
+        metadata: { ...sourceMetadata, contentHash, sourceId: cleanSourceId },
+        reason: wikiLastError,
+      });
+    }
+
+    const patch = {
+      rawPath,
+      wikiPath,
+      wikiStatus: wikiLastError ? 'failed' : wikiPath ? 'compiled' : 'raw',
+      wikiLastError,
+      compiledFrom: wikiPath ? sourceIds : [],
+      sourceIds,
+      contentHash,
+      topicKey: selectedTopicKey,
+      classificationMode: classification.classificationMode,
+      classificationModes: viewModes,
+      classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+      viewModes,
+      indexPaths,
+      obsidianStatus: wikiLastError ? 'fallback' : 'synced',
+      obsidianMode: viewModes[0],
+      obsidianModes: viewModes,
+      obsidianPath: wikiPath,
+      obsidianFallbackPath: wikiLastError ? rawPath : '',
+      obsidianLastError: wikiLastError,
+      obsidianSyncedAt: wikiLastError ? '' : new Date().toISOString(),
+    };
+    updateArtifactMetadata(artifactRecord.id, patch);
+
+    return {
+      success: true,
+      captured: true,
+      destination,
+      artifact: {
+        ...artifactRecord,
+        metadata: {
+          ...(artifactRecord.metadata || {}),
+          ...patch,
+        },
+      },
+      artifactId: artifactRecord.id,
+      rawPath,
+      wikiPath,
+      indexPaths,
+      viewModes,
+      contentHash,
+      topicKey: selectedTopicKey,
+      mode: viewModes[0],
+      modes: viewModes,
+      error: wikiLastError,
+      obsidianBridge: {
+        destination,
+        rawPath,
+        wikiPath,
+        indexPaths,
+        viewModes,
+        path: wikiPath,
+        fallbackPath: wikiLastError ? rawPath : '',
+        error: wikiLastError,
+        targets: viewModes.map((mode) => ({
+          mode,
+          destination,
+          path: wikiPath,
+          rawPath,
+          indexPaths,
+        })),
+      },
+    };
+  };
 
   const ingestUploadedFile = async ({
     file,
@@ -298,12 +613,14 @@ export const createObsidianWikiService = ({
     });
     const importBatchId = readString(batchId) || `import-${Date.now()}`;
     const sourcePath = readString(file.path || file.filePath);
-    const artifactResult = await createArtifact({
-      kind: 'wiki-source',
+    const result = await ingestKnowledgeSourceToWiki({
+      source: 'file-upload',
+      sourceId: sourcePath,
       title: extracted.title,
       projectName,
       sessionId,
       content: extracted.content,
+      kind: 'wiki-source',
       metadata: {
         source: 'file-upload',
         sourcePath,
@@ -324,113 +641,17 @@ export const createObsidianWikiService = ({
         routingReason: classification.classificationReason,
         routingConfidence: classification.routingConfidence,
       },
-    }, {
-      autoExport: false,
+      modes: classification.classificationModes,
     });
-    const artifact = artifactResult.artifact;
-
-    let rawPath = '';
-    let wikiPath = '';
-    let obsidianBridge = null;
-    let wikiLastError = '';
-
-    try {
-      const rawResult = await sendObsidianWikiIngest({
-        title: extracted.title,
-        content: extracted.content,
-        projectName,
-        sessionId,
-        source: 'file-upload',
-        sourcePath,
-        importBatchId,
-        contentHash,
-        argusId: `wiki-source:${contentHash}`,
-        extractionStatus: extracted.extractionStatus,
-        classificationMode: classification.classificationMode,
-        classificationReason: classification.classificationReason,
-        tags: ['argus', 'raw', 'file-upload'],
-      });
-      rawPath = rawResult.path || rawResult.rawPath || '';
-
-      let compileResult = null;
-      if (extracted.extractionStatus === 'extracted') {
-        compileResult = await sendObsidianWikiCompile({
-          title: extracted.title,
-          content: buildCompiledContent({
-            title: extracted.title,
-            content: extracted.content,
-            rawPath,
-          }),
-          projectName,
-          sessionId,
-          source: 'file-upload',
-          importBatchId,
-          contentHash,
-          rawPath,
-          sourceIds: [artifact.id],
-          compiledFrom: [artifact.id],
-          argusId: `wiki:${contentHash}`,
-          classificationMode: classification.classificationMode,
-          classificationReason: classification.classificationReason,
-          tags: ['argus', 'wiki'],
-        });
-      }
-      wikiPath = compileResult?.path || compileResult?.wikiPath || '';
-    } catch (error) {
-      wikiLastError = error?.message || 'Failed to write Obsidian wiki source.';
-    }
-
-    const patch = {
-      rawPath,
-      wikiPath,
-      wikiStatus: wikiLastError ? 'failed' : wikiPath ? 'compiled' : extracted.extractionStatus === 'extracted' ? 'failed' : 'raw',
-      wikiLastError,
-      compiledFrom: wikiPath ? [artifact.id] : [],
-      classificationMode: classification.classificationMode,
-      classificationModes: classification.classificationModes,
-      classificationReason: classification.classificationReason,
-      contentHash,
-      importBatchId,
-    };
-    updateArtifactMetadata(artifact.id, patch);
-
-    if (!wikiLastError && classification.classificationModes.length > 0) {
-      try {
-        obsidianBridge = await exportArtifactToObsidianModes({
-          ...artifact,
-          metadata: {
-            ...artifact.metadata,
-            ...patch,
-            obsidianModes: classification.classificationModes,
-            routingModes: classification.classificationModes,
-            routingMode: classification.classificationMode,
-            routingReason: classification.classificationReason,
-          },
-        }, {
-          modes: classification.classificationModes,
-          automatic: true,
-        });
-      } catch (error) {
-        obsidianBridge = {
-          destination: 'error',
-          error: error?.message || 'Failed to export compiled wiki artifact.',
-        };
-      }
-    }
 
     return {
-      artifactId: artifact.id,
+      ...result,
       title: extracted.title,
-      rawPath,
-      wikiPath,
-      wikiStatus: patch.wikiStatus,
-      contentHash,
+      wikiStatus: result.error ? 'failed' : result.wikiPath ? 'compiled' : 'raw',
       classificationMode: classification.classificationMode,
       classificationModes: classification.classificationModes,
       classificationReason: classification.classificationReason,
       extractionStatus: extracted.extractionStatus,
-      obsidianBridge,
-      error: wikiLastError,
     };
   };
 
@@ -457,7 +678,7 @@ export const createObsidianWikiService = ({
     };
   };
 
-  const compileWikiImport = async ({ artifactId = '' } = {}) => {
+  const compileWikiImport = async ({ artifactId = '', topicKey = '', forceRecompile = false } = {}) => {
     if (!readString(artifactId)) {
       return {
         success: true,
@@ -472,39 +693,20 @@ export const createObsidianWikiService = ({
     if (!artifact) {
       throw new Error('Wiki import artifact not found.');
     }
-    const contentHash = artifact.metadata?.contentHash || hashText(artifact.content || artifact.id);
-    const rawPath = artifact.metadata?.rawPath || '';
-    const compileResult = await sendObsidianWikiCompile({
+    return ingestKnowledgeSourceToWiki({
+      artifact,
+      source: artifact.metadata?.source || 'artifact',
+      sourceId: artifact.metadata?.sourceId || artifact.id,
       title: artifact.title,
-      content: buildCompiledContent({
-        title: artifact.title,
-        content: artifact.content || '',
-        rawPath,
-      }),
       projectName: artifact.projectName,
       sessionId: artifact.sessionId,
-      source: artifact.metadata?.source || 'artifact',
-      importBatchId: artifact.metadata?.importBatchId || '',
-      contentHash,
-      rawPath,
-      sourceIds: [artifact.id],
-      compiledFrom: [artifact.id],
-      argusId: `wiki:${contentHash}`,
-      classificationMode: artifact.metadata?.classificationMode || '',
-      classificationReason: artifact.metadata?.classificationReason || '',
+      content: artifact.content || '',
+      kind: artifact.kind,
+      metadata: artifact.metadata || {},
+      modes: artifact.metadata?.obsidianModes || artifact.metadata?.routingModes || [],
+      topicKey,
+      forceRecompile,
     });
-    const wikiPath = compileResult.path || compileResult.wikiPath || '';
-    updateArtifactMetadata(artifact.id, {
-      wikiPath,
-      wikiStatus: wikiPath ? 'compiled' : 'failed',
-      compiledFrom: [artifact.id],
-    });
-    return {
-      success: true,
-      artifactId: artifact.id,
-      wikiPath,
-      rawPath,
-    };
   };
 
   const lintWiki = async (payload = {}) => lintObsidianWiki(payload);
@@ -536,6 +738,7 @@ export const createObsidianWikiService = ({
     compileWikiImport,
     extractWikiFileContent,
     getWikiImportBatch,
+    ingestKnowledgeSourceToWiki,
     ingestUploadedFilesToObsidian,
     lintWiki,
   };
@@ -544,6 +747,7 @@ export const createObsidianWikiService = ({
 export const obsidianWikiService = createObsidianWikiService();
 
 export const ingestUploadedFilesToObsidian = (...args) => obsidianWikiService.ingestUploadedFilesToObsidian(...args);
+export const ingestKnowledgeSourceToWiki = (...args) => obsidianWikiService.ingestKnowledgeSourceToWiki(...args);
 export const compileWikiImport = (...args) => obsidianWikiService.compileWikiImport(...args);
 export const lintWiki = (...args) => obsidianWikiService.lintWiki(...args);
 export const getWikiImportBatch = (...args) => obsidianWikiService.getWikiImportBatch(...args);

@@ -147,6 +147,30 @@ describe('argus bridge Obsidian core', () => {
     expect(index).toContain('project-summary');
   });
 
+  it('builds Wiki-backed view indexes without duplicating the compiled note body', () => {
+    const index = core.buildWikiViewIndex({
+      mode: 'project-knowledge',
+      projectName: 'GPUScene',
+      entries: [
+        {
+          title: 'GPUScene Review',
+          wikiPath: 'Argus/Wiki/GPUScene/GPUScene Review.md',
+          rawPath: 'Argus/Raw/GPUScene/2026-05-08/GPUScene Review.md',
+          kind: 'review-notes',
+          classificationReason: 'Matched project implementation.',
+        },
+      ],
+    });
+
+    expect(index).toContain('# GPUScene');
+    expect(index).toContain('<!-- argus-bridge:wiki-view:start -->');
+    expect(index).toContain('[[GPUScene Review|GPUScene Review]]');
+    expect(index).toContain('review-notes');
+    expect(index).toContain('Matched project implementation.');
+    expect(index).not.toContain('## 摘要');
+    expect(index).not.toContain('Compiled page.');
+  });
+
   it('filters search results to configured readable folders only', () => {
     const results = core.searchReadableFiles([
       { path: 'Argus/AIMemory/App/Prefs.md', content: '# Prefs\nUse concise answers.' },

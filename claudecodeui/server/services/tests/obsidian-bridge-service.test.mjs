@@ -27,9 +27,14 @@ describe('obsidian bridge service', () => {
       enabled: false,
       endpoint: 'http://127.0.0.1:27177',
       defaultMode: 'project-knowledge',
-      aiMemoryReadbackEnabled: false,
-      aiMemoryMaxResults: 5,
+      aiMemoryReadbackEnabled: true,
+      wikiPrimaryEnabled: true,
+      wikiReadbackEnabled: true,
+      wikiReadbackIncludeRaw: false,
+      wikiReadbackMaxResults: 8,
+      aiMemoryMaxResults: 8,
       aiMemoryProjectScopeEnabled: true,
+      readableVaultFolders: expect.arrayContaining(['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory']),
       tokenConfigured: false,
     });
     expect(config).not.toHaveProperty('token');
@@ -59,7 +64,7 @@ describe('obsidian bridge service', () => {
       aiMemoryReadbackEnabled: true,
       aiMemoryMaxResults: 20,
       aiMemoryProjectScopeEnabled: false,
-      readableVaultFolders: ['Argus/Projects', 'Argus/AIMemory'],
+      readableVaultFolders: ['Argus/Projects', 'Argus/AIMemory', 'Argus/Wiki', 'Argus/_Indexes'],
     });
     expect(saved).not.toHaveProperty('token');
 
@@ -257,7 +262,7 @@ describe('obsidian bridge service', () => {
         name: 'Self',
         endpoint: 'http://127.0.0.1:27179',
         tokenConfigured: true,
-        readableFolders: ['Argus/Projects'],
+        readableFolders: ['Argus/Projects', 'Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
         writeBaseFolder: 'Argus',
       }),
     ]);

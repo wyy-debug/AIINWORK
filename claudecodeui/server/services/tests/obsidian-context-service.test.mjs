@@ -29,7 +29,7 @@ describe('obsidian context service', () => {
 
     expect(result.command).toBe('Summarize today.');
     expect(result.options.appendSystemPrompt).toContain('Existing prompt.');
-    expect(result.options.appendSystemPrompt).toContain('Obsidian memory context');
+    expect(result.options.appendSystemPrompt).toContain('Argus Wiki Context');
     expect(result.options.appendSystemPrompt).toContain('Use concise answers.');
     expect(result.options.obsidianContext).toMatchObject({
       used: true,
@@ -38,8 +38,46 @@ describe('obsidian context service', () => {
     expect(buildObsidianContext).toHaveBeenCalledWith({
       query: 'Summarize today.',
       projectName: 'App',
-      folders: ['Argus/AIMemory/App', 'Argus/Projects/App'],
+      folders: ['Argus/Wiki/App', 'Argus/_Indexes', 'Argus/AIMemory/App'],
       limit: 3,
+    });
+  });
+
+  it('uses Wiki readback defaults when the new wiki flags are enabled', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const buildObsidianContext = vi.fn(async () => ({
+      success: true,
+      context: 'Path: Argus/Wiki/App/GPUScene.md\nTitle: GPUScene\nUse the compiled wiki as the source of truth.',
+      results: [{ path: 'Argus/Wiki/App/GPUScene.md', title: 'GPUScene' }],
+    }));
+
+    const result = await service.applyObsidianContextToChatCommand({
+      type: 'codex-command',
+      command: 'Continue the GPUScene review.',
+      options: { projectName: 'App' },
+    }, {
+      buildObsidianContext,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        wikiReadbackEnabled: true,
+        wikiReadbackMaxResults: 8,
+        aiMemoryProjectScopeEnabled: true,
+        readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
+      }),
+    });
+
+    expect(result.command).toContain('Argus Wiki Context');
+    expect(result.command).toContain('Use the compiled wiki as the source of truth.');
+    expect(result.options.obsidianContext).toMatchObject({
+      used: true,
+      resultCount: 1,
+      source: 'wiki',
+    });
+    expect(buildObsidianContext).toHaveBeenCalledWith({
+      query: 'Continue the GPUScene review.',
+      projectName: 'App',
+      folders: ['Argus/Wiki/App', 'Argus/_Indexes', 'Argus/AIMemory/App'],
+      limit: 8,
     });
   });
 

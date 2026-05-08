@@ -93,7 +93,7 @@ const buildWikiRawPath = (payload = {}, now = new Date(), options = {}) => {
 const buildWikiPath = (payload = {}, _now = new Date(), options = {}) => {
   const baseFolder = sanitizePathSegment(options.baseFolder || DEFAULT_BASE_FOLDER, DEFAULT_BASE_FOLDER);
   const projectName = sanitizePathSegment(payload.projectName, 'General');
-  return `${baseFolder}/Wiki/${projectName}/${buildFileName(payload.title)}`;
+  return `${baseFolder}/Wiki/${projectName}/${buildFileName(payload.topicKey || payload.title)}`;
 };
 
 const buildWikiSchemaPath = (options = {}) => {
@@ -470,6 +470,57 @@ const buildProjectIndex = ({ projectName = 'General', entries = [], existingCont
     return content.replace(pattern, block);
   }
   return `${content.trim()}\n\n## Argus Knowledge\n\n${block}\n`;
+};
+
+const modeViewTitle = (mode = 'project-knowledge', projectName = 'General', now = new Date()) => {
+  if (mode === 'second-brain') {
+    return String(toDate(now).getFullYear());
+  }
+  return sanitizePathSegment(projectName, 'General');
+};
+
+const buildWikiViewIndex = ({
+  mode = 'project-knowledge',
+  projectName = 'General',
+  entries = [],
+  existingContent = '',
+  now = new Date(),
+} = {}) => {
+  const title = modeViewTitle(mode, projectName, now);
+  const start = '<!-- argus-bridge:wiki-view:start -->';
+  const end = '<!-- argus-bridge:wiki-view:end -->';
+  const existingBlock = String(existingContent || '').match(new RegExp(`${start}([\\s\\S]*?)${end}`))?.[1] || '';
+  const existingLines = existingBlock
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('- '));
+  const newLines = entries
+    .filter((entry) => entry?.wikiPath && String(entry.wikiPath).endsWith('.md'))
+    .map((entry) => [
+      `- ${noteLinkForPath(entry.wikiPath, entry.title)}`,
+      entry.kind ? ` - ${entry.kind}` : '',
+      entry.classificationReason ? ` - ${entry.classificationReason}` : '',
+      entry.rawPath ? ` (source: ${noteLinkForPath(entry.rawPath, 'Raw')})` : '',
+    ].join(''));
+  const replacedTitles = new Set(entries.map((entry) => String(entry?.title || '').toLowerCase()).filter(Boolean));
+  const lines = [
+    start,
+    ...newLines,
+    ...existingLines.filter((line) => {
+      const titleMatch = line.match(/\[\[[^\]|]+(?:\|([^\]]+))?\]\]/)?.[1];
+      return !titleMatch || !replacedTitles.has(titleMatch.toLowerCase());
+    }),
+    end,
+  ];
+  const block = lines.join('\n');
+  const content = existingContent && String(existingContent).trim()
+    ? String(existingContent)
+    : `# ${title}\n\n## Argus Wiki Index\n\n${start}\n${end}\n`;
+  const pattern = new RegExp(`${start}[\\s\\S]*?${end}`);
+  if (pattern.test(content)) {
+    return content.replace(pattern, block);
+  }
+  return `${content.trim()}\n\n## Argus Wiki Index\n\n${block}\n`;
 };
 
 const normalizeReadableFolder = (folder) => sanitizePathSegment(folder, '')
@@ -1011,6 +1062,7 @@ module.exports = {
   buildWikiSchemaPath,
   buildContextFromSearchResults,
   buildProjectIndex,
+  buildWikiViewIndex,
   buildProperties,
   buildTargetDirectory,
   buildWikiUploadIndex,

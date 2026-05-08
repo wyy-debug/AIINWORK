@@ -29,14 +29,15 @@ const resolveProjectName = (data = {}) => {
 const buildProjectScopedFolders = (projectName = '') => {
   const projectSegment = sanitizeVaultSegment(projectName, 'General');
   return [
+    `Argus/Wiki/${projectSegment}`,
+    'Argus/_Indexes',
     `Argus/AIMemory/${projectSegment}`,
-    `Argus/Projects/${projectSegment}`,
   ];
 };
 
 const buildContextBlock = (context = '') => [
-  'Obsidian memory context',
-  'Use this only when it is relevant to the current user request.',
+  'Argus Wiki Context',
+  'Use the compiled Wiki as the source of truth only when it is relevant to the current user request.',
   '',
   context,
 ].filter(Boolean).join('\n');
@@ -78,15 +79,26 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   const command = typeof data.command === 'string' ? data.command : '';
   const options = data.options && typeof data.options === 'object' ? data.options : {};
   const config = readObsidianBridgeConfig();
-  if (!config.enabled || !config.aiMemoryReadbackEnabled || !command.trim()) {
+  const readbackEnabled = config.wikiReadbackEnabled !== false
+    || config.aiMemoryReadbackEnabled === true;
+  if (!config.enabled || !readbackEnabled || !command.trim()) {
     return data;
   }
 
   const projectName = resolveProjectName(data);
+  const scopedFolders = buildProjectScopedFolders(projectName);
+  if (config.wikiReadbackIncludeRaw) {
+    scopedFolders.push(`Argus/Raw/${sanitizeVaultSegment(projectName, 'General')}`);
+  }
   const folders = config.aiMemoryProjectScopeEnabled
-    ? buildProjectScopedFolders(projectName)
+    || config.wikiReadbackProjectScopeEnabled !== false
+    ? scopedFolders
     : config.readableVaultFolders;
-  const limit = Number.isFinite(Number(config.aiMemoryMaxResults)) ? Number(config.aiMemoryMaxResults) : 5;
+  const limit = Number.isFinite(Number(config.wikiReadbackMaxResults))
+    ? Number(config.wikiReadbackMaxResults)
+    : Number.isFinite(Number(config.aiMemoryMaxResults))
+      ? Number(config.aiMemoryMaxResults)
+      : 8;
 
   try {
     const activeNoteResult = config.activeNoteReadbackEnabled
@@ -116,6 +128,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           obsidianContext: {
             used: false,
             resultCount: Array.isArray(result?.results) ? result.results.length : 0,
+            source: 'wiki',
             sources,
           },
         },
@@ -133,6 +146,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
             used: true,
             resultCount: Array.isArray(result?.results) ? result.results.length : 0,
             projectName,
+            source: 'wiki',
             sources,
           },
         },
@@ -148,6 +162,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           used: true,
           resultCount: Array.isArray(result?.results) ? result.results.length : 0,
           projectName,
+          source: 'wiki',
           sources,
         },
       },
@@ -160,6 +175,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
         ...options,
         obsidianContext: {
           used: false,
+          source: 'wiki',
           error: error?.message || 'Failed to read Obsidian context.',
         },
       },

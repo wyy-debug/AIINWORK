@@ -18,20 +18,24 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   defaultMode: 'project-knowledge',
   timeoutMs: 5000,
   autoExportKnowledgeArtifacts: true,
-  readableVaultFolders: ['Argus/Projects', 'Argus/AIMemory', 'Argus/SecondBrain'],
+  readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
   fallbackToProjectKnowledge: true,
   lastConnection: '',
   lastError: '',
   pluginVersion: '',
-  aiMemoryReadbackEnabled: false,
-  aiMemoryMaxResults: 5,
+  aiMemoryReadbackEnabled: true,
+  aiMemoryMaxResults: 8,
   aiMemoryProjectScopeEnabled: true,
   activeVaultId: DEFAULT_VAULT_ID,
   activeNoteReadbackEnabled: false,
   dailyNoteFolder: 'Daily',
   dailyNoteHeading: 'Argus',
   mcpEnabled: false,
+  wikiPrimaryEnabled: true,
   wikiCompilerEnabled: true,
+  wikiReadbackEnabled: true,
+  wikiReadbackIncludeRaw: false,
+  wikiReadbackMaxResults: 8,
   wikiRawFolder: 'Argus/Raw',
   wikiFolder: 'Argus/Wiki',
   wikiIndexFolder: 'Argus/_Indexes',
@@ -134,9 +138,14 @@ const normalizeVaultFolder = (value) => {
   return normalized;
 };
 
+const REQUIRED_WIKI_READABLE_FOLDERS = ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'];
+
 const normalizeVaultFolders = (value) => {
   const source = Array.isArray(value) ? value : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.readableVaultFolders;
-  const folders = [...new Set(source.map(normalizeVaultFolder).filter(Boolean))];
+  const folders = [...new Set([
+    ...source,
+    ...REQUIRED_WIKI_READABLE_FOLDERS,
+  ].map(normalizeVaultFolder).filter(Boolean))];
   return folders.length > 0 ? folders : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.readableVaultFolders;
 };
 
@@ -254,8 +263,16 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     lastConnection: activeVault.lastConnection || readString(source.lastConnection),
     lastError: (activeVault.lastError || readString(source.lastError)).slice(0, 500),
     pluginVersion: (activeVault.pluginVersion || readString(source.pluginVersion)).slice(0, 80),
-    aiMemoryReadbackEnabled: source.aiMemoryReadbackEnabled === true,
-    aiMemoryMaxResults: normalizeMaxResults(source.aiMemoryMaxResults),
+    wikiPrimaryEnabled: source.wikiPrimaryEnabled !== false,
+    wikiReadbackEnabled: Object.prototype.hasOwnProperty.call(source, 'wikiReadbackEnabled')
+      ? source.wikiReadbackEnabled !== false
+      : source.aiMemoryReadbackEnabled !== false,
+    wikiReadbackIncludeRaw: source.wikiReadbackIncludeRaw === true,
+    wikiReadbackMaxResults: normalizeMaxResults(source.wikiReadbackMaxResults ?? source.aiMemoryMaxResults),
+    aiMemoryReadbackEnabled: Object.prototype.hasOwnProperty.call(source, 'aiMemoryReadbackEnabled')
+      ? source.aiMemoryReadbackEnabled !== false
+      : source.wikiReadbackEnabled !== false,
+    aiMemoryMaxResults: normalizeMaxResults(source.aiMemoryMaxResults ?? source.wikiReadbackMaxResults),
     aiMemoryProjectScopeEnabled: source.aiMemoryProjectScopeEnabled !== false,
     activeVaultId,
     activeNoteReadbackEnabled: source.activeNoteReadbackEnabled === true,
@@ -548,6 +565,40 @@ export const sendObsidianWikiCompile = async (payload, {
 
   const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId, payload });
   return callBridge('/argus/v1/wiki/compile', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, config, fetchImpl);
+};
+
+export const updateObsidianWikiViews = async (payload, {
+  fetchImpl = globalThis.fetch,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId, payload });
+  return callBridge('/argus/v1/wiki/views/update', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, config, fetchImpl);
+};
+
+export const migrateObsidianWikiLegacy = async (payload = {}, {
+  fetchImpl = globalThis.fetch,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  return callBridge('/argus/v1/wiki/migrate-legacy', {
     method: 'POST',
     body: JSON.stringify(payload),
   }, config, fetchImpl);

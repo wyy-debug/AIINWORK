@@ -11,6 +11,7 @@ import {
   getActiveObsidianNote,
   getObsidianGraph,
   archiveObsidianDuplicates,
+  migrateObsidianWikiLegacy,
   ObsidianBridgeError,
   patchObsidianNote,
   queryObsidianNotes,
@@ -42,6 +43,7 @@ import {
 import {
   compileWikiImport,
   getWikiImportBatch,
+  ingestKnowledgeSourceToWiki,
   ingestUploadedFilesToObsidian,
   lintWiki,
 } from '../services/obsidian-wiki-service.js';
@@ -79,9 +81,30 @@ const sendBridgeError = (res, error, fallbackMessage) => {
 router.post('/documents', async (req, res) => {
   try {
     const projectRoot = await resolveProjectRoot(req.body?.projectName || '');
-    const result = await createKnowledgeDocument(req.body || {}, {
-      projectRoot,
-    });
+    const config = readObsidianBridgeConfig();
+    const payload = req.body || {};
+    const result = config.wikiPrimaryEnabled
+      ? await ingestKnowledgeSourceToWiki({
+        source: payload.source || payload.metadata?.source || 'document',
+        sourceId: payload.sourceId || payload.sourceArtifactId || payload.argusId || '',
+        title: payload.title,
+        projectName: payload.projectName,
+        sessionId: payload.sessionId,
+        content: payload.content,
+        kind: payload.kind || 'knowledge',
+        metadata: {
+          ...(payload.metadata || {}),
+          sourceArtifactId: payload.sourceArtifactId || '',
+          obsidianMode: payload.mode || config.defaultMode || 'project-knowledge',
+          obsidianModes: payload.modes || payload.obsidianModes || [payload.mode || config.defaultMode || 'project-knowledge'],
+          confidence: payload.confidence,
+        },
+        modes: payload.modes || payload.obsidianModes || [payload.mode || config.defaultMode || 'project-knowledge'],
+        projectRoot,
+      })
+      : await createKnowledgeDocument(payload, {
+        projectRoot,
+      });
     res.json({ success: true, ...result });
   } catch (error) {
     sendBridgeError(res, error, 'Failed to write document to Obsidian bridge');
@@ -258,6 +281,15 @@ router.post('/wiki/lint', async (req, res) => {
     res.json(result);
   } catch (error) {
     sendBridgeError(res, error, 'Failed to lint Obsidian wiki');
+  }
+});
+
+router.post('/wiki/migrate-legacy', async (req, res) => {
+  try {
+    const result = await migrateObsidianWikiLegacy(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to migrate legacy Obsidian wiki notes');
   }
 });
 

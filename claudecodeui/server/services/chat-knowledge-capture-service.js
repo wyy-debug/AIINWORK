@@ -10,6 +10,11 @@ import { createArtifact as defaultCreateArtifact } from './artifact-service.js';
 import { createMemoryCandidates as defaultCreateMemoryCandidates } from './obsidian-memory-service.js';
 import { readObsidianBridgeConfig as defaultReadObsidianBridgeConfig } from './obsidian-bridge-service.js';
 
+const defaultIngestKnowledgeSourceToWiki = async (...args) => {
+  const module = await import('./obsidian-wiki-service.js');
+  return module.ingestKnowledgeSourceToWiki(...args);
+};
+
 const AUTO_CAPTURE_SOURCE = 'chat-auto-capture';
 const MIN_EXPLICIT_CONTENT_LENGTH = 24;
 const MIN_INFERRED_CONTENT_LENGTH = 120;
@@ -394,6 +399,7 @@ export const createChatKnowledgeCaptureService = ({
   createArtifact = defaultCreateArtifact,
   createMemoryCandidates = defaultCreateMemoryCandidates,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
+  ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
   findExistingCapture = (sourceId, fingerprint) => defaultFindExistingCapture(sourceId, fingerprint, db),
   claimCaptureKey = (fingerprint) => defaultClaimCaptureKey(fingerprint, db),
   completeCaptureKey = (patch) => defaultCompleteCaptureKey(patch, db),
@@ -533,34 +539,49 @@ export const createChatKnowledgeCaptureService = ({
       };
     }
 
+    const metadata = {
+      source: AUTO_CAPTURE_SOURCE,
+      sourceId,
+      contentHash,
+      provider: readString(payload.provider),
+      previousUserPrompt: normalizeWhitespace(payload.previousUserPrompt || payload.userPrompt || '').slice(0, 1000),
+      messageTimestamp: payload.timestamp || '',
+      obsidianMode: assessment.mode,
+      obsidianModes: assessment.routingModes || [assessment.mode],
+      autoCaptureReason: assessment.reason,
+      confidence: assessment.confidence,
+      routingMode: assessment.routingMode,
+      routingModes: assessment.routingModes || [assessment.mode],
+      routingScores: assessment.routingScores,
+      routingSignals: assessment.routingSignals,
+      routingReason: assessment.routingReason,
+      routingConfidence: assessment.routingConfidence,
+      memoryCapturePolicy: assessment.memoryCapturePolicy,
+      kind: assessment.kind,
+    };
+
     try {
-      const result = await createArtifact({
-        kind: assessment.kind,
-        title: assessment.title,
-        projectName: readString(payload.projectName),
-        sessionId: readString(payload.sessionId),
-        content,
-        metadata: {
+      const result = config.wikiPrimaryEnabled === true
+        ? await ingestKnowledgeSourceToWiki({
           source: AUTO_CAPTURE_SOURCE,
           sourceId,
-          contentHash,
-          provider: readString(payload.provider),
-          previousUserPrompt: normalizeWhitespace(payload.previousUserPrompt || payload.userPrompt || '').slice(0, 1000),
-          messageTimestamp: payload.timestamp || '',
-          obsidianMode: assessment.mode,
-          obsidianModes: assessment.routingModes || [assessment.mode],
-          autoCaptureReason: assessment.reason,
-          confidence: assessment.confidence,
-          routingMode: assessment.routingMode,
-          routingModes: assessment.routingModes || [assessment.mode],
-          routingScores: assessment.routingScores,
-          routingSignals: assessment.routingSignals,
-          routingReason: assessment.routingReason,
-          routingConfidence: assessment.routingConfidence,
-          memoryCapturePolicy: assessment.memoryCapturePolicy,
-        },
-      });
-      completeClaim({ artifactId: result.artifact?.id || '', status: 'captured' });
+          title: assessment.title,
+          projectName: readString(payload.projectName),
+          sessionId: readString(payload.sessionId),
+          content,
+          kind: assessment.kind,
+          metadata,
+          modes: assessment.routingModes || [assessment.mode],
+        })
+        : await createArtifact({
+          kind: assessment.kind,
+          title: assessment.title,
+          projectName: readString(payload.projectName),
+          sessionId: readString(payload.sessionId),
+          content,
+          metadata,
+        });
+      completeClaim({ artifactId: result.artifact?.id || result.artifactId || '', status: 'captured' });
 
       return {
         success: true,
@@ -571,6 +592,7 @@ export const createChatKnowledgeCaptureService = ({
         mode: assessment.mode,
         kind: assessment.kind,
         artifact: result.artifact,
+        artifactId: result.artifact?.id || result.artifactId || '',
         obsidianBridge: result.obsidianBridge,
         routingMode: assessment.routingMode,
         routingScores: assessment.routingScores,

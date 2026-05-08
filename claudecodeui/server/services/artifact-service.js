@@ -158,6 +158,73 @@ const buildObsidianMultiMetadataPatch = (obsidianBridges = [], artifactId = '') 
   };
 };
 
+const defaultIngestKnowledgeSourceToWiki = async (...args) => {
+  const module = await import('./obsidian-wiki-service.js');
+  return module.ingestKnowledgeSourceToWiki(...args);
+};
+
+const isWikiPrimaryEnabled = (config = {}) => config.wikiPrimaryEnabled === true;
+
+const summarizeWikiExport = (result = {}, { mode = '', modes = [], automatic = false, artifactId = '' } = {}) => {
+  const viewModes = Array.isArray(result.viewModes) && result.viewModes.length > 0
+    ? result.viewModes
+    : normalizeObsidianModes(modes, mode || result.mode || 'project-knowledge');
+  const destination = result.destination || result.obsidianBridge?.destination || (result.wikiPath ? 'obsidian' : 'error');
+  const wikiPath = result.wikiPath || result.obsidianBridge?.wikiPath || result.path || '';
+  const rawPath = result.rawPath || result.obsidianBridge?.rawPath || '';
+  const indexPaths = result.indexPaths || result.obsidianBridge?.indexPaths || [];
+  return {
+    destination,
+    path: wikiPath,
+    wikiPath,
+    rawPath,
+    indexPaths,
+    viewModes,
+    fallbackPath: result.fallbackPath || result.obsidianBridge?.fallbackPath || '',
+    error: result.error || result.obsidianBridge?.error || '',
+    errorCode: result.errorCode || '',
+    mode: mode || viewModes[0] || '',
+    automatic,
+    argusId: artifactId ? `wiki:${artifactId}` : '',
+    updatedAt: new Date().toISOString(),
+    targets: viewModes.map((targetMode) => ({
+      mode: targetMode,
+      destination,
+      path: wikiPath,
+      wikiPath,
+      rawPath,
+      indexPaths,
+    })),
+  };
+};
+
+const buildWikiMetadataPatch = (obsidianBridge, artifactId) => {
+  const paths = {};
+  const argusIds = {};
+  for (const mode of obsidianBridge.viewModes || []) {
+    if (obsidianBridge.wikiPath) paths[mode] = obsidianBridge.wikiPath;
+    if (artifactId) argusIds[mode] = `wiki:${artifactId}:${mode}`;
+  }
+  return {
+    obsidianBridge,
+    obsidianStatus: obsidianStatusFromDestination(obsidianBridge.destination),
+    obsidianMode: obsidianBridge.mode || obsidianBridge.viewModes?.[0] || '',
+    obsidianModes: obsidianBridge.viewModes || [],
+    obsidianPath: obsidianBridge.wikiPath || obsidianBridge.path || '',
+    obsidianPaths: paths,
+    obsidianFallbackPath: obsidianBridge.fallbackPath || '',
+    obsidianArgusId: obsidianBridge.argusId || (artifactId ? `wiki:${artifactId}` : ''),
+    obsidianArgusIds: argusIds,
+    obsidianLastError: obsidianBridge.error || '',
+    obsidianSyncedAt: obsidianBridge.destination === 'obsidian' ? obsidianBridge.updatedAt : '',
+    rawPath: obsidianBridge.rawPath || '',
+    wikiPath: obsidianBridge.wikiPath || '',
+    indexPaths: obsidianBridge.indexPaths || [],
+    viewModes: obsidianBridge.viewModes || [],
+    wikiStatus: obsidianBridge.destination === 'obsidian' ? 'compiled' : 'failed',
+  };
+};
+
 export const createArtifactService = ({
   db = defaultDb,
   artifactsDir = DEFAULT_ARTIFACTS_DIR,
@@ -166,6 +233,7 @@ export const createArtifactService = ({
   createKnowledgeDocumentFromArtifact = defaultCreateKnowledgeDocumentFromArtifact,
   createMemoryCandidates = defaultCreateMemoryCandidates,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
+  ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
 } = {}) => {
   const mapArtifact = (row, includeContent = false) => ({
     id: row.id,
@@ -266,6 +334,35 @@ export const createArtifactService = ({
     multiMode = false,
   } = {}) => {
     const targetMode = mode || artifact?.metadata?.obsidianMode || 'project-knowledge';
+    const bridgeConfig = readObsidianBridgeConfig();
+    if (isWikiPrimaryEnabled(bridgeConfig)) {
+      const result = await ingestKnowledgeSourceToWiki({
+        artifact,
+        source: 'artifact',
+        sourceId: artifact?.id,
+        title: artifact?.title,
+        projectName: artifact?.projectName,
+        sessionId: artifact?.sessionId,
+        content: artifact?.content || '',
+        kind: artifact?.kind,
+        metadata: {
+          ...(artifact?.metadata || {}),
+          obsidianMode: targetMode,
+          obsidianModes: [targetMode],
+        },
+        modes: [targetMode],
+      });
+      const obsidianBridge = summarizeWikiExport(result, {
+        mode: targetMode,
+        modes: [targetMode],
+        automatic,
+        artifactId: artifact.id,
+      });
+      if (updateMetadata) {
+        updateArtifactMetadata(artifact.id, buildWikiMetadataPatch(obsidianBridge, artifact.id));
+      }
+      return obsidianBridge;
+    }
     const projectRoot = await resolveProjectRoot(artifact.projectName);
     const argusId = artifactArgusId(artifact.id, targetMode, multiMode);
     const result = await createKnowledgeDocumentFromArtifact(artifact, {
@@ -296,6 +393,33 @@ export const createArtifactService = ({
       sourceModes,
       firstMode || artifact?.metadata?.obsidianMode || 'project-knowledge',
     );
+    const bridgeConfig = readObsidianBridgeConfig();
+    if (isWikiPrimaryEnabled(bridgeConfig)) {
+      const result = await ingestKnowledgeSourceToWiki({
+        artifact,
+        source: 'artifact',
+        sourceId: artifact?.id,
+        title: artifact?.title,
+        projectName: artifact?.projectName,
+        sessionId: artifact?.sessionId,
+        content: artifact?.content || '',
+        kind: artifact?.kind,
+        metadata: {
+          ...(artifact?.metadata || {}),
+          obsidianMode: targetModes[0],
+          obsidianModes: targetModes,
+        },
+        modes: targetModes,
+      });
+      const obsidianBridge = summarizeWikiExport(result, {
+        mode: targetModes[0],
+        modes: targetModes,
+        automatic,
+        artifactId: artifact.id,
+      });
+      updateArtifactMetadata(artifact.id, buildWikiMetadataPatch(obsidianBridge, artifact.id));
+      return obsidianBridge;
+    }
     const multiMode = targetModes.length > 1;
     const obsidianBridges = [];
     for (const targetMode of targetModes) {
