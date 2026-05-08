@@ -31,6 +31,7 @@ import {
 } from './services/obsidian-auto-capture-orchestrator.js';
 import { runObsidianAutoCaptureBackfill } from './services/obsidian-auto-capture-backfill-service.js';
 import { readObsidianBridgeConfig } from './services/obsidian-bridge-service.js';
+import { ingestUploadedFilesToObsidian } from './services/obsidian-wiki-service.js';
 import {
     getProjects,
     getSessions,
@@ -3456,9 +3457,27 @@ app.post('/api/projects/:projectName/upload-files', authenticateToken, async (re
                     });
                 }
 
+                let obsidianWiki = null;
+                if (String(req.body?.obsidianIngest || 'true') !== 'false') {
+                    try {
+                        obsidianWiki = await ingestUploadedFilesToObsidian({
+                            files: savedFiles,
+                            projectName: req.params.projectName,
+                            sessionId: String(req.body?.sessionId || ''),
+                            batchId: String(req.body?.batchId || `chat-${batchId}`),
+                        });
+                    } catch (obsidianError) {
+                        obsidianWiki = {
+                            success: false,
+                            error: obsidianError?.message || 'Failed to ingest attachments into Obsidian wiki',
+                        };
+                    }
+                }
+
                 res.json({
                     success: true,
                     files: savedFiles,
+                    obsidianWiki,
                     message: `Uploaded ${savedFiles.length} file(s) successfully`
                 });
             } catch (error) {

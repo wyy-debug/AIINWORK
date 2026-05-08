@@ -22,6 +22,9 @@ describe('argus bridge Obsidian plugin main', () => {
       '/argus/v1/query',
       '/argus/v1/periodic/append',
       '/argus/v1/graph',
+      '/argus/v1/wiki/ingest',
+      '/argus/v1/wiki/compile',
+      '/argus/v1/wiki/lint',
       '/argus/v1/duplicates/scan',
       '/argus/v1/duplicates/archive',
     ]) {
@@ -44,5 +47,8 @@ describe('argus bridge Obsidian plugin main', () => {
     expect(source).toContain('sendToArgusIngress');
     expect(source).toContain('appendToPeriodicNote');
     expect(source).toContain('archiveDuplicateNotes');
+    expect(source).toContain('writeWikiRawSource');
+    expect(source).toContain('compileWikiSource');
+    expect(source).toContain('lintWiki');
   });
 });

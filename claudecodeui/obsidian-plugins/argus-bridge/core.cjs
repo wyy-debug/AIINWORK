@@ -82,6 +82,30 @@ const buildDocumentPath = (payload = {}, now = new Date(), options = {}) => {
   return `${folder}/${fileName}`;
 };
 
+const getDay = (now) => toDate(now).toISOString().slice(0, 10);
+
+const buildWikiRawPath = (payload = {}, now = new Date(), options = {}) => {
+  const baseFolder = sanitizePathSegment(options.baseFolder || DEFAULT_BASE_FOLDER, DEFAULT_BASE_FOLDER);
+  const projectName = sanitizePathSegment(payload.projectName, 'General');
+  return `${baseFolder}/Raw/${projectName}/${getDay(now)}/${buildFileName(payload.title)}`;
+};
+
+const buildWikiPath = (payload = {}, _now = new Date(), options = {}) => {
+  const baseFolder = sanitizePathSegment(options.baseFolder || DEFAULT_BASE_FOLDER, DEFAULT_BASE_FOLDER);
+  const projectName = sanitizePathSegment(payload.projectName, 'General');
+  return `${baseFolder}/Wiki/${projectName}/${buildFileName(payload.title)}`;
+};
+
+const buildWikiSchemaPath = (options = {}) => {
+  const baseFolder = sanitizePathSegment(options.baseFolder || DEFAULT_BASE_FOLDER, DEFAULT_BASE_FOLDER);
+  return `${baseFolder}/_Meta/Schema.md`;
+};
+
+const buildWikiIndexPath = (options = {}) => {
+  const baseFolder = sanitizePathSegment(options.baseFolder || DEFAULT_BASE_FOLDER, DEFAULT_BASE_FOLDER);
+  return `${baseFolder}/_Indexes/Uploads.md`;
+};
+
 const assertSafeVaultPath = (path) => {
   const value = readString(path);
   if (!value || value.includes('\\') || value.split('/').some((segment) => segment === '..' || segment === '.')) {
@@ -207,6 +231,101 @@ const formatDocument = (payload = {}, now = new Date(), options = {}) => {
   const properties = buildProperties(document, now, options);
   const content = renderTemplate(selectTemplate(document, options.templates), document);
   return `${formatFrontmatter(properties)}\n\n${content}`;
+};
+
+const normalizeStringArray = (value) => (
+  Array.isArray(value)
+    ? [...new Set(value.map(readString).filter(Boolean))]
+    : []
+);
+
+const buildWikiProperties = (payload = {}, now = new Date(), type = 'raw-source') => {
+  const timestamp = toDate(now).toISOString();
+  const properties = {
+    type,
+    source: readString(payload.source) || 'argus',
+    project: readString(payload.projectName),
+    created: payload.created || timestamp,
+    updated: timestamp,
+    tags: normalizeStringArray(payload.tags || ['argus', type === 'raw-source' ? 'raw' : 'wiki']),
+    argusId: readString(payload.argusId),
+    importBatchId: readString(payload.importBatchId),
+    contentHash: readString(payload.contentHash),
+    sourcePath: readString(payload.sourcePath),
+    sourceIds: normalizeStringArray(payload.sourceIds),
+    compiledFrom: normalizeStringArray(payload.compiledFrom),
+    rawPath: readString(payload.rawPath),
+    wikiPath: readString(payload.wikiPath),
+    classificationMode: readString(payload.classificationMode),
+    classificationReason: readString(payload.classificationReason),
+    extractionStatus: readString(payload.extractionStatus),
+    wikiStatus: readString(payload.wikiStatus) || (type === 'raw-source' ? 'raw' : 'compiled'),
+    status: readString(payload.status) || (type === 'wiki-note' ? 'active' : ''),
+    related: normalizeStringArray(payload.related),
+  };
+
+  return Object.fromEntries(Object.entries(properties).filter(([, value]) => !(
+    value === '' || value == null || (Array.isArray(value) && value.length === 0)
+  )));
+};
+
+const formatWikiSourceDocument = (payload = {}, now = new Date()) => {
+  const properties = buildWikiProperties({
+    ...payload,
+    wikiStatus: payload.wikiStatus || 'raw',
+  }, now, 'raw-source');
+  return `${formatFrontmatter(properties)}\n\n${String(payload.content || '').trimEnd()}\n`;
+};
+
+const formatWikiCompiledDocument = (payload = {}, now = new Date()) => {
+  const properties = buildWikiProperties({
+    ...payload,
+    source: payload.source || 'argus',
+    wikiStatus: payload.wikiStatus || 'compiled',
+    status: payload.status || 'active',
+  }, now, 'wiki-note');
+  return `${formatFrontmatter(properties)}\n\n${String(payload.content || '').trimEnd()}\n`;
+};
+
+const formatWikiSchemaDocument = (baseFolder = DEFAULT_BASE_FOLDER) => [
+  '# Argus Wiki Schema',
+  '',
+  '## Core folders',
+  `- \`${baseFolder}/Raw/<project>/<YYYY-MM-DD>/\`: immutable extracted source notes.`,
+  `- \`${baseFolder}/Wiki/<project>/\`: compiled, linked, durable wiki pages.`,
+  `- \`${baseFolder}/_Indexes/\`: generated import and topic indexes.`,
+  '',
+  '## Required Properties',
+  '- Raw notes: `type`, `source`, `project`, `contentHash`, `importBatchId`, `wikiStatus`.',
+  '- Wiki notes: `type`, `project`, `compiledFrom`, `wikiStatus`, `status`.',
+  '',
+  '## Managed Policy',
+  'Argus only rewrites managed Raw/Wiki notes by `argusId` and managed index blocks.',
+].join('\n');
+
+const buildWikiUploadIndex = ({ entries = [], existingContent = '' } = {}) => {
+  const start = '<!-- argus-bridge:wiki-imports:start -->';
+  const end = '<!-- argus-bridge:wiki-imports:end -->';
+  const lines = [
+    start,
+    ...entries.map((entry) => {
+      const title = readString(entry.title || entry.path || 'Import');
+      const raw = entry.rawPath ? ` raw: ${noteLinkForPath(entry.rawPath, title)}` : '';
+      const wiki = entry.wikiPath ? ` wiki: ${noteLinkForPath(entry.wikiPath, title)}` : '';
+      const status = entry.wikiStatus ? ` status: ${entry.wikiStatus}` : '';
+      return `- ${title}${status}${raw}${wiki}`;
+    }),
+    end,
+  ];
+  const block = lines.join('\n');
+  const content = existingContent && String(existingContent).trim()
+    ? String(existingContent)
+    : `# Argus Wiki Imports\n\n${start}\n${end}\n`;
+  const pattern = new RegExp(`${start}[\\s\\S]*?${end}`);
+  if (pattern.test(content)) {
+    return content.replace(pattern, block);
+  }
+  return `${content.trim()}\n\n${block}\n`;
 };
 
 const resolveUniquePath = (basePath, exists) => {
@@ -800,6 +919,84 @@ const planDuplicateArchives = (files = [], options = {}) => {
   return { groups, moves };
 };
 
+const titleKeyForWiki = (note) => normalizeHeadingText(note.title || baseNameFromPath(note.path));
+
+const lintWikiFiles = (files = [], options = {}) => {
+  const baseFolder = sanitizePathSegment(options.baseFolder || DEFAULT_BASE_FOLDER, DEFAULT_BASE_FOLDER);
+  const rawPrefix = `${baseFolder}/Raw/`;
+  const wikiPrefix = `${baseFolder}/Wiki/`;
+  const notes = files
+    .filter((file) => file?.path && String(file.path).endsWith('.md'))
+    .map((file) => extractNoteMetadata(file));
+  const wikiNotes = notes.filter((note) => note.path.startsWith(wikiPrefix));
+  const rawNotes = notes.filter((note) => note.path.startsWith(rawPrefix));
+  const allTitles = new Set(notes.flatMap((note) => [
+    titleKeyForWiki(note),
+    normalizeHeadingText(baseNameFromPath(note.path)),
+  ]).filter(Boolean));
+  const issues = [];
+
+  for (const note of rawNotes) {
+    const missing = ['type', 'contentHash', 'importBatchId', 'wikiStatus']
+      .filter((key) => !compareValues(note.properties[key], 'exists'));
+    if (missing.length > 0) {
+      issues.push({ type: 'missing-properties', path: note.path, missing });
+    }
+    if (note.properties.wikiStatus !== 'compiled' || !note.properties.wikiPath) {
+      issues.push({ type: 'uncompiled-raw', path: note.path, title: note.title });
+    }
+  }
+
+  for (const note of wikiNotes) {
+    const missing = ['type', 'compiledFrom', 'wikiStatus']
+      .filter((key) => !compareValues(note.properties[key], 'exists'));
+    if (missing.length > 0) {
+      issues.push({ type: 'missing-properties', path: note.path, missing });
+    }
+    for (const link of note.links) {
+      if (!allTitles.has(normalizeHeadingText(link))) {
+        issues.push({ type: 'broken-link', path: note.path, target: link });
+      }
+    }
+  }
+
+  const wikiByTitle = new Map();
+  for (const note of wikiNotes) {
+    const key = titleKeyForWiki(note);
+    const group = wikiByTitle.get(key) || [];
+    group.push(note);
+    wikiByTitle.set(key, group);
+  }
+  for (const [key, group] of wikiByTitle.entries()) {
+    if (key && group.length > 1) {
+      issues.push({
+        type: 'duplicate-topic',
+        title: group[0].title,
+        paths: group.map((note) => note.path),
+      });
+    }
+  }
+
+  const inbound = new Set();
+  for (const note of wikiNotes) {
+    for (const link of note.links) {
+      inbound.add(normalizeHeadingText(link));
+    }
+  }
+  for (const note of wikiNotes) {
+    const key = titleKeyForWiki(note);
+    if (wikiNotes.length > 1 && key && !inbound.has(key) && note.links.length === 0) {
+      issues.push({ type: 'orphan-wiki', path: note.path, title: note.title });
+    }
+  }
+
+  return {
+    success: true,
+    checked: rawNotes.length + wikiNotes.length,
+    issues,
+  };
+};
+
 module.exports = {
   MODES,
   DEFAULT_BASE_FOLDER,
@@ -808,14 +1005,23 @@ module.exports = {
   buildKnowledgeGraph,
   buildDocumentPath,
   buildFileName,
+  buildWikiIndexPath,
+  buildWikiPath,
+  buildWikiRawPath,
+  buildWikiSchemaPath,
   buildContextFromSearchResults,
   buildProjectIndex,
   buildProperties,
   buildTargetDirectory,
+  buildWikiUploadIndex,
   findPathByArgusId,
   formatDocument,
   formatFrontmatter,
+  formatWikiCompiledDocument,
+  formatWikiSchemaDocument,
+  formatWikiSourceDocument,
   extractNoteMetadata,
+  lintWikiFiles,
   normalizeMode,
   normalizePayload,
   parseFrontmatter,

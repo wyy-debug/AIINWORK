@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookOpen, Clipboard, FileText, MessageSquarePlus, RefreshCw, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Clipboard, FileText, MessageSquarePlus, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
 
 import type { Project } from '../../../types/app';
 import { apiFetch } from '../../../utils/api';
@@ -158,6 +158,8 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [obsidianMode, setObsidianMode] = useState<ObsidianBridgeMode>('auto');
+  const [wikiUploadStatus, setWikiUploadStatus] = useState('');
+  const wikiUploadInputRef = useRef<HTMLInputElement>(null);
 
   const filteredArtifacts = useMemo(() => (
     sourceFilter === 'all'
@@ -288,6 +290,36 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
     }
   };
 
+  const uploadFilesToWiki = async (files: FileList | null) => {
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) return;
+    setBusy('wiki-upload');
+    setError('');
+    setWikiUploadStatus('');
+    try {
+      const formData = new FormData();
+      selectedFiles.forEach((file) => formData.append('files', file));
+      formData.append('projectName', selectedProject.name);
+      if (sessionId) formData.append('sessionId', sessionId);
+      const data = await parseJson<{ imported?: Array<{ wikiStatus?: string; wikiPath?: string; rawPath?: string }> }>(
+        await apiFetch('/api/obsidian-bridge/wiki/upload', {
+          method: 'POST',
+          headers: {},
+          body: formData,
+        }),
+      );
+      const imported = Array.isArray(data.imported) ? data.imported : [];
+      const compiled = imported.filter((entry) => entry.wikiStatus === 'compiled').length;
+      setWikiUploadStatus(`自主落库完成：${imported.length} 个文件进入 Raw，${compiled} 个已编译 Wiki。`);
+      await load();
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '上传到知识库失败');
+    } finally {
+      setBusy('');
+      if (wikiUploadInputRef.current) wikiUploadInputRef.current.value = '';
+    }
+  };
+
   const obsidianStatus = activeArtifact?.metadata?.obsidianBridge as ObsidianBridgeStatus | undefined;
   const obsidianStatusView = useMemo(() => getObsidianStatus(activeArtifact), [activeArtifact]);
   const routingReason = typeof activeArtifact?.metadata?.routingReason === 'string'
@@ -310,9 +342,26 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
           <RefreshCw className={cn('h-4 w-4', busy === 'load' && 'animate-spin')} />
           Refresh
         </Button>
+        <input
+          ref={wikiUploadInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => void uploadFilesToWiki(event.target.files)}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => wikiUploadInputRef.current?.click()}
+          disabled={busy === 'wiki-upload'}
+        >
+          <UploadCloud className={cn('h-4 w-4', busy === 'wiki-upload' && 'animate-pulse')} />
+          上传到知识库
+        </Button>
       </div>
 
       {error && <div className="border-b border-border/70 px-5 py-2 text-sm text-destructive">{error}</div>}
+      {wikiUploadStatus && <div className="border-b border-border/70 px-5 py-2 text-sm text-emerald-700 dark:text-emerald-300">{wikiUploadStatus}</div>}
 
       <div className="flex gap-2 border-b border-border/70 px-5 py-2">
         {SOURCE_FILTERS.map((source) => (

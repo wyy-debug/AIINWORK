@@ -41,6 +41,11 @@ type ObsidianBridgeConfig = {
   dailyNoteFolder: string;
   dailyNoteHeading: string;
   mcpEnabled: boolean;
+  wikiCompilerEnabled: boolean;
+  wikiRawFolder: string;
+  wikiFolder: string;
+  wikiIndexFolder: string;
+  wikiMetaFolder: string;
   routingRules?: Record<string, unknown>;
 };
 
@@ -109,6 +114,11 @@ const DEFAULT_CONFIG: ObsidianBridgeConfig = {
   dailyNoteFolder: 'Daily',
   dailyNoteHeading: 'Argus',
   mcpEnabled: false,
+  wikiCompilerEnabled: true,
+  wikiRawFolder: 'Argus/Raw',
+  wikiFolder: 'Argus/Wiki',
+  wikiIndexFolder: 'Argus/_Indexes',
+  wikiMetaFolder: 'Argus/_Meta',
 };
 
 const MODES: Array<{ value: ObsidianBridgeMode; label: string; description: string }> = [
@@ -162,6 +172,8 @@ export default function ObsidianBridgeSettingsContent() {
   const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState<BackfillStatus | null>(null);
   const [isRunningBackfill, setIsRunningBackfill] = useState(false);
+  const [isTestingWikiCompiler, setIsTestingWikiCompiler] = useState(false);
+  const [wikiCompilerStatus, setWikiCompilerStatus] = useState('');
 
   const loadVaults = async ({ quiet = false } = {}) => {
     setIsLoadingVaults(true);
@@ -468,6 +480,46 @@ export default function ObsidianBridgeSettingsContent() {
       setMessage(error instanceof Error ? error.message : '运行自动补扫失败。');
     } finally {
       setIsRunningBackfill(false);
+    }
+  };
+
+  const compileWiki = async () => {
+    setIsTestingWikiCompiler(true);
+    try {
+      await save({ quiet: true });
+      const data = await parseJson<{ wikiPath?: string; artifactId?: string }>(
+        await apiFetch('/api/obsidian-bridge/wiki/compile', {
+          method: 'POST',
+          body: JSON.stringify({ artifactId: '' }),
+        }),
+      );
+      setWikiCompilerStatus(data.wikiPath ? `Wiki Compiler 已编译：${data.wikiPath}` : 'Wiki Compiler 已连接。');
+      setMessage('Wiki Compiler 测试完成。');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Wiki Compiler 编译测试失败。';
+      setWikiCompilerStatus(text);
+      setMessage(text);
+    } finally {
+      setIsTestingWikiCompiler(false);
+    }
+  };
+
+  const lintWikiCompiler = async () => {
+    setIsTestingWikiCompiler(true);
+    try {
+      await save({ quiet: true });
+      const data = await parseJson<{ issues?: unknown[]; checked?: number }>(
+        await apiFetch('/api/obsidian-bridge/wiki/lint', { method: 'POST' }),
+      );
+      const issues = Array.isArray(data.issues) ? data.issues.length : 0;
+      setWikiCompilerStatus(`Wiki Compiler lint：检查 ${data.checked || 0} 篇，发现 ${issues} 个问题。`);
+      setMessage('Wiki Compiler lint 完成。');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Wiki Compiler lint 失败。';
+      setWikiCompilerStatus(text);
+      setMessage(text);
+    } finally {
+      setIsTestingWikiCompiler(false);
     }
   };
 
@@ -866,6 +918,75 @@ export default function ObsidianBridgeSettingsContent() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="text-sm font-medium text-foreground">Wiki Compiler</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              将上传文件先写入 Raw，再自动编译到 Wiki，并维护 Schema、Index 和可追溯来源。
+            </p>
+          </div>
+          <SettingsToggle
+            checked={config.wikiCompilerEnabled}
+            onChange={(wikiCompilerEnabled) => setConfig((previous) => ({ ...previous, wikiCompilerEnabled }))}
+            ariaLabel="启用 Wiki Compiler"
+          />
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <label className="text-sm font-medium text-foreground">
+            Raw 目录
+            <input
+              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiRawFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiRawFolder: event.target.value }))}
+              placeholder="Argus/Raw"
+            />
+          </label>
+          <label className="text-sm font-medium text-foreground">
+            Wiki 目录
+            <input
+              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiFolder: event.target.value }))}
+              placeholder="Argus/Wiki"
+            />
+          </label>
+          <label className="text-sm font-medium text-foreground">
+            Index 目录
+            <input
+              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiIndexFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiIndexFolder: event.target.value }))}
+              placeholder="Argus/_Indexes"
+            />
+          </label>
+          <label className="text-sm font-medium text-foreground">
+            Schema 目录
+            <input
+              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiMetaFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiMetaFolder: event.target.value }))}
+              placeholder="Argus/_Meta"
+            />
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={compileWiki} disabled={isTestingWikiCompiler || isSaving}>
+            {isTestingWikiCompiler ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            测试 compile
+          </Button>
+          <Button type="button" variant="outline" onClick={lintWikiCompiler} disabled={isTestingWikiCompiler || isSaving}>
+            <Search className="h-4 w-4" />
+            测试 lint
+          </Button>
+        </div>
+        {wikiCompilerStatus && (
+          <div className="mt-3 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+            {wikiCompilerStatus}
+          </div>
+        )}
       </div>
 
       <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">

@@ -31,6 +31,11 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   dailyNoteFolder: 'Daily',
   dailyNoteHeading: 'Argus',
   mcpEnabled: false,
+  wikiCompilerEnabled: true,
+  wikiRawFolder: 'Argus/Raw',
+  wikiFolder: 'Argus/Wiki',
+  wikiIndexFolder: 'Argus/_Indexes',
+  wikiMetaFolder: 'Argus/_Meta',
   routingRules: {
     readingNotesMode: 'second-brain',
     projectKnowledgeMode: 'project-knowledge',
@@ -257,6 +262,11 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     dailyNoteFolder: normalizeVaultFolder(source.dailyNoteFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.dailyNoteFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.dailyNoteFolder,
     dailyNoteHeading: readString(source.dailyNoteHeading) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.dailyNoteHeading,
     mcpEnabled: source.mcpEnabled === true,
+    wikiCompilerEnabled: source.wikiCompilerEnabled !== false,
+    wikiRawFolder: normalizeVaultFolder(source.wikiRawFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiRawFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiRawFolder,
+    wikiFolder: normalizeVaultFolder(source.wikiFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiFolder,
+    wikiIndexFolder: normalizeVaultFolder(source.wikiIndexFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiIndexFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiIndexFolder,
+    wikiMetaFolder: normalizeVaultFolder(source.wikiMetaFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiMetaFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiMetaFolder,
     routingRules: normalizeRoutingRules(source.routingRules),
     vaults,
   };
@@ -506,6 +516,57 @@ export const sendObsidianDocument = async (payload, {
   return callBridge('/argus/v1/documents', {
     method: 'POST',
     body: JSON.stringify(document),
+  }, config, fetchImpl);
+};
+
+export const sendObsidianWikiIngest = async (payload, {
+  fetchImpl = globalThis.fetch,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId, payload });
+  return callBridge('/argus/v1/wiki/ingest', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, config, fetchImpl);
+};
+
+export const sendObsidianWikiCompile = async (payload, {
+  fetchImpl = globalThis.fetch,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId, payload });
+  return callBridge('/argus/v1/wiki/compile', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, config, fetchImpl);
+};
+
+export const lintObsidianWiki = async (payload = {}, {
+  fetchImpl = globalThis.fetch,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  return callBridge('/argus/v1/wiki/lint', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   }, config, fetchImpl);
 };
 

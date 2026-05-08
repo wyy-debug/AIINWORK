@@ -55,6 +55,10 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('/api/obsidian-bridge/duplicates/archive');
     expect(source).toContain('/api/obsidian-bridge/auto-capture/backfill');
     expect(source).toContain('/api/obsidian-bridge/auto-capture/status');
+    expect(source).toContain('/api/obsidian-bridge/wiki/compile');
+    expect(source).toContain('/api/obsidian-bridge/wiki/lint');
+    expect(source).toContain('wikiCompilerEnabled');
+    expect(source).toContain('Wiki Compiler');
     expect(source).toContain('测试自动路由');
     expect(source).toContain('重复笔记清理');
     expect(source).toContain('Obsidian 知识库');
@@ -87,5 +91,29 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('project-knowledge');
     expect(source).toContain('second-brain');
     expect(source).toContain('ai-memory');
+    expect(source).toContain('/api/obsidian-bridge/wiki/upload');
+    expect(source).toContain('上传到知识库');
+    expect(source).toContain('自主落库');
+  });
+
+  it('wires chat file attachments to the Obsidian wiki ingest toggle', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const hookSource = readFileSync(
+      resolve(currentDir, '..', '..', '..', 'chat', 'hooks', 'useChatComposerState.ts'),
+      'utf8',
+    );
+    const composerSource = readFileSync(
+      resolve(currentDir, '..', '..', '..', 'chat', 'view', 'subcomponents', 'ChatComposer.tsx'),
+      'utf8',
+    );
+    const interfaceSource = readFileSync(
+      resolve(currentDir, '..', '..', '..', 'chat', 'view', 'ChatInterface.tsx'),
+      'utf8',
+    );
+
+    expect(hookSource).toContain('ingestAttachmentsToObsidian');
+    expect(hookSource).toContain("formData.append('obsidianIngest'");
+    expect(composerSource).toContain('同时落库到 Obsidian');
+    expect(interfaceSource).toContain('ingestAttachmentsToObsidian');
   });
 });

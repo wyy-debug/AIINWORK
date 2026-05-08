@@ -1,3 +1,7 @@
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+
 import express from 'express';
 
 import { extractProjectDirectory, getProjects } from '../projects.js';
@@ -35,6 +39,12 @@ import {
   getObsidianAutoCaptureBackfillStatus,
   runObsidianAutoCaptureBackfill,
 } from '../services/obsidian-auto-capture-backfill-service.js';
+import {
+  compileWikiImport,
+  getWikiImportBatch,
+  ingestUploadedFilesToObsidian,
+  lintWiki,
+} from '../services/obsidian-wiki-service.js';
 
 const router = express.Router();
 
@@ -132,6 +142,130 @@ router.get('/auto-capture/status', async (_req, res) => {
     res.json(getObsidianAutoCaptureBackfillStatus());
   } catch (error) {
     sendBridgeError(res, error, 'Failed to read Obsidian auto-capture status');
+  }
+});
+
+const sanitizeUploadName = (value = 'uploaded-file') => (
+  path.basename(String(value || 'uploaded-file'))
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/^\.+$/, 'uploaded-file')
+    .trim() || 'uploaded-file'
+);
+
+const copyUploadFilesToProject = async ({ req, projectName, batchId }) => {
+  const projectRoot = await resolveProjectRoot(projectName);
+  if (!projectRoot) {
+    throw new ObsidianBridgeError('Project root is required for Obsidian wiki uploads.', {
+      code: 'OBSIDIAN_WIKI_PROJECT_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+  const targetDir = path.resolve(projectRoot, '.tmp', 'obsidian-imports', batchId);
+  const relative = path.relative(projectRoot, targetDir);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new ObsidianBridgeError('Unsafe Obsidian wiki import path.', {
+      code: 'OBSIDIAN_WIKI_BAD_UPLOAD_PATH',
+      statusCode: 403,
+    });
+  }
+  await fs.mkdir(targetDir, { recursive: true });
+  const files = [];
+  for (const file of req.files || []) {
+    const safeName = sanitizeUploadName(file.originalname);
+    const destination = path.resolve(targetDir, safeName);
+    const destinationRelative = path.relative(projectRoot, destination);
+    if (!destinationRelative || destinationRelative.startsWith('..') || path.isAbsolute(destinationRelative)) {
+      await fs.unlink(file.path).catch(() => undefined);
+      continue;
+    }
+    await fs.copyFile(file.path, destination);
+    await fs.unlink(file.path).catch(() => undefined);
+    files.push({
+      name: safeName,
+      path: destination,
+      size: file.size,
+      mimeType: file.mimetype || 'application/octet-stream',
+    });
+  }
+  return files;
+};
+
+const handleWikiUpload = async (req, res) => {
+  const multer = (await import('multer')).default;
+  const uploadTempRoot = path.join(os.tmpdir(), 'argus-obsidian-wiki-uploads', String(req.user?.id || 'user'));
+  await fs.mkdir(uploadTempRoot, { recursive: true });
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: (_request, _file, cb) => cb(null, uploadTempRoot),
+      filename: (_request, _file, cb) => cb(null, `wiki-upload-${Date.now()}-${Math.round(Math.random() * 1E9)}`),
+    }),
+    limits: {
+      fileSize: 50 * 1024 * 1024,
+      files: 20,
+    },
+  });
+
+  upload.array('files', 20)(req, res, async (error) => {
+    if (error) {
+      return res.status(400).json({ success: false, error: error.message || 'Failed to upload wiki files' });
+    }
+    try {
+      if (!Array.isArray(req.files) || req.files.length === 0) {
+        return res.status(400).json({ success: false, error: 'No files provided' });
+      }
+      const projectName = String(req.body?.projectName || req.params?.projectName || '').trim();
+      const batchId = String(req.body?.batchId || `upload-${Date.now()}-${Math.round(Math.random() * 1E9)}`).trim();
+      const files = await copyUploadFilesToProject({ req, projectName, batchId });
+      const result = await ingestUploadedFilesToObsidian({
+        files,
+        projectName,
+        sessionId: String(req.body?.sessionId || ''),
+        batchId,
+      });
+      return res.json({ success: true, ...result, files });
+    } catch (innerError) {
+      await Promise.all((req.files || []).map((file) => fs.unlink(file.path).catch(() => undefined)));
+      return sendBridgeError(res, innerError, 'Failed to ingest uploaded files into Obsidian wiki');
+    }
+  });
+};
+
+router.post('/wiki/upload', (req, res) => {
+  void handleWikiUpload(req, res);
+});
+
+router.post('/wiki/ingest', async (req, res) => {
+  try {
+    const result = await ingestUploadedFilesToObsidian(req.body || {});
+    res.json(result);
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to ingest Obsidian wiki source');
+  }
+});
+
+router.post('/wiki/compile', async (req, res) => {
+  try {
+    const result = await compileWikiImport(req.body || {});
+    res.json(result);
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to compile Obsidian wiki note');
+  }
+});
+
+router.post('/wiki/lint', async (req, res) => {
+  try {
+    const result = await lintWiki(req.body || {});
+    res.json(result);
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to lint Obsidian wiki');
+  }
+});
+
+router.get('/wiki/imports/:id', async (req, res) => {
+  try {
+    res.json(getWikiImportBatch(req.params.id));
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to read Obsidian wiki import batch');
   }
 });
 

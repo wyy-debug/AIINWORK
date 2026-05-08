@@ -470,3 +470,4 @@ export const exportArtifactToObsidian = (...args) => artifactService.exportArtif
 export const exportArtifactToObsidianModes = (...args) => artifactService.exportArtifactToObsidianModes(...args);
 export const getArtifact = (...args) => artifactService.getArtifact(...args);
 export const listArtifacts = (...args) => artifactService.listArtifacts(...args);
+export const updateArtifactMetadata = (...args) => artifactService.updateArtifactMetadata(...args);

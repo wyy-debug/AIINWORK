@@ -1164,6 +1164,8 @@ function ChatInterface({
     uploadingImages,
     imageErrors,
     fileAttachmentErrors,
+    ingestAttachmentsToObsidian,
+    setIngestAttachmentsToObsidian,
     handleAttachmentFiles,
     getRootProps,
     getInputProps,
@@ -1559,6 +1561,8 @@ function ChatInterface({
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
           fileAttachmentErrors={fileAttachmentErrors}
+          ingestAttachmentsToObsidian={ingestAttachmentsToObsidian}
+          onIngestAttachmentsToObsidianChange={setIngestAttachmentsToObsidian}
           showFileDropdown={showFileDropdown}
           filteredFiles={filteredFiles}
           fileMentionQuery={fileMentionQuery}

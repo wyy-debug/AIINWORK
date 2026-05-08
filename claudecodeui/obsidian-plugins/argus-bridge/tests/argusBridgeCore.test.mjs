@@ -29,6 +29,20 @@ describe('argus bridge Obsidian core', () => {
     }, fixedDate)).toBe('Argus/AIMemory/General/Preference index.md');
   });
 
+  it('builds safe Raw and Wiki paths for imported source files', () => {
+    expect(core.buildWikiRawPath({
+      title: '../../GPU: Notes?',
+      projectName: '../GPUScene\\Test',
+    }, fixedDate)).toBe('Argus/Raw/GPUScene Test/2026-05-07/GPU Notes.md');
+
+    expect(core.buildWikiPath({
+      title: 'Streaming Renderer',
+      projectName: 'GPUScene',
+    })).toBe('Argus/Wiki/GPUScene/Streaming Renderer.md');
+
+    expect(core.buildWikiSchemaPath()).toBe('Argus/_Meta/Schema.md');
+  });
+
   it('removes traversal and illegal characters from path segments', () => {
     const path = core.buildDocumentPath({
       title: '../../System: Plan?',
@@ -326,6 +340,76 @@ describe('argus bridge Obsidian core', () => {
     });
 
     expect(indexed.map((result) => result.sourceType)).toContain('excalidraw');
+  });
+
+  it('formats Raw and compiled Wiki notes with traceable properties', () => {
+    const raw = core.formatWikiSourceDocument({
+      title: 'Design',
+      content: '# Design\nRaw source.',
+      projectName: 'GPUScene',
+      source: 'file-upload',
+      importBatchId: 'batch-1',
+      contentHash: 'abc123',
+      sourcePath: 'C:/tmp/Design.md',
+      classificationMode: 'project-knowledge',
+      classificationReason: 'Matched project implementation.',
+      argusId: 'wiki-source:abc123',
+    }, fixedDate);
+
+    expect(raw).toContain('type: raw-source');
+    expect(raw).toContain('source: file-upload');
+    expect(raw).toContain('project: GPUScene');
+    expect(raw).toContain('importBatchId: batch-1');
+    expect(raw).toContain('contentHash: abc123');
+    expect(raw).toContain('wikiStatus: raw');
+    expect(raw).toContain('# Design\nRaw source.');
+
+    const compiled = core.formatWikiCompiledDocument({
+      title: 'Design',
+      content: '# Design\nCompiled page.',
+      projectName: 'GPUScene',
+      compiledFrom: ['artifact-1'],
+      rawPath: 'Argus/Raw/GPUScene/2026-05-07/Design.md',
+      sourceIds: ['artifact-1'],
+      related: ['[[GPUScene Index]]'],
+      argusId: 'wiki:GPUScene:Design',
+    }, fixedDate);
+
+    expect(compiled).toContain('type: wiki-note');
+    expect(compiled).toContain('compiledFrom:\n  - artifact-1');
+    expect(compiled).toContain('rawPath: Argus/Raw/GPUScene/2026-05-07/Design.md');
+    expect(compiled).toContain('wikiStatus: compiled');
+    expect(compiled).toContain('related:\n  - "[[GPUScene Index]]"');
+  });
+
+  it('lints wiki files for missing properties, uncompiled raw notes, duplicate topics, and broken links', () => {
+    const result = core.lintWikiFiles([
+      {
+        path: 'Argus/Raw/App/2026-05-07/Source.md',
+        content: '---\ntype: raw-source\ncontentHash: abc\nwikiStatus: raw\n---\n# Source',
+      },
+      {
+        path: 'Argus/Wiki/App/Topic.md',
+        content: '---\ntype: wiki-note\ncompiledFrom:\n  - artifact-1\nwikiStatus: compiled\n---\n# Topic\nSee [[Missing]].',
+      },
+      {
+        path: 'Argus/Wiki/App/Topic 2.md',
+        content: '---\ntype: wiki-note\ncompiledFrom:\n  - artifact-2\nwikiStatus: compiled\n---\n# Topic',
+      },
+      {
+        path: 'Argus/Wiki/App/NoProps.md',
+        content: '# NoProps',
+      },
+    ], {
+      baseFolder: 'Argus',
+    });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'uncompiled-raw', path: 'Argus/Raw/App/2026-05-07/Source.md' }),
+      expect.objectContaining({ type: 'broken-link', path: 'Argus/Wiki/App/Topic.md', target: 'Missing' }),
+      expect.objectContaining({ type: 'duplicate-topic', title: 'Topic' }),
+      expect.objectContaining({ type: 'missing-properties', path: 'Argus/Wiki/App/NoProps.md' }),
+    ]));
   });
 
   it('appends to a daily note heading while preserving user content', () => {

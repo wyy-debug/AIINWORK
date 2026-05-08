@@ -15,6 +15,7 @@ export default defineConfig({
       'server/services/tests/obsidian-context-service.test.mjs',
       'server/services/tests/obsidian-bridge-installer-service.test.mjs',
       'server/services/tests/obsidian-bridge-service.test.mjs',
+      'server/services/tests/obsidian-wiki-service.test.mjs',
       'server/services/tests/obsidian-bridge-ingress-service.test.mjs',
       'server/services/tests/obsidian-memory-service.test.mjs',
       'server/services/tests/session-goal-service.test.mjs',

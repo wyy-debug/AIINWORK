@@ -8,11 +8,20 @@ const {
   buildContextFromSearchResults,
   buildDocumentPath,
   buildProjectIndex,
+  buildWikiIndexPath,
+  buildWikiPath,
+  buildWikiRawPath,
+  buildWikiSchemaPath,
+  buildWikiUploadIndex,
   extractNoteMetadata,
   findPathByArgusId,
   formatDocument,
+  formatWikiCompiledDocument,
+  formatWikiSchemaDocument,
+  formatWikiSourceDocument,
   normalizePayload,
   patchMarkdownContent,
+  lintWikiFiles,
   planDuplicateArchives,
   queryReadableFiles,
   readProperty,
@@ -293,6 +302,7 @@ module.exports = class ArgusBridgePlugin extends Plugin {
             'graph',
             'duplicates',
             'ingress',
+            'wiki',
           ],
           dailyNote: {
             folder: this.settings.dailyNoteFolder,
@@ -343,6 +353,27 @@ module.exports = class ArgusBridgePlugin extends Plugin {
       if (req.method === 'POST' && url.pathname === '/argus/v1/graph') {
         const payload = await readRequestBody(req);
         const result = await this.getGraph(payload);
+        sendJson(res, 200, { success: true, ...result });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/argus/v1/wiki/ingest') {
+        const payload = await readRequestBody(req);
+        const result = await this.writeWikiRawSource(payload);
+        sendJson(res, 200, { success: true, ...result });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/argus/v1/wiki/compile') {
+        const payload = await readRequestBody(req);
+        const result = await this.compileWikiSource(payload);
+        sendJson(res, 200, { success: true, ...result });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/argus/v1/wiki/lint') {
+        const payload = await readRequestBody(req);
+        const result = await this.lintWiki(payload);
         sendJson(res, 200, { success: true, ...result });
         return;
       }
@@ -440,6 +471,151 @@ module.exports = class ArgusBridgePlugin extends Plugin {
       updated: false,
       vaultName: this.app.vault.getName(),
     };
+  }
+
+  async ensureWikiSchema() {
+    const schemaPath = buildWikiSchemaPath({ baseFolder: this.settings.baseFolder });
+    const existing = this.app.vault.getAbstractFileByPath(schemaPath);
+    if (existing) {
+      return schemaPath;
+    }
+    await this.ensureFolderForPath(schemaPath);
+    await this.app.vault.create(schemaPath, formatWikiSchemaDocument(this.settings.baseFolder));
+    return schemaPath;
+  }
+
+  async updateWikiImportIndex(entry = {}) {
+    const indexPath = buildWikiIndexPath({ baseFolder: this.settings.baseFolder });
+    await this.ensureFolderForPath(indexPath);
+    const existing = this.app.vault.getAbstractFileByPath(indexPath);
+    if (existing) {
+      await this.app.vault.process(existing, (previousContent) => buildWikiUploadIndex({
+        existingContent: previousContent,
+        entries: [entry],
+      }));
+    } else {
+      await this.app.vault.create(indexPath, buildWikiUploadIndex({ entries: [entry] }));
+    }
+    return indexPath;
+  }
+
+  async writeWikiRawSource(payload = {}) {
+    const now = new Date();
+    const title = String(payload.title || '').trim();
+    if (!title) {
+      throw new Error('Wiki source title is required.');
+    }
+    if (typeof payload.content !== 'string') {
+      throw new Error('Wiki source content is required.');
+    }
+    const existingFile = payload.argusId ? await this.findFileByArgusId(payload.argusId) : null;
+    const targetPath = assertSafeVaultPath(buildWikiRawPath(payload, now, {
+      baseFolder: this.settings.baseFolder,
+    }));
+    let notePath = existingFile?.path || targetPath;
+    let updated = Boolean(existingFile);
+    if (existingFile) {
+      await this.app.vault.process(existingFile, (previousContent) => {
+        const created = readProperty(previousContent, 'created') || now.toISOString();
+        return formatWikiSourceDocument({ ...payload, created }, now);
+      });
+    } else {
+      notePath = resolveUniquePath(targetPath, (candidate) => Boolean(this.app.vault.getAbstractFileByPath(candidate)));
+      await this.ensureFolderForPath(notePath);
+      await this.app.vault.create(notePath, formatWikiSourceDocument(payload, now));
+    }
+    await this.ensureWikiSchema();
+    await this.updateWikiImportIndex({
+      title,
+      rawPath: notePath,
+      wikiStatus: 'raw',
+    });
+    await this.afterWikiWrite(notePath, {
+      title,
+      mode: 'raw',
+      kind: 'raw-source',
+      routingReason: payload.classificationReason || '',
+    }, updated);
+    return {
+      path: notePath,
+      rawPath: notePath,
+      argusId: payload.argusId || '',
+      updated,
+      vaultName: this.app.vault.getName(),
+    };
+  }
+
+  async compileWikiSource(payload = {}) {
+    const now = new Date();
+    const title = String(payload.title || '').trim();
+    if (!title) {
+      throw new Error('Wiki compile title is required.');
+    }
+    if (typeof payload.content !== 'string') {
+      throw new Error('Wiki compile content is required.');
+    }
+    const existingFile = payload.argusId ? await this.findFileByArgusId(payload.argusId) : null;
+    const targetPath = assertSafeVaultPath(buildWikiPath(payload, now, {
+      baseFolder: this.settings.baseFolder,
+    }));
+    let wikiPath = existingFile?.path || targetPath;
+    const updated = Boolean(existingFile);
+    if (existingFile) {
+      await this.app.vault.process(existingFile, (previousContent) => {
+        const created = readProperty(previousContent, 'created') || now.toISOString();
+        return formatWikiCompiledDocument({ ...payload, created }, now);
+      });
+    } else {
+      wikiPath = resolveUniquePath(targetPath, (candidate) => Boolean(this.app.vault.getAbstractFileByPath(candidate)));
+      await this.ensureFolderForPath(wikiPath);
+      await this.app.vault.create(wikiPath, formatWikiCompiledDocument(payload, now));
+    }
+
+    if (payload.rawPath) {
+      const rawFile = this.app.vault.getAbstractFileByPath(assertSafeVaultPath(payload.rawPath));
+      if (rawFile) {
+        await this.app.vault.process(rawFile, (previousContent) => patchMarkdownContent(previousContent, {
+          operation: 'upsert-frontmatter',
+          properties: {
+            wikiPath,
+            wikiStatus: 'compiled',
+            updated: now.toISOString(),
+          },
+        }).content);
+      }
+    }
+
+    await this.ensureWikiSchema();
+    await this.updateWikiImportIndex({
+      title,
+      rawPath: payload.rawPath || '',
+      wikiPath,
+      wikiStatus: 'compiled',
+    });
+    await this.afterWikiWrite(wikiPath, {
+      title,
+      mode: 'wiki',
+      kind: 'wiki-note',
+      routingReason: payload.classificationReason || '',
+    }, updated);
+    return {
+      path: wikiPath,
+      wikiPath,
+      rawPath: payload.rawPath || '',
+      argusId: payload.argusId || '',
+      updated,
+      vaultName: this.app.vault.getName(),
+    };
+  }
+
+  async lintWiki(payload = {}) {
+    const folders = Array.isArray(payload.folders) && payload.folders.length > 0
+      ? payload.folders.map((folder) => this.normalizeVaultFolder(folder)).filter(Boolean)
+      : [`${this.settings.baseFolder}/Raw`, `${this.settings.baseFolder}/Wiki`];
+    const files = await this.readMarkdownPayloads(folders);
+    return lintWikiFiles(files, {
+      baseFolder: this.settings.baseFolder,
+    });
   }
 
   async ensureFolderForPath(notePath) {
@@ -816,6 +992,22 @@ module.exports = class ArgusBridgePlugin extends Plugin {
     if (document.mode === 'project-knowledge' && document.projectName) {
       await this.updateProjectIndex(document.projectName);
     }
+  }
+
+  async afterWikiWrite(notePath, document, updated) {
+    this.settings.recentWrites = [
+      {
+        path: notePath,
+        title: document.title,
+        mode: document.mode,
+        kind: document.kind || '',
+        routingReason: document.routingReason || '',
+        updated,
+        writtenAt: new Date().toISOString(),
+      },
+      ...this.settings.recentWrites,
+    ].slice(0, 20);
+    await this.saveSettings();
   }
 
   async updateProjectIndex(projectName) {

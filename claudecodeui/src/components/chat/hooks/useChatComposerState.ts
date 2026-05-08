@@ -215,6 +215,7 @@ export function useChatComposerState({
   const [uploadingImages, setUploadingImages] = useState<Map<string, number>>(new Map());
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
   const [fileAttachmentErrors, setFileAttachmentErrors] = useState<Map<string, string>>(new Map());
+  const [ingestAttachmentsToObsidian, setIngestAttachmentsToObsidian] = useState(true);
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
   const [subagentDispatchRequested, setSubagentDispatchRequested] = useState(false);
@@ -773,6 +774,11 @@ export function useChatComposerState({
         attachedFiles.forEach((file) => {
           formData.append('files', file);
         });
+        formData.append('obsidianIngest', ingestAttachmentsToObsidian ? 'true' : 'false');
+        const uploadSessionId = currentSessionId || selectedSession?.id || '';
+        if (uploadSessionId && !isTemporarySessionId(uploadSessionId)) {
+          formData.append('sessionId', uploadSessionId);
+        }
 
         try {
           const response = await apiFetch(`/api/projects/${selectedProject.name}/upload-files`, {
@@ -1015,6 +1021,7 @@ export function useChatComposerState({
       selectedSession,
       attachedImages,
       attachedFiles,
+      ingestAttachmentsToObsidian,
       claudeModel,
       codexModel,
       currentSessionId,
@@ -1358,6 +1365,8 @@ export function useChatComposerState({
     uploadingImages,
     imageErrors,
     fileAttachmentErrors,
+    ingestAttachmentsToObsidian,
+    setIngestAttachmentsToObsidian,
     handleAttachmentFiles,
     getRootProps,
     getInputProps,

@@ -213,6 +213,37 @@ Ctrl+K -> /results
 
 Results 面板会显示 `Routing reason`，例如因为命中 `reading notes / idea / person` 写入 SecondBrain，或因为命中 `stable fact / preference` 写入 AIMemory。
 
+## Wiki Compiler 和文件自主落库
+
+Argus 现在支持 Karpathy-style Wiki Compiler：上传文件后先保留 Raw source，再编译成 Wiki note，并按自动分类写入 Projects、SecondBrain 或 AIMemory。
+
+默认目录:
+
+```text
+Argus/Raw/<project-or-General>/<YYYY-MM-DD>/
+Argus/Wiki/<project-or-General>/
+Argus/_Indexes/
+Argus/_Meta/Schema.md
+```
+
+使用方式:
+
+1. 在 Settings -> Runtime -> Obsidian 知识库 开启 `Wiki Compiler`。
+2. 在 Results 面板点击 `上传到知识库`，选择 Markdown、TXT、HTML、CSV、JSON、PDF 或 Office 文件。
+3. Argus 会自动抽取文本、生成 `file-upload` artifact、写入 Raw、编译 Wiki，并按分类同步到 Obsidian。
+4. Chat 附件默认也会勾选 `同时落库到 Obsidian`；如果只是临时文件，可以发送前取消勾选。
+
+去重规则:
+
+- 同一文件内容会生成稳定 `contentHash`。
+- 重复上传不会再次创建 Obsidian `2/3/4/5` 副本。
+- PDF/Office 当前环境无法抽取正文时，会保存元数据并标记 `extract_failed`，原始材料不会丢。
+
+维护工具:
+
+- `测试 lint`: 检查 Raw 未编译、Wiki 断链、缺失 Properties、重复主题。
+- `测试 compile`: 用于验证后端到插件的编译接口是否可达。
+
 ## 重复笔记清理
 
 如果之前因为旧前端自动捕获或手动重复发送产生了 `总结 2/3/4/5`，不要直接删除。推荐在 Settings 里使用:
