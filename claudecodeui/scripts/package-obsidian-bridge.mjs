@@ -22,7 +22,7 @@ const releaseFiles = [
 const buildBundledMain = async () => {
   const main = await fs.readFile(path.join(pluginDir, 'main.js'), 'utf8');
   const core = await fs.readFile(path.join(pluginDir, 'core.cjs'), 'utf8');
-  const requirePattern = /const \{\n[\s\S]*?\n\} = require\('\.\/core\.js'\);/;
+  const requirePattern = /const\s+\{\r?\n[\s\S]*?\r?\n\}\s*=\s*require\('\.\/core\.js'\);/;
   const requireMatch = main.match(requirePattern);
   if (!requireMatch) {
     throw new Error('Could not find Argus Bridge core require in plugin main.js.');
