@@ -20,6 +20,8 @@ import { fileURLToPath } from 'url';
 import { MTL_CODE_MODEL } from '../shared/modelConstants.js';
 
 import {
+  ANTHROPIC_MODEL_ENV_KEYS,
+  OPENAI_MODEL_ENV_KEYS,
   applyAnthropicRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
   applySubagentRuntimeToEnv,
@@ -489,15 +491,20 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
   }
 
   const optionModel = canonicalizeAnthropicModel(options.model);
+  const configuredEnvModel = env.MTL_CODE_USE_OPENAI === '1'
+    ? env[OPENAI_MODEL_ENV_KEYS.model]
+      || env[OPENAI_MODEL_ENV_KEYS.defaultSonnetModel]
+      || env[OPENAI_MODEL_ENV_KEYS.defaultHaikuModel]
+      || env[OPENAI_MODEL_ENV_KEYS.defaultOpusModel]
+      || ''
+    : env[ANTHROPIC_MODEL_ENV_KEYS.model]
+      || env[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel]
+      || env[ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel]
+      || env[ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel]
+      || '';
   const resolvedSessionModel = optionModel && optionModel !== MTL_CODE_MODEL.value
     ? optionModel
-    : canonicalizeAnthropicModel(
-      env.ANTHROPIC_MODEL
-      || env.ANTHROPIC_DEFAULT_SONNET_MODEL
-      || env.ANTHROPIC_DEFAULT_HAIKU_MODEL
-      || env.ANTHROPIC_DEFAULT_OPUS_MODEL
-      || '',
-    );
+    : canonicalizeAnthropicModel(configuredEnvModel);
   if (resolvedSessionModel) {
     args.push('--model', resolvedSessionModel);
   }
@@ -507,6 +514,38 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 
 function getMtlCodeConfigDir() {
   return process.env.MTL_CODE_CONFIG_DIR || path.join(osHomedirFallback(), '.mtl-code');
+}
+
+const ANTHROPIC_RUNTIME_ENV_KEYS = [
+  ANTHROPIC_MODEL_ENV_KEYS.authToken,
+  ANTHROPIC_MODEL_ENV_KEYS.baseUrl,
+  ANTHROPIC_MODEL_ENV_KEYS.model,
+  ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel,
+  ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel,
+  ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel,
+];
+
+const OPENAI_RUNTIME_ENV_KEYS = [
+  OPENAI_MODEL_ENV_KEYS.apiKey,
+  OPENAI_MODEL_ENV_KEYS.baseUrl,
+  OPENAI_MODEL_ENV_KEYS.model,
+  OPENAI_MODEL_ENV_KEYS.defaultHaikuModel,
+  OPENAI_MODEL_ENV_KEYS.defaultSonnetModel,
+  OPENAI_MODEL_ENV_KEYS.defaultOpusModel,
+];
+
+function pruneInactiveProviderEnv(env) {
+  if (env.MTL_CODE_USE_OPENAI === '1') {
+    for (const key of ANTHROPIC_RUNTIME_ENV_KEYS) {
+      delete env[key];
+    }
+    return;
+  }
+  if (env.MTL_CODE_USE_OPENAI === '0') {
+    for (const key of OPENAI_RUNTIME_ENV_KEYS) {
+      delete env[key];
+    }
+  }
 }
 
 async function readMtlCodeSettingsEnv() {
@@ -530,7 +569,10 @@ async function readMtlCodeSettingsEnv() {
       Object.entries(settings.env)
         .filter(([, value]) => typeof value === 'string' && value.length > 0)
     );
-    repairAnthropicRuntimeModelEnv(env);
+    pruneInactiveProviderEnv(env);
+    if (env.MTL_CODE_USE_OPENAI !== '1') {
+      repairAnthropicRuntimeModelEnv(env);
+    }
     applyOpenMythosRuntimeToEnv(env, readOpenMythosRuntimeConfig(settings, env));
     applySubagentRuntimeToEnv(env, readSubagentRuntimeConfig(settings, env));
     return env;
@@ -558,8 +600,10 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     ...process.env,
     ...settingsEnv,
     ...(modelRuntime?.env || {}),
-    MTLCODE: '1'
+    MTLCODE: '1',
+    MTL_CODE_PROVIDER_MANAGED_BY_HOST: '1',
   };
+  pruneInactiveProviderEnv(spawnEnv);
   if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
     spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';
   }
@@ -567,10 +611,10 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     spawnEnv.MTL_CODE_COORDINATOR_MODE = '0';
   }
   for (const key of [
-    'ANTHROPIC_MODEL',
-    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-    'ANTHROPIC_DEFAULT_SONNET_MODEL',
-    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ANTHROPIC_MODEL_ENV_KEYS.model,
+    ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel,
+    ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel,
+    ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel,
     'MTL_CODE_SUBAGENT_MODEL',
     'CLAUDE_CODE_SUBAGENT_MODEL',
   ]) {
@@ -587,10 +631,12 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     spawnEnv.CONTEXT_WINDOW = configuredContextWindow;
   }
 
-  applyAnthropicRuntimeModelDefaults(spawnEnv, {
-    baseUrl: spawnEnv.ANTHROPIC_BASE_URL || '',
-    model: spawnEnv.ANTHROPIC_MODEL || spawnEnv.ANTHROPIC_DEFAULT_SONNET_MODEL || '',
-  });
+  if (spawnEnv.MTL_CODE_USE_OPENAI !== '1') {
+    applyAnthropicRuntimeModelDefaults(spawnEnv, {
+      baseUrl: spawnEnv[ANTHROPIC_MODEL_ENV_KEYS.baseUrl] || '',
+      model: spawnEnv[ANTHROPIC_MODEL_ENV_KEYS.model] || spawnEnv[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel] || '',
+    });
+  }
 
   return spawnEnv;
 }

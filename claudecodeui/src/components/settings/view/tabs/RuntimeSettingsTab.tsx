@@ -40,6 +40,30 @@ type RuntimeSettingsTabProps = {
   onOpenSmallModelSettings?: () => void;
 };
 
+type RuntimeSettingsSection = 'local-permissions' | 'obsidian' | 'openmythos';
+
+const RUNTIME_SETTINGS_TABS: Array<{
+  id: RuntimeSettingsSection;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'local-permissions',
+    label: '本地执行权限',
+    description: '终端、安全确认和可执行路径。',
+  },
+  {
+    id: 'obsidian',
+    label: 'Obsidian 知识库',
+    description: 'Bridge 连接、Wiki 上传和回读注入。',
+  },
+  {
+    id: 'openmythos',
+    label: 'OpenMythos 运行时',
+    description: '推理运行时和子智能体分发。',
+  },
+];
+
 export default function RuntimeSettingsTab({
   projects = [],
   selectedProject = null,
@@ -48,6 +72,8 @@ export default function RuntimeSettingsTab({
   const [permissions, setPermissions] = useState<RuntimePermissions>(DEFAULT_PERMISSIONS);
   const [allowedPathsText, setAllowedPathsText] = useState('');
   const [message, setMessage] = useState('');
+  const [selectedRuntimeTab, setSelectedRuntimeTab] =
+    useState<RuntimeSettingsSection>('local-permissions');
 
   useEffect(() => {
     let cancelled = false;
@@ -100,39 +126,17 @@ export default function RuntimeSettingsTab({
     }
   };
 
-  return (
-    <div className="max-w-none space-y-6">
+  const renderLocalPermissionsTab = () => (
+    <div className="space-y-4">
       <div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <ShieldCheck className="h-4 w-4" />
-          <span>运行时</span>
-        </div>
-        <h3 className="mt-1 text-xl font-semibold text-foreground">Argus 运行时</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          统一管理 OpenMythos 推理运行时、本地终端和执行权限。子智能体自动分发只在 OpenMythos 运行时中配置。
-        </p>
-      </div>
-
-      {message && (
-        <div className="rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
-          {message}
-        </div>
-      )}
-
-      <OpenMythosRuntimeContent />
-
-      <ObsidianBridgeSettingsContent
-        projects={projects}
-        selectedProject={selectedProject}
-        onOpenSmallModelSettings={onOpenSmallModelSettings}
-      />
-
-      <div className="border-t border-border/70 pt-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <ShieldCheck className="h-4 w-4" />
           <span>本地执行权限</span>
         </div>
         <h3 className="mt-1 text-lg font-semibold text-foreground">终端与安全策略</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          控制 Argus 可以使用的本地终端、路径范围和危险命令确认策略。
+        </p>
       </div>
 
       <div className="rounded-lg border border-border/70 bg-card p-4">
@@ -203,8 +207,69 @@ export default function RuntimeSettingsTab({
       </div>
 
       <div className="flex justify-end">
-        <Button onClick={save}>保存运行时设置</Button>
+        <Button onClick={save}>保存本地执行权限</Button>
       </div>
+    </div>
+  );
+
+  const renderObsidianTab = () => (
+    <ObsidianBridgeSettingsContent
+      projects={projects}
+      selectedProject={selectedProject}
+      onOpenSmallModelSettings={onOpenSmallModelSettings}
+    />
+  );
+
+  const renderOpenMythosTab = () => <OpenMythosRuntimeContent />;
+
+  return (
+    <div className="max-w-none space-y-6">
+      <div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <ShieldCheck className="h-4 w-4" />
+          <span>运行时</span>
+        </div>
+        <h3 className="mt-1 text-xl font-semibold text-foreground">Argus 运行时</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          分页管理本地执行权限、Obsidian 知识库和 OpenMythos 运行时。
+        </p>
+      </div>
+
+      {message && (
+        <div className="rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
+          {message}
+        </div>
+      )}
+
+      <div className="border-b border-border bg-background/95">
+        <div role="tablist" className="flex overflow-x-auto px-1">
+          {RUNTIME_SETTINGS_TABS.map((tab) => {
+            const isSelected = selectedRuntimeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isSelected}
+                className={[
+                  'whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors duration-150',
+                  isSelected
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                ].join(' ')}
+                onClick={() => setSelectedRuntimeTab(tab.id)}
+                title={tab.description}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {selectedRuntimeTab === 'local-permissions' && renderLocalPermissionsTab()}
+      {selectedRuntimeTab === 'obsidian' && renderObsidianTab()}
+      {selectedRuntimeTab === 'openmythos' && renderOpenMythosTab()}
     </div>
   );
 }

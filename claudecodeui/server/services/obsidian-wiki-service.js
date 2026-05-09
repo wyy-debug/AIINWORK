@@ -34,6 +34,46 @@ const WIKI_UPLOAD_TOKEN_BUDGET = {
   finalTimeoutMs: 30000,
   maxAttempts: 2,
 };
+const WIKI_TOPIC_SUGGEST_TIMEOUT_MS = 8000;
+const WIKI_TOPIC_SUGGEST_MAX_TOKENS = 500;
+const WIKI_TOPIC_SUGGEST_CONTENT_CHARS = 5000;
+const PDF_TEXT_EXTRACT_MAX_PAGES = 80;
+const PDF_TEXT_EXTRACT_MAX_CHARS = 250_000;
+const PDF_EXTRACTION_ENGINE = 'pdfjs-dist';
+
+const SUMMARY_TYPES = new Set([
+  'auto',
+  'technical-review',
+  'project-summary',
+  'reading-note',
+  'decision-adr',
+  'meeting-notes',
+  'general-wiki',
+]);
+
+const SUMMARY_TYPE_GUIDANCE = {
+  'technical-review': [
+    'Compile this as a technical review.',
+    'The final Wiki page must include: overall assessment, severe issues, architecture risks, performance/stability risks, priority recommendations, affected modules, and Sources.',
+  ].join(' '),
+  'project-summary': 'Compile this as a project summary with goals, current state, decisions, risks, next steps, and Sources.',
+  'reading-note': 'Compile this as a reading note with thesis, useful ideas, reusable patterns, questions, and Sources.',
+  'decision-adr': 'Compile this as an ADR-style note with context, decision, alternatives, consequences, status, and Sources.',
+  'meeting-notes': 'Compile this as meeting notes with attendees/topics when available, decisions, action items, open questions, and Sources.',
+  'general-wiki': 'Compile this as a durable Wiki note with summary, key facts, conclusions, implementation/details, open questions, and Sources.',
+  auto: 'Infer the most useful Wiki shape from the source, then compile a durable note with concrete details and Sources.',
+};
+
+const PLACEHOLDER_PATTERNS = [
+  /pending compiler refinement/i,
+  /to be refined/i,
+  /needs? further refinement/i,
+  /待后续/i,
+  /待补充/i,
+  /原文未明确给出/i,
+  /后续编译器/i,
+  /TODO\b/i,
+];
 
 const TEXT_EXTENSIONS = new Set([
   '.md',
@@ -56,6 +96,11 @@ const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 
 const normalizeWhitespace = (value) => readString(value).replace(/\s+/g, ' ');
 
+const normalizeSummaryType = (value = 'auto') => {
+  const clean = readString(value) || 'auto';
+  return SUMMARY_TYPES.has(clean) ? clean : 'auto';
+};
+
 const slug = (value = 'Untitled') => normalizeWhitespace(value)
   .replace(/[\\/]+/g, ' ')
   .replace(/\.\.+/g, ' ')
@@ -76,6 +121,167 @@ const topicKeyFromTitle = (value = 'Untitled') => slug(value)
   .slice(0, 100) || 'untitled';
 
 const projectKey = (value = '') => slug(value || 'General');
+
+const SECTION_TITLE_PATTERNS = [
+  /^\d{1,3}\s*[-.、)]\s*\S+/,
+  /^[一二三四五六七八九十百]+[、.）)]\s*\S+/,
+  /^第[一二三四五六七八九十百\d]+[章节部分][、.：:\s-]*\S*/,
+];
+
+const stripSectionTitlePrefix = (value = '') => normalizeWhitespace(value)
+  .replace(/^#{1,6}\s+/, '')
+  .replace(/^\d{1,3}\s*[-.、)]\s*/, '')
+  .replace(/^[一二三四五六七八九十百]+[、.）)]\s*/, '')
+  .replace(/^第[一二三四五六七八九十百\d]+[章节部分][、.：:\s-]*/, '')
+  .trim();
+
+const isSectionLikeWikiTitle = (value = '') => {
+  const clean = normalizeWhitespace(value).replace(/^#{1,6}\s+/, '');
+  return SECTION_TITLE_PATTERNS.some((pattern) => pattern.test(clean));
+};
+
+const sameTitleKey = (left = '', right = '') => topicKeyFromTitle(left) === topicKeyFromTitle(right);
+
+const hasExplicitWikiTopicTitle = ({ sourceMetadata = {}, artifact = null } = {}) => [
+  sourceMetadata.wikiTitle,
+  sourceMetadata.topicTitle,
+  sourceMetadata.documentTitle,
+  sourceMetadata.sourceTitle,
+  sourceMetadata.artifactTitle,
+  artifact?.metadata?.wikiTitle,
+  artifact?.metadata?.topicTitle,
+  artifact?.metadata?.documentTitle,
+  artifact?.metadata?.sourceTitle,
+  artifact?.metadata?.artifactTitle,
+  artifact?.title,
+].some((candidate) => {
+  const clean = readString(candidate);
+  return clean && !isSectionLikeWikiTitle(clean);
+});
+
+const withProjectTitlePrefix = ({ projectName = '', title = '' } = {}) => {
+  const cleanProject = projectKey(projectName);
+  const cleanTitle = slug(title);
+  if (!cleanTitle || cleanProject === 'General') return cleanTitle;
+  if (sameTitleKey(cleanProject, cleanTitle)) return cleanTitle;
+  if (cleanTitle.toLowerCase().startsWith(`${cleanProject.toLowerCase()} `)) return cleanTitle;
+  return `${cleanProject} ${cleanTitle}`;
+};
+
+const inferProjectTopicName = ({ projectName = '', content = '' } = {}) => {
+  const cleanProject = projectKey(projectName);
+  const text = String(content || '');
+  const afterProjectPattern = cleanProject && cleanProject !== 'General'
+    ? new RegExp(`${cleanProject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(?:的|项目|project)?\\s*([A-Z][A-Za-z0-9_.-]{2,80})`)
+    : null;
+  const afterProjectMatch = afterProjectPattern ? text.match(afterProjectPattern) : null;
+  if (afterProjectMatch?.[1] && !sameTitleKey(afterProjectMatch[1], cleanProject)) {
+    return slug(afterProjectMatch[1]);
+  }
+  const candidates = text.match(/\b[A-Z][A-Za-z0-9_]*(?:Graphics|Scene|Renderer|RenderPipeline|Pipeline|Streaming|System|Service|Manager|Module|Graph|Resource|Engine)\b/g) || [];
+  for (const candidate of candidates) {
+    if (!sameTitleKey(candidate, cleanProject)) return slug(candidate);
+  }
+  return '';
+};
+
+const resolveWikiTopicIdentity = ({
+  title = '',
+  projectName = '',
+  content = '',
+  sourceMetadata = {},
+  artifact = null,
+} = {}) => {
+  const cleanTitle = readString(title) || readString(artifact?.title) || 'Untitled';
+  if (!isSectionLikeWikiTitle(cleanTitle)) {
+    return {
+      wikiTitle: cleanTitle,
+      sourceHeading: '',
+      topicKey: topicKeyFromTitle(cleanTitle),
+    };
+  }
+
+  const sourceTitleCandidates = [
+    sourceMetadata.wikiTitle,
+    sourceMetadata.topicTitle,
+    sourceMetadata.documentTitle,
+    sourceMetadata.sourceTitle,
+    sourceMetadata.artifactTitle,
+    artifact?.metadata?.wikiTitle,
+    artifact?.metadata?.topicTitle,
+    artifact?.metadata?.documentTitle,
+    artifact?.metadata?.sourceTitle,
+    artifact?.metadata?.artifactTitle,
+    artifact?.title,
+  ].map(readString).filter(Boolean);
+  const explicitTopicTitle = sourceTitleCandidates.find((candidate) => !isSectionLikeWikiTitle(candidate));
+  const sourceHeading = cleanTitle;
+  const cleanProject = projectKey(projectName);
+  const sectionTitle = stripSectionTitlePrefix(cleanTitle) || cleanTitle;
+  const inferredTopic = inferProjectTopicName({ projectName: cleanProject, content });
+  const wikiTitle = explicitTopicTitle
+    || [cleanProject && cleanProject !== 'General' ? cleanProject : '', inferredTopic, sectionTitle]
+      .filter(Boolean)
+      .join(' ')
+    || sectionTitle;
+
+  return {
+    wikiTitle: slug(wikiTitle),
+    sourceHeading,
+    topicKey: topicKeyFromTitle(wikiTitle),
+  };
+};
+
+const isWeakWikiTopicTitle = (value = '') => {
+  const clean = topicKeyFromTitle(value);
+  return !clean
+    || isSectionLikeWikiTitle(value)
+    || ['untitled', 'summary', 'chat-summary', 'review', 'notes', 'analysis', 'report'].includes(clean);
+};
+
+const isProjectTechnicalWikiSource = ({
+  projectName = '',
+  title = '',
+  content = '',
+} = {}) => {
+  const cleanProject = projectKey(projectName);
+  if (!cleanProject || cleanProject === 'General') return false;
+  const text = `${title}\n${content}`.toLowerCase();
+  const projectSignals = [
+    cleanProject.toLowerCase(),
+    'project',
+    'package',
+    'module',
+    'architecture',
+    'pipeline',
+    'renderer',
+    'shader',
+    'unity',
+    'srp',
+    'urp',
+    'hdrp',
+    'review',
+    'risk',
+    'performance',
+    'stability',
+    'code',
+    '项目',
+    '模块',
+    '架构',
+    '管线',
+    '渲染',
+    '代码',
+    '评审',
+    '风险',
+    '性能',
+    '稳定性',
+  ];
+  let hits = 0;
+  for (const signal of projectSignals) {
+    if (signal && text.includes(signal)) hits += 1;
+  }
+  return hits >= 2;
+};
 
 const hashText = (value) => crypto
   .createHash('sha256')
@@ -129,6 +335,150 @@ const csvToMarkdown = (csv = '') => {
   ].join('\n');
 };
 
+const normalizePdfPageText = (items = []) => normalizeWhitespace(
+  items
+    .map((item) => readString(item?.str))
+    .filter(Boolean)
+    .join(' '),
+);
+
+const pdfExtractionFailureReason = (error) => {
+  const name = readString(error?.name);
+  const message = readString(error?.message).toLowerCase();
+  if (/password|encrypted/.test(`${name} ${message}`)) return 'pdf_encrypted';
+  if (/invalid|missing|unexpected|xref|trailer|parse/.test(`${name} ${message}`)) return 'pdf_parse_failed';
+  if (/import|module|cannot find/.test(`${name} ${message}`)) return 'pdf_engine_unavailable';
+  return 'pdf_extract_failed';
+};
+
+const buildPdfExtractFailedContent = ({
+  title = '',
+  filePath = '',
+  mimeType = '',
+  size = 0,
+  reason = '',
+} = {}) => [
+  `# ${title}`,
+  '',
+  'Argus saved the original PDF metadata, but could not extract usable text from this PDF.',
+  '',
+  `- Original file: ${filePath}`,
+  `- MIME: ${mimeType || 'application/pdf'}`,
+  `- Size: ${Number(size) || 0}`,
+  `- Failure reason: ${reason || 'pdf_extract_failed'}`,
+].join('\n');
+
+export const extractPdfTextContent = async (filePath, {
+  title = '',
+  mimeType = 'application/pdf',
+  size = 0,
+  maxPages = PDF_TEXT_EXTRACT_MAX_PAGES,
+  maxChars = PDF_TEXT_EXTRACT_MAX_CHARS,
+} = {}) => {
+  const cleanTitle = readString(title) || titleFromName(filePath);
+  try {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const buffer = await fs.readFile(filePath);
+    const loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      disableFontFace: true,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    });
+    const document = await loadingTask.promise;
+    const pageCount = Number(document.numPages) || 0;
+    const safeMaxPages = Math.max(1, Number(maxPages) || PDF_TEXT_EXTRACT_MAX_PAGES);
+    const safeMaxChars = Math.max(1_000, Number(maxChars) || PDF_TEXT_EXTRACT_MAX_CHARS);
+    const pageLimit = Math.min(pageCount, safeMaxPages);
+    const pages = [];
+    let extractedChars = 0;
+    let truncated = pageCount > pageLimit;
+
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
+      if (extractedChars >= safeMaxChars) {
+        truncated = true;
+        break;
+      }
+      const page = await document.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = normalizePdfPageText(textContent.items);
+      if (!pageText) continue;
+      const remainingChars = safeMaxChars - extractedChars;
+      const clippedText = pageText.length > remainingChars ? pageText.slice(0, remainingChars).trim() : pageText;
+      if (pageText.length > remainingChars) truncated = true;
+      pages.push({ pageNumber, text: clippedText });
+      extractedChars += clippedText.length;
+    }
+
+    await loadingTask.destroy().catch(() => undefined);
+
+    if (pages.length === 0 || extractedChars === 0) {
+      return {
+        title: cleanTitle,
+        content: buildPdfExtractFailedContent({
+          title: cleanTitle,
+          filePath,
+          mimeType,
+          size: size || buffer.length,
+          reason: 'pdf_no_text_layer',
+        }),
+        extractionStatus: 'extract_failed',
+        extractionEngine: PDF_EXTRACTION_ENGINE,
+        extractionFailureReason: 'pdf_no_text_layer',
+        extension: '.pdf',
+        pdfPageCount: pageCount,
+        pdfExtractedPages: 0,
+        pdfExtractedChars: 0,
+        pdfTruncated: false,
+      };
+    }
+
+    return {
+      title: cleanTitle,
+      content: [
+        `# ${cleanTitle}`,
+        '',
+        '> PDF extracted by Argus',
+        '',
+        ...pages.flatMap((page) => [
+          `## Page ${page.pageNumber}`,
+          '',
+          page.text,
+          '',
+        ]),
+      ].join('\n').trim(),
+      extractionStatus: 'extracted',
+      extractionEngine: PDF_EXTRACTION_ENGINE,
+      extractionFailureReason: '',
+      extension: '.pdf',
+      pdfPageCount: pageCount,
+      pdfExtractedPages: pages.length,
+      pdfExtractedChars: extractedChars,
+      pdfTruncated: truncated,
+    };
+  } catch (error) {
+    const reason = pdfExtractionFailureReason(error);
+    return {
+      title: cleanTitle,
+      content: buildPdfExtractFailedContent({
+        title: cleanTitle,
+        filePath,
+        mimeType,
+        size,
+        reason,
+      }),
+      extractionStatus: 'extract_failed',
+      extractionEngine: PDF_EXTRACTION_ENGINE,
+      extractionFailureReason: reason,
+      extension: '.pdf',
+      pdfPageCount: 0,
+      pdfExtractedPages: 0,
+      pdfExtractedChars: 0,
+      pdfTruncated: false,
+    };
+  }
+};
+
 export const extractWikiFileContent = async (file = {}) => {
   const filePath = readString(file.path || file.filePath);
   if (!filePath) {
@@ -138,6 +488,14 @@ export const extractWikiFileContent = async (file = {}) => {
   const extension = path.extname(name || filePath).toLowerCase();
   const buffer = await fs.readFile(filePath);
   const title = titleFromName(name);
+
+  if (extension === '.pdf' || /^application\/pdf$/i.test(readString(file.mimeType))) {
+    return extractPdfTextContent(filePath, {
+      title,
+      mimeType: readString(file.mimeType) || 'application/pdf',
+      size: Number(file.size) || buffer.length,
+    });
+  }
 
   if (TEXT_EXTENSIONS.has(extension) || /^text\//i.test(readString(file.mimeType))) {
     const raw = decodeUtf8(buffer);
@@ -204,6 +562,7 @@ const positiveModesFromAssessment = (assessment = {}) => (
 const classifyWikiSource = ({
   title = '',
   content = '',
+  projectName = '',
   defaultMode = 'project-knowledge',
   routingRules = {},
   extractionStatus = 'extracted',
@@ -227,14 +586,24 @@ const classifyWikiSource = ({
   const modes = assessment.shouldCapture
     ? assessment.routingModes || [assessment.routingMode || assessment.mode].filter(Boolean)
     : positiveModesFromAssessment(assessment);
+  const projectTechnical = isProjectTechnicalWikiSource({ projectName, title, content });
+  const resolvedModes = projectTechnical
+    ? ['project-knowledge', ...modes.filter((mode) => mode !== 'project-knowledge')]
+    : modes;
+  const routingScores = {
+    ...(assessment.routingScores || {}),
+    ...(projectTechnical ? { 'project-knowledge': Math.max(Number(assessment.routingScores?.['project-knowledge']) || 0, 1) } : {}),
+  };
+  const routingSignals = assessment.routingSignals || [];
   return {
-    classificationMode: modes[0] || 'raw',
-    classificationModes: [...new Set(modes)],
+    classificationMode: resolvedModes[0] || 'raw',
+    classificationModes: [...new Set(resolvedModes)],
     classificationReason: assessment.routingReason || '已保存为 Raw，等待后续编译。',
-    routingScores: assessment.routingScores || {},
-    routingSignals: assessment.routingSignals || [],
+    routingScores,
+    routingSignals: projectTechnical ? [...new Set([...routingSignals, 'project technical source'])] : routingSignals,
     routingConfidence: assessment.routingConfidence || assessment.confidence || 0,
     memoryCapturePolicy: assessment.memoryCapturePolicy || 'not-memory',
+    projectTechnical,
   };
 };
 
@@ -437,6 +806,54 @@ const completeJsonWithRetries = async ({
   return lastResult || { success: false, reason: 'failed' };
 };
 
+const suggestWikiTopicWithSmallModel = async ({
+  title = '',
+  projectName = '',
+  content = '',
+  sourceMetadata = {},
+  artifact = null,
+  completeJson = null,
+} = {}) => {
+  if (typeof completeJson !== 'function') return null;
+  if (readString(sourceMetadata.topicKey)) return null;
+  if (hasExplicitWikiTopicTitle({ sourceMetadata, artifact })) return null;
+  if (!isWeakWikiTopicTitle(title)) return null;
+
+  const result = await completeJsonWithRetries({
+    completeJson,
+    maxAttempts: 1,
+    request: {
+      purpose: 'wiki-topic-suggest',
+      maxTokens: WIKI_TOPIC_SUGGEST_MAX_TOKENS,
+      timeoutMs: WIKI_TOPIC_SUGGEST_TIMEOUT_MS,
+      systemPrompt: [
+        'You suggest stable topic titles for Argus Obsidian Wiki pages.',
+        'Return strict JSON only: {"topicTitle":"","reason":""}.',
+        'The topicTitle must be a durable note title, not a numbered section heading.',
+        'Prefer project/component/topic names. Do not include markdown formatting.',
+      ].join('\n'),
+      userPrompt: JSON.stringify({
+        currentTitle: title,
+        projectName,
+        source: sourceMetadata.source || artifact?.metadata?.source || '',
+        sourceHeading: isSectionLikeWikiTitle(title) ? title : '',
+        contentExcerpt: String(content || '').slice(0, WIKI_TOPIC_SUGGEST_CONTENT_CHARS),
+      }),
+    },
+  });
+
+  if (!result?.success || !result.json) return null;
+  const suggestedTitle = readString(result.json.topicTitle || result.json.title || result.json.wikiTitle);
+  if (!suggestedTitle || isWeakWikiTopicTitle(suggestedTitle) || sameTitleKey(suggestedTitle, title)) {
+    return null;
+  }
+  return {
+    topicTitle: withProjectTitlePrefix({ projectName, title: suggestedTitle }),
+    reason: readString(result.json.reason),
+    model: readString(result.model || result.profileModel),
+  };
+};
+
 const ensureSourcesSection = (markdown = '', { rawPath = '', sourceIds = [] } = {}) => {
   const content = String(markdown || '').trim();
   const sourceLines = [
@@ -447,6 +864,79 @@ const ensureSourcesSection = (markdown = '', { rawPath = '', sourceIds = [] } = 
     return content;
   }
   return [content, '', '## Sources', '', ...sourceLines].join('\n').trim();
+};
+
+const containsPlaceholderText = (markdown = '') => PLACEHOLDER_PATTERNS
+  .some((pattern) => pattern.test(String(markdown || '')));
+
+const assessCompiledWikiQuality = (markdown = '', { summaryType = 'auto' } = {}) => {
+  const content = String(markdown || '').trim();
+  const warnings = [];
+  if (!content) {
+    warnings.push('empty_content');
+  }
+  if (containsPlaceholderText(content)) {
+    warnings.push('placeholder_content');
+  }
+  if (!/^##\s+Sources\b/im.test(content)) {
+    warnings.push('missing_sources');
+  }
+  if (normalizeWhitespace(content).length < 80) {
+    warnings.push('too_short');
+  }
+  if (normalizeSummaryType(summaryType) === 'technical-review') {
+    const requiredPatterns = [
+      /overall|整体|评价|assessment/i,
+      /severe|critical|严重|问题/i,
+      /risk|风险/i,
+      /priority|优先级|recommendation|建议/i,
+      /module|模块|file|路径/i,
+    ];
+    const missingTechnicalSections = requiredPatterns
+      .filter((pattern) => !pattern.test(content))
+      .length;
+    if (missingTechnicalSections >= 3) {
+      warnings.push('weak_technical_review_structure');
+    }
+  }
+  return {
+    passed: warnings.length === 0,
+    warnings: [...new Set(warnings)],
+  };
+};
+
+const withQualityMetadata = (compiled = {}, patch = {}) => ({
+  ...compiled,
+  qualityStatus: patch.qualityStatus || compiled.qualityStatus || 'passed',
+  repairAttempts: Number.isFinite(Number(patch.repairAttempts))
+    ? Number(patch.repairAttempts)
+    : Number(compiled.repairAttempts) || 0,
+  warnings: Array.isArray(patch.warnings)
+    ? [...new Set(patch.warnings.map(readString).filter(Boolean))]
+    : Array.isArray(compiled.warnings)
+      ? [...new Set(compiled.warnings.map(readString).filter(Boolean))]
+      : [],
+});
+
+const buildNeedsReviewContent = ({
+  title = 'Untitled',
+  content = '',
+  summaries = [],
+  rawPath = '',
+  sourceIds = [],
+} = {}) => {
+  const partialContent = summaries.length > 0
+    ? buildPartialCompiledContentFromSummaries({ title, summaries, rawPath, sourceIds })
+    : buildDeterministicCompiledContent({ title, content, rawPath, sourceIds });
+  const sourceExcerpt = buildDeterministicSummary(content);
+  const baseContent = ensureSourcesSection(
+    String(partialContent || '')
+      .replace(/^>\s*Argus Wiki Compiler.*$/gmi, '> Argus Wiki Compiler could not complete a high-quality model pass. This page is readable but marked for review.')
+      .replace(PLACEHOLDER_PATTERNS[0], 'Needs human review')
+      .replace(/待后续编译器继续提炼。?/g, 'Needs human review.'),
+    { rawPath, sourceIds },
+  );
+  return sourceExcerpt ? `${baseContent}\n\n## Source excerpt\n\n${sourceExcerpt}` : baseContent;
 };
 
 const markdownFromCompiledJson = ({
@@ -525,8 +1015,11 @@ export const compileWikiContentWithSmallModel = async ({
   rawPath = '',
   sourceIds = [],
   projectName = '',
+  summaryType = 'auto',
   completeJson = defaultCompleteSmallModelJson,
 } = {}) => {
+  const normalizedSummaryType = normalizeSummaryType(summaryType);
+  const summaryGuidance = SUMMARY_TYPE_GUIDANCE[normalizedSummaryType] || SUMMARY_TYPE_GUIDANCE.auto;
   const chunks = chunkWikiSourceContent(content);
   const deterministic = (reason = '') => ({
     content: buildDeterministicCompiledContent({ title, content, rawPath, sourceIds }),
@@ -536,6 +1029,10 @@ export const compileWikiContentWithSmallModel = async ({
     tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
     model: '',
     fallbackReason: reason,
+    summaryType: normalizedSummaryType,
+    qualityStatus: reason === 'empty_content' ? 'needs-review' : 'partial',
+    repairAttempts: 0,
+    warnings: reason ? [reason] : [],
   });
   const summaries = [];
   let model = '';
@@ -552,6 +1049,10 @@ export const compileWikiContentWithSmallModel = async ({
     tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
     model,
     fallbackReason: reason,
+    summaryType: normalizedSummaryType,
+    qualityStatus: 'partial',
+    repairAttempts: 0,
+    warnings: reason ? [reason] : [],
   });
 
   if (chunks.length === 0 || typeof completeJson !== 'function') {
@@ -568,12 +1069,14 @@ export const compileWikiContentWithSmallModel = async ({
         systemPrompt: [
           'You are the Argus Wiki upload compiler.',
           'Your main job is to produce a useful Obsidian summary, not to classify the text.',
+          summaryGuidance,
           'Summarize one source chunk into strict JSON only. Extract concrete facts, decisions, implementation details, risks, and open questions.',
           'Return: {"summary":"","keyFacts":[],"decisions":[],"implementationDetails":[],"openQuestions":[],"tags":[],"relatedTopics":[]}.',
         ].join('\n'),
         userPrompt: JSON.stringify({
           title,
           projectName,
+          summaryType: normalizedSummaryType,
           chunkIndex: chunk.index,
           chunkTotal: chunk.total,
           truncated: chunk.truncated,
@@ -600,13 +1103,15 @@ export const compileWikiContentWithSmallModel = async ({
       systemPrompt: [
         'You are the Argus Wiki compiler.',
         'Merge chunk summaries into a polished, useful Markdown summary for an Obsidian Wiki page.',
-        'Do not leave placeholder text. If a section has no explicit items, say that briefly.',
+        summaryGuidance,
+        'Do not leave placeholder text. If a section has no explicit items, omit it or explain the limitation with concrete source context.',
         'Return strict JSON only. Prefer {"markdown":"..."}; otherwise return structured fields.',
         'The Markdown must include: 摘要, 关键事实, 决策/结论, 实现细节, 未解决问题, Sources.',
       ].join('\n'),
       userPrompt: JSON.stringify({
         title,
         projectName,
+        summaryType: normalizedSummaryType,
         rawPath,
         sourceIds,
         chunks: summaries,
@@ -632,15 +1137,103 @@ export const compileWikiContentWithSmallModel = async ({
     return deterministic('final_compile_empty_markdown');
   }
 
-  return {
-    content: ensureSourcesSection(markdown, { rawPath, sourceIds }),
+  const initialContent = ensureSourcesSection(markdown, { rawPath, sourceIds });
+  const initialQuality = assessCompiledWikiQuality(initialContent, {
+    summaryType: normalizedSummaryType,
+  });
+  if (initialQuality.passed) {
+    return withQualityMetadata({
+      content: initialContent,
+      compiler: 'small-model',
+      compileStrategy: WIKI_UPLOAD_COMPILE_STRATEGY,
+      chunks: chunks.length,
+      tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
+      model,
+      fallbackReason: '',
+      summaryType: normalizedSummaryType,
+    }, {
+      qualityStatus: 'passed',
+      repairAttempts: 0,
+      warnings: [],
+    });
+  }
+
+  const repairResult = await completeJsonWithRetries({
+    completeJson,
+    request: {
+      purpose: 'wiki-upload-quality-repair',
+      maxTokens: WIKI_UPLOAD_TOKEN_BUDGET.finalMaxTokens,
+      timeoutMs: WIKI_UPLOAD_TOKEN_BUDGET.finalTimeoutMs,
+      systemPrompt: [
+        'You repair an Argus Wiki page that failed quality checks.',
+        summaryGuidance,
+        'Remove placeholders, keep only claims supported by the chunk summaries/source excerpts, and keep Sources.',
+        'Return strict JSON only as {"markdown":"..."}.',
+      ].join('\n'),
+      userPrompt: JSON.stringify({
+        title,
+        projectName,
+        summaryType: normalizedSummaryType,
+        rawPath,
+        sourceIds,
+        qualityWarnings: initialQuality.warnings,
+        currentMarkdown: initialContent,
+        chunks: summaries,
+      }),
+    },
+  });
+
+  if (repairResult?.success && repairResult.json) {
+    model = readString(repairResult.model || repairResult.profileModel) || model;
+    const repairedMarkdown = readString(repairResult.json.markdown)
+      || markdownFromCompiledJson({
+        title,
+        json: repairResult.json,
+        rawPath,
+        sourceIds,
+      });
+    const repairedContent = ensureSourcesSection(repairedMarkdown, { rawPath, sourceIds });
+    const repairedQuality = assessCompiledWikiQuality(repairedContent, {
+      summaryType: normalizedSummaryType,
+    });
+    if (repairedQuality.passed) {
+      return withQualityMetadata({
+        content: repairedContent,
+        compiler: 'small-model',
+        compileStrategy: WIKI_UPLOAD_COMPILE_STRATEGY,
+        chunks: chunks.length,
+        tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
+        model,
+        fallbackReason: '',
+        summaryType: normalizedSummaryType,
+      }, {
+        qualityStatus: 'repaired',
+        repairAttempts: 1,
+        warnings: initialQuality.warnings,
+      });
+    }
+  }
+
+  return withQualityMetadata({
+    content: buildNeedsReviewContent({
+      title,
+      content,
+      summaries,
+      rawPath,
+      sourceIds,
+    }),
     compiler: 'small-model',
     compileStrategy: WIKI_UPLOAD_COMPILE_STRATEGY,
     chunks: chunks.length,
     tokenBudget: WIKI_UPLOAD_TOKEN_BUDGET,
     model,
-    fallbackReason: '',
-  };
+    fallbackReason: 'quality_gate_failed',
+    summaryType: normalizedSummaryType,
+  }, {
+    qualityStatus: 'needs-review',
+    repairAttempts: 1,
+    warnings: initialQuality.warnings,
+  });
 };
 
 const normalizeModes = (value, fallback = 'project-knowledge') => {
@@ -746,6 +1339,7 @@ export const createObsidianWikiService = ({
     metadata = {},
     modes = [],
     topicKey = '',
+    summaryType = '',
     forceRecompile = false,
     projectRoot = '',
   } = {}) => {
@@ -756,6 +1350,7 @@ export const createObsidianWikiService = ({
     const cleanSessionId = readString(sessionId) || readString(artifact?.sessionId);
     const cleanSource = readString(source) || readString(sourceMetadata.source) || 'artifact';
     const cleanSourceId = readString(sourceId) || readString(sourceMetadata.sourceId) || readString(artifact?.id);
+    const cleanSummaryType = normalizeSummaryType(summaryType || sourceMetadata.summaryType || artifact?.metadata?.summaryType || 'auto');
     const contentHash = readString(sourceMetadata.contentHash) || hashText([
       cleanSource,
       cleanSourceId,
@@ -777,24 +1372,67 @@ export const createObsidianWikiService = ({
         wikiCompileStrategy: existing.metadata?.wikiCompileStrategy || '',
         wikiCompileChunks: existing.metadata?.wikiCompileChunks || 0,
         wikiCompileFallbackReason: existing.metadata?.wikiCompileFallbackReason || '',
+        summaryType: existing.metadata?.summaryType || 'auto',
+        compileQualityStatus: existing.metadata?.compileQualityStatus || '',
+        compileRepairAttempts: existing.metadata?.compileRepairAttempts || 0,
+        compileWarnings: existing.metadata?.compileWarnings || [],
       };
     }
 
     const config = readObsidianBridgeConfig();
-    const classification = classifyWikiSource({
+    const topicSuggestion = await suggestWikiTopicWithSmallModel({
       title: cleanTitle,
+      projectName: cleanProjectName,
       content: cleanContent,
+      sourceMetadata,
+      artifact,
+      completeJson: completeSmallModelJson,
+    });
+    const topicIdentity = resolveWikiTopicIdentity({
+      title: cleanTitle,
+      projectName: cleanProjectName,
+      content: cleanContent,
+      sourceMetadata: topicSuggestion?.topicTitle
+        ? { ...sourceMetadata, topicTitle: topicSuggestion.topicTitle }
+        : sourceMetadata,
+      artifact,
+    });
+    const wikiTitle = topicIdentity.wikiTitle;
+    const sourceHeading = topicIdentity.sourceHeading;
+    const classification = classifyWikiSource({
+      title: wikiTitle,
+      content: cleanContent,
+      projectName: cleanProjectName,
       defaultMode: sourceMetadata.obsidianMode || config.defaultMode || 'project-knowledge',
       routingRules: config.routingRules || {},
       extractionStatus: sourceMetadata.extractionStatus || 'extracted',
     });
+    const sourceModeInput = modes.length > 0
+      ? modes
+      : sourceMetadata.obsidianModes || sourceMetadata.routingModes || classification.classificationModes;
+    const preferredModeInput = classification.projectTechnical && modes.length === 0
+      ? ['project-knowledge', ...normalizeModes(sourceModeInput, classification.classificationMode)]
+      : sourceModeInput;
     const viewModes = normalizeModes(
-      modes.length > 0
-        ? modes
-        : sourceMetadata.obsidianModes || sourceMetadata.routingModes || classification.classificationModes,
+      preferredModeInput,
       sourceMetadata.obsidianMode || classification.classificationMode || config.defaultMode || 'project-knowledge',
     );
-    const selectedTopicKey = readString(topicKey) || readString(sourceMetadata.topicKey) || topicKeyFromTitle(cleanTitle);
+    const selectedTopicKey = readString(topicKey) || (!sourceHeading ? readString(sourceMetadata.topicKey) : '') || topicIdentity.topicKey;
+    const wikiTopicSuggestedBy = topicSuggestion?.topicTitle ? 'small-model' : '';
+    const wikiTopicSuggestionReason = topicSuggestion?.topicTitle ? topicSuggestion.reason : '';
+    const wikiTopicSuggestionModel = topicSuggestion?.topicTitle ? topicSuggestion.model : '';
+    const resolvedClassificationReason = classification.projectTechnical
+      ? classification.classificationReason
+      : sourceMetadata.routingReason || classification.classificationReason;
+    const resolvedRoutingMode = classification.projectTechnical
+      ? classification.classificationMode
+      : sourceMetadata.routingMode || classification.classificationMode;
+    const resolvedRoutingSignals = classification.projectTechnical
+      ? [...new Set([...(Array.isArray(sourceMetadata.routingSignals) ? sourceMetadata.routingSignals : []), ...classification.routingSignals])]
+      : sourceMetadata.routingSignals || classification.routingSignals;
+    const resolvedRoutingScores = classification.projectTechnical
+      ? { ...(sourceMetadata.routingScores || {}), ...classification.routingScores }
+      : sourceMetadata.routingScores || classification.routingScores;
     const artifactRecord = artifact || (await createArtifact({
       kind: readString(kind) || readString(sourceMetadata.kind) || classification.classificationMode || 'wiki-source',
       title: cleanTitle,
@@ -807,14 +1445,20 @@ export const createObsidianWikiService = ({
         sourceId: cleanSourceId,
         contentHash,
         wikiStatus: 'raw',
+        wikiTitle,
+        sourceHeading,
+        wikiTopicSuggestedBy,
+        wikiTopicSuggestionReason,
+        wikiTopicSuggestionModel,
+        summaryType: cleanSummaryType,
         classificationMode: classification.classificationMode,
         classificationModes: viewModes,
-        classificationReason: sourceMetadata.routingReason || classification.classificationReason,
-        routingMode: sourceMetadata.routingMode || classification.classificationMode,
+        classificationReason: resolvedClassificationReason,
+        routingMode: resolvedRoutingMode,
         routingModes: viewModes,
-        routingScores: sourceMetadata.routingScores || classification.routingScores,
-        routingSignals: sourceMetadata.routingSignals || classification.routingSignals,
-        routingReason: sourceMetadata.routingReason || classification.classificationReason,
+        routingScores: resolvedRoutingScores,
+        routingSignals: resolvedRoutingSignals,
+        routingReason: resolvedClassificationReason,
         routingConfidence: sourceMetadata.routingConfidence || classification.routingConfidence,
         obsidianMode: viewModes[0],
         obsidianModes: viewModes,
@@ -829,6 +1473,12 @@ export const createObsidianWikiService = ({
     let wikiLastError = '';
     let destination = 'obsidian';
     const extractionStatus = readString(sourceMetadata.extractionStatus) || 'extracted';
+    const extractionEngine = readString(sourceMetadata.extractionEngine);
+    const extractionFailureReason = readString(sourceMetadata.extractionFailureReason);
+    const pdfPageCount = Number(sourceMetadata.pdfPageCount) || 0;
+    const pdfExtractedPages = Number(sourceMetadata.pdfExtractedPages) || 0;
+    const pdfExtractedChars = Number(sourceMetadata.pdfExtractedChars) || 0;
+    const pdfTruncated = Boolean(sourceMetadata.pdfTruncated);
     const shouldCompile = config.wikiCompilerEnabled !== false
       && extractionStatus === 'extracted'
       && normalizeWhitespace(cleanContent);
@@ -839,6 +1489,10 @@ export const createObsidianWikiService = ({
       wikiCompileTokenBudget: null,
       wikiCompileModel: '',
       wikiCompileFallbackReason: '',
+      summaryType: cleanSummaryType,
+      compileQualityStatus: 'raw',
+      compileRepairAttempts: 0,
+      compileWarnings: [],
     };
 
     try {
@@ -853,20 +1507,32 @@ export const createObsidianWikiService = ({
         contentHash,
         argusId: `wiki-source:${contentHash}`,
         extractionStatus,
+        extractionEngine,
+        extractionFailureReason,
+        pdfPageCount,
+        pdfExtractedPages,
+        pdfExtractedChars,
+        pdfTruncated,
         classificationMode: classification.classificationMode,
         classificationModes: viewModes,
-        classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+        classificationReason: resolvedClassificationReason,
+        sourceHeading,
+        wikiTitle,
+        wikiTopicSuggestedBy,
+        wikiTopicSuggestionReason,
+        wikiTopicSuggestionModel,
         tags: ['argus', 'raw', cleanSource],
       });
       rawPath = rawResult.path || rawResult.rawPath || '';
 
       if (shouldCompile) {
         const compiledContent = await compileWikiContent({
-          title: cleanTitle,
+          title: wikiTitle,
           content: cleanContent,
           rawPath,
           sourceIds,
           projectName: cleanProjectName,
+          summaryType: cleanSummaryType,
           completeJson: completeSmallModelJson,
         });
         wikiCompileMeta = {
@@ -876,9 +1542,13 @@ export const createObsidianWikiService = ({
           wikiCompileTokenBudget: compiledContent.tokenBudget || WIKI_UPLOAD_TOKEN_BUDGET,
           wikiCompileModel: readString(compiledContent.model),
           wikiCompileFallbackReason: readString(compiledContent.fallbackReason),
+          summaryType: compiledContent.summaryType || cleanSummaryType,
+          compileQualityStatus: compiledContent.qualityStatus || 'passed',
+          compileRepairAttempts: Number(compiledContent.repairAttempts) || 0,
+          compileWarnings: Array.isArray(compiledContent.warnings) ? compiledContent.warnings : [],
         };
         const compileResult = await sendObsidianWikiCompile({
-          title: cleanTitle,
+          title: wikiTitle,
           projectName: cleanProjectName,
           content: compiledContent.content,
           sessionId: cleanSessionId,
@@ -893,9 +1563,13 @@ export const createObsidianWikiService = ({
           compiledFrom: sourceIds,
           topicKey: selectedTopicKey,
           argusId: `wiki:${projectKey(cleanProjectName)}:${selectedTopicKey}`,
+          sourceHeading,
+          wikiTopicSuggestedBy,
+          wikiTopicSuggestionReason,
+          wikiTopicSuggestionModel,
           classificationMode: classification.classificationMode,
           classificationModes: viewModes,
-          classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+          classificationReason: resolvedClassificationReason,
           viewModes,
           kind: readString(kind) || readString(sourceMetadata.kind) || artifactRecord.kind || '',
           tags: ['argus', 'wiki'],
@@ -907,13 +1581,17 @@ export const createObsidianWikiService = ({
           wikiCompileTokenBudget: wikiCompileMeta.wikiCompileTokenBudget,
           wikiCompileModel: wikiCompileMeta.wikiCompileModel,
           wikiCompileFallbackReason: wikiCompileMeta.wikiCompileFallbackReason,
+          summaryType: wikiCompileMeta.summaryType,
+          compileQualityStatus: wikiCompileMeta.compileQualityStatus,
+          compileRepairAttempts: wikiCompileMeta.compileRepairAttempts,
+          compileWarnings: wikiCompileMeta.compileWarnings,
         });
         wikiPath = compileResult?.path || compileResult?.wikiPath || '';
         indexPaths = Array.isArray(compileResult?.indexPaths) ? compileResult.indexPaths : [];
 
         if (wikiPath && indexPaths.length === 0) {
           const viewResult = await updateObsidianWikiViews({
-            title: cleanTitle,
+            title: wikiTitle,
             projectName: cleanProjectName,
             sessionId: cleanSessionId,
             wikiPath,
@@ -922,7 +1600,11 @@ export const createObsidianWikiService = ({
             viewModes,
             classificationMode: classification.classificationMode,
             classificationModes: viewModes,
-            classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+            classificationReason: resolvedClassificationReason,
+            sourceHeading,
+            wikiTopicSuggestedBy,
+            wikiTopicSuggestionReason,
+            wikiTopicSuggestionModel,
             kind: readString(kind) || readString(sourceMetadata.kind) || artifactRecord.kind || '',
           });
           indexPaths = Array.isArray(viewResult?.indexPaths) ? viewResult.indexPaths : [];
@@ -942,18 +1624,38 @@ export const createObsidianWikiService = ({
       });
     }
 
+    const nextWikiStatus = wikiLastError
+      ? 'failed'
+      : wikiPath
+        ? wikiCompileMeta.compileQualityStatus === 'needs-review'
+          ? 'needs-review'
+          : 'compiled'
+        : 'raw';
     const patch = {
       rawPath,
       wikiPath,
-      wikiStatus: wikiLastError ? 'failed' : wikiPath ? 'compiled' : 'raw',
+      wikiStatus: nextWikiStatus,
       wikiLastError,
       compiledFrom: wikiPath ? sourceIds : [],
       sourceIds,
       contentHash,
       topicKey: selectedTopicKey,
+      wikiTitle,
+      sourceHeading,
+      wikiTopicSuggestedBy,
+      wikiTopicSuggestionReason,
+      wikiTopicSuggestionModel,
+      extractionStatus,
+      extractionEngine,
+      extractionFailureReason,
+      pdfPageCount,
+      pdfExtractedPages,
+      pdfExtractedChars,
+      pdfTruncated,
       classificationMode: classification.classificationMode,
       classificationModes: viewModes,
-      classificationReason: sourceMetadata.routingReason || classification.classificationReason,
+      classificationReason: resolvedClassificationReason,
+      summaryType: cleanSummaryType,
       viewModes,
       indexPaths,
       obsidianStatus: wikiLastError ? 'fallback' : 'synced',
@@ -981,10 +1683,16 @@ export const createObsidianWikiService = ({
       artifactId: artifactRecord.id,
       rawPath,
       wikiPath,
+      wikiStatus: nextWikiStatus,
       indexPaths,
       viewModes,
       contentHash,
       topicKey: selectedTopicKey,
+      wikiTitle,
+      sourceHeading,
+      wikiTopicSuggestedBy,
+      wikiTopicSuggestionReason,
+      wikiTopicSuggestionModel,
       mode: viewModes[0],
       modes: viewModes,
       error: wikiLastError,
@@ -993,6 +1701,7 @@ export const createObsidianWikiService = ({
         destination,
         rawPath,
         wikiPath,
+        wikiStatus: nextWikiStatus,
         indexPaths,
         viewModes,
         path: wikiPath,
@@ -1015,9 +1724,11 @@ export const createObsidianWikiService = ({
     projectName = '',
     sessionId = '',
     batchId = '',
+    summaryType = 'auto',
   }) => {
     const extracted = await extractWikiFileContent(file);
     const config = readObsidianBridgeConfig();
+    const cleanSummaryType = normalizeSummaryType(summaryType);
     const contentHash = hashText([
       extracted.content,
       extracted.extractionStatus,
@@ -1037,12 +1748,17 @@ export const createObsidianWikiService = ({
         wikiCompileStrategy: existing.metadata?.wikiCompileStrategy || '',
         wikiCompileChunks: existing.metadata?.wikiCompileChunks || 0,
         wikiCompileFallbackReason: existing.metadata?.wikiCompileFallbackReason || '',
+        summaryType: existing.metadata?.summaryType || cleanSummaryType,
+        compileQualityStatus: existing.metadata?.compileQualityStatus || '',
+        compileRepairAttempts: existing.metadata?.compileRepairAttempts || 0,
+        compileWarnings: existing.metadata?.compileWarnings || [],
       };
     }
 
     const classification = classifyWikiSource({
       title: extracted.title,
       content: extracted.content,
+      projectName,
       defaultMode: config.defaultMode || 'project-knowledge',
       routingRules: config.routingRules || {},
       extractionStatus: extracted.extractionStatus,
@@ -1066,7 +1782,14 @@ export const createObsidianWikiService = ({
         importBatchId,
         contentHash,
         wikiStatus: 'raw',
+        summaryType: cleanSummaryType,
         extractionStatus: extracted.extractionStatus,
+        extractionEngine: extracted.extractionEngine || '',
+        extractionFailureReason: extracted.extractionFailureReason || '',
+        pdfPageCount: Number(extracted.pdfPageCount) || 0,
+        pdfExtractedPages: Number(extracted.pdfExtractedPages) || 0,
+        pdfExtractedChars: Number(extracted.pdfExtractedChars) || 0,
+        pdfTruncated: Boolean(extracted.pdfTruncated),
         classificationMode: classification.classificationMode,
         classificationModes: classification.classificationModes,
         classificationReason: classification.classificationReason,
@@ -1078,16 +1801,24 @@ export const createObsidianWikiService = ({
         routingConfidence: classification.routingConfidence,
       },
       modes: classification.classificationModes,
+      summaryType: cleanSummaryType,
     });
 
     return {
       ...result,
       title: extracted.title,
-      wikiStatus: result.error ? 'failed' : result.wikiPath ? 'compiled' : 'raw',
+      wikiStatus: result.wikiStatus || (result.error ? 'failed' : result.wikiPath ? 'compiled' : 'raw'),
+      summaryType: cleanSummaryType,
       classificationMode: classification.classificationMode,
       classificationModes: classification.classificationModes,
       classificationReason: classification.classificationReason,
       extractionStatus: extracted.extractionStatus,
+      extractionEngine: extracted.extractionEngine || '',
+      extractionFailureReason: extracted.extractionFailureReason || '',
+      pdfPageCount: Number(extracted.pdfPageCount) || 0,
+      pdfExtractedPages: Number(extracted.pdfExtractedPages) || 0,
+      pdfExtractedChars: Number(extracted.pdfExtractedChars) || 0,
+      pdfTruncated: Boolean(extracted.pdfTruncated),
     };
   };
 
@@ -1096,6 +1827,7 @@ export const createObsidianWikiService = ({
     projectName = '',
     sessionId = '',
     batchId = '',
+    summaryType = 'auto',
   } = {}) => {
     const importBatchId = readString(batchId) || `import-${now().toISOString().replace(/[:.]/g, '-')}`;
     const imported = [];
@@ -1105,6 +1837,7 @@ export const createObsidianWikiService = ({
         projectName,
         sessionId,
         batchId: importBatchId,
+        summaryType,
       }));
     }
     return {
@@ -1114,7 +1847,12 @@ export const createObsidianWikiService = ({
     };
   };
 
-  const compileWikiImport = async ({ artifactId = '', topicKey = '', forceRecompile = false } = {}) => {
+  const compileWikiImport = async ({
+    artifactId = '',
+    topicKey = '',
+    summaryType = '',
+    forceRecompile = false,
+  } = {}) => {
     if (!readString(artifactId)) {
       return {
         success: true,
@@ -1141,6 +1879,7 @@ export const createObsidianWikiService = ({
       metadata: artifact.metadata || {},
       modes: artifact.metadata?.obsidianModes || artifact.metadata?.routingModes || [],
       topicKey,
+      summaryType,
       forceRecompile,
     });
   };

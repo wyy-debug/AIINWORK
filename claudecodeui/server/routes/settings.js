@@ -19,10 +19,14 @@ import {
   SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyGoalRuntimeToEnv,
+  applyOpenAIRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
   applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
+  isOpenAIModelProtocol,
+  normalizeAnthropicBaseUrl,
   normalizeGoalRuntimeConfig,
+  normalizeOpenAIBaseUrl,
   normalizeOpenMythosRuntimeConfig,
   normalizeSmallModelRuntimeConfig,
   normalizeSubagentRuntimeConfig,
@@ -72,6 +76,8 @@ const MIMO_TOKEN_PLAN_ANTHROPIC_BASE_URL = 'https://token-plan-cn.xiaomimimo.com
 const MODEL_PROFILES_KEY = 'mtlCodeModelProfiles';
 const ACTIVE_MODEL_PROFILE_KEY = 'activeMtlCodeModelProfileId';
 const MIMO_MODEL_CONTEXT_WINDOWS = {
+  'deepseek-v4-pro': 1_000_000,
+  'deepseek-v4-flash': 1_000_000,
   'mimo-v2.5-pro': 1_000_000,
   'mimo-v2.5': 1_000_000,
   'mimo-v2-pro': 1_000_000,
@@ -214,20 +220,20 @@ const sanitizeModelProfile = (profile, env = {}) => ({
 
 const createProfileFromEnv = (settings, env) => {
   const modelType = readOptionalString(settings.modelType);
-  const preferLegacyOpenAI = modelType === 'openai';
+  const useOpenAI = modelType === 'openai' || readStringEnv(env, 'MTL_CODE_USE_OPENAI') === '1';
   const anthropicBaseUrl = readStringEnv(env, ANTHROPIC_ENV_KEYS.baseUrl);
   const anthropicModel = canonicalizeAnthropicModel(readStringEnv(env, ANTHROPIC_ENV_KEYS.model));
   const anthropicAuthToken = readStringEnv(env, ANTHROPIC_ENV_KEYS.authToken);
   const legacyOpenAIBaseUrl = readStringEnv(env, OPENAI_ENV_KEYS.baseUrl);
   const legacyOpenAIModel = canonicalizeAnthropicModel(readStringEnv(env, OPENAI_ENV_KEYS.model));
   const legacyOpenAIKey = readStringEnv(env, OPENAI_ENV_KEYS.apiKey);
-  const baseUrl = preferLegacyOpenAI
+  const baseUrl = useOpenAI
     ? legacyOpenAIBaseUrl || anthropicBaseUrl
     : anthropicBaseUrl || legacyOpenAIBaseUrl;
-  const model = preferLegacyOpenAI
+  const model = useOpenAI
     ? legacyOpenAIModel || canonicalizeAnthropicModel(settings.model) || anthropicModel || ''
     : anthropicModel || canonicalizeAnthropicModel(settings.model) || legacyOpenAIModel || '';
-  const authToken = preferLegacyOpenAI
+  const authToken = useOpenAI
     ? legacyOpenAIKey || anthropicAuthToken
     : anthropicAuthToken || legacyOpenAIKey;
 
@@ -235,7 +241,7 @@ const createProfileFromEnv = (settings, env) => {
     id: 'default',
     name: model ? `Default (${model})` : 'Default model',
     provider: 'anthropic',
-    protocol: 'anthropic',
+    protocol: useOpenAI ? 'openai-compatible' : 'anthropic',
     baseUrl,
     model,
     requestModel: '',
@@ -442,6 +448,12 @@ const clearOpenAIEnv = (env) => {
   }
 };
 
+const clearAnthropicEnv = (env) => {
+  for (const key of Object.values(ANTHROPIC_ENV_KEYS)) {
+    delete env[key];
+  }
+};
+
 const mergeAndStoreModelProfiles = (settings, env, input) => {
   const existingProfiles = readStoredModelProfiles(settings, env);
   const existingById = new Map(existingProfiles.map((profile) => [profile.id, profile]));
@@ -502,23 +514,46 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
 const applyActiveProfileToEnv = (settings, env, profile) => {
   settings.modelType = 'anthropic';
   const requestModel = readOptionalString(profile.requestModel) || profile.model;
+  const protocol = normalizeModelProtocol(profile.protocol);
+  const usesOpenAI = isOpenAIModelProtocol(protocol);
 
-  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.baseUrl, profile.baseUrl);
-  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, requestModel);
   env[MTL_CODE_ENV_KEYS.uiBareMode] = profile.bareMode !== false ? '1' : '0';
 
   const contextWindowTokens = resolveProfileContextWindow(profile, env);
   env[MTL_CODE_ENV_KEYS.maxContextTokens] = String(contextWindowTokens);
   env[MTL_CODE_ENV_KEYS.uiContextWindow] = String(contextWindowTokens);
 
+  if (usesOpenAI) {
+    clearAnthropicEnv(env);
+    env.MTL_CODE_USE_OPENAI = '1';
+    setOptionalEnv(env, OPENAI_ENV_KEYS.baseUrl, normalizeOpenAIBaseUrl(profile.baseUrl));
+    setOptionalEnv(env, OPENAI_ENV_KEYS.model, requestModel);
+    if (profile.authToken) {
+      env[OPENAI_ENV_KEYS.apiKey] = profile.authToken;
+    } else {
+      delete env[OPENAI_ENV_KEYS.apiKey];
+    }
+    applyOpenAIRuntimeModelDefaults(env, { model: requestModel });
+    if (profile.model) {
+      settings.model = profile.model;
+    } else {
+      delete settings.model;
+    }
+    return;
+  }
+
+  clearOpenAIEnv(env);
+  env.MTL_CODE_USE_OPENAI = '0';
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.baseUrl, normalizeAnthropicBaseUrl(profile.baseUrl));
+  setOptionalEnv(env, ANTHROPIC_ENV_KEYS.model, requestModel);
+
   if (profile.authToken) {
     env[ANTHROPIC_ENV_KEYS.authToken] = profile.authToken;
   } else {
     delete env[ANTHROPIC_ENV_KEYS.authToken];
   }
-
   applyAnthropicRuntimeModelDefaults(env, {
-    baseUrl: profile.baseUrl,
+    baseUrl: normalizeAnthropicBaseUrl(profile.baseUrl),
     model: requestModel,
   });
 
@@ -870,7 +905,6 @@ router.put('/mtl-code-model', async (req, res) => {
     settings[SMALL_MODEL_RUNTIME_SETTINGS_KEY] = smallModelRuntime;
     applyGoalRuntimeToEnv(env, goals);
     applyCoordinatorModeFromOpenMythosRuntime(env, openMythosRuntime);
-    clearOpenAIEnv(env);
     settings.env = env;
     await writeJsonConfig(filePath, settings);
 

@@ -533,7 +533,7 @@ export const refineWikiReadbackContext = async ({
 } = {}) => {
   const sourceResults = Array.isArray(results) ? results : [];
   if (!readString(context) && sourceResults.length === 0 && !activeNote?.path) {
-    return { refined: false, context: '', sources: [] };
+    return { refined: false, reranked: false, context: '', sources: [], tokenBudgetUsed: 0 };
   }
   const result = await completeJson({
     purpose: 'wiki-readback',
@@ -555,17 +555,23 @@ export const refineWikiReadbackContext = async ({
       })),
     }),
     maxTokens: 1200,
+    timeoutMs: 8000,
   });
   if (!result.success) {
+    const fallbackSources = sourceResults.map((entry) => ({
+      kind: 'context-result',
+      path: entry.path || '',
+      title: entry.title || '',
+      snippet: entry.snippet || entry.excerpt || '',
+      hitReason: '',
+    })).filter((source) => source.path);
     return {
       refined: false,
+      reranked: false,
       reason: result.reason,
       context,
-      sources: sourceResults.map((entry) => ({
-        kind: 'context-result',
-        path: entry.path || '',
-        title: entry.title || '',
-      })).filter((source) => source.path),
+      sources: fallbackSources,
+      tokenBudgetUsed: String(context || '').length,
     };
   }
   const snippets = Array.isArray(result.json?.snippets) ? result.json.snippets : [];
@@ -578,23 +584,28 @@ export const refineWikiReadbackContext = async ({
       hitReason: readString(snippet.reason),
     }))
     .filter((snippet) => snippet.path && snippet.snippet && (allowedPaths.size === 0 || allowedPaths.has(snippet.path)))
-    .slice(0, 8);
+    .slice(0, 6);
   if (normalizedSnippets.length === 0) {
-    return { refined: false, reason: 'empty_result', context, sources: [] };
+    return { refined: false, reranked: false, reason: 'empty_result', context, sources: [], tokenBudgetUsed: String(context || '').length };
   }
+  const refinedContext = normalizedSnippets.map((snippet) => [
+    `Path: ${snippet.path}`,
+    snippet.title ? `Title: ${snippet.title}` : '',
+    snippet.hitReason ? `Reason: ${snippet.hitReason}` : '',
+    snippet.snippet,
+  ].filter(Boolean).join('\n')).join('\n\n');
   return {
     refined: true,
+    reranked: true,
     model: result.model,
-    context: normalizedSnippets.map((snippet) => [
-      `Path: ${snippet.path}`,
-      snippet.title ? `Title: ${snippet.title}` : '',
-      snippet.hitReason ? `Reason: ${snippet.hitReason}` : '',
-      snippet.snippet,
-    ].filter(Boolean).join('\n')).join('\n\n'),
+    rerankModel: result.model,
+    tokenBudgetUsed: refinedContext.length,
+    context: refinedContext,
     sources: normalizedSnippets.map((snippet) => ({
       kind: 'context-result',
       path: snippet.path,
       title: snippet.title,
+      snippet: snippet.snippet,
       hitReason: snippet.hitReason,
     })),
   };

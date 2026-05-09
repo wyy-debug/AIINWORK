@@ -158,6 +158,23 @@ describe('subagent publishing gate', () => {
       expect(enabledToolNames).not.toContain(toolName)
     }
   })
+
+  test('keeps Codex-style collaborative agent tools available in bare mode when enabled', () => {
+    process.env.MTL_CODE_SUBAGENTS_ENABLED = '1'
+    process.env.MTL_CODE_SIMPLE = '1'
+
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    for (const toolName of CODEX_SUBAGENT_TOOL_NAMES) {
+      expect(enabledToolNames).toContain(toolName)
+    }
+
+    for (const toolName of LEGACY_SUBAGENT_TOOL_NAMES) {
+      expect(enabledToolNames).not.toContain(toolName)
+    }
+  })
 })
 
 describe('goal publishing gate', () => {
@@ -185,6 +202,19 @@ describe('goal publishing gate', () => {
 
     for (const toolName of CODEX_GOAL_TOOL_NAMES) {
       expect(baseToolNames).toContain(toolName)
+      expect(enabledToolNames).toContain(toolName)
+    }
+  })
+
+  test('keeps Codex goal tools available in bare mode when the goals feature gate is enabled', () => {
+    process.env.MTL_CODE_GOALS_ENABLED = '1'
+    process.env.MTL_CODE_SIMPLE = '1'
+
+    const enabledToolNames = getTools(getEmptyToolPermissionContext()).map(
+      tool => tool.name,
+    )
+
+    for (const toolName of CODEX_GOAL_TOOL_NAMES) {
       expect(enabledToolNames).toContain(toolName)
     }
   })

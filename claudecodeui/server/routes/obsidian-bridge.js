@@ -47,6 +47,7 @@ import {
   ingestUploadedFilesToObsidian,
   lintWiki,
 } from '../services/obsidian-wiki-service.js';
+import { refineWikiReadbackContext } from '../services/small-model-service.js';
 
 const router = express.Router();
 
@@ -95,11 +96,13 @@ router.post('/documents', async (req, res) => {
         metadata: {
           ...(payload.metadata || {}),
           sourceArtifactId: payload.sourceArtifactId || '',
+          summaryType: payload.summaryType || payload.metadata?.summaryType || 'auto',
           obsidianMode: payload.mode || config.defaultMode || 'project-knowledge',
           obsidianModes: payload.modes || payload.obsidianModes || [payload.mode || config.defaultMode || 'project-knowledge'],
           confidence: payload.confidence,
         },
         modes: payload.modes || payload.obsidianModes || [payload.mode || config.defaultMode || 'project-knowledge'],
+        summaryType: payload.summaryType || payload.metadata?.summaryType || 'auto',
         projectRoot,
       })
       : await createKnowledgeDocument(payload, {
@@ -244,6 +247,7 @@ const handleWikiUpload = async (req, res) => {
         projectName,
         sessionId: String(req.body?.sessionId || ''),
         batchId,
+        summaryType: String(req.body?.summaryType || 'auto'),
       });
       return res.json({ success: true, ...result, files });
     } catch (innerError) {
@@ -435,8 +439,28 @@ router.post('/graph', async (req, res) => {
 
 router.post('/context', async (req, res) => {
   try {
-    const result = await buildObsidianContext(req.body || {});
-    res.json({ success: true, ...result });
+    const payload = req.body || {};
+    const result = await buildObsidianContext(payload);
+    const refinement = payload.refine === false
+      ? { refined: false, reranked: false, context: result.context || '', sources: [] }
+      : await refineWikiReadbackContext({
+        query: payload.query || payload.prompt || '',
+        projectName: payload.projectName || '',
+        context: result.context || '',
+        results: result.results || [],
+      });
+    const context = refinement?.context || result.context || '';
+    res.json({
+      success: true,
+      ...result,
+      context,
+      reranked: Boolean(refinement?.reranked || refinement?.refined),
+      rerankModel: refinement?.rerankModel || refinement?.model || '',
+      tokenBudgetUsed: Number(refinement?.tokenBudgetUsed) || 0,
+      sources: refinement?.refined && Array.isArray(refinement.sources)
+        ? refinement.sources
+        : result.results || [],
+    });
   } catch (error) {
     sendBridgeError(res, error, 'Failed to build Obsidian context');
   }

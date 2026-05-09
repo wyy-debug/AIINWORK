@@ -22,6 +22,7 @@ const PROVIDER_MANAGED_ENV_VARS = new Set([
   'MTL_CODE_USE_BEDROCK',
   'MTL_CODE_USE_VERTEX',
   'MTL_CODE_USE_FOUNDRY',
+  'MTL_CODE_USE_OPENAI',
   'MTL_CODE_USE_GEMINI',
   // Endpoint config (base URLs, project/resource identifiers)
   'ANTHROPIC_BASE_URL',

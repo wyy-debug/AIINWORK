@@ -19,6 +19,15 @@ export const ANTHROPIC_MODEL_ENV_KEYS = {
   defaultOpusModel: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
 };
 
+export const OPENAI_MODEL_ENV_KEYS = {
+  apiKey: 'OPENAI_API_KEY',
+  baseUrl: 'OPENAI_BASE_URL',
+  model: 'OPENAI_MODEL',
+  defaultHaikuModel: 'OPENAI_DEFAULT_HAIKU_MODEL',
+  defaultSonnetModel: 'OPENAI_DEFAULT_SONNET_MODEL',
+  defaultOpusModel: 'OPENAI_DEFAULT_OPUS_MODEL',
+};
+
 export const MTL_CODE_MODEL_ENV_KEYS = {
   uiBareMode: 'MTL_CODE_UI_BARE',
   maxContextTokens: 'MTL_CODE_MAX_CONTEXT_TOKENS',
@@ -102,6 +111,8 @@ const MIMO_MODEL_CONTEXT_WINDOWS = {
 };
 
 const readStringEnv = (env, key) => readOptionalString(env?.[key]) || '';
+
+const cleanBaseUrl = (value) => (readOptionalString(value) || '').replace(/\/+$/, '');
 
 const readPositiveIntegerEnv = (env, key) => {
   const value = Number.parseInt(readStringEnv(env, key), 10);
@@ -541,6 +552,20 @@ export function applyAnthropicRuntimeModelDefaults(env, { baseUrl = '', model = 
   return env;
 }
 
+export function applyOpenAIRuntimeModelDefaults(env, { model = '' } = {}) {
+  const configuredModel = readOptionalString(model) || '';
+  if (!configuredModel) {
+    return env;
+  }
+
+  env[OPENAI_MODEL_ENV_KEYS.defaultHaikuModel] = configuredModel;
+  env[OPENAI_MODEL_ENV_KEYS.defaultSonnetModel] = configuredModel;
+  env[OPENAI_MODEL_ENV_KEYS.defaultOpusModel] = configuredModel;
+  env[MTL_CODE_MODEL_ENV_KEYS.subagentModel] = configuredModel;
+  env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel] = configuredModel;
+  return env;
+}
+
 export function repairAnthropicRuntimeModelEnv(env) {
   const model = canonicalizeAnthropicModel(
     readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.model)
@@ -576,6 +601,43 @@ function normalizeModelProtocol(value) {
   return readModelProtocol(value) || 'anthropic';
 }
 
+export function isOpenAIModelProtocol(value) {
+  const protocol = normalizeModelProtocol(value);
+  return protocol === 'openai-compatible' || protocol === 'openai-responses';
+}
+
+export function normalizeAnthropicBaseUrl(value) {
+  let normalized = cleanBaseUrl(value);
+  const suffixes = ['/v1/chat/completions', '/chat/completions', '/v1/messages', '/messages', '/v1'];
+  for (const suffix of suffixes) {
+    if (normalized.toLowerCase().endsWith(suffix)) {
+      normalized = normalized.slice(0, -suffix.length).replace(/\/+$/, '');
+      break;
+    }
+  }
+  return normalized;
+}
+
+export function normalizeOpenAIBaseUrl(value) {
+  let normalized = cleanBaseUrl(value);
+  const lower = normalized.toLowerCase();
+  if (lower.endsWith('/v1/chat/completions')) {
+    return normalized.slice(0, -'/chat/completions'.length);
+  }
+  if (lower.endsWith('/chat/completions')) {
+    normalized = normalized.slice(0, -'/chat/completions'.length).replace(/\/+$/, '');
+  } else if (lower.endsWith('/v1/responses')) {
+    return normalized.slice(0, -'/responses'.length);
+  } else if (lower.endsWith('/responses')) {
+    normalized = normalized.slice(0, -'/responses'.length).replace(/\/+$/, '');
+  }
+
+  if (!normalized || normalized.toLowerCase().endsWith('/v1')) {
+    return normalized;
+  }
+  return `${normalized}/v1`;
+}
+
 function getMimoContextWindow(model) {
   return MIMO_MODEL_CONTEXT_WINDOWS[canonicalizeAnthropicModel(model)] || null;
 }
@@ -594,20 +656,20 @@ function resolveProfileContextWindow(profile, env) {
 
 function createProfileFromEnv(settings, env) {
   const modelType = readOptionalString(settings?.modelType);
-  const preferLegacyOpenAI = modelType === 'openai';
+  const useOpenAI = modelType === 'openai' || readStringEnv(env, 'MTL_CODE_USE_OPENAI') === '1';
   const anthropicBaseUrl = readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.baseUrl);
   const anthropicModel = canonicalizeAnthropicModel(readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.model));
   const anthropicAuthToken = readStringEnv(env, ANTHROPIC_MODEL_ENV_KEYS.authToken);
-  const legacyOpenAIBaseUrl = readStringEnv(env, 'OPENAI_BASE_URL');
-  const legacyOpenAIModel = canonicalizeAnthropicModel(readStringEnv(env, 'OPENAI_MODEL'));
-  const legacyOpenAIKey = readStringEnv(env, 'OPENAI_API_KEY');
-  const baseUrl = preferLegacyOpenAI
+  const legacyOpenAIBaseUrl = readStringEnv(env, OPENAI_MODEL_ENV_KEYS.baseUrl);
+  const legacyOpenAIModel = canonicalizeAnthropicModel(readStringEnv(env, OPENAI_MODEL_ENV_KEYS.model));
+  const legacyOpenAIKey = readStringEnv(env, OPENAI_MODEL_ENV_KEYS.apiKey);
+  const baseUrl = useOpenAI
     ? legacyOpenAIBaseUrl || anthropicBaseUrl
     : anthropicBaseUrl || legacyOpenAIBaseUrl;
-  const model = preferLegacyOpenAI
+  const model = useOpenAI
     ? legacyOpenAIModel || canonicalizeAnthropicModel(settings?.model) || anthropicModel || ''
     : anthropicModel || canonicalizeAnthropicModel(settings?.model) || legacyOpenAIModel || '';
-  const authToken = preferLegacyOpenAI
+  const authToken = useOpenAI
     ? legacyOpenAIKey || anthropicAuthToken
     : anthropicAuthToken || legacyOpenAIKey;
 
@@ -615,7 +677,7 @@ function createProfileFromEnv(settings, env) {
     id: 'default',
     name: model ? `Default (${model})` : 'Default model',
     provider: 'anthropic',
-    protocol: 'anthropic',
+    protocol: useOpenAI ? 'openai-compatible' : 'anthropic',
     baseUrl,
     model,
     requestModel: '',
@@ -641,7 +703,7 @@ export function readStoredModelProfiles(settings, env = {}) {
         id,
         name,
         provider: 'anthropic',
-        protocol: readModelProtocol(profile.protocol),
+        protocol: normalizeModelProtocol(profile.protocol),
         baseUrl,
         model,
         requestModel: readOptionalString(profile.requestModel) || '',
@@ -705,33 +767,45 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
 
   const model = canonicalizeAnthropicModel(profile.model);
   const requestModel = readOptionalString(profile.requestModel) || model;
+  const protocol = normalizeModelProtocol(profile.protocol);
+  const usesOpenAI = isOpenAIModelProtocol(protocol);
+  const normalizedBaseUrl = usesOpenAI
+    ? normalizeOpenAIBaseUrl(profile.baseUrl)
+    : normalizeAnthropicBaseUrl(profile.baseUrl);
   const contextWindowTokens = resolveProfileContextWindow({ ...profile, model }, settingsEnv);
   const openMythosRuntime = readOpenMythosRuntimeConfig(settings, settingsEnv);
   const subagents = readSubagentRuntimeConfig(settings, settingsEnv);
   const goals = readGoalRuntimeConfig(settings, settingsEnv);
   const coordinatorModeEnabled = false;
   const runtimeEnv = {
-    [ANTHROPIC_MODEL_ENV_KEYS.baseUrl]: profile.baseUrl,
-    [ANTHROPIC_MODEL_ENV_KEYS.model]: requestModel,
+    MTL_CODE_USE_OPENAI: usesOpenAI ? '1' : '0',
     [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: profile.bareMode !== false ? '1' : '0',
     [MTL_CODE_MODEL_ENV_KEYS.maxContextTokens]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.coordinatorMode]: coordinatorModeEnabled ? '1' : '0',
   };
-  applyAnthropicRuntimeModelDefaults(runtimeEnv, {
-    baseUrl: profile.baseUrl,
-    model: requestModel,
-  });
+  if (usesOpenAI) {
+    runtimeEnv[OPENAI_MODEL_ENV_KEYS.baseUrl] = normalizedBaseUrl;
+    runtimeEnv[OPENAI_MODEL_ENV_KEYS.model] = requestModel;
+    applyOpenAIRuntimeModelDefaults(runtimeEnv, { model: requestModel });
+  } else {
+    runtimeEnv[ANTHROPIC_MODEL_ENV_KEYS.baseUrl] = normalizedBaseUrl;
+    runtimeEnv[ANTHROPIC_MODEL_ENV_KEYS.model] = requestModel;
+    applyAnthropicRuntimeModelDefaults(runtimeEnv, {
+      baseUrl: normalizedBaseUrl,
+      model: requestModel,
+    });
+  }
   applyOpenMythosRuntimeToEnv(runtimeEnv, openMythosRuntime);
   applySubagentRuntimeToEnv(runtimeEnv, subagents);
   applyGoalRuntimeToEnv(runtimeEnv, goals);
 
   if (profile.authToken) {
-    runtimeEnv[ANTHROPIC_MODEL_ENV_KEYS.authToken] = profile.authToken;
+    runtimeEnv[usesOpenAI ? OPENAI_MODEL_ENV_KEYS.apiKey : ANTHROPIC_MODEL_ENV_KEYS.authToken] = profile.authToken;
   }
 
   return {
-    profile: { ...profile, model, requestModel: profile.requestModel || '', contextWindowTokens },
+    profile: { ...profile, protocol, baseUrl: normalizedBaseUrl, model, requestModel: profile.requestModel || '', contextWindowTokens },
     env: Object.fromEntries(Object.entries(runtimeEnv).filter(([, value]) => Boolean(value))),
     contextWindowTokens,
     openMythosRuntime,

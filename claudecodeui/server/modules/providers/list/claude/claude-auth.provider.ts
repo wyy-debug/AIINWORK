@@ -114,6 +114,46 @@ export class ClaudeProviderAuth implements IProviderAuth {
   private async checkCredentials(): Promise<ClaudeCredentialsStatus> {
     const settings = await this.loadSettings();
     const settingsEnv = settings.env;
+    const openAIUseFlag =
+      process.env.MTL_CODE_USE_OPENAI?.trim()
+      || readOptionalString(settingsEnv.MTL_CODE_USE_OPENAI);
+    const openAIKey =
+      process.env.OPENAI_API_KEY?.trim()
+      || readOptionalString(settingsEnv.OPENAI_API_KEY);
+    const openAIBaseUrl =
+      process.env.OPENAI_BASE_URL?.trim()
+      || readOptionalString(settingsEnv.OPENAI_BASE_URL)
+      || 'https://api.openai.com/v1';
+    const openAIModel =
+      process.env.OPENAI_MODEL?.trim()
+      || readOptionalString(settingsEnv.OPENAI_MODEL)
+      || settings.model
+      || 'OpenAI-compatible model';
+    const hasStoredOpenAIConfig =
+      Boolean(readOptionalString(settingsEnv.OPENAI_BASE_URL))
+      || Boolean(readOptionalString(settingsEnv.OPENAI_MODEL))
+      || openAIUseFlag === '1'
+      || settings.modelType === 'openai';
+
+    if (hasStoredOpenAIConfig) {
+      if (openAIKey) {
+        return {
+          authenticated: true,
+          email: openAIModel,
+          method: openAIBaseUrl === 'https://api.openai.com/v1'
+            ? 'openai_api_key'
+            : 'openai_compatible',
+        };
+      }
+
+      return {
+        authenticated: false,
+        email: openAIModel,
+        method: 'openai_compatible',
+        error: 'OpenAI-compatible Argus config is missing OPENAI_API_KEY.',
+      };
+    }
+
     const anthropicToken =
       process.env.ANTHROPIC_AUTH_TOKEN?.trim()
       || readOptionalString(settingsEnv.ANTHROPIC_AUTH_TOKEN);

@@ -1,4 +1,4 @@
-import { app, BrowserView, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserView, BrowserWindow, Notification, dialog, ipcMain, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import http from 'node:http';
@@ -20,6 +20,10 @@ const serverEntry = path.join(appRoot, 'dist-server', 'server', 'index.js');
 const runtimeNode = path.join(resourcesRoot, 'runtime', 'node.exe');
 const nodeCommand = existsSync(runtimeNode) ? runtimeNode : 'node';
 const backendLogPath = path.join(userDataDir, 'logs', 'backend.log');
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.aiinwork.mtlcode');
+}
 
 let backendProcess = null;
 let mainWindow = null;
@@ -107,6 +111,52 @@ ipcMain.handle('dialog:select-project-root', async (event, options = {}) => {
     canceled: false,
     path: result.filePaths[0],
   };
+});
+
+const normalizeNotificationText = (value, fallback = '') => {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized || fallback;
+};
+
+ipcMain.handle('notification:show', async (event, options = {}) => {
+  if (!isTrustedRenderer(event)) {
+    return { success: false, error: 'Untrusted renderer' };
+  }
+
+  const title = normalizeNotificationText(options?.title, 'Argus');
+  const body = normalizeNotificationText(options?.body);
+  const tag = normalizeNotificationText(options?.tag);
+
+  if (!Notification.isSupported()) {
+    return { success: false, error: 'Native notifications are not supported' };
+  }
+
+  const notification = new Notification({
+    title,
+    body,
+    tag,
+    icon: resolveWindowIconPath(),
+    urgency: options?.urgency === 'critical' ? 'critical' : 'normal',
+    silent: false,
+  });
+
+  notification.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  notification.show();
+  return { success: true };
 });
 
 const isBrowserUrlAllowed = (targetUrl, projectPath = '') => {

@@ -2358,20 +2358,64 @@ function createRuntimeDiagnosticsPayload(data) {
     };
 }
 
-function summarizeMcpBindings(bindings = []) {
+function readJsonFileSync(filePath) {
+    try {
+        if (!filePath || !fs.existsSync(filePath)) {
+            return null;
+        }
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function collectConfiguredMcpServerNames(projectPath = '') {
+    const home = os.homedir();
+    const configDir = process.env.MTL_CODE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || home;
+    const candidates = uniquePaths([
+        path.join(configDir, '.mtl-code.json'),
+        path.join(process.env.CLAUDE_CONFIG_DIR || home, '.claude.json'),
+        projectPath ? path.join(projectPath, '.mtl-code.json') : '',
+        projectPath ? path.join(projectPath, '.claude.json') : '',
+    ]);
+    const names = new Set();
+
+    for (const configPath of candidates) {
+        const config = readJsonFileSync(configPath);
+        const servers = config?.mcpServers && typeof config.mcpServers === 'object'
+            ? config.mcpServers
+            : null;
+        if (!servers) {
+            continue;
+        }
+        for (const serverName of Object.keys(servers)) {
+            if (serverName.trim()) {
+                names.add(serverName.trim());
+            }
+        }
+    }
+
+    return names;
+}
+
+function summarizeMcpBindings(bindings = [], projectPath = '') {
     if (!Array.isArray(bindings)) {
         return [];
     }
+    const configuredServers = collectConfiguredMcpServerNames(projectPath);
     return bindings
         .filter((binding) => String(binding?.app || '').startsWith('MCP: '))
         .map((binding) => {
             const serverName = String(binding.app || '').replace(/^MCP:\s*/, '').trim();
+            const isConfigured = configuredServers.has(serverName);
             return {
                 slot: binding.slot || '',
                 serverName,
                 status: binding.status || 'optional',
-                runtimeToolsStatus: 'discovered-after-session-start',
-                message: 'Configuration is bound; Argus runtime discovers MCP tools when the session starts.',
+                runtimeToolsStatus: configuredServers.has(serverName) ? 'configured' : 'missing',
+                message: isConfigured
+                    ? 'Selected MCP server is present in the runtime config.'
+                    : 'selected MCP server is not present in the runtime config',
             };
         });
 }
@@ -2389,6 +2433,29 @@ function emitRuntimeDiagnostics(writer, data) {
         provider: payload.provider || 'claude',
         sessionId: payload.sessionId || null,
         agentRuntime: payload,
+    }));
+}
+
+function emitObsidianContextResult(writer, data) {
+    const context = data?.options?.obsidianContext;
+    if (!context || typeof context !== 'object') {
+        return;
+    }
+    writer.send(createNormalizedMessage({
+        kind: 'status',
+        text: '',
+        event: 'obsidian_context_result',
+        provider: getProviderFromCommandType(data?.type),
+        sessionId: data?.options?.sessionId || data?.sessionId || null,
+        messageId: data?.options?.clientMessageId || data?.clientMessageId || null,
+        obsidianContext: context,
+        used: context.used,
+        resultCount: context.resultCount,
+        reranked: context.reranked,
+        rerankModel: context.rerankModel,
+        tokenBudgetUsed: context.tokenBudgetUsed,
+        sources: context.sources,
+        error: context.error,
     }));
 }
 
@@ -2505,6 +2572,7 @@ async function applyAgentRuntimeToChatCommand(data) {
         })
         : null;
     const resolvedSessionModel = sessionModelRuntime?.env?.ANTHROPIC_MODEL
+        || sessionModelRuntime?.env?.OPENAI_MODEL
         || sessionModelRuntime?.profile?.requestModel
         || sessionModelRuntime?.profile?.model
         || '';
@@ -2558,6 +2626,7 @@ async function applyAgentRuntimeToChatCommand(data) {
         const skillReferences = await resolveSkillReferences(sessionSkills, {
             query: typeof data.command === 'string' ? data.command : '',
             workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+            contextWindowTokens: resolvedContextWindowTokens,
         });
         const appendSystemPrompt = skillReferences.prompt;
         if (!appendSystemPrompt) {
@@ -2611,12 +2680,14 @@ async function applyAgentRuntimeToChatCommand(data) {
         query: typeof data.command === 'string' ? data.command : '',
         sessionConfiguration,
         workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+        contextWindowTokens: resolvedContextWindowTokens,
     });
     if (!runtime) {
         if (sessionSkills.length > 0) {
             const skillReferences = await resolveSkillReferences(sessionSkills, {
                 query: typeof data.command === 'string' ? data.command : '',
                 workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+                contextWindowTokens: resolvedContextWindowTokens,
             });
             const appendSystemPrompt = skillReferences.prompt;
             if (!appendSystemPrompt) {
@@ -2670,6 +2741,7 @@ async function applyAgentRuntimeToChatCommand(data) {
     const skillReferences = await resolveSkillReferences(runtime.agent.skills, {
         query: typeof data.command === 'string' ? data.command : '',
         workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
+        contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
     });
 
     if (allowSessionAgentBinding && concreteSessionId) {
@@ -2692,7 +2764,10 @@ async function applyAgentRuntimeToChatCommand(data) {
             agentName: runtime.agent.name,
             appBindings: runtime.agent.appBindings,
             mcpBindings: runtime.agent.appBindings.filter((binding) => String(binding?.app || '').startsWith('MCP: ')),
-            mcpDiagnosticsSummary: summarizeMcpBindings(runtime.agent.appBindings),
+            mcpDiagnosticsSummary: summarizeMcpBindings(
+                runtime.agent.appBindings,
+                data?.options?.projectPath || data?.options?.cwd || '',
+            ),
             sessionSkills,
             effectiveSkills: runtime.agent.skills,
             skillDetails: skillReferences.details,
@@ -2751,6 +2826,7 @@ function handleChatConnection(ws, request) {
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(data)),
                 ));
                 emitRuntimeDiagnostics(writer, commandData);
+                emitObsidianContextResult(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -2818,6 +2894,7 @@ function handleChatConnection(ws, request) {
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
                 emitRuntimeDiagnostics(writer, commandData);
+                emitObsidianContextResult(writer, commandData);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -2830,6 +2907,7 @@ function handleChatConnection(ws, request) {
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
                 emitRuntimeDiagnostics(writer, commandData);
+                emitObsidianContextResult(writer, commandData);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -2842,6 +2920,7 @@ function handleChatConnection(ws, request) {
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
                 emitRuntimeDiagnostics(writer, commandData);
+                emitObsidianContextResult(writer, commandData);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');

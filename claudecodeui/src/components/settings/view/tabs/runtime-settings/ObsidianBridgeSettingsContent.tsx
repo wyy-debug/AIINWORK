@@ -73,16 +73,15 @@ type MemoryCandidate = {
   status: string;
 };
 
-type RoutingPreview = {
-  mode?: ObsidianBridgeMode;
-  routingMode?: ObsidianBridgeMode;
-  routingReason?: string;
-  routingSignals?: string[];
-  routingConfidence?: number;
-  confidence?: number;
-  wouldWrite?: boolean;
-  memoryAction?: string;
-};
+const WIKI_SUMMARY_TYPES = [
+  { value: 'auto', label: '自动总结' },
+  { value: 'technical-review', label: '技术评审' },
+  { value: 'project-summary', label: '项目总结' },
+  { value: 'reading-note', label: '阅读笔记' },
+  { value: 'decision-adr', label: '决策 ADR' },
+  { value: 'meeting-notes', label: '会议纪要' },
+  { value: 'general-wiki', label: '通用 Wiki' },
+];
 
 type DuplicateCleanupStatus = {
   duplicateGroups?: unknown[];
@@ -132,26 +131,6 @@ const DEFAULT_CONFIG: ObsidianBridgeConfig = {
   wikiMetaFolder: 'Argus/_Meta',
 };
 
-const MODES: Array<{ value: ObsidianBridgeMode; label: string; description: string }> = [
-  {
-    value: 'project-knowledge',
-    label: '项目知识库',
-    description: '计划、总结、会话记录和决策沉淀。',
-  },
-  {
-    value: 'second-brain',
-    label: '第二大脑',
-    description: '日记、阅读、想法、人物和长期主题。',
-  },
-  {
-    value: 'ai-memory',
-    label: 'AI 记忆',
-    description: '偏好、长期事实、决策和回忆索引。',
-  },
-];
-
-const getModeLabel = (mode?: string) => MODES.find((entry) => entry.value === mode)?.label || mode || '未选择';
-
 const parseJson = async <T,>(response: Response): Promise<T> => {
   const data = await response.json();
   if (!response.ok || data?.error) {
@@ -165,6 +144,15 @@ type ObsidianBridgeSettingsContentProps = {
   selectedProject?: SettingsProject | null;
   onOpenSmallModelSettings?: () => void;
 };
+
+type ObsidianBridgeTab = 'connection' | 'knowledge' | 'advanced';
+
+const OBSIDIAN_BRIDGE_TABS: Array<{ id: ObsidianBridgeTab; label: string }> = [
+  { id: 'connection', label: '连接' },
+  { id: 'knowledge', label: '知识库' },
+  { id: 'advanced', label: '高级' },
+];
+const OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT = 'argusObsidianBridgeSettingsChanged';
 
 export default function ObsidianBridgeSettingsContent({
   projects = [],
@@ -186,20 +174,18 @@ export default function ObsidianBridgeSettingsContent({
   const [activeNotePreview, setActiveNotePreview] = useState('');
   const [mcpInstallText, setMcpInstallText] = useState('');
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
-  const [routingPreviewText, setRoutingPreviewText] = useState('请总结这篇阅读笔记，保留长期想法和用户偏好。');
-  const [routingPreview, setRoutingPreview] = useState<RoutingPreview | null>(null);
-  const [isTestingRouting, setIsTestingRouting] = useState(false);
   const [duplicateStatus, setDuplicateStatus] = useState<DuplicateCleanupStatus | null>(null);
   const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState<BackfillStatus | null>(null);
   const [isRunningBackfill, setIsRunningBackfill] = useState(false);
-  const [isTestingWikiCompiler, setIsTestingWikiCompiler] = useState(false);
-  const [wikiCompilerStatus, setWikiCompilerStatus] = useState('');
   const [knowledgeUploadProjectName, setKnowledgeUploadProjectName] = useState(
     () => selectedProject?.name || projects[0]?.name || '',
   );
+  const [knowledgeUploadSummaryType, setKnowledgeUploadSummaryType] = useState('auto');
   const [isUploadingKnowledgeFiles, setIsUploadingKnowledgeFiles] = useState(false);
   const [knowledgeUploadStatus, setKnowledgeUploadStatus] = useState('');
+  const [wikiReadbackPreview, setWikiReadbackPreview] = useState('');
+  const [selectedObsidianTab, setSelectedObsidianTab] = useState<ObsidianBridgeTab>('connection');
   const knowledgeUploadInputRef = useRef<HTMLInputElement>(null);
 
   const loadVaults = async ({ quiet = false } = {}) => {
@@ -337,6 +323,7 @@ export default function ObsidianBridgeSettingsContent({
       setConfig(nextConfig);
       setReadableFoldersText(nextConfig.readableVaultFolders.join('\n'));
       setToken('');
+      window.dispatchEvent(new Event(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT));
       if (!quiet) {
         setMessage('Obsidian Bridge 设置已保存。');
       }
@@ -391,7 +378,7 @@ export default function ObsidianBridgeSettingsContent({
           method: 'POST',
           body: JSON.stringify({ ...payload, sourceTypes: ['markdown', 'canvas', 'excalidraw'] }),
         })),
-        parseJson<{ context?: string; results?: unknown[] }>(await apiFetch('/api/obsidian-bridge/context', {
+        parseJson<{ context?: string; results?: unknown[]; sources?: Array<{ path?: string; title?: string; snippet?: string; hitReason?: string }>; reranked?: boolean; rerankModel?: string; tokenBudgetUsed?: number }>(await apiFetch('/api/obsidian-bridge/context', {
           method: 'POST',
           body: JSON.stringify(payload),
         })),
@@ -399,6 +386,18 @@ export default function ObsidianBridgeSettingsContent({
       const searchCount = Array.isArray(searchData.results) ? searchData.results.length : 0;
       const queryCount = Array.isArray(queryData.results) ? queryData.results.length : 0;
       const contextCount = Array.isArray(contextData.results) ? contextData.results.length : 0;
+      const contextSources = Array.isArray(contextData.sources) ? contextData.sources : [];
+      setWikiReadbackPreview([
+        contextData.reranked ? `小模型已筛选：${contextData.rerankModel || '已启用'}` : '使用规则排序结果',
+        `最终注入来源：${contextSources.length || contextCount} 条`,
+        contextData.tokenBudgetUsed ? `注入长度预算：${contextData.tokenBudgetUsed}` : '',
+        ...contextSources.slice(0, 5).map((source, index) => [
+          `${index + 1}. ${source.title || source.path || 'Wiki source'}`,
+          source.path ? `Path: ${source.path}` : '',
+          source.hitReason ? `命中原因：${source.hitReason}` : '',
+          source.snippet ? `Snippet: ${source.snippet}` : '',
+        ].filter(Boolean).join('\n')),
+      ].filter(Boolean).join('\n\n'));
       setMessage(`搜索返回 ${searchCount} 篇笔记；结构化查询返回 ${queryCount} 个来源；上下文返回 ${contextCount} 篇笔记。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Obsidian 搜索/上下文测试失败。');
@@ -424,30 +423,6 @@ export default function ObsidianBridgeSettingsContent({
       setMessage(error instanceof Error ? error.message : '测试当前笔记失败。');
     } finally {
       setIsTestingReadback(false);
-    }
-  };
-
-  const testRouting = async () => {
-    setIsTestingRouting(true);
-    try {
-      await save({ quiet: true });
-      const data = await parseJson<RoutingPreview>(
-        await apiFetch('/api/obsidian-bridge/routing/preview', {
-          method: 'POST',
-          body: JSON.stringify({
-            content: routingPreviewText,
-            defaultMode: config.defaultMode,
-          }),
-        }),
-      );
-      setRoutingPreview(data);
-      const mode = data.routingMode || data.mode || config.defaultMode;
-      const confidence = data.routingConfidence ?? data.confidence ?? 0;
-      setMessage(`自动路由：${getModeLabel(mode)}（${Math.round(confidence * 100)}%）。`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Obsidian 自动路由测试失败。');
-    } finally {
-      setIsTestingRouting(false);
     }
   };
 
@@ -518,46 +493,6 @@ export default function ObsidianBridgeSettingsContent({
     }
   };
 
-  const compileWiki = async () => {
-    setIsTestingWikiCompiler(true);
-    try {
-      await save({ quiet: true });
-      const data = await parseJson<{ wikiPath?: string; artifactId?: string }>(
-        await apiFetch('/api/obsidian-bridge/wiki/compile', {
-          method: 'POST',
-          body: JSON.stringify({ artifactId: '' }),
-        }),
-      );
-      setWikiCompilerStatus(data.wikiPath ? `Wiki Compiler 已编译：${data.wikiPath}` : 'Wiki Compiler 已连接。');
-      setMessage('Wiki Compiler 测试完成。');
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Wiki Compiler 编译测试失败。';
-      setWikiCompilerStatus(text);
-      setMessage(text);
-    } finally {
-      setIsTestingWikiCompiler(false);
-    }
-  };
-
-  const lintWikiCompiler = async () => {
-    setIsTestingWikiCompiler(true);
-    try {
-      await save({ quiet: true });
-      const data = await parseJson<{ issues?: unknown[]; checked?: number }>(
-        await apiFetch('/api/obsidian-bridge/wiki/lint', { method: 'POST' }),
-      );
-      const issues = Array.isArray(data.issues) ? data.issues.length : 0;
-      setWikiCompilerStatus(`Wiki Compiler lint：检查 ${data.checked || 0} 篇，发现 ${issues} 个问题。`);
-      setMessage('Wiki Compiler lint 完成。');
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Wiki Compiler lint 失败。';
-      setWikiCompilerStatus(text);
-      setMessage(text);
-    } finally {
-      setIsTestingWikiCompiler(false);
-    }
-  };
-
   const uploadKnowledgeFiles = async (files: FileList | null) => {
     const selectedFiles = Array.from(files || []);
     if (selectedFiles.length === 0) return;
@@ -576,6 +511,7 @@ export default function ObsidianBridgeSettingsContent({
         formData.append('files', file);
       });
       formData.append('projectName', projectName);
+      formData.append('summaryType', knowledgeUploadSummaryType);
 
       const data = await parseJson<{
         importBatchId?: string;
@@ -586,6 +522,14 @@ export default function ObsidianBridgeSettingsContent({
           wikiCompiler?: string;
           wikiCompileChunks?: number;
           wikiCompileFallbackReason?: string;
+          summaryType?: string;
+          compileQualityStatus?: string;
+          compileRepairAttempts?: number;
+          extractionStatus?: string;
+          extractionEngine?: string;
+          extractionFailureReason?: string;
+          pdfExtractedPages?: number;
+          pdfTruncated?: boolean;
         }>;
       }>(
         await apiFetch('/api/obsidian-bridge/wiki/upload', {
@@ -602,8 +546,24 @@ export default function ObsidianBridgeSettingsContent({
       const fallbackCount = imported.filter((entry) => (
         entry.wikiCompiler === 'deterministic' && Boolean(entry.wikiCompileFallbackReason)
       )).length;
+      const repairedCount = imported.filter((entry) => entry.compileQualityStatus === 'repaired').length;
+      const needsReviewCount = imported.filter((entry) => entry.compileQualityStatus === 'needs-review').length;
       const chunkCount = imported.reduce((total, entry) => total + (Number(entry.wikiCompileChunks) || 0), 0);
+      const pdfExtractedCount = imported.filter((entry) => (
+        entry.extractionEngine === 'pdfjs-dist' && entry.extractionStatus === 'extracted'
+      )).length;
+      const pdfFailedReasons = [...new Set(imported
+        .filter((entry) => entry.extractionEngine === 'pdfjs-dist' && entry.extractionStatus === 'extract_failed')
+        .map((entry) => entry.extractionFailureReason || 'extract_failed'))];
+      const pdfExtractedPages = imported.reduce((total, entry) => total + (Number(entry.pdfExtractedPages) || 0), 0);
+      const pdfTruncatedCount = imported.filter((entry) => entry.pdfTruncated).length;
+      const qualitySummary = [
+        repairedCount ? `${repairedCount} repaired` : '',
+        needsReviewCount ? `${needsReviewCount} needs review` : '',
+      ].filter(Boolean).join(' / ');
       setKnowledgeUploadStatus([
+        qualitySummary,
+        `总结类型：${knowledgeUploadSummaryType}`,
         `上传完成：${rawCount} 个文件进入 Raw，${wikiCount} 个已编译 Wiki`,
         smallModelCount ? `${smallModelCount} 个小模型编译` : '',
         fallbackCount ? `${fallbackCount} 个 fallback 编译` : '',
@@ -611,6 +571,14 @@ export default function ObsidianBridgeSettingsContent({
         failedCount ? `${failedCount} 个需稍后重试` : '',
       ].filter(Boolean).join('，') + '。');
       setMessage(data.importBatchId ? `导入批次：${data.importBatchId}` : '知识库上传完成。');
+      const pdfStatusSuffix = [
+        pdfExtractedCount ? `${pdfExtractedCount} 个 PDF 已抽取文本（${pdfExtractedPages} 页）` : '',
+        pdfTruncatedCount ? `${pdfTruncatedCount} 个 PDF 文本过长已截断` : '',
+        pdfFailedReasons.length ? `PDF 抽取失败：${pdfFailedReasons.join(' / ')}` : '',
+      ].filter(Boolean).join('；');
+      if (pdfStatusSuffix) {
+        setKnowledgeUploadStatus((previous) => [previous, pdfStatusSuffix].filter(Boolean).join(' '));
+      }
       window.dispatchEvent(new CustomEvent('argus-refresh-workflow-counts'));
     } catch (error) {
       const nextMessage = error instanceof Error ? error.message : '上传到知识库失败。';
@@ -667,133 +635,127 @@ export default function ObsidianBridgeSettingsContent({
     }
   };
 
-  const selectedMode = MODES.find((mode) => mode.value === config.defaultMode) || MODES[0];
-
-  return (
-    <div className="rounded-lg border border-border/70 bg-card p-4">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <BookOpen className="h-4 w-4" />
-            <span>Obsidian 知识库</span>
+  const renderConnectionTab = () => (
+    <div className="space-y-4">
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-foreground">启用 Bridge</div>
+            <p className="mt-1 text-xs text-muted-foreground">打开后，Argus 会通过本机 Obsidian 插件写入和读取 Wiki。</p>
           </div>
-          <h3 className="mt-1 text-lg font-semibold text-foreground">Argus Bridge for Obsidian</h3>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            将自动沉淀的知识文档写入本机 Obsidian 插件；不可达时可回退到项目文档。
-          </p>
+          <SettingsToggle
+            checked={config.enabled}
+            onChange={(enabled) => setConfig((previous) => ({ ...previous, enabled }))}
+            ariaLabel="启用 Obsidian Bridge"
+            disabled={isSaving || isTesting}
+          />
         </div>
-        <SettingsToggle
-          checked={config.enabled}
-          onChange={(enabled) => setConfig((previous) => ({ ...previous, enabled }))}
-          ariaLabel="启用 Obsidian Bridge"
-          disabled={isSaving || isTesting}
-        />
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <div className="rounded-md border border-border/70 bg-muted/20 p-3 lg:col-span-2">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end">
-            <div className="min-w-0 flex-1">
-              <label className="text-sm font-medium text-foreground">Obsidian vault</label>
-              {vaults.length > 0 && (
-                <select
-                  className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={selectedVaultPath}
-                  onChange={(event) => setSelectedVaultPath(event.target.value)}
-                >
-                  {vaults.map((vault) => (
-                    <option key={vault.path} value={vault.path}>
-                      {vault.name}
-                      {vault.open ? '（已打开）' : ''}
-                      {vault.pluginInstalled ? ` - argus-bridge ${vault.pluginVersion || '已安装'}` : ''}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <input
-                className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end">
+          <div className="min-w-0 flex-1">
+            <label className="text-sm font-medium text-foreground">Vault / 安装插件</label>
+            {vaults.length > 0 && (
+              <select
+                className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={selectedVaultPath}
                 onChange={(event) => setSelectedVaultPath(event.target.value)}
-                placeholder="C:\Users\you\Documents\ObsidianVault"
-              />
-            </div>
-            <div className="flex shrink-0 flex-col gap-2 sm:flex-row md:pb-0">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void loadVaults()}
-                disabled={isLoadingVaults || isInstallingPlugin}
               >
-                {isLoadingVaults ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-                刷新 vault
-              </Button>
-              <Button
-                type="button"
-                onClick={installPluginToVault}
-                disabled={isInstallingPlugin || !selectedVaultPath.trim()}
-              >
-                {isInstallingPlugin ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-                安装插件到 vault
-              </Button>
-            </div>
+                {vaults.map((vault) => (
+                  <option key={vault.path} value={vault.path}>
+                    {vault.name}
+                    {vault.open ? '（已打开）' : ''}
+                    {vault.pluginInstalled ? ` - argus-bridge ${vault.pluginVersion || '已安装'}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+            <input
+              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={selectedVaultPath}
+              onChange={(event) => setSelectedVaultPath(event.target.value)}
+              placeholder="C:\Users\you\Documents\ObsidianVault"
+            />
           </div>
-        </div>
-
-        {config.vaults.length > 0 && (
-          <div className="rounded-md border border-border/70 bg-muted/20 p-3 lg:col-span-2">
-            <label className="text-sm font-medium text-foreground">当前桥接 vault</label>
-            <select
-              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={config.activeVaultId}
-              onChange={(event) => {
-                const vault = config.vaults.find((entry) => entry.vaultId === event.target.value);
-                setConfig((previous) => ({
-                  ...previous,
-                  activeVaultId: event.target.value,
-                  endpoint: vault?.endpoint || previous.endpoint,
-                  vaultName: vault?.name || previous.vaultName,
-                  readableVaultFolders: vault?.readableFolders || previous.readableVaultFolders,
-                }));
-                if (vault?.readableFolders) {
-                  setReadableFoldersText(vault.readableFolders.join('\n'));
-                }
-              }}
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void loadVaults()}
+              disabled={isLoadingVaults || isInstallingPlugin}
             >
-              {config.vaults.map((vault) => (
-                <option key={vault.vaultId} value={vault.vaultId}>
-                  {vault.name || vault.vaultId}
-                  {vault.tokenConfigured ? ' - 已配置 token' : ' - 缺少 token'}
-                </option>
-              ))}
-            </select>
+              {isLoadingVaults ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+              刷新 vault
+            </Button>
+            <Button
+              type="button"
+              onClick={installPluginToVault}
+              disabled={isInstallingPlugin || !selectedVaultPath.trim()}
+            >
+              {isInstallingPlugin ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+              安装插件到 vault
+            </Button>
           </div>
-        )}
-
-        <div>
-          <label className="text-sm font-medium text-foreground">插件地址</label>
-          <input
-            className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            value={config.endpoint}
-            onChange={(event) => setConfig((previous) => ({ ...previous, endpoint: event.target.value }))}
-            placeholder="http://127.0.0.1:27177"
-          />
-          <p className="mt-2 text-xs text-muted-foreground">只接受 127.0.0.1 和 localhost 地址。</p>
-        </div>
-
-        <div>
-          <label className="text-sm font-medium text-foreground">配对 token</label>
-          <input
-            className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            value={token}
-            type="password"
-            onChange={(event) => setToken(event.target.value)}
-            placeholder={config.tokenConfigured ? '已配置 token' : '粘贴插件 token'}
-          />
-          <p className="mt-2 text-xs text-muted-foreground">留空会继续使用当前 token。</p>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
+      {config.vaults.length > 0 && (
+        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+          <label className="text-sm font-medium text-foreground">当前 vault</label>
+          <select
+            className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={config.activeVaultId}
+            onChange={(event) => {
+              const vault = config.vaults.find((entry) => entry.vaultId === event.target.value);
+              setConfig((previous) => ({
+                ...previous,
+                activeVaultId: event.target.value,
+                endpoint: vault?.endpoint || previous.endpoint,
+                vaultName: vault?.name || previous.vaultName,
+                readableVaultFolders: vault?.readableFolders || previous.readableVaultFolders,
+              }));
+              if (vault?.readableFolders) {
+                setReadableFoldersText(vault.readableFolders.join('\n'));
+              }
+            }}
+          >
+            {config.vaults.map((vault) => (
+              <option key={vault.vaultId} value={vault.vaultId}>
+                {vault.name || vault.vaultId}
+                {vault.tokenConfigured ? ' - 已配置 token' : ' - 缺少 token'}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+          <label className="text-sm font-medium text-foreground">
+            Token / 测试连接
+            <input
+              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={token}
+              type="password"
+              onChange={(event) => setToken(event.target.value)}
+              placeholder={config.tokenConfigured ? '已配置 token' : '粘贴插件 token'}
+            />
+            <span className="mt-2 block text-xs font-normal text-muted-foreground">留空会继续使用当前 token。</span>
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={testConnection}
+            disabled={isSaving || isTesting || isTestingReadback}
+          >
+            {isTesting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+            测试连接
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-md border border-border/70 bg-muted/25 p-3">
           <div className="text-xs text-muted-foreground">Vault</div>
           <div className="mt-1 truncate text-sm font-medium text-foreground">{config.vaultName || '未连接'}</div>
@@ -808,80 +770,40 @@ export default function ObsidianBridgeSettingsContent({
             {config.lastConnection ? new Date(config.lastConnection).toLocaleString() : '从未连接'}
           </div>
         </div>
-      </div>
-
-      <div className="mt-5">
-        <div className="text-sm font-semibold text-foreground">核心开关</div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          日常只需要确认这几项；目录、路由测试、MCP 和清理工具收在下面的高级设置里。
-        </p>
-      </div>
-
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
-        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-foreground">手动上传/保存到 Wiki</div>
-              <p className="mt-1 text-xs text-muted-foreground">默认由你主动上传文件或从结果保存；自动判断默认关闭，打开后才会自动捕获知识结果。</p>
-            </div>
-            <SettingsToggle
-              checked={config.autoExportKnowledgeArtifacts}
-              onChange={(autoExportKnowledgeArtifacts) => setConfig((previous) => ({
-                ...previous,
-                autoExportKnowledgeArtifacts,
-                autoExportKnowledgeArtifactsOptIn: autoExportKnowledgeArtifacts,
-              }))}
-              ariaLabel="允许自动判断写入 Wiki"
-            />
-          </div>
-        </div>
-        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-foreground">不可达时回退到项目文档</div>
-              <p className="mt-1 text-xs text-muted-foreground">Obsidian 不可达时，把 Markdown 写入 docs/knowledge。</p>
-            </div>
-            <SettingsToggle
-              checked={config.fallbackToProjectKnowledge}
-              onChange={(fallbackToProjectKnowledge) => setConfig((previous) => ({
-                ...previous,
-                fallbackToProjectKnowledge,
-              }))}
-              ariaLabel="不可达时回退到项目文档"
-            />
-          </div>
+        <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+          <div className="text-xs text-muted-foreground">最近错误</div>
+          <div className="mt-1 truncate text-sm font-medium text-foreground">{config.lastError || '无'}</div>
         </div>
       </div>
+    </div>
+  );
 
-      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Sparkles className="h-4 w-4" />
-              <span>小模型增强</span>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              小模型是全局 Agent 能力，用于 Wiki 自动分类和回读筛选；模型、协议和 token 在 Agent 设置里统一维护。
-            </p>
-          </div>
-          <Button type="button" variant="outline" onClick={onOpenSmallModelSettings}>
-            打开小模型设置
-          </Button>
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
+  const renderKnowledgeTab = () => (
+    <div className="space-y-4">
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
               <UploadCloud className="h-4 w-4" />
-              <span>上传现有文件</span>
+              <span>上传/保存成 Wiki</span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Markdown、PDF、Office、HTML、CSV、JSON 等文件会先进入 Raw → Wiki → Index，再由 Wiki 回读注入对话。
             </p>
           </div>
           <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            <select
+              className="h-9 min-w-[150px] rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={knowledgeUploadSummaryType}
+              onChange={(event) => setKnowledgeUploadSummaryType(event.target.value)}
+              aria-label="Wiki 总结类型"
+            >
+              {WIKI_SUMMARY_TYPES.map((type) => (
+                <option key={type.value} value={type.value}>
+                  {type.label}
+                </option>
+              ))}
+            </select>
             {projects.length > 0 ? (
               <select
                 className="h-9 min-w-[180px] rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -919,7 +841,7 @@ export default function ObsidianBridgeSettingsContent({
               disabled={isUploadingKnowledgeFiles || !knowledgeUploadProjectName.trim()}
             >
               {isUploadingKnowledgeFiles ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              上传到知识库
+              上传现有文件
             </Button>
           </div>
         </div>
@@ -930,171 +852,192 @@ export default function ObsidianBridgeSettingsContent({
         )}
       </div>
 
-      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Brain className="h-4 w-4" />
-              <span>Wiki 回读注入</span>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">发送聊天消息时，Argus 会从 Wiki 和索引里读取一小段上下文注入本轮请求。</p>
-          </div>
-          <SettingsToggle
-            checked={config.wikiReadbackEnabled && config.aiMemoryReadbackEnabled}
-            onChange={(enabled) => setConfig((previous) => ({
-              ...previous,
-              wikiReadbackEnabled: enabled,
-              aiMemoryReadbackEnabled: enabled,
-            }))}
-            ariaLabel="启用 Wiki 回读注入"
-          />
-        </div>
-        <details className="mt-3 rounded-md border border-border/70 bg-background/45 p-3">
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">读回测试和当前笔记</summary>
-          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_160px]">
-            <label className="text-xs font-medium text-muted-foreground">
-              测试查询
-              <input
-                className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={readbackQuery}
-                onChange={(event) => setReadbackQuery(event.target.value)}
-              />
-            </label>
-            <label className="text-xs font-medium text-muted-foreground">
-              最大结果数
-              <input
-                className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                type="number"
-                min={1}
-                max={20}
-                value={config.aiMemoryMaxResults}
-                onChange={(event) => setConfig((previous) => ({
-                  ...previous,
-                  aiMemoryMaxResults: Number.parseInt(event.target.value, 10) || DEFAULT_CONFIG.aiMemoryMaxResults,
-                }))}
-              />
-            </label>
-          </div>
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={config.aiMemoryProjectScopeEnabled}
-                onChange={(event) => setConfig((previous) => ({
-                  ...previous,
-                  aiMemoryProjectScopeEnabled: event.target.checked,
-                }))}
-              />
-              优先读取当前项目范围内的 AI 记忆目录。
-            </label>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={testSearchAndContext}
-              disabled={isSaving || isTestingReadback}
-            >
-              {isTestingReadback ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-              测试 search/context
-            </Button>
-          </div>
-          <div className="mt-3 flex flex-col gap-3 rounded-md border border-border/70 bg-background/50 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={config.activeNoteReadbackEnabled}
-                onChange={(event) => setConfig((previous) => ({
-                  ...previous,
-                  activeNoteReadbackEnabled: event.target.checked,
-                }))}
-              />
-              对话读回时包含当前 Obsidian 笔记或选中文本。
-            </label>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={testActiveNote}
-              disabled={isSaving || isTestingReadback}
-            >
-              测试当前笔记
-            </Button>
-          </div>
-          {activeNotePreview && (
-            <div className="mt-2 truncate rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-              {activeNotePreview}
-            </div>
-          )}
-        </details>
-      </div>
-
-      <details className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
-        <summary className="cursor-pointer text-sm font-semibold text-foreground">高级设置</summary>
-        <p className="mt-1 text-xs text-muted-foreground">
-          只有需要调试、迁移、清理重复笔记或自定义目录时才需要展开。
-        </p>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <label className="text-sm font-medium text-foreground">
-          Daily note 目录
-          <input
-            className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            value={config.dailyNoteFolder}
-            onChange={(event) => setConfig((previous) => ({ ...previous, dailyNoteFolder: event.target.value }))}
-            placeholder="Daily"
-          />
-        </label>
-        <label className="text-sm font-medium text-foreground">
-          Daily note 标题
-          <input
-            className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            value={config.dailyNoteHeading}
-            onChange={(event) => setConfig((previous) => ({ ...previous, dailyNoteHeading: event.target.value }))}
-            placeholder="Argus"
-          />
-        </label>
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-3">
-        <div className="rounded-md border border-border/70 bg-muted/20 p-3 lg:col-span-2">
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-foreground">测试自动路由</div>
-              <p className="mt-1 text-xs text-muted-foreground">预览一段回复会进入哪个 Obsidian 库，并显示置信度和命中信号。</p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Brain className="h-4 w-4" />
+                <span>Wiki 回读注入</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">发送聊天消息时，从 Wiki 和索引里读取短上下文注入本轮请求。</p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={testRouting}
-              disabled={isTestingRouting || isSaving}
-            >
-              {isTestingRouting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              测试自动路由
-            </Button>
+            <SettingsToggle
+              checked={config.wikiReadbackEnabled && config.aiMemoryReadbackEnabled}
+              onChange={(enabled) => setConfig((previous) => ({
+                ...previous,
+                wikiReadbackEnabled: enabled,
+                aiMemoryReadbackEnabled: enabled,
+              }))}
+              ariaLabel="启用 Wiki 回读注入"
+            />
           </div>
-          <textarea
-            className="mt-3 min-h-24 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            value={routingPreviewText}
-            onChange={(event) => setRoutingPreviewText(event.target.value)}
-          />
-          {routingPreview && (
-            <div className="mt-3 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-              <div className="font-medium text-foreground">
-                {getModeLabel(routingPreview.routingMode || routingPreview.mode || config.defaultMode)}
-                {' '}
-                ({Math.round(((routingPreview.routingConfidence ?? routingPreview.confidence ?? 0) as number) * 100)}%)
-              </div>
-              <div className="mt-1">
-                是否写入：{routingPreview.wouldWrite === false ? '否' : '是'}
-                {' · '}
-                AI 记忆处理：{routingPreview.memoryAction || '无'}
-              </div>
-              {routingPreview.routingReason && <div className="mt-1">{routingPreview.routingReason}</div>}
-              {Array.isArray(routingPreview.routingSignals) && routingPreview.routingSignals.length > 0 && (
-                <div className="mt-1">命中信号：{routingPreview.routingSignals.join(', ')}</div>
-              )}
-            </div>
-          )}
         </div>
 
+        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Sparkles className="h-4 w-4" />
+                <span>小模型设置</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">Wiki 总结和回读筛选复用 Agent 全局小模型配置。</p>
+            </div>
+            <Button type="button" variant="outline" onClick={onOpenSmallModelSettings}>
+              打开小模型设置
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderAdvancedTab = () => (
+    <div className="space-y-4">
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <Search className="h-4 w-4" />
+          <span>高级诊断</span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">只有调试连接、迁移旧数据、清理重复笔记或自定义目录时才需要修改。</p>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="text-sm font-medium text-foreground">
+          Endpoint
+          <input
+            className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={config.endpoint}
+            onChange={(event) => setConfig((previous) => ({ ...previous, endpoint: event.target.value }))}
+            placeholder="http://127.0.0.1:27177"
+          />
+          <span className="mt-2 block text-xs font-normal text-muted-foreground">只接受 127.0.0.1 和 localhost 地址。</span>
+        </label>
+        <label className="text-sm font-medium text-foreground">
+          可读目录
+          <textarea
+            className="mt-2 min-h-24 w-full resize-none rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={readableFoldersText}
+            onChange={(event) => setReadableFoldersText(event.target.value)}
+          />
+        </label>
+      </div>
+
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="text-sm font-medium text-foreground">Raw/Wiki/Index 目录</div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <label className="text-xs font-medium text-muted-foreground">
+            Raw 目录
+            <input
+              className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiRawFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiRawFolder: event.target.value }))}
+              placeholder="Argus/Raw"
+            />
+          </label>
+          <label className="text-xs font-medium text-muted-foreground">
+            Wiki 目录
+            <input
+              className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiFolder: event.target.value }))}
+              placeholder="Argus/Wiki"
+            />
+          </label>
+          <label className="text-xs font-medium text-muted-foreground">
+            Index 目录
+            <input
+              className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={config.wikiIndexFolder}
+              onChange={(event) => setConfig((previous) => ({ ...previous, wikiIndexFolder: event.target.value }))}
+              placeholder="Argus/_Indexes"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <label className="min-w-0 flex-1 text-xs font-medium text-muted-foreground">
+            search/context 测试
+            <input
+              className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={readbackQuery}
+              onChange={(event) => setReadbackQuery(event.target.value)}
+            />
+          </label>
+          <label className="w-full text-xs font-medium text-muted-foreground lg:w-36">
+            最大结果数
+            <input
+              className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              type="number"
+              min={1}
+              max={20}
+              value={config.aiMemoryMaxResults}
+              onChange={(event) => setConfig((previous) => ({
+                ...previous,
+                aiMemoryMaxResults: Number.parseInt(event.target.value, 10) || DEFAULT_CONFIG.aiMemoryMaxResults,
+              }))}
+            />
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={testSearchAndContext}
+            disabled={isSaving || isTestingReadback}
+          >
+            {isTestingReadback ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            测试 search/context
+          </Button>
+        </div>
+        <label className="mt-3 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={config.aiMemoryProjectScopeEnabled}
+            onChange={(event) => setConfig((previous) => ({
+              ...previous,
+              aiMemoryProjectScopeEnabled: event.target.checked,
+            }))}
+          />
+          优先读取当前项目范围内的 AI 记忆目录。
+        </label>
+        {wikiReadbackPreview && (
+          <pre className="mt-3 max-h-56 overflow-auto rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+            {wikiReadbackPreview}
+          </pre>
+        )}
+      </div>
+
+      <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={config.activeNoteReadbackEnabled}
+              onChange={(event) => setConfig((previous) => ({
+                ...previous,
+                activeNoteReadbackEnabled: event.target.checked,
+              }))}
+            />
+            对话读回时包含当前 Obsidian 笔记或选中文本。
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={testActiveNote}
+            disabled={isSaving || isTestingReadback}
+          >
+            测试当前笔记
+          </Button>
+        </div>
+        {activeNotePreview && (
+          <div className="mt-3 truncate rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+            {activeNotePreview}
+          </div>
+        )}
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
         <div className="rounded-md border border-border/70 bg-muted/20 p-3">
           <div className="text-sm font-medium text-foreground">重复笔记清理</div>
           <p className="mt-1 text-xs text-muted-foreground">保留最新重复笔记，把旧副本移动到 Argus/_duplicates。</p>
@@ -1114,168 +1057,40 @@ export default function ObsidianBridgeSettingsContent({
             </div>
           )}
         </div>
+
+        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-medium text-foreground">历史补扫</div>
+              <p className="mt-1 text-xs text-muted-foreground">用同一套幂等捕获服务扫描旧 assistant 回复。</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={loadBackfillStatus}>
+                刷新状态
+              </Button>
+              <Button type="button" variant="outline" onClick={runBackfill} disabled={isRunningBackfill || isSaving}>
+                {isRunningBackfill ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
+                运行补扫
+              </Button>
+            </div>
+          </div>
+          {backfillStatus && (
+            <div className="mt-3 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+              {backfillStatus.running ? '运行中' : '空闲'}
+              {' · '}
+              会话：{backfillStatus.processed || 0}/{backfillStatus.total || 0}
+              {' · '}
+              已捕获：{backfillStatus.captured || 0}
+              {' · '}
+              已跳过：{backfillStatus.skipped || 0}
+              {' · '}
+              错误：{Array.isArray(backfillStatus.errors) ? backfillStatus.errors.length : 0}
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="text-sm font-medium text-foreground">Wiki Compiler</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              将上传文件先写入 Raw，再自动编译到 Wiki，并维护 Schema、Index 和可追溯来源。
-            </p>
-          </div>
-          <SettingsToggle
-            checked={config.wikiCompilerEnabled}
-            onChange={(wikiCompilerEnabled) => setConfig((previous) => ({ ...previous, wikiCompilerEnabled }))}
-            ariaLabel="启用 Wiki Compiler"
-          />
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-3">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={config.wikiPrimaryEnabled}
-              onChange={(event) => setConfig((previous) => ({ ...previous, wikiPrimaryEnabled: event.target.checked }))}
-            />
-            Wiki 作为唯一正文
-          </label>
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={config.wikiReadbackEnabled}
-              onChange={(event) => setConfig((previous) => ({
-                ...previous,
-                wikiReadbackEnabled: event.target.checked,
-                aiMemoryReadbackEnabled: event.target.checked,
-              }))}
-            />
-            默认回读 Wiki 注入对话
-          </label>
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={config.wikiReadbackIncludeRaw}
-              onChange={(event) => setConfig((previous) => ({ ...previous, wikiReadbackIncludeRaw: event.target.checked }))}
-            />
-            回读包含 Raw
-          </label>
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <label className="text-sm font-medium text-foreground">
-            Raw 目录
-            <input
-              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={config.wikiRawFolder}
-              onChange={(event) => setConfig((previous) => ({ ...previous, wikiRawFolder: event.target.value }))}
-              placeholder="Argus/Raw"
-            />
-          </label>
-          <label className="text-sm font-medium text-foreground">
-            Wiki 目录
-            <input
-              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={config.wikiFolder}
-              onChange={(event) => setConfig((previous) => ({ ...previous, wikiFolder: event.target.value }))}
-              placeholder="Argus/Wiki"
-            />
-          </label>
-          <label className="text-sm font-medium text-foreground">
-            Index 目录
-            <input
-              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={config.wikiIndexFolder}
-              onChange={(event) => setConfig((previous) => ({ ...previous, wikiIndexFolder: event.target.value }))}
-              placeholder="Argus/_Indexes"
-            />
-          </label>
-          <label className="text-sm font-medium text-foreground">
-            Schema 目录
-            <input
-              className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={config.wikiMetaFolder}
-              onChange={(event) => setConfig((previous) => ({ ...previous, wikiMetaFolder: event.target.value }))}
-              placeholder="Argus/_Meta"
-            />
-          </label>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={compileWiki} disabled={isTestingWikiCompiler || isSaving}>
-            {isTestingWikiCompiler ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            测试 compile
-          </Button>
-          <Button type="button" variant="outline" onClick={lintWikiCompiler} disabled={isTestingWikiCompiler || isSaving}>
-            <Search className="h-4 w-4" />
-            测试 lint
-          </Button>
-        </div>
-        {wikiCompilerStatus && (
-          <div className="mt-3 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-            {wikiCompilerStatus}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="text-sm font-medium text-foreground">历史回复自动补扫</div>
-            <p className="mt-1 text-xs text-muted-foreground">用同一套幂等捕获服务扫描旧 assistant 回复。</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={loadBackfillStatus}>
-              刷新状态
-            </Button>
-            <Button type="button" variant="outline" onClick={runBackfill} disabled={isRunningBackfill || isSaving}>
-              {isRunningBackfill ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
-              运行补扫
-            </Button>
-          </div>
-        </div>
-        {backfillStatus && (
-          <div className="mt-3 rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-            {backfillStatus.running ? '运行中' : '空闲'}
-            {' · '}
-            会话：{backfillStatus.processed || 0}/{backfillStatus.total || 0}
-            {' · '}
-            已捕获：{backfillStatus.captured || 0}
-            {' · '}
-            已跳过：{backfillStatus.skipped || 0}
-            {' · '}
-            错误：{Array.isArray(backfillStatus.errors) ? backfillStatus.errors.length : 0}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-4">
-        <label className="text-sm font-medium text-foreground">默认写入形态</label>
-        <select
-          className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          value={config.defaultMode}
-          onChange={(event) => setConfig((previous) => ({
-            ...previous,
-            defaultMode: event.target.value as ObsidianBridgeMode,
-          }))}
-        >
-          {MODES.map((mode) => (
-            <option key={mode.value} value={mode.value}>
-              {mode.label}
-            </option>
-          ))}
-        </select>
-        <p className="mt-2 text-xs text-muted-foreground">{selectedMode.description}</p>
-      </div>
-
-      <div className="mt-4">
-        <label className="text-sm font-medium text-foreground">可读取的 vault 目录</label>
-        <textarea
-          className="mt-2 min-h-24 w-full resize-none rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          value={readableFoldersText}
-          onChange={(event) => setReadableFoldersText(event.target.value)}
-        />
-        <p className="mt-2 text-xs text-muted-foreground">搜索和 AI 上下文读回只会读取这些目录。</p>
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-2">
         <div className="rounded-md border border-border/70 bg-muted/20 p-3">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1296,7 +1111,7 @@ export default function ObsidianBridgeSettingsContent({
         <div className="rounded-md border border-border/70 bg-muted/20 p-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-foreground">AI 记忆候选队列</div>
+              <div className="text-sm font-medium text-foreground">AI Memory 候选入口</div>
               <p className="mt-1 text-xs text-muted-foreground">候选内容会保持待确认，确认后才写入 AIMemory。</p>
             </div>
             <Button type="button" variant="outline" onClick={loadMemoryCandidates}>
@@ -1324,38 +1139,65 @@ export default function ObsidianBridgeSettingsContent({
           </div>
         </div>
       </div>
-      </details>
+    </div>
+  );
 
-      {config.lastError && (
-        <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {config.lastError}
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/70 bg-card">
+      <div className="p-4">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <BookOpen className="h-4 w-4" />
+          <span>Obsidian 知识库</span>
         </div>
-      )}
+        <h3 className="mt-1 text-lg font-semibold text-foreground">Argus Bridge for Obsidian</h3>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+          主界面只保留连接 Obsidian、上传/保存成 Wiki、Wiki 回读注入；诊断和迁移工具集中在高级页。
+        </p>
+      </div>
 
-      {message && (
-        <div className="mt-4 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
-          {message}
+      <div className="border-y border-border bg-background/95">
+        <div role="tablist" className="flex overflow-x-auto px-2 md:px-4">
+          {OBSIDIAN_BRIDGE_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selectedObsidianTab === tab.id}
+              onClick={() => setSelectedObsidianTab(tab.id)}
+              className={[
+                'whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium touch-manipulation transition-colors duration-150',
+                selectedObsidianTab === tab.id
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              ].join(' ')}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
-      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={testConnection}
-          disabled={isSaving || isTesting || isTestingReadback}
-        >
-          {isTesting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
-          测试连接
-        </Button>
-        <Button
-          type="button"
-          onClick={() => void save()}
-          disabled={isSaving || isTesting || isTestingReadback}
-        >
-          <Save className="h-4 w-4" />
-          保存 Bridge
-        </Button>
+      <div className="p-4">
+        {selectedObsidianTab === 'connection' && renderConnectionTab()}
+        {selectedObsidianTab === 'knowledge' && renderKnowledgeTab()}
+        {selectedObsidianTab === 'advanced' && renderAdvancedTab()}
+
+        {message && (
+          <div className="mt-4 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
+            {message}
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <Button
+            type="button"
+            onClick={() => void save()}
+            disabled={isSaving || isTesting || isTestingReadback}
+          >
+            <Save className="h-4 w-4" />
+            保存 Bridge
+          </Button>
+        </div>
       </div>
     </div>
   );

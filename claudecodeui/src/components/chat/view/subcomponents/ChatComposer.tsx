@@ -160,6 +160,7 @@ interface ChatComposerProps {
   uploadingImages: Map<string, number>;
   imageErrors: Map<string, string>;
   fileAttachmentErrors: Map<string, string>;
+  obsidianBridgeEnabled?: boolean;
   ingestAttachmentsToObsidian: boolean;
   onIngestAttachmentsToObsidianChange: (value: boolean) => void;
   showFileDropdown: boolean;
@@ -253,6 +254,7 @@ export default function ChatComposer({
   uploadingImages,
   imageErrors,
   fileAttachmentErrors,
+  obsidianBridgeEnabled = false,
   ingestAttachmentsToObsidian,
   onIngestAttachmentsToObsidianChange,
   showFileDropdown,
@@ -1223,7 +1225,7 @@ export default function ChatComposer({
                     />
                   ))}
                 </div>
-                {attachedFiles.length > 0 && (
+                {obsidianBridgeEnabled && attachedFiles.length > 0 && (
                   <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"

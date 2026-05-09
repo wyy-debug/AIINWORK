@@ -121,6 +121,16 @@ const getArtifactPreview = (artifact: Artifact) => (
   artifact.content || artifact.filePath || '没有可预览的内容。'
 );
 
+const WIKI_SUMMARY_TYPES = [
+  { value: 'auto', label: '自动总结' },
+  { value: 'technical-review', label: '技术评审' },
+  { value: 'project-summary', label: '项目总结' },
+  { value: 'reading-note', label: '阅读笔记' },
+  { value: 'decision-adr', label: '决策 ADR' },
+  { value: 'meeting-notes', label: '会议纪要' },
+  { value: 'general-wiki', label: '通用 Wiki' },
+];
+
 export default function ArtifactsPanel({ selectedProject, sessionId }: ArtifactsPanelProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -128,6 +138,7 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [wikiUploadStatus, setWikiUploadStatus] = useState('');
+  const [wikiSummaryType, setWikiSummaryType] = useState('auto');
   const wikiUploadInputRef = useRef<HTMLInputElement>(null);
 
   const activeArtifact = useMemo(
@@ -238,7 +249,7 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
       const data = await parseJson<{ artifact: Artifact; obsidianBridge: ObsidianBridgeStatus }>(
         await apiFetch(`/api/artifacts/${encodeURIComponent(artifact.id)}/send-to-obsidian`, {
           method: 'POST',
-          body: JSON.stringify({ mode: 'auto' }),
+          body: JSON.stringify({ mode: 'auto', summaryType: wikiSummaryType }),
         }),
       );
       setSelectedArtifact(data.artifact);
@@ -265,6 +276,7 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
       const formData = new FormData();
       selectedFiles.forEach((file) => formData.append('files', file));
       formData.append('projectName', selectedProject.name);
+      formData.append('summaryType', wikiSummaryType);
       if (sessionId) formData.append('sessionId', sessionId);
       const data = await parseJson<{
         imported?: Array<{
@@ -274,6 +286,11 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
           wikiCompiler?: string;
           wikiCompileChunks?: number;
           wikiCompileFallbackReason?: string;
+          extractionStatus?: string;
+          extractionEngine?: string;
+          extractionFailureReason?: string;
+          pdfExtractedPages?: number;
+          pdfTruncated?: boolean;
         }>;
       }>(
         await apiFetch('/api/obsidian-bridge/wiki/upload', {
@@ -289,12 +306,28 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
         entry.wikiCompiler === 'deterministic' && Boolean(entry.wikiCompileFallbackReason)
       )).length;
       const chunkCount = imported.reduce((total, entry) => total + (Number(entry.wikiCompileChunks) || 0), 0);
+      const pdfExtractedCount = imported.filter((entry) => (
+        entry.extractionEngine === 'pdfjs-dist' && entry.extractionStatus === 'extracted'
+      )).length;
+      const pdfFailedReasons = [...new Set(imported
+        .filter((entry) => entry.extractionEngine === 'pdfjs-dist' && entry.extractionStatus === 'extract_failed')
+        .map((entry) => entry.extractionFailureReason || 'extract_failed'))];
+      const pdfExtractedPages = imported.reduce((total, entry) => total + (Number(entry.pdfExtractedPages) || 0), 0);
+      const pdfTruncatedCount = imported.filter((entry) => entry.pdfTruncated).length;
       setWikiUploadStatus([
         `上传完成：${imported.length} 个文件进入 Raw，${compiled} 个已编译 Wiki`,
         smallModelCount ? `${smallModelCount} 个小模型总结` : '',
         fallbackCount ? `${fallbackCount} 个 fallback 总结` : '',
         chunkCount ? `共处理 ${chunkCount} 个分块` : '',
       ].filter(Boolean).join('，') + '。');
+      const pdfStatusSuffix = [
+        pdfExtractedCount ? `${pdfExtractedCount} 个 PDF 已抽取文本（${pdfExtractedPages} 页）` : '',
+        pdfTruncatedCount ? `${pdfTruncatedCount} 个 PDF 文本过长已截断` : '',
+        pdfFailedReasons.length ? `PDF 抽取失败：${pdfFailedReasons.join(' / ')}` : '',
+      ].filter(Boolean).join('；');
+      if (pdfStatusSuffix) {
+        setWikiUploadStatus((previous) => [previous, pdfStatusSuffix].filter(Boolean).join(' '));
+      }
       await load();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '上传文件到 Wiki 失败');
@@ -324,6 +357,18 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
           <h2 className="mt-1 text-lg font-semibold text-foreground">项目结果</h2>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <select
+            className="h-9 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={wikiSummaryType}
+            onChange={(event) => setWikiSummaryType(event.target.value)}
+            aria-label="Wiki 总结类型"
+          >
+            {WIKI_SUMMARY_TYPES.map((type) => (
+              <option key={type.value} value={type.value}>
+                {type.label}
+              </option>
+            ))}
+          </select>
           <Button variant="outline" size="sm" onClick={load} disabled={busy === 'load'}>
             <RefreshCw className={cn('h-4 w-4', busy === 'load' && 'animate-spin')} />
             刷新
@@ -333,7 +378,7 @@ export default function ArtifactsPanel({ selectedProject, sessionId }: Artifacts
             type="file"
             multiple
             className="hidden"
-            accept=".md,.markdown,.txt,.log,.html,.htm,.csv,.json,.jsonl,.yaml,.yml,.xml"
+            accept=".md,.markdown,.txt,.log,.pdf,.html,.htm,.csv,.json,.jsonl,.yaml,.yml,.xml"
             onChange={(event) => void uploadFilesToWiki(event.target.files)}
           />
           <Button

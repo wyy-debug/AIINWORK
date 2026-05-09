@@ -7,11 +7,267 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   chunkWikiSourceContent,
   createObsidianWikiService,
+  extractWikiFileContent,
 } from '../obsidian-wiki-service.js';
 
 const tempDir = () => mkdtemp(path.join(os.tmpdir(), 'argus-wiki-service-'));
 
+const escapePdfText = (value = '') => String(value)
+  .replace(/\\/g, '\\\\')
+  .replace(/\(/g, '\\(')
+  .replace(/\)/g, '\\)');
+
+const createTextPdfBuffer = (pages = []) => {
+  const objects = new Map();
+  const pageObjectRefs = [];
+  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objects.set(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  pages.forEach((pageText, index) => {
+    const pageObject = 4 + index * 2;
+    const contentObject = pageObject + 1;
+    pageObjectRefs.push(`${pageObject} 0 R`);
+    const lines = String(pageText || '').split('\n');
+    const streamLines = [
+      'BT',
+      '/F1 12 Tf',
+      '72 720 Td',
+      ...lines.flatMap((line, lineIndex) => [
+        lineIndex === 0 ? '' : '0 -18 Td',
+        `(${escapePdfText(line)}) Tj`,
+      ]).filter(Boolean),
+      'ET',
+    ];
+    const stream = streamLines.join('\n');
+    objects.set(pageObject, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObject} 0 R >>`);
+    objects.set(contentObject, `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`);
+  });
+  objects.set(2, `<< /Type /Pages /Kids [${pageObjectRefs.join(' ')}] /Count ${pageObjectRefs.length} >>`);
+
+  let pdf = '%PDF-1.4\n';
+  const maxObject = Math.max(...objects.keys());
+  const offsets = [0];
+  for (let objectNumber = 1; objectNumber <= maxObject; objectNumber += 1) {
+    offsets[objectNumber] = Buffer.byteLength(pdf, 'latin1');
+    pdf += `${objectNumber} 0 obj\n${objects.get(objectNumber)}\nendobj\n`;
+  }
+  const startXref = Buffer.byteLength(pdf, 'latin1');
+  pdf += `xref\n0 ${maxObject + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (let objectNumber = 1; objectNumber <= maxObject; objectNumber += 1) {
+    pdf += `${String(offsets[objectNumber]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${maxObject + 1} /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1');
+};
+
 describe('obsidian wiki service', () => {
+  it('repairs placeholder small-model Wiki output before writing it to Obsidian', async () => {
+    const root = await tempDir();
+    const filePath = path.join(root, 'Review.md');
+    await writeFile(filePath, [
+      '# GPUScene Review',
+      '',
+      'The review found serious lifetime risks, missing disposal ownership, and render-thread scheduling pressure.',
+      '- Critical issue: NativeArray ownership is unclear.',
+      '- Performance risk: upload batches create transient allocations.',
+      '- Recommendation: split scheduling from mesh processing.',
+    ].join('\n'), 'utf8');
+    const compileWrites = [];
+    const metadataPatches = [];
+    const calls = [];
+
+    const service = createObsidianWikiService({
+      createArtifact: vi.fn(async (payload) => ({
+        artifact: {
+          id: 'artifact-review',
+          kind: payload.kind,
+          title: payload.title,
+          projectName: payload.projectName,
+          sessionId: payload.sessionId,
+          content: payload.content,
+          metadata: payload.metadata,
+        },
+      })),
+      updateArtifactMetadata: vi.fn((_artifactId, patch) => {
+        metadataPatches.push(patch);
+        return patch;
+      }),
+      sendObsidianWikiIngest: vi.fn(async (payload) => ({
+        path: `Argus/Raw/${payload.projectName}/2026-05-08/${payload.title}.md`,
+      })),
+      sendObsidianWikiCompile: vi.fn(async (payload) => {
+        compileWrites.push(payload);
+        return { path: `Argus/Wiki/${payload.projectName}/${payload.topicKey}.md` };
+      }),
+      updateObsidianWikiViews: vi.fn(async () => ({ indexPaths: [] })),
+      findExistingImportByContentHash: vi.fn(() => null),
+      completeSmallModelJson: vi.fn(async (request) => {
+        calls.push(request);
+        if (request.purpose === 'wiki-upload-chunk-summary') {
+          return {
+            success: true,
+            model: 'gpt-5.4-mini',
+            json: {
+              summary: 'GPUScene review identifies lifetime and scheduling risks.',
+              keyFacts: ['NativeArray ownership is unclear.'],
+              decisions: ['Split scheduling from mesh processing.'],
+              implementationDetails: ['Upload batches create transient allocations.'],
+              openQuestions: ['Which system owns disposal?'],
+            },
+          };
+        }
+        if (request.purpose === 'wiki-upload-final-compile') {
+          expect(request.userPrompt).toContain('"summaryType":"technical-review"');
+          expect(request.systemPrompt).toMatch(/technical review/i);
+          return {
+            success: true,
+            model: 'gpt-5.4-mini',
+            json: {
+              markdown: [
+                '# GPUScene Review',
+                '',
+                '## Summary',
+                '- Pending compiler refinement.',
+                '',
+                '## Sources',
+                '- Raw source',
+              ].join('\n'),
+            },
+          };
+        }
+        expect(request.purpose).toBe('wiki-upload-quality-repair');
+        return {
+          success: true,
+          model: 'gpt-5.4-mini',
+          json: {
+            markdown: [
+              '# GPUScene Review',
+              '',
+              '## Summary',
+              'GPUScene has concrete lifetime, scheduling, and allocation risks that should be fixed before broad rollout.',
+              '',
+              '## Critical Issues',
+              '- NativeArray ownership is unclear.',
+              '',
+              '## Architecture Risks',
+              '- Scheduling and mesh processing are coupled.',
+              '',
+              '## Performance/Stability Risks',
+              '- Upload batches create transient allocations.',
+              '',
+              '## Recommendations',
+              '- P1: split scheduling from mesh processing.',
+              '',
+              '## Affected Modules',
+              '- GPUScene renderer',
+              '',
+              '## Sources',
+              '- Raw source',
+            ].join('\n'),
+          },
+        };
+      }),
+      now: () => new Date('2026-05-08T09:10:11.000Z'),
+    });
+
+    const result = await service.ingestUploadedFilesToObsidian({
+      projectName: 'App',
+      batchId: 'quality-batch',
+      summaryType: 'technical-review',
+      files: [{ name: 'Review.md', path: filePath, size: 500, mimeType: 'text/markdown' }],
+    });
+
+    expect(calls.map((call) => call.purpose)).toContain('wiki-upload-quality-repair');
+    expect(compileWrites[0]).toMatchObject({
+      summaryType: 'technical-review',
+      compileQualityStatus: 'repaired',
+      compileRepairAttempts: 1,
+      content: expect.stringContaining('Critical Issues'),
+    });
+    expect(compileWrites[0].content).not.toMatch(/Pending compiler refinement|待后续|待补充/);
+    expect(metadataPatches.at(-1)).toMatchObject({
+      summaryType: 'technical-review',
+      compileQualityStatus: 'repaired',
+      compileRepairAttempts: 1,
+    });
+    expect(result.imported[0]).toMatchObject({
+      summaryType: 'technical-review',
+      compileQualityStatus: 'repaired',
+      wikiStatus: 'compiled',
+    });
+  });
+
+  it('marks unrepairable placeholder output as needs-review without writing pure placeholders', async () => {
+    const root = await tempDir();
+    const filePath = path.join(root, 'NeedsReview.md');
+    await writeFile(filePath, [
+      '# Needs Review',
+      '',
+      'Renderer review: bucket pooling reduces allocations, but ownership and disposal order need confirmation.',
+    ].join('\n'), 'utf8');
+    const compileWrites = [];
+    const metadataPatches = [];
+
+    const service = createObsidianWikiService({
+      createArtifact: vi.fn(async (payload) => ({
+        artifact: {
+          id: 'artifact-needs-review',
+          kind: payload.kind,
+          title: payload.title,
+          projectName: payload.projectName,
+          sessionId: payload.sessionId,
+          content: payload.content,
+          metadata: payload.metadata,
+        },
+      })),
+      updateArtifactMetadata: vi.fn((_artifactId, patch) => {
+        metadataPatches.push(patch);
+        return patch;
+      }),
+      sendObsidianWikiIngest: vi.fn(async (payload) => ({
+        path: `Argus/Raw/${payload.projectName}/2026-05-08/${payload.title}.md`,
+      })),
+      sendObsidianWikiCompile: vi.fn(async (payload) => {
+        compileWrites.push(payload);
+        return { path: `Argus/Wiki/${payload.projectName}/${payload.topicKey}.md` };
+      }),
+      updateObsidianWikiViews: vi.fn(async () => ({ indexPaths: [] })),
+      findExistingImportByContentHash: vi.fn(() => null),
+      completeSmallModelJson: vi.fn(async (request) => {
+        if (request.purpose === 'wiki-upload-chunk-summary') {
+          return { success: true, model: 'gpt-5.4-mini', json: { summary: 'Renderer review.', keyFacts: [] } };
+        }
+        return {
+          success: true,
+          model: 'gpt-5.4-mini',
+          json: { markdown: '# Needs Review\n\n## Summary\n- Pending compiler refinement.\n\n## Sources\n- Raw source' },
+        };
+      }),
+    });
+
+    const result = await service.ingestUploadedFilesToObsidian({
+      projectName: 'App',
+      batchId: 'needs-review-batch',
+      files: [{ name: 'NeedsReview.md', path: filePath, size: 120, mimeType: 'text/markdown' }],
+    });
+
+    expect(compileWrites[0]).toMatchObject({
+      compileQualityStatus: 'needs-review',
+      compileRepairAttempts: 1,
+    });
+    expect(compileWrites[0].content).toContain('bucket pooling reduces allocations');
+    expect(compileWrites[0].content).not.toMatch(/Pending compiler refinement|待后续|待补充/);
+    expect(metadataPatches.at(-1)).toMatchObject({
+      wikiStatus: 'needs-review',
+      compileQualityStatus: 'needs-review',
+      compileRepairAttempts: 1,
+    });
+    expect(result.imported[0]).toMatchObject({
+      wikiStatus: 'needs-review',
+      compileQualityStatus: 'needs-review',
+    });
+  });
+
   it('chunks long uploaded sources for small-model Wiki compilation', () => {
     const content = Array.from({ length: 15 }, (_item, index) => `Section ${index}\n${'x'.repeat(1000)}`).join('\n\n');
 
@@ -604,6 +860,40 @@ describe('obsidian wiki service', () => {
     expect(sendObsidianWikiIngest).not.toHaveBeenCalled();
   });
 
+  it('extracts text-layer PDF uploads into paged Markdown', async () => {
+    const root = await tempDir();
+    const filePath = path.join(root, 'Review.pdf');
+    await writeFile(filePath, createTextPdfBuffer([
+      'Argus PDF page one summary',
+      'Argus PDF page two decisions',
+    ]));
+
+    const extracted = await extractWikiFileContent({
+      name: 'Review.pdf',
+      path: filePath,
+      size: 1024,
+      mimeType: 'application/pdf',
+    });
+
+    expect(extracted).toMatchObject({
+      title: 'Review',
+      extension: '.pdf',
+      extractionStatus: 'extracted',
+      extractionEngine: 'pdfjs-dist',
+      pdfPageCount: 2,
+      pdfExtractedPages: 2,
+      pdfTruncated: false,
+      extractionFailureReason: '',
+    });
+    expect(extracted.pdfExtractedChars).toBeGreaterThan(20);
+    expect(extracted.content).toContain('# Review');
+    expect(extracted.content).toContain('> PDF extracted by Argus');
+    expect(extracted.content).toContain('## Page 1');
+    expect(extracted.content).toContain('Argus PDF page one summary');
+    expect(extracted.content).toContain('## Page 2');
+    expect(extracted.content).toContain('Argus PDF page two decisions');
+  });
+
   it('keeps extract-failed uploads in Raw without compiling a Wiki page', async () => {
     const root = await tempDir();
     const filePath = path.join(root, 'Legacy.pdf');
@@ -650,6 +940,7 @@ describe('obsidian wiki service', () => {
       wikiPath: '',
       wikiStatus: 'raw',
       extractionStatus: 'extract_failed',
+      extractionFailureReason: expect.any(String),
     });
     expect(compile).not.toHaveBeenCalled();
     expect(completeJson).not.toHaveBeenCalled();
@@ -657,6 +948,7 @@ describe('obsidian wiki service', () => {
       rawPath: 'Argus/Raw/App/2026-05-08/Legacy.md',
       wikiPath: '',
       wikiStatus: 'raw',
+      extractionFailureReason: expect.any(String),
     });
   });
 
@@ -810,6 +1102,180 @@ describe('obsidian wiki service', () => {
       wikiStatus: 'compiled',
       viewModes: ['project-knowledge', 'second-brain'],
       indexPaths: ['Argus/Projects/App/Index.md', 'Argus/SecondBrain/2026/Index.md'],
+    });
+  });
+
+  it('promotes numbered section titles to project Wiki topics for technical project notes', async () => {
+    const createdArtifacts = [];
+    const compileWrites = [];
+    const viewUpdates = [];
+    const metadataPatches = [];
+
+    const service = createObsidianWikiService({
+      createArtifact: vi.fn(async (payload) => {
+        const artifact = {
+          id: `artifact-${createdArtifacts.length + 1}`,
+          kind: payload.kind,
+          title: payload.title,
+          projectName: payload.projectName,
+          sessionId: payload.sessionId,
+          content: payload.content,
+          metadata: payload.metadata,
+        };
+        createdArtifacts.push({ payload, artifact });
+        return { artifact };
+      }),
+      updateArtifactMetadata: vi.fn((artifactId, patch) => {
+        metadataPatches.push({ artifactId, patch });
+        const entry = createdArtifacts.find((candidate) => candidate.artifact.id === artifactId);
+        entry.artifact.metadata = { ...entry.artifact.metadata, ...patch };
+        return entry.artifact.metadata;
+      }),
+      sendObsidianWikiIngest: vi.fn(async (payload) => ({
+        path: `Argus/Raw/${payload.projectName}/2026-05-09/${payload.title}.md`,
+      })),
+      sendObsidianWikiCompile: vi.fn(async (payload) => {
+        compileWrites.push(payload);
+        return { path: `Argus/Wiki/${payload.projectName}/${payload.topicKey}.md` };
+      }),
+      updateObsidianWikiViews: vi.fn(async (payload) => {
+        viewUpdates.push(payload);
+        return { indexPaths: ['Argus/Projects/D--SOC-trunk/Index.md'] };
+      }),
+      findExistingImportByContentHash: vi.fn(() => null),
+      completeSmallModelJson: vi.fn(async () => ({ success: false, reason: 'disabled' })),
+      now: () => new Date('2026-05-09T03:25:09.020Z'),
+    });
+
+    const result = await service.ingestKnowledgeSourceToWiki({
+      source: 'artifact',
+      sourceId: 'artifact-source',
+      title: '1-分析目标与完成标准',
+      projectName: 'D--SOC-trunk',
+      sessionId: 'session-1',
+      content: [
+        'D--SOC-trunk 的 SocGraphics 是一个基于 Unity Graphics / Scriptable Render Pipeline 的大型图形库。',
+        '本次项目分析覆盖目录、Packages、Tests、TestProjects、package.json、代码规模与关键子模块。',
+        '结论包括 URP 是项目主渲染管线，风险最高区域是 HDRP、Shader Graph、VFX Graph。',
+        '这是技术评审资料，包含架构风险、性能风险、稳定性风险和模块扫描结果。',
+      ].join('\n'),
+      metadata: {
+        routingMode: 'second-brain',
+        routingModes: ['second-brain'],
+        routingReason: '命中 reflection，路由到第二大脑。',
+      },
+    });
+
+    expect(compileWrites[0]).toMatchObject({
+      title: 'D--SOC-trunk SocGraphics 分析目标与完成标准',
+      topicKey: 'd-soc-trunk-socgraphics-分析目标与完成标准',
+      argusId: 'wiki:D--SOC-trunk:d-soc-trunk-socgraphics-分析目标与完成标准',
+      sourceHeading: '1-分析目标与完成标准',
+      classificationMode: 'project-knowledge',
+      viewModes: ['project-knowledge', 'second-brain'],
+    });
+    expect(viewUpdates[0]).toMatchObject({
+      title: 'D--SOC-trunk SocGraphics 分析目标与完成标准',
+      viewModes: ['project-knowledge', 'second-brain'],
+    });
+    expect(metadataPatches.at(-1).patch).toMatchObject({
+      wikiTitle: 'D--SOC-trunk SocGraphics 分析目标与完成标准',
+      sourceHeading: '1-分析目标与完成标准',
+      topicKey: 'd-soc-trunk-socgraphics-分析目标与完成标准',
+      classificationMode: 'project-knowledge',
+      viewModes: ['project-knowledge', 'second-brain'],
+    });
+    expect(result).toMatchObject({
+      topicKey: 'd-soc-trunk-socgraphics-分析目标与完成标准',
+      wikiPath: 'Argus/Wiki/D--SOC-trunk/d-soc-trunk-socgraphics-分析目标与完成标准.md',
+      viewModes: ['project-knowledge', 'second-brain'],
+    });
+  });
+
+  it('uses small-model suggestWikiTopic before deterministic fallback for section-like titles', async () => {
+    const createdArtifacts = [];
+    const compileWrites = [];
+    const topicSuggestCalls = [];
+    const metadataPatches = [];
+
+    const service = createObsidianWikiService({
+      createArtifact: vi.fn(async (payload) => {
+        const artifact = {
+          id: `artifact-${createdArtifacts.length + 1}`,
+          kind: payload.kind,
+          title: payload.title,
+          projectName: payload.projectName,
+          sessionId: payload.sessionId,
+          content: payload.content,
+          metadata: payload.metadata,
+        };
+        createdArtifacts.push({ payload, artifact });
+        return { artifact };
+      }),
+      updateArtifactMetadata: vi.fn((artifactId, patch) => {
+        metadataPatches.push({ artifactId, patch });
+        const entry = createdArtifacts.find((candidate) => candidate.artifact.id === artifactId);
+        entry.artifact.metadata = { ...entry.artifact.metadata, ...patch };
+        return entry.artifact.metadata;
+      }),
+      sendObsidianWikiIngest: vi.fn(async (payload) => ({
+        path: `Argus/Raw/${payload.projectName}/2026-05-09/${payload.title}.md`,
+      })),
+      sendObsidianWikiCompile: vi.fn(async (payload) => {
+        compileWrites.push(payload);
+        return { path: `Argus/Wiki/${payload.projectName}/${payload.topicKey}.md` };
+      }),
+      updateObsidianWikiViews: vi.fn(async () => ({ indexPaths: ['Argus/Projects/D--SOC-trunk/Index.md'] })),
+      findExistingImportByContentHash: vi.fn(() => null),
+      completeSmallModelJson: vi.fn(async (request) => {
+        if (request.purpose === 'wiki-topic-suggest') {
+          topicSuggestCalls.push(request);
+          return {
+            success: true,
+            model: 'gpt-5.4-mini',
+            json: {
+              topicTitle: 'SocGraphics Render Pipeline Review',
+              reason: 'The source is a project-level technical review of the SocGraphics render pipeline.',
+            },
+          };
+        }
+        return { success: false, reason: 'disabled' };
+      }),
+      now: () => new Date('2026-05-09T03:25:09.020Z'),
+    });
+
+    await service.ingestKnowledgeSourceToWiki({
+      source: 'artifact',
+      sourceId: 'artifact-source',
+      title: '1-Completion Criteria',
+      projectName: 'D--SOC-trunk',
+      sessionId: 'session-1',
+      content: [
+        'D--SOC-trunk SocGraphics is a Unity SRP render pipeline package.',
+        'The review covers architecture risks, performance risks, stability risks, and affected modules.',
+        'URP is the main path; HDRP, Shader Graph, and VFX Graph are compatibility risk areas.',
+      ].join('\n'),
+    });
+
+    expect(topicSuggestCalls).toHaveLength(1);
+    expect(topicSuggestCalls[0]).toMatchObject({
+      purpose: 'wiki-topic-suggest',
+      timeoutMs: expect.any(Number),
+      maxTokens: expect.any(Number),
+    });
+    expect(topicSuggestCalls[0].userPrompt).toContain('1-Completion Criteria');
+    expect(compileWrites[0]).toMatchObject({
+      title: 'D--SOC-trunk SocGraphics Render Pipeline Review',
+      topicKey: 'd-soc-trunk-socgraphics-render-pipeline-review',
+      argusId: 'wiki:D--SOC-trunk:d-soc-trunk-socgraphics-render-pipeline-review',
+      wikiTopicSuggestedBy: 'small-model',
+      wikiTopicSuggestionReason: 'The source is a project-level technical review of the SocGraphics render pipeline.',
+    });
+    expect(metadataPatches.at(-1).patch).toMatchObject({
+      wikiTitle: 'D--SOC-trunk SocGraphics Render Pipeline Review',
+      topicKey: 'd-soc-trunk-socgraphics-render-pipeline-review',
+      wikiTopicSuggestedBy: 'small-model',
+      wikiTopicSuggestionReason: 'The source is a project-level technical review of the SocGraphics render pipeline.',
     });
   });
 });

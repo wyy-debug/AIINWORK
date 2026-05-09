@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, t
 
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { notifyAgentCompletion } from '../../../utils/nativeNotifications';
 import type { AgentRuntimeDiagnostics, PendingPermissionRequest } from '../types/types';
 
 type PendingViewSession = {
@@ -327,6 +328,15 @@ export function useChatRealtimeHandlers({
           break;
         }
 
+        void notifyAgentCompletion({
+          provider: msg.provider || provider,
+          projectName: selectedProject?.displayName || selectedProject?.name || null,
+          sessionName: selectedSession?.title || selectedSession?.name || selectedSession?.summary || null,
+          sessionId: sid || currentSessionId || null,
+          exitCode: typeof msg.exitCode === 'number' ? msg.exitCode : null,
+          aborted: Boolean(msg.aborted),
+        });
+
         // Clear pending session
         const pendingSessionId = sessionStorage.getItem('pendingSessionId');
         if (pendingSessionId && msg.exitCode === 0) {
@@ -386,7 +396,12 @@ export function useChatRealtimeHandlers({
       }
 
       case 'status': {
-        if (msg.text === 'obsidian_auto_capture_result' || msg.event === 'obsidian_auto_capture_result') {
+        if (
+          msg.text === 'obsidian_auto_capture_result'
+          || msg.event === 'obsidian_auto_capture_result'
+          || msg.text === 'obsidian_context_result'
+          || msg.event === 'obsidian_context_result'
+        ) {
           break;
         }
         if (msg.text === 'token_budget' && (msg.contextBudget || msg.tokenBudget)) {

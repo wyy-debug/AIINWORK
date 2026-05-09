@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen, Copy, ExternalLink, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
@@ -40,6 +40,8 @@ type MessageComponentProps = {
   sessionId?: string | null;
   provider: Provider | string;
   messageKey?: string;
+  obsidianBridgeEnabled?: boolean;
+  isLatestAssistantReply?: boolean;
 };
 
 type InteractiveOption = {
@@ -69,6 +71,23 @@ type ObsidianCaptureStatus = {
   fallbackPath?: string;
   error?: string;
 };
+type ObsidianContextSource = {
+  kind?: string;
+  path?: string;
+  title?: string;
+  snippet?: string;
+  hitReason?: string;
+};
+type ObsidianContextStatus = {
+  used?: boolean;
+  resultCount?: number;
+  reranked?: boolean;
+  rerankModel?: string;
+  refinementModel?: string;
+  tokenBudgetUsed?: number;
+  sources?: ObsidianContextSource[];
+  error?: string;
+};
 type WikiUploadSuggestion = {
   loading: boolean;
   shouldUpload: boolean;
@@ -82,6 +101,15 @@ type WikiUploadState = {
   path: string;
   error: string;
 };
+const WIKI_SUMMARY_TYPES = [
+  { value: 'auto', label: '自动总结' },
+  { value: 'technical-review', label: '技术评审' },
+  { value: 'project-summary', label: '项目总结' },
+  { value: 'reading-note', label: '阅读笔记' },
+  { value: 'decision-adr', label: '决策 ADR' },
+  { value: 'meeting-notes', label: '会议纪要' },
+  { value: 'general-wiki', label: '通用 Wiki' },
+];
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
 const OBSIDIAN_CAPTURE_STATUS_LABELS: Record<string, string> = {
@@ -150,7 +178,7 @@ const formatWikiRoutingReason = (reason = '') => {
   return `命中 ${signals}，建议整理成 Wiki。`;
 };
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, sessionId, provider, messageKey }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, sessionId, provider, messageKey, obsidianBridgeEnabled = false, isLatestAssistantReply = false }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -177,7 +205,17 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
     !message.isThinking;
-  const obsidianCaptureStatus = (message.obsidianCaptureStatus || null) as ObsidianCaptureStatus | null;
+  const obsidianContextStatus = (message.obsidianContextStatus || null) as ObsidianContextStatus | null;
+  const obsidianContextSources = Array.isArray(obsidianContextStatus?.sources)
+    ? obsidianContextStatus.sources.filter((source) => source?.path || source?.title || source?.snippet)
+    : [];
+  const obsidianContextCount = obsidianContextSources.length || Number(obsidianContextStatus?.resultCount || 0);
+  const shouldShowObsidianContextStatus = obsidianBridgeEnabled
+    && message.type === 'user'
+    && Boolean(obsidianContextStatus);
+  const obsidianCaptureStatus = obsidianBridgeEnabled
+    ? (message.obsidianCaptureStatus || null) as ObsidianCaptureStatus | null
+    : null;
   const obsidianCaptureLabel = obsidianCaptureStatus?.status
     ? OBSIDIAN_CAPTURE_STATUS_LABELS[obsidianCaptureStatus.status] || obsidianCaptureStatus.status
     : '';
@@ -225,8 +263,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     path: '',
     error: '',
   });
+  const [wikiSummaryType, setWikiSummaryType] = useState('auto');
   const wikiUploadContent = assistantCopyContent.trim();
-  const shouldOfferWikiUpload = message.type === 'assistant'
+  const shouldOfferWikiUpload = obsidianBridgeEnabled
+    && isLatestAssistantReply
+    && message.type === 'assistant'
     && !message.isStreaming
     && !message.isToolUse
     && !message.isThinking
@@ -351,6 +392,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
           metadata: {
             source: 'manual-chat-wiki-upload',
             sourceId: wikiUploadSourceId,
+            summaryType: wikiSummaryType,
             provider: String(provider || ''),
             messageKey: messageKey || '',
             messageTimestamp: message.timestamp,
@@ -369,7 +411,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
         obsidianBridge?: { path?: string; wikiPath?: string; fallbackPath?: string; destination?: string };
       }>(await apiFetch(`/api/artifacts/${encodeURIComponent(artifactId)}/send-to-obsidian`, {
         method: 'POST',
-        body: JSON.stringify({ mode: 'auto' }),
+        body: JSON.stringify({ mode: 'auto', summaryType: wikiSummaryType }),
       }));
       const targetPath = exported.obsidianBridge?.wikiPath
         || exported.obsidianBridge?.path
@@ -481,6 +523,53 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </button>
                 ))}
               </div>
+            )}
+            {shouldShowObsidianContextStatus && (
+              <details className="mt-2 rounded-lg border border-white/15 bg-white/10 px-2.5 py-2 text-xs text-blue-50">
+                <summary className="cursor-pointer select-none text-blue-50">
+                  {obsidianContextStatus?.used
+                    ? `已注入 ${obsidianContextCount} 条 Wiki 上下文`
+                    : `Wiki 上下文未注入${obsidianContextStatus?.error ? '：' + obsidianContextStatus.error : ''}`}
+                  {obsidianContextStatus?.reranked ? ` · ${obsidianContextStatus.rerankModel || obsidianContextStatus.refinementModel || '小模型筛选'}` : ''}
+                </summary>
+                {obsidianContextSources.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {obsidianContextSources.map((source, index) => (
+                      <div key={`${source.path || source.title || index}-${index}`} className="rounded-md bg-white/10 p-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate font-medium">
+                            {source.title || source.path || 'Wiki source'}
+                          </span>
+                          {source.path && (
+                            <a
+                              href={`obsidian://open?path=${encodeURIComponent(source.path)}`}
+                              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-white/15"
+                              title="打开 Obsidian 笔记"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          )}
+                          {source.path && (
+                            <button
+                              type="button"
+                              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-white/15"
+                              title="复制路径"
+                              onClick={() => {
+                                void navigator.clipboard?.writeText(source.path || '');
+                              }}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        {source.path && <div className="mt-1 truncate text-[11px] text-blue-100">{source.path}</div>}
+                        {source.hitReason && <div className="mt-1 text-[11px] text-blue-100">命中原因：{source.hitReason}</div>}
+                        {source.snippet && <div className="mt-1 line-clamp-3 text-[11px] text-blue-50/90">{source.snippet}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </details>
             )}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
               {shouldShowUserCopyControl && (
@@ -812,14 +901,24 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       wikiSuggestion.confidence ? `置信度：${Math.round(wikiSuggestion.confidence * 100)}%` : '',
                       wikiUploadState.path,
                       wikiUploadState.error,
-                      '由你决定是否落库',
                     ].filter(Boolean).join('\n')}
                   >
                     {wikiSuggestion.loading && <Loader2 className="h-3 w-3 animate-spin" />}
                     <span className={wikiSuggestion.shouldUpload ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-500 dark:text-gray-400'}>
                       {wikiSuggestionLabel}
                     </span>
-                    <span className="hidden text-gray-400 sm:inline">由你决定是否落库</span>
+                    <select
+                      className="h-6 rounded border border-gray-200 bg-white px-1 text-[11px] text-gray-600 outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                      value={wikiSummaryType}
+                      onChange={(event) => setWikiSummaryType(event.target.value)}
+                      title="summaryType"
+                    >
+                      {WIKI_SUMMARY_TYPES.map((type) => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </select>
                     <Button
                       type="button"
                       variant="ghost"

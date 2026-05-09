@@ -239,6 +239,12 @@ function isObsidianAutoCaptureStatus(message: NormalizedMessage): boolean {
     && (message.text === 'obsidian_auto_capture_result' || event === 'obsidian_auto_capture_result');
 }
 
+function isObsidianContextStatus(message: NormalizedMessage): boolean {
+  const event = (message as any).event;
+  return message.kind === 'status'
+    && (message.text === 'obsidian_context_result' || event === 'obsidian_context_result');
+}
+
 function statusPayloadForObsidianCapture(message: NormalizedMessage): Record<string, unknown> {
   const record = message as any;
   return {
@@ -259,10 +265,40 @@ function statusPayloadForObsidianCapture(message: NormalizedMessage): Record<str
   };
 }
 
+function statusPayloadForObsidianContext(message: NormalizedMessage): Record<string, unknown> {
+  const record = message as any;
+  const context = record.obsidianContext && typeof record.obsidianContext === 'object'
+    ? record.obsidianContext
+    : record;
+  return {
+    used: context.used,
+    resultCount: context.resultCount,
+    projectName: context.projectName,
+    source: context.source,
+    refined: context.refined,
+    refinementModel: context.refinementModel,
+    reranked: context.reranked,
+    rerankModel: context.rerankModel,
+    tokenBudgetUsed: context.tokenBudgetUsed,
+    sources: context.sources,
+    error: context.error,
+  };
+}
+
 function nearestAssistantMessageId(messages: NormalizedMessage[], beforeIndex: number): string {
   for (let index = beforeIndex - 1; index >= 0; index -= 1) {
     const candidate = messages[index];
     if (candidate?.kind === 'text' && candidate.role === 'assistant' && candidate.id) {
+      return candidate.id;
+    }
+  }
+  return '';
+}
+
+function nearestUserMessageId(messages: NormalizedMessage[], beforeIndex: number): string {
+  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (candidate?.kind === 'text' && candidate.role === 'user' && candidate.id) {
       return candidate.id;
     }
   }
@@ -279,6 +315,7 @@ function nearestAssistantMessageId(messages: NormalizedMessage[], beforeIndex: n
 export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
   const converted: ChatMessage[] = [];
   const obsidianCaptureStatusByMessageId = new Map<string, Record<string, unknown>>();
+  const obsidianContextStatusByMessageId = new Map<string, Record<string, unknown>>();
 
   messages.forEach((msg, index) => {
     if (!isObsidianAutoCaptureStatus(msg)) return;
@@ -290,6 +327,19 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       : nearestAssistantMessageId(messages, index);
     if (targetMessageId) {
       obsidianCaptureStatusByMessageId.set(targetMessageId, payload);
+    }
+  });
+
+  messages.forEach((msg, index) => {
+    if (!isObsidianContextStatus(msg)) return;
+    const record = msg as any;
+    const payload = statusPayloadForObsidianContext(msg);
+    const explicitMessageId = typeof record.messageId === 'string' ? record.messageId : '';
+    const targetMessageId = explicitMessageId && explicitMessageId !== 'stream'
+      ? explicitMessageId
+      : nearestUserMessageId(messages, index);
+    if (targetMessageId) {
+      obsidianContextStatusByMessageId.set(targetMessageId, payload);
     }
   });
 
@@ -393,6 +443,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             type: 'user',
             content: unescapeWithMathProtection(decodeHtmlEntities(content)),
             timestamp: msg.timestamp,
+            obsidianContextStatus: msg.id ? obsidianContextStatusByMessageId.get(msg.id) : undefined,
           });
         } else {
           let text = decodeHtmlEntities(content);

@@ -64,6 +64,7 @@ interface ChatMessagesPaneProps {
   onSelectConversationAgent?: (agentId: string) => void;
   selectedModelProfileId?: string;
   onModelProfileChange?: (profileId: string) => void;
+  obsidianBridgeEnabled?: boolean;
 }
 
 type ProcessTraceGroupProps = {
@@ -82,6 +83,7 @@ type ProcessTraceGroupProps = {
   provider: LLMProvider;
   getMessageKey: (message: ChatMessage) => string;
   onPreserveScrollForLayoutChange?: () => void;
+  obsidianBridgeEnabled?: boolean;
 };
 
 const parseTimestamp = (value: ChatMessage['timestamp']) => {
@@ -128,7 +130,8 @@ function areProcessTraceGroupPropsEqual(
     previous.sessionId === next.sessionId &&
     previous.provider === next.provider &&
     previous.getMessageKey === next.getMessageKey &&
-    previous.onPreserveScrollForLayoutChange === next.onPreserveScrollForLayoutChange
+    previous.onPreserveScrollForLayoutChange === next.onPreserveScrollForLayoutChange &&
+    previous.obsidianBridgeEnabled === next.obsidianBridgeEnabled
   );
 }
 
@@ -148,6 +151,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   provider,
   getMessageKey,
   onPreserveScrollForLayoutChange,
+  obsidianBridgeEnabled = false,
 }: ProcessTraceGroupProps) {
   const [open, setOpen] = useState(active);
   const wasActiveRef = useRef(active);
@@ -243,6 +247,8 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
                   selectedProject={selectedProject}
                   sessionId={sessionId}
                   provider={provider}
+                  obsidianBridgeEnabled={obsidianBridgeEnabled}
+                  isLatestAssistantReply={false}
                 />
               ))}
             </div>
@@ -306,6 +312,7 @@ export default function ChatMessagesPane({
   onSelectConversationAgent,
   selectedModelProfileId,
   onModelProfileChange,
+  obsidianBridgeEnabled = false,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
@@ -383,6 +390,22 @@ export default function ChatMessagesPane({
 
     return items;
   }, [getMessageKey, isSessionRunning, visibleMessages]);
+
+  const latestAssistantReplyKey = useMemo(() => {
+    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+      const message = visibleMessages[index];
+      if (
+        message?.type === 'assistant'
+        && !message.isToolUse
+        && !message.isThinking
+        && !message.isTaskNotification
+        && String(message.content || '').trim()
+      ) {
+        return getMessageKey(message);
+      }
+    }
+    return '';
+  }, [getMessageKey, visibleMessages]);
 
   return (
     <div
@@ -533,6 +556,7 @@ export default function ChatMessagesPane({
                   provider={provider}
                   getMessageKey={getMessageKey}
                   onPreserveScrollForLayoutChange={onPreserveScrollForLayoutChange}
+                  obsidianBridgeEnabled={obsidianBridgeEnabled}
                 />
               );
             }
@@ -554,6 +578,8 @@ export default function ChatMessagesPane({
                 selectedProject={selectedProject}
                 sessionId={currentSessionId}
                 provider={provider}
+                obsidianBridgeEnabled={obsidianBridgeEnabled}
+                isLatestAssistantReply={!isSessionRunning && messageKey === latestAssistantReplyKey}
               />
             );
           })}

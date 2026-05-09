@@ -51,6 +51,7 @@ interface UseChatComposerStateArgs {
   selectedSkillNames?: string[];
   getSelectedSkillNames?: () => string[];
   modelProfileId?: string;
+  obsidianBridgeEnabled?: boolean;
   allowSessionAgentBinding?: boolean;
   isLoading: boolean;
   canAbortSession: boolean;
@@ -182,6 +183,7 @@ export function useChatComposerState({
   selectedSkillNames = [],
   getSelectedSkillNames,
   modelProfileId = '',
+  obsidianBridgeEnabled = false,
   allowSessionAgentBinding = false,
   isLoading,
   canAbortSession,
@@ -774,7 +776,7 @@ export function useChatComposerState({
         attachedFiles.forEach((file) => {
           formData.append('files', file);
         });
-        formData.append('obsidianIngest', ingestAttachmentsToObsidian ? 'true' : 'false');
+        formData.append('obsidianIngest', obsidianBridgeEnabled && ingestAttachmentsToObsidian ? 'true' : 'false');
         const uploadSessionId = currentSessionId || selectedSession?.id || '';
         if (uploadSessionId && !isTemporarySessionId(uploadSessionId)) {
           formData.append('sessionId', uploadSessionId);
@@ -1022,6 +1024,7 @@ export function useChatComposerState({
       attachedImages,
       attachedFiles,
       ingestAttachmentsToObsidian,
+      obsidianBridgeEnabled,
       claudeModel,
       codexModel,
       currentSessionId,

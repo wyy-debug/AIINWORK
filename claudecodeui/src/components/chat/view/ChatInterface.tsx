@@ -62,6 +62,7 @@ const isTemporarySessionId = (sessionId: string | null | undefined) =>
 const INTERACTIVE_PERMISSION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const MAX_RUNTIME_DIAGNOSTICS_CACHE_SIZE = 100;
 const SUBAGENT_UI_HARD_DISABLED = true;
+const OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT = 'argusObsidianBridgeSettingsChanged';
 const runtimeDiagnosticsBySessionCache = new Map<string, AgentRuntimeDiagnostics>();
 
 function cacheRuntimeDiagnostics(sessionKey: string, diagnostics: AgentRuntimeDiagnostics) {
@@ -184,6 +185,7 @@ function ChatInterface({
   const [repositorySkillsError, setRepositorySkillsError] = useState<string | null>(null);
   const [installingRepositorySkillKey, setInstallingRepositorySkillKey] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('');
+  const selectedAgentIdRef = useRef('');
   const [selectedAgentAppBindings, setSelectedAgentAppBindings] = useState<AgentAppBinding[]>([]);
   const [selectedSessionSkillNames, setSelectedSessionSkillNames] = useState<string[]>([]);
   const [selectedProjectSkillNames, setSelectedProjectSkillNames] = useState<string[]>([]);
@@ -193,6 +195,7 @@ function ChatInterface({
   const [selectedModelProfileId, setSelectedModelProfileId] = useState('');
   const selectedModelProfileIdRef = useRef('');
   const [subagentsEnabled, setSubagentsEnabled] = useState(false);
+  const [obsidianBridgeEnabled, setObsidianBridgeEnabled] = useState(false);
   const [goalsEnabled, setGoalsEnabled] = useState(false);
   const [sessionGoal, setSessionGoal] = useState<SessionGoal | null>(null);
   const [draftSessionGoal, setDraftSessionGoal] = useState<DraftSessionGoal | null>(null);
@@ -216,6 +219,10 @@ function ChatInterface({
   const isWorktreeProject = Boolean(!isConversationSpace && worktreeMeta?.id);
   const agentBindingEnabled = isConversationSpace || isWorktreeProject;
   const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
+
+  useEffect(() => {
+    selectedAgentIdRef.current = selectedAgentId;
+  }, [selectedAgentId]);
 
   useEffect(() => {
     selectedSessionSkillNamesRef.current = selectedSessionSkillNames;
@@ -609,6 +616,35 @@ function ChatInterface({
   useEffect(() => {
     let cancelled = false;
 
+    const loadObsidianBridgeSettings = async () => {
+      try {
+        const response = await api.get('/settings/obsidian-bridge');
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load Obsidian bridge settings');
+        }
+        if (!cancelled) {
+          setObsidianBridgeEnabled(Boolean(data?.config?.enabled));
+        }
+      } catch (error) {
+        console.warn('Failed to load Obsidian bridge settings:', error);
+        if (!cancelled) {
+          setObsidianBridgeEnabled(false);
+        }
+      }
+    };
+
+    void loadObsidianBridgeSettings();
+    window.addEventListener(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT, loadObsidianBridgeSettings);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT, loadObsidianBridgeSettings);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
     const loadDefaultModelProfile = async () => {
       try {
         const response = await api.get('/settings/mtl-code-model');
@@ -827,7 +863,7 @@ function ChatInterface({
       return;
     }
     setSelectedProjectSkillNames([]);
-  }, [agentBindingEnabled, selectedProject?.name, selectedSession?.id]);
+  }, [agentBindingEnabled, selectedProject?.name]);
 
   useEffect(() => {
     if (!isWorktreeProject || selectedSession?.id || currentSessionId || !worktreeMeta?.id) {
@@ -938,13 +974,13 @@ function ChatInterface({
         && quickStartAgentRequestId
         && lastQuickStartAgentRequestRef.current === quickStartAgentRequestId,
       );
-      if (!hasQuickStartAgent && !selectedAgentId && selectedSessionSkillNames.length === 0) {
+      const localAgentId = selectedAgentIdRef.current;
+      const localSkills = selectedSessionSkillNamesRef.current;
+      if (!hasQuickStartAgent && !localAgentId && localSkills.length === 0) {
         setSelectedAgentId('');
         setSelectedAgentAppBindings([]);
         setSelectedSessionSkillNames([]);
-        if (agentChoiceState === 'agent') {
-          setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
-        }
+        setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
       }
       return;
     }
@@ -1001,7 +1037,7 @@ function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationSessionId, agentBindingEnabled, agentChoiceState, currentSessionId, defaultModelProfileId, isConversationSpace, isWorktreeProject, provider, quickStartAgentId, quickStartAgentRequestId, selectedAgentId, selectedSession?.id, selectedSessionSkillNames.length]);
+  }, [activeConversationSessionId, agentBindingEnabled, currentSessionId, defaultModelProfileId, isConversationSpace, isWorktreeProject, provider, quickStartAgentId, quickStartAgentRequestId, selectedSession?.id]);
 
   useEffect(() => {
     if (!selectedAgentId) {
@@ -1313,6 +1349,7 @@ function ChatInterface({
     getSelectedSkillNames: getActiveSkillNames,
     modelProfileId: selectedModelProfileId,
     allowSessionAgentBinding: agentBindingEnabled || activeSkillNames.length > 0 || Boolean(selectedModelProfileId),
+    obsidianBridgeEnabled,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -1593,6 +1630,7 @@ function ChatInterface({
           onSelectConversationAgent={selectAgentForConversation}
           selectedModelProfileId={selectedModelProfileId}
           onModelProfileChange={setSelectedModelProfileId}
+          obsidianBridgeEnabled={obsidianBridgeEnabled}
         />
 
         <ChatComposer
@@ -1670,6 +1708,7 @@ function ChatInterface({
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
           fileAttachmentErrors={fileAttachmentErrors}
+          obsidianBridgeEnabled={obsidianBridgeEnabled}
           ingestAttachmentsToObsidian={ingestAttachmentsToObsidian}
           onIngestAttachmentsToObsidianChange={setIngestAttachmentsToObsidian}
           showFileDropdown={showFileDropdown}

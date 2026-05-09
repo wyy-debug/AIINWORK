@@ -21,6 +21,13 @@ const normalizeBrowserAttachOptions = (options = {}) => ({
   bounds: normalizeBounds(options.bounds),
 });
 
+const normalizeNotificationOptions = (options = {}) => ({
+  title: typeof options.title === 'string' ? options.title : '',
+  body: typeof options.body === 'string' ? options.body : '',
+  tag: typeof options.tag === 'string' ? options.tag : '',
+  urgency: options.urgency === 'critical' ? 'critical' : 'normal',
+});
+
 contextBridge.exposeInMainWorld('argusDesktop', {
   selectProjectRoot: (options) =>
     ipcRenderer.invoke('dialog:select-project-root', normalizeOptions(options)),
@@ -44,4 +51,6 @@ contextBridge.exposeInMainWorld('argusDesktop', {
     ipcRenderer.invoke('browser:close'),
   browserDetach: () =>
     ipcRenderer.invoke('browser:detach'),
+  notify: (options) =>
+    ipcRenderer.invoke('notification:show', normalizeNotificationOptions(options)),
 });

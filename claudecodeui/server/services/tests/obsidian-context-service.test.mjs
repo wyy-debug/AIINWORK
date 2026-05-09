@@ -156,12 +156,16 @@ describe('obsidian context service', () => {
     const service = await import('../obsidian-context-service.js');
     const refineWikiReadbackContext = vi.fn(async () => ({
       refined: true,
+      reranked: true,
       model: 'mimo-v2-flash',
+      rerankModel: 'mimo-v2-flash',
+      tokenBudgetUsed: 128,
       context: 'Path: Argus/Wiki/App/Plan.md\nTitle: Plan\nRefined snippet.',
       sources: [{
         kind: 'context-result',
         path: 'Argus/Wiki/App/Plan.md',
         title: 'Plan',
+        snippet: 'Refined snippet.',
         hitReason: '小模型判断与当前问题相关',
       }],
     }));
@@ -191,9 +195,13 @@ describe('obsidian context service', () => {
       used: true,
       refined: true,
       refinementModel: 'mimo-v2-flash',
+      reranked: true,
+      rerankModel: 'mimo-v2-flash',
+      tokenBudgetUsed: 128,
       sources: [
         expect.objectContaining({
           path: 'Argus/Wiki/App/Plan.md',
+          snippet: 'Refined snippet.',
           hitReason: '小模型判断与当前问题相关',
         }),
       ],

@@ -13,7 +13,29 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('./runtime-settings/ObsidianBridgeSettingsContent');
   });
 
-  it('wires bridge settings to the public API and exposes the three output modes', () => {
+  it('organizes runtime settings into top-level tabs like the agent page', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(currentDir, 'RuntimeSettingsTab.tsx'), 'utf8');
+
+    expect(source).toContain('RUNTIME_SETTINGS_TABS');
+    expect(source).toContain("id: 'local-permissions'");
+    expect(source).toContain("id: 'obsidian'");
+    expect(source).toContain("id: 'openmythos'");
+    expect(source).toContain('本地执行权限');
+    expect(source).toContain('Obsidian 知识库');
+    expect(source).toContain('OpenMythos 运行时');
+    expect(source).toContain('role="tablist"');
+    expect(source).toContain('selectedRuntimeTab');
+    expect(source).toContain('renderLocalPermissionsTab');
+    expect(source).toContain('renderObsidianTab');
+    expect(source).toContain('renderOpenMythosTab');
+    expect(source).toContain("selectedRuntimeTab === 'local-permissions'");
+    expect(source).toContain("selectedRuntimeTab === 'obsidian'");
+    expect(source).toContain("selectedRuntimeTab === 'openmythos'");
+    expect(source).toContain('保存本地执行权限');
+  });
+
+  it('wires bridge settings to the public API and exposes the compact tab layout', () => {
     const currentDir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(
       resolve(currentDir, 'runtime-settings', 'ObsidianBridgeSettingsContent.tsx'),
@@ -27,22 +49,18 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('安装插件到 vault');
     expect(source).toContain('刷新 vault');
     expect(source).toContain('SettingsToggle');
-    expect(source).toContain('autoExportKnowledgeArtifacts');
-    expect(source).toContain('fallbackToProjectKnowledge');
     expect(source).toContain('aiMemoryReadbackEnabled');
     expect(source).toContain('aiMemoryMaxResults');
     expect(source).toContain('aiMemoryProjectScopeEnabled');
     expect(source).toContain('activeNoteReadbackEnabled');
     expect(source).toContain('activeVaultId');
-    expect(source).toContain('dailyNoteFolder');
-    expect(source).toContain('dailyNoteHeading');
     expect(source).toContain('mcpEnabled');
     expect(source).toContain('/api/obsidian-bridge/active');
     expect(source).toContain('/api/obsidian-bridge/query');
     expect(source).toContain('/api/obsidian-bridge/mcp/install');
     expect(source).toContain('/api/obsidian-bridge/memory/candidates');
     expect(source).toContain('/api/obsidian-bridge/memory/commit');
-    expect(source).toContain('AI 记忆候选队列');
+    expect(source).toContain('AI Memory 候选入口');
     expect(source).toContain('测试当前笔记');
     expect(source).toContain('安装 MCP');
     expect(source).toContain('readableVaultFolders');
@@ -50,24 +68,28 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('pluginVersion');
     expect(source).toContain('/api/obsidian-bridge/search');
     expect(source).toContain('/api/obsidian-bridge/context');
-    expect(source).toContain('/api/obsidian-bridge/routing/preview');
     expect(source).toContain('/api/obsidian-bridge/duplicates/scan');
     expect(source).toContain('/api/obsidian-bridge/duplicates/archive');
     expect(source).toContain('/api/obsidian-bridge/auto-capture/backfill');
     expect(source).toContain('/api/obsidian-bridge/auto-capture/status');
-    expect(source).toContain('/api/obsidian-bridge/wiki/compile');
-    expect(source).toContain('/api/obsidian-bridge/wiki/lint');
-    expect(source).toContain('wikiCompilerEnabled');
-    expect(source).toContain('Wiki Compiler');
-    expect(source).toContain('测试自动路由');
+    expect(source).toContain('OBSIDIAN_BRIDGE_TABS');
+    expect(source).toContain("id: 'connection'");
+    expect(source).toContain("id: 'knowledge'");
+    expect(source).toContain("id: 'advanced'");
+    expect(source).toContain('连接');
+    expect(source).toContain('知识库');
+    expect(source).toContain('高级');
+    expect(source).toContain('role="tablist"');
+    expect(source).toContain('selectedObsidianTab');
+    expect(source).toContain('最近错误');
     expect(source).toContain('重复笔记清理');
     expect(source).toContain('Obsidian 知识库');
-    expect(source).toContain('手动上传/保存到 Wiki');
-    expect(source).toContain('自动判断默认关闭');
-    expect(source).toContain('不可达时回退到项目文档');
-    expect(source).toContain('project-knowledge');
-    expect(source).toContain('second-brain');
-    expect(source).toContain('ai-memory');
+    expect(source).not.toContain('Daily note 目录');
+    expect(source).not.toContain('Daily note 标题');
+    expect(source).not.toContain('默认写入形态');
+    expect(source).not.toContain('测试自动路由');
+    expect(source).not.toContain('Schema 目录');
+    expect(source).not.toContain('Wiki Compiler');
   });
 
   it('keeps the Obsidian settings page compact and links to global small model settings', () => {
@@ -78,11 +100,12 @@ describe('Runtime settings Obsidian bridge entry', () => {
     );
     const settingsSource = readFileSync(resolve(currentDir, '..', 'Settings.tsx'), 'utf8');
 
-    expect(source).toContain('核心开关');
-    expect(source).toContain('小模型增强');
+    expect(source).toContain('连接 Obsidian');
+    expect(source).toContain('上传/保存成 Wiki');
+    expect(source).toContain('Wiki 回读注入');
     expect(source).toContain('打开小模型设置');
-    expect(source).toContain('高级设置');
-    expect(source).toContain('<details');
+    expect(source).toContain('高级诊断');
+    expect(source).not.toContain('<details');
     expect(source).toContain('onOpenSmallModelSettings');
     expect(settingsSource).toContain('agentInitialCategory');
     expect(settingsSource).toContain('small-model');
@@ -98,9 +121,18 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('knowledgeUploadInputRef');
     expect(source).toContain('uploadKnowledgeFiles');
     expect(source).toContain('/api/obsidian-bridge/wiki/upload');
+    expect(source).toContain('summaryType');
+    expect(source).toContain('WIKI_SUMMARY_TYPES');
+    expect(source).toContain('technical-review');
+    expect(source).toContain('compileQualityStatus');
+    expect(source).toContain('wikiReadbackPreview');
+    expect(source).toContain('reranked');
+    expect(source).toContain('rerankModel');
     expect(source).toContain("formData.append('files'");
     expect(source).toContain('wikiCompiler');
     expect(source).toContain('wikiCompileChunks');
+    expect(source).toContain('extractionEngine');
+    expect(source).toContain('pdfExtractedPages');
     expect(source).toContain('小模型编译');
     expect(source).toContain('fallback 编译');
     expect(source).toContain('上传现有文件');
@@ -128,10 +160,15 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('\u672a\u4fdd\u5b58');
     expect(source).toContain('\u8bf4\u660e');
     expect(source).toContain('/api/obsidian-bridge/wiki/upload');
+    expect(source).toContain('summaryType');
+    expect(source).toContain('WIKI_SUMMARY_TYPES');
+    expect(source).toContain('technical-review');
     expect(source).toContain('wikiCompiler');
+    expect(source).toContain('extractionEngine');
+    expect(source).toContain('pdfExtractedPages');
     expect(source).toContain('\u5c0f\u6a21\u578b\u603b\u7ed3');
     expect(source).toContain('fallback \u603b\u7ed3');
-    expect(source).not.toContain('.pdf');
+    expect(source).toContain('.pdf');
     expect(source).not.toContain('.docx');
     expect(source).not.toContain('.pptx');
     expect(source).not.toContain('SOURCE_FILTERS');

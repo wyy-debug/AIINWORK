@@ -76,6 +76,15 @@ declare global {
         success?: boolean;
         error?: string;
       }>;
+      notify?: (options: {
+        title: string;
+        body?: string;
+        tag?: string;
+        urgency?: 'normal' | 'critical';
+      }) => Promise<{
+        success?: boolean;
+        error?: string;
+      }>;
 	    };
   }
 

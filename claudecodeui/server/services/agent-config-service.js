@@ -9,6 +9,10 @@ const AGENTS_DIR = process.env.MTL_CODE_AGENTS_CONFIG_DIR || path.join(UI_DATA_D
 const AGENTS_PATH = path.join(AGENTS_DIR, 'agents.json');
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MAX_CONTEXT_WINDOW_TOKENS = 4_000_000;
+const DEFAULT_INLINE_SKILL_CONTENT_CHARS = 16_000;
+const MAX_INLINE_SKILL_CONTENT_CHARS = 200_000;
+const INLINE_SKILL_CONTEXT_TOKEN_RATIO = 0.05;
+const APPROX_CHARS_PER_TOKEN = 4;
 const MTL_CODE_HOME_DIR = process.env.MTL_CODE_CONFIG_DIR || path.join(os.homedir(), '.mtl-code');
 const LEGACY_CLAUDE_HOME_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const MTL_CODE_MODEL_ENV_KEYS = {
@@ -475,6 +479,50 @@ export async function buildAgentSystemPrompt(agent, options = {}) {
   return (await buildAgentSystemPromptResult(agent, options)).prompt;
 }
 
+function normalizeInlineSkillContentLimit(options = {}) {
+  const envLimit = Number(process.env.MTL_CODE_INLINE_SKILL_CONTENT_CHARS || 0);
+  if (Number.isFinite(envLimit) && envLimit > 0) {
+    return Math.max(
+      DEFAULT_INLINE_SKILL_CONTENT_CHARS,
+      Math.min(MAX_INLINE_SKILL_CONTENT_CHARS, Math.floor(envLimit)),
+    );
+  }
+
+  const contextWindowTokens = Number(options.contextWindowTokens || 0);
+  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return DEFAULT_INLINE_SKILL_CONTENT_CHARS;
+  }
+
+  const dynamicLimit = Math.floor(
+    contextWindowTokens * INLINE_SKILL_CONTEXT_TOKEN_RATIO * APPROX_CHARS_PER_TOKEN,
+  );
+  return Math.max(
+    DEFAULT_INLINE_SKILL_CONTENT_CHARS,
+    Math.min(MAX_INLINE_SKILL_CONTENT_CHARS, dynamicLimit),
+  );
+}
+
+async function readInlineSkillContent(skillPath, options = {}) {
+  if (!skillPath) {
+    return '';
+  }
+  try {
+    const content = await fs.readFile(skillPath, 'utf8');
+    const trimmed = content.trim();
+    const limit = normalizeInlineSkillContentLimit(options);
+    if (trimmed.length <= limit) {
+      return trimmed;
+    }
+    return [
+      trimmed.slice(0, limit),
+      '',
+      `[Skill content truncated to ${limit} characters.]`,
+    ].join('\n');
+  } catch {
+    return '';
+  }
+}
+
 export async function resolveSkillReferences(skillNames = [], options = {}) {
   const normalizedSkillNames = normalizeStringArray(skillNames, 60, 120);
   if (normalizedSkillNames.length === 0) {
@@ -489,11 +537,14 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
     installedSkills = [];
   }
 
-  const details = normalizedSkillNames.map((skillName) => {
+  const details = await Promise.all(normalizedSkillNames.map(async (skillName) => {
     const installed = installedSkills.find((skill) => (
       skill.name.toLowerCase() === String(skillName).toLowerCase()
       || skill.title.toLowerCase() === String(skillName).toLowerCase()
     ));
+    const injectedContent = installed?.callable
+      ? await readInlineSkillContent(installed.skillPath || '', options)
+      : '';
     const line = installed
       ? `- ${skillName} (installed, ${installed.provider}/${installed.scope}, ${installed.skillPath})`
       : `- ${skillName} (not installed; do not rely on this Skill until the user installs it)`;
@@ -506,23 +557,42 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
       callable: Boolean(installed?.callable),
       exists: Boolean(installed?.skillPath),
       promptLength: line.length,
+      injectedContent,
       unavailableReason: installed
         ? (installed.callable ? '' : 'Skill 已安装，但当前注册表未标记为可调用。')
         : '未找到已安装的 SKILL.md，后端会提示模型不要依赖该 Skill。',
       line,
     };
-  });
+  }));
+
+  const injectedSkillBlocks = details
+    .filter((detail) => detail.injectedContent)
+    .map((detail) => [
+      `<skill name="${detail.name}" path="${detail.path}">`,
+      detail.injectedContent,
+      '</skill>',
+    ].join('\n'));
 
   const lines = [
     'Preferred skills for this conversation:',
     ...details.map((detail) => detail.line),
-    'When a preferred Skill is installed, read and follow its SKILL.md instructions before applying that specialized workflow. These Skills narrow the workflow for this conversation and do not grant extra permissions by themselves.',
+    ...(injectedSkillBlocks.length > 0
+      ? [
+          '',
+          'Installed Skill instructions are injected below. Follow these SKILL.md instructions before applying the specialized workflow.',
+          ...injectedSkillBlocks,
+        ]
+      : []),
+    'When a preferred Skill is not installed, do not rely on it. These Skills narrow the workflow for this conversation and do not grant extra permissions by themselves.',
   ];
 
   const prompt = lines.join('\n');
   return {
     prompt,
-    details: details.map(({ line, ...detail }) => detail),
+    details: details.map(({ line, injectedContent, ...detail }) => ({
+      ...detail,
+      promptLength: detail.promptLength + injectedContent.length,
+    })),
     promptLength: prompt.length,
   };
 }

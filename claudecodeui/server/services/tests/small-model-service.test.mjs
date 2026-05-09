@@ -416,11 +416,15 @@ describe('small model service', () => {
 
     expect(result).toMatchObject({
       refined: true,
+      reranked: true,
       model: 'mimo-v2-flash',
+      rerankModel: 'mimo-v2-flash',
+      tokenBudgetUsed: expect.any(Number),
       context: expect.stringContaining('Use the GPUScene review note.'),
       sources: [
         expect.objectContaining({
           path: 'Argus/Wiki/App/GPUScene.md',
+          snippet: 'Use the GPUScene review note.',
           hitReason: 'Title match',
         }),
       ],
@@ -433,6 +437,7 @@ describe('small model service', () => {
       completeJson: vi.fn(async () => ({ success: false, reason: 'not_configured' })),
     })).resolves.toMatchObject({
       refined: false,
+      reranked: false,
       context: 'Raw context',
     });
   });

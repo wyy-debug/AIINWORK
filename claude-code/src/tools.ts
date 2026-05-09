@@ -212,19 +212,8 @@ export function getToolsForDefaultPreset(): string[] {
  * NOTE: This MUST stay in sync with https://console.statsig.com/4aF3Ewatb6xPVpCwxb5nA3/dynamic_configs/mtl_code_global_system_caching, in order to cache the system prompt across users.
  */
 export function getAllBaseTools(): Tools {
-  const subagentTools = areSubagentsHardDisabled()
-    ? []
-    : [
-        SpawnAgentTool,
-        ListAgentsTool,
-        WaitAgentTool,
-        CloseAgentTool,
-        SendMessageAgentTool,
-        FollowupTaskAgentTool,
-      ]
-  const goalTools = areGoalsHardDisabled()
-    ? []
-    : [GetGoalTool, CreateGoalTool, UpdateGoalTool]
+  const subagentTools = getCodexSubagentTools()
+  const goalTools = getCodexGoalTools()
 
   return [
     ...subagentTools,
@@ -289,6 +278,27 @@ export function getAllBaseTools(): Tools {
   ]
 }
 
+function getCodexSubagentTools(): Tool[] {
+  return areSubagentsHardDisabled()
+    ? []
+    : [
+        SpawnAgentTool,
+        ListAgentsTool,
+        WaitAgentTool,
+        CloseAgentTool,
+        SendMessageAgentTool,
+        FollowupTaskAgentTool,
+      ]
+}
+
+function getCodexGoalTools(): Tool[] {
+  return areGoalsHardDisabled()
+    ? []
+    // buildTool preserves each goal tool's narrow call signature; tool dispatch
+    // still validates against each inputSchema before calling it.
+    : ([GetGoalTool, CreateGoalTool, UpdateGoalTool] as unknown as Tool[])
+}
+
 /**
  * Filters out tools that are blanket-denied by the permission context.
  * A tool is filtered out if there's a deny rule matching its name with no
@@ -329,11 +339,13 @@ function shouldUseCodexStylePlanToolSurface(
 export const getTools = (permissionContext: ToolPermissionContext): Tools => {
   // Simple mode: only Bash, Read, and Edit tools
   if (isEnvTruthy(process.env.MTL_CODE_SIMPLE)) {
+    const simpleSubagentTools = getCodexSubagentTools()
+    const simpleGoalTools = getCodexGoalTools()
     // --bare + REPL mode: REPL wraps Bash/Read/Edit/etc inside the VM, so
     // return REPL instead of the raw primitives. Matches the non-bare path
     // below which also hides REPL_ONLY_TOOLS when REPL is enabled.
     if (isReplModeEnabled() && REPLTool) {
-      const replSimple: Tool[] = [REPLTool]
+      const replSimple = [REPLTool, ...simpleSubagentTools, ...simpleGoalTools]
       if (
         !areSubagentsHardDisabled() &&
         feature('COORDINATOR_MODE') &&
@@ -341,17 +353,18 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       ) {
         replSimple.push(
           TaskStopTool,
-          ListAgentsTool,
-          WaitAgentTool,
-          CloseAgentTool,
-          SendMessageAgentTool,
-          FollowupTaskAgentTool,
           getSendMessageTool(),
         )
       }
       return filterToolsByDenyRules(replSimple, permissionContext)
     }
-    const simpleTools: Tool[] = [BashTool, FileReadTool, FileEditTool]
+    const simpleTools = [
+      BashTool,
+      FileReadTool,
+      FileEditTool,
+      ...simpleSubagentTools,
+      ...simpleGoalTools,
+    ]
     // When coordinator mode is also active, include spawn_agent and TaskStopTool
     // so the coordinator gets Task+TaskStop (via useMergedTools filtering) and
     // workers get Bash/Read/Edit (via filterToolsForAgent filtering).
@@ -361,13 +374,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       coordinatorModeModule?.isCoordinatorMode()
     ) {
       simpleTools.push(
-        SpawnAgentTool,
         TaskStopTool,
-        ListAgentsTool,
-        WaitAgentTool,
-        CloseAgentTool,
-        SendMessageAgentTool,
-        FollowupTaskAgentTool,
         getSendMessageTool(),
       )
     }

@@ -329,6 +329,7 @@ export const createArtifactService = ({
 
   const exportArtifactToObsidian = async (artifact, {
     mode = '',
+    summaryType = 'auto',
     automatic = false,
     updateMetadata = true,
     multiMode = false,
@@ -347,10 +348,12 @@ export const createArtifactService = ({
         kind: artifact?.kind,
         metadata: {
           ...(artifact?.metadata || {}),
+          summaryType: summaryType || artifact?.metadata?.summaryType || 'auto',
           obsidianMode: targetMode,
           obsidianModes: [targetMode],
         },
         modes: [targetMode],
+        summaryType: summaryType || artifact?.metadata?.summaryType || 'auto',
       });
       const obsidianBridge = summarizeWikiExport(result, {
         mode: targetMode,
@@ -383,6 +386,7 @@ export const createArtifactService = ({
 
   const exportArtifactToObsidianModes = async (artifact, {
     modes = [],
+    summaryType = 'auto',
     automatic = false,
   } = {}) => {
     const sourceModes = Array.isArray(modes) && modes.length === 0
@@ -406,10 +410,12 @@ export const createArtifactService = ({
         kind: artifact?.kind,
         metadata: {
           ...(artifact?.metadata || {}),
+          summaryType: summaryType || artifact?.metadata?.summaryType || 'auto',
           obsidianMode: targetModes[0],
           obsidianModes: targetModes,
         },
         modes: targetModes,
+        summaryType: summaryType || artifact?.metadata?.summaryType || 'auto',
       });
       const obsidianBridge = summarizeWikiExport(result, {
         mode: targetModes[0],
@@ -426,6 +432,7 @@ export const createArtifactService = ({
       try {
         obsidianBridges.push(await exportArtifactToObsidian(artifact, {
           mode: targetMode,
+          summaryType,
           automatic,
           updateMetadata: false,
           multiMode,

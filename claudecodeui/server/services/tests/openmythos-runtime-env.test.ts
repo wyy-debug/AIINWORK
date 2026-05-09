@@ -145,6 +145,91 @@ test('Model profile requestModel overrides the runtime Anthropic model request n
   }
 });
 
+test('OpenAI-compatible model profiles build OpenAI runtime env', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
+  const configRoot = path.join(tempRoot, '.mtl-code');
+  await fs.mkdir(configRoot, { recursive: true });
+  await fs.writeFile(path.join(configRoot, 'settings.json'), JSON.stringify({
+    env: {
+      ANTHROPIC_BASE_URL: 'http://stale.example.com',
+      ANTHROPIC_MODEL: 'stale-anthropic-model',
+    },
+    mtlCodeModelProfiles: [
+      {
+        id: 'wd-openai',
+        name: 'WD OpenAI',
+        protocol: 'openai-compatible',
+        baseUrl: 'http://token.wd.com',
+        model: 'gpt-5.4-mini',
+        authToken: 'test-token',
+        contextWindowTokens: 200000,
+      },
+    ],
+    activeMtlCodeModelProfileId: 'wd-openai',
+  }, null, 2), 'utf8');
+
+  const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
+  process.env.MTL_CODE_CONFIG_DIR = configRoot;
+  try {
+    const runtime = await resolveMtlCodeModelRuntime('wd-openai');
+
+    expect(runtime?.env.MTL_CODE_USE_OPENAI).toBe('1');
+    expect(runtime?.env.OPENAI_BASE_URL).toBe('http://token.wd.com/v1');
+    expect(runtime?.env.OPENAI_MODEL).toBe('gpt-5.4-mini');
+    expect(runtime?.env.OPENAI_API_KEY).toBe('test-token');
+    expect(runtime?.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(runtime?.env.ANTHROPIC_MODEL).toBeUndefined();
+  } finally {
+    if (previousConfigRoot === undefined) {
+      delete process.env.MTL_CODE_CONFIG_DIR;
+    } else {
+      process.env.MTL_CODE_CONFIG_DIR = previousConfigRoot;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('Anthropic model profiles normalize gateway base URLs and disable stale OpenAI routing', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
+  const configRoot = path.join(tempRoot, '.mtl-code');
+  await fs.mkdir(configRoot, { recursive: true });
+  await fs.writeFile(path.join(configRoot, 'settings.json'), JSON.stringify({
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+    },
+    mtlCodeModelProfiles: [
+      {
+        id: 'wd-anthropic',
+        name: 'WD Anthropic',
+        protocol: 'anthropic',
+        baseUrl: 'http://token.wd.com/v1/',
+        model: 'gpt-5.4',
+        authToken: 'test-token',
+        contextWindowTokens: 200000,
+      },
+    ],
+    activeMtlCodeModelProfileId: 'wd-anthropic',
+  }, null, 2), 'utf8');
+
+  const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
+  process.env.MTL_CODE_CONFIG_DIR = configRoot;
+  try {
+    const runtime = await resolveMtlCodeModelRuntime('wd-anthropic');
+
+    expect(runtime?.env.MTL_CODE_USE_OPENAI).toBe('0');
+    expect(runtime?.env.ANTHROPIC_BASE_URL).toBe('http://token.wd.com');
+    expect(runtime?.env.ANTHROPIC_MODEL).toBe('gpt-5.4');
+    expect(runtime?.env.ANTHROPIC_AUTH_TOKEN).toBe('test-token');
+  } finally {
+    if (previousConfigRoot === undefined) {
+      delete process.env.MTL_CODE_CONFIG_DIR;
+    } else {
+      process.env.MTL_CODE_CONFIG_DIR = previousConfigRoot;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('OpenMythos runtime settings override stale env values when read back', async () => {
   const env = {
     MTL_CODE_OPENMYTHOS_RUNTIME: '0',

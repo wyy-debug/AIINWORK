@@ -22,6 +22,7 @@ export default defineConfig({
       'server/services/tests/local-tool-service.test.mjs',
       'server/services/tests/session-goal-api-events.test.mjs',
       'server/services/tests/session-goal-service.test.mjs',
+      'server/services/tests/settings-route.test.mjs',
     ],
   },
 });

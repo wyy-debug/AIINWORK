@@ -93,13 +93,16 @@ router.post('/:id/send-to-obsidian', async (req, res) => {
       return res.status(404).json({ error: 'Artifact not found' });
     }
     const requestedMode = typeof req.body?.mode === 'string' ? req.body.mode : 'auto';
+    const summaryType = typeof req.body?.summaryType === 'string' ? req.body.summaryType : 'auto';
     const obsidianBridge = requestedMode === 'auto'
       ? await exportArtifactToObsidianModes(artifact, {
         automatic: false,
+        summaryType,
       })
       : await exportArtifactToObsidian(artifact, {
         mode: requestedMode,
         automatic: false,
+        summaryType,
       });
     const updated = await getArtifact(req.params.id, { includeContent: true });
     return res.json({
