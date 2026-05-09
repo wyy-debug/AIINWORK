@@ -36,3 +36,29 @@ export const getIntrinsicMessageKey = (message: ChatMessage): string | null => {
   const toolName = typeof message.toolName === 'string' ? message.toolName : '';
   return `message-${message.type}-${timestamp}-${toolName}-${contentPreview}`;
 };
+
+export type MessageRenderKeyLookup = {
+  getKey: (message: ChatMessage) => string;
+};
+
+export const createMessageRenderKeyLookup = (
+  messages: readonly ChatMessage[],
+): MessageRenderKeyLookup => {
+  const keyByMessage = new Map<ChatMessage, string>();
+  const seenKeys = new Map<string, number>();
+
+  messages.forEach((message, index) => {
+    const baseKey = getIntrinsicMessageKey(message) || `message-generated-${index}`;
+    const seenCount = seenKeys.get(baseKey) || 0;
+    seenKeys.set(baseKey, seenCount + 1);
+    keyByMessage.set(message, seenCount === 0 ? baseKey : `${baseKey}-${seenCount}`);
+  });
+
+  return {
+    getKey(message) {
+      return keyByMessage.get(message)
+        || getIntrinsicMessageKey(message)
+        || 'message-generated-unmapped';
+    },
+  };
+};

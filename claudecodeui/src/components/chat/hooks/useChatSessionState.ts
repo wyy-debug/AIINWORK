@@ -224,6 +224,10 @@ export function useChatSessionState({
   /* ---------------------------------------------------------------- */
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  const currentSessionIdRef = useRef<string | null>(currentSessionId);
+  activeSessionIdRef.current = activeSessionId;
+  currentSessionIdRef.current = currentSessionId;
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null);
 
   // Tell the store which session we're viewing so it only re-renders for this one
@@ -520,15 +524,17 @@ export function useChatSessionState({
       return;
     }
 
+    const requestSessionId = selectedSession.id;
+    let cancelled = false;
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
-    const sessionKey = `${selectedSession.id}:${selectedProject.name}:${provider}`;
+    const sessionKey = `${requestSessionId}:${selectedProject.name}:${provider}`;
 
     // Skip if already loaded and fresh
-    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
+    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(requestSessionId) && !sessionStore.isStale(requestSessionId)) {
       return;
     }
 
-    const sessionChanged = currentSessionId !== null && currentSessionId !== selectedSession.id;
+    const sessionChanged = currentSessionIdRef.current !== null && currentSessionIdRef.current !== requestSessionId;
     if (sessionChanged) {
       resetStreamingState();
       pendingViewSessionRef.current = null;
@@ -556,28 +562,31 @@ export function useChatSessionState({
       setIsLoading(false);
     }
 
-    setCurrentSessionId(selectedSession.id);
+    setCurrentSessionId(requestSessionId);
+    activeSessionIdRef.current = requestSessionId;
+    currentSessionIdRef.current = requestSessionId;
     setSessionLoadError('');
     if (provider === 'cursor') {
-      sessionStorage.setItem('cursorSessionId', selectedSession.id);
+      sessionStorage.setItem('cursorSessionId', requestSessionId);
     }
 
     // Check session status
     if (ws) {
-      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
+      sendMessage({ type: 'check-session-status', sessionId: requestSessionId, provider });
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;
 
     // Fetch from server -> store updates -> chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);
-    sessionStore.fetchFromServer(selectedSession.id, {
+    sessionStore.fetchFromServer(requestSessionId, {
       provider: (selectedSession.__provider || provider) as LLMProvider,
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
       limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
+      if (cancelled || activeSessionIdRef.current !== requestSessionId) return;
       if (slot) {
         setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
@@ -590,11 +599,14 @@ export function useChatSessionState({
       }
       setIsLoadingSessionMessages(false);
     }).catch(() => {
+      if (cancelled || activeSessionIdRef.current !== requestSessionId) return;
       setSessionLoadError('Failed to load session messages');
       setIsLoadingSessionMessages(false);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [
-    currentSessionId,
     pendingViewSessionRef,
     resetStreamingState,
     selectedProject,

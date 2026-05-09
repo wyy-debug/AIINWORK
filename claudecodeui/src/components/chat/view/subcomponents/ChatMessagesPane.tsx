@@ -5,7 +5,7 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { AgentConfig } from '../../../../types/agent';
-import { getIntrinsicMessageKey } from '../../utils/messageKeys';
+import { createMessageRenderKeyLookup } from '../../utils/messageKeys';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../../../shared/view/ui';
 
 import MessageComponent from './MessageComponent';
@@ -315,33 +315,16 @@ export default function ChatMessagesPane({
   obsidianBridgeEnabled = false,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
-  const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
-  const allocatedKeysRef = useRef<Set<string>>(new Set());
-  const generatedMessageKeyCounterRef = useRef(0);
 
-  // Keep keys stable across prepends so existing MessageComponent instances retain local state.
+  const messageKeyLookup = useMemo(
+    () => createMessageRenderKeyLookup(visibleMessages),
+    [visibleMessages],
+  );
+
+  // Keep keys stable across refreshes so scroll anchors and component state survive rebuilds.
   const getMessageKey = useCallback((message: ChatMessage) => {
-    const existingKey = messageKeyMapRef.current.get(message);
-    if (existingKey) {
-      return existingKey;
-    }
-
-    const intrinsicKey = getIntrinsicMessageKey(message);
-    let candidateKey = intrinsicKey;
-
-    if (!candidateKey || allocatedKeysRef.current.has(candidateKey)) {
-      do {
-        generatedMessageKeyCounterRef.current += 1;
-        candidateKey = intrinsicKey
-          ? `${intrinsicKey}-${generatedMessageKeyCounterRef.current}`
-          : `message-generated-${generatedMessageKeyCounterRef.current}`;
-      } while (allocatedKeysRef.current.has(candidateKey));
-    }
-
-    allocatedKeysRef.current.add(candidateKey);
-    messageKeyMapRef.current.set(message, candidateKey);
-    return candidateKey;
-  }, []);
+    return messageKeyLookup.getKey(message);
+  }, [messageKeyLookup]);
 
   const renderedMessageItems = useMemo(() => {
     type RenderedMessageItem =
