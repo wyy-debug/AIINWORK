@@ -84,11 +84,11 @@ function AgentChoiceDropdown({ agents, value, onChange }: AgentChoiceDropdownPro
       <button
         type="button"
         onClick={() => setIsOpen((current) => !current)}
-        className="flex h-10 w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 text-left text-xs shadow-sm transition-colors hover:bg-muted/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15"
+        className="flex min-h-10 w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs shadow-sm transition-colors hover:bg-muted/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15"
       >
         <span className="flex min-w-0 items-center gap-2">
           <Bot className="h-3.5 w-3.5 shrink-0 text-primary" />
-          <span className="min-w-0 truncate font-medium text-foreground">
+          <span className="min-w-0 whitespace-normal break-words font-medium leading-4 text-foreground">
             {selectedAgent?.shortName || selectedAgent?.name || "选择 Agent"}
           </span>
         </span>
@@ -96,7 +96,7 @@ function AgentChoiceDropdown({ agents, value, onChange }: AgentChoiceDropdownPro
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-56 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl ring-1 ring-black/5">
+        <div className="absolute left-1/2 top-[calc(100%+6px)] z-30 max-h-56 w-[22rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl ring-1 ring-black/5 sm:w-[24rem]">
           {agents.map((agent) => {
             const selected = agent.id === value;
             return (
@@ -107,17 +107,17 @@ function AgentChoiceDropdown({ agents, value, onChange }: AgentChoiceDropdownPro
                   onChange(agent.id);
                   setIsOpen(false);
                 }}
-                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
+                className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
                   selected
                     ? "bg-primary text-primary-foreground"
                     : "text-foreground hover:bg-muted"
                 }`}
               >
-                <Bot className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate font-medium">
+                <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 whitespace-normal break-words font-medium leading-5">
                   {agent.shortName || agent.name}
                 </span>
-                {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+                {selected && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
               </button>
             );
           })}
