@@ -504,22 +504,25 @@ function normalizeInlineSkillContentLimit(options = {}) {
 
 async function readInlineSkillContent(skillPath, options = {}) {
   if (!skillPath) {
-    return '';
+    return { content: '', error: 'SKILL.md path is empty' };
   }
   try {
     const content = await fs.readFile(skillPath, 'utf8');
     const trimmed = content.trim();
     const limit = normalizeInlineSkillContentLimit(options);
     if (trimmed.length <= limit) {
-      return trimmed;
+      return { content: trimmed, error: '' };
     }
-    return [
+    return { content: [
       trimmed.slice(0, limit),
       '',
       `[Skill content truncated to ${limit} characters.]`,
-    ].join('\n');
-  } catch {
-    return '';
+    ].join('\n'), error: '' };
+  } catch (error) {
+    return {
+      content: '',
+      error: error?.message || String(error || 'Failed to read SKILL.md'),
+    };
   }
 }
 
@@ -542,9 +545,15 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
       skill.name.toLowerCase() === String(skillName).toLowerCase()
       || skill.title.toLowerCase() === String(skillName).toLowerCase()
     ));
-    const injectedContent = installed?.callable
+    const inlineSkill = installed?.callable
       ? await readInlineSkillContent(installed.skillPath || '', options)
-      : '';
+      : { content: '', error: '' };
+    const injectedContent = inlineSkill.content;
+    const injectionStatus = !installed
+      ? 'not-installed'
+      : (!installed.callable
+          ? 'not-callable'
+          : (inlineSkill.error ? 'failed' : (injectedContent ? 'injected' : 'empty')));
     const line = installed
       ? `- ${skillName} (installed, ${installed.provider}/${installed.scope}, ${installed.skillPath})`
       : `- ${skillName} (not installed; do not rely on this Skill until the user installs it)`;
@@ -558,8 +567,12 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
       exists: Boolean(installed?.skillPath),
       promptLength: line.length,
       injectedContent,
+      injectionStatus,
+      injectionError: inlineSkill.error || '',
       unavailableReason: installed
-        ? (installed.callable ? '' : 'Skill 已安装，但当前注册表未标记为可调用。')
+        ? (installed.callable
+            ? (inlineSkill.error ? `Skill SKILL.md could not be read: ${inlineSkill.error}` : '')
+            : 'Skill 已安装，但当前注册表未标记为可调用。')
         : '未找到已安装的 SKILL.md，后端会提示模型不要依赖该 Skill。',
       line,
     };
@@ -572,6 +585,9 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
       detail.injectedContent,
       '</skill>',
     ].join('\n'));
+  const failedSkillBlocks = details
+    .filter((detail) => detail.injectionStatus === 'failed')
+    .map((detail) => `- ${detail.name}: failed to inline SKILL.md at ${detail.path}. ${detail.injectionError}`);
 
   const lines = [
     'Preferred skills for this conversation:',
@@ -581,6 +597,14 @@ export async function resolveSkillReferences(skillNames = [], options = {}) {
           '',
           'Installed Skill instructions are injected below. Follow these SKILL.md instructions before applying the specialized workflow.',
           ...injectedSkillBlocks,
+        ]
+      : []),
+    ...(failedSkillBlocks.length > 0
+      ? [
+          '',
+          'Skill injection issues:',
+          ...failedSkillBlocks,
+          'Do not assume unavailable Skill instructions beyond the metadata listed above.',
         ]
       : []),
     'When a preferred Skill is not installed, do not rely on it. These Skills narrow the workflow for this conversation and do not grant extra permissions by themselves.',

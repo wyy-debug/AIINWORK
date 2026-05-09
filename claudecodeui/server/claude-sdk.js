@@ -684,6 +684,24 @@ function getAllSessions() {
   return Array.from(activeSessions.keys());
 }
 
+function isMtlCodeUserAbort(child) {
+  return child?._mtlCodeAborted === true;
+}
+
+function buildMtlCodeCloseFailureMessage({ code = null, signal = null, stderrLines = [] } = {}) {
+  const stderrText = Array.isArray(stderrLines) ? stderrLines.slice(-12).join('\n') : '';
+  if (stderrText.trim()) {
+    const suffix = signal
+      ? `\n\nArgus backend exited with signal ${signal}.`
+      : (code ? `\n\nArgus backend exited with code ${code}.` : '');
+    return `${stderrText}${suffix}`;
+  }
+  if (signal) {
+    return `Argus backend exited with signal ${signal}`;
+  }
+  return `Argus backend exited with code ${code}`;
+}
+
 /**
  * Transforms SDK messages to WebSocket format expected by frontend
  * @param {Object} sdkMessage - SDK message object
@@ -1001,15 +1019,36 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   });
 
   const clientSessionId = typeof options.clientSessionId === 'string' ? options.clientSessionId.trim() : '';
+  const registeredSessionIds = new Set();
+  const registerSession = (sessionKey) => {
+    if (!sessionKey) {
+      return;
+    }
+    addSession(sessionKey, createSessionInstance(child), tempImagePaths, tempDir, ws);
+    registeredSessionIds.add(sessionKey);
+  };
+  const unregisterSession = (sessionKey) => {
+    if (!sessionKey) {
+      return;
+    }
+    removeSession(sessionKey);
+    registeredSessionIds.delete(sessionKey);
+  };
+  const cleanupRegisteredSessions = () => {
+    for (const sessionKey of registeredSessionIds) {
+      removeSession(sessionKey);
+    }
+    registeredSessionIds.clear();
+  };
   const ensureSessionRegistered = (messageSessionId) => {
     if (!messageSessionId || capturedSessionId === messageSessionId) {
       return;
     }
 
     capturedSessionId = messageSessionId;
-    addSession(capturedSessionId, createSessionInstance(child), tempImagePaths, tempDir, ws);
+    registerSession(capturedSessionId);
     if (clientSessionId && clientSessionId !== capturedSessionId) {
-      removeSession(clientSessionId);
+      unregisterSession(clientSessionId);
     }
 
     if (ws.setSessionId && typeof ws.setSessionId === 'function') {
@@ -1192,7 +1231,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
 
     if (sessionId || clientSessionId) {
-      addSession(capturedSessionId || clientSessionId, createSessionInstance(child), tempImagePaths, tempDir, ws);
+      registerSession(capturedSessionId || clientSessionId);
     }
 
     child.stderr?.on('data', (chunk) => {
@@ -1236,15 +1275,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       await handleStdoutLine(stdoutBuffer);
     }
 
-    if (capturedSessionId) {
-      removeSession(capturedSessionId);
-    }
+    cleanupRegisteredSessions();
     await cleanupTempFiles(tempImagePaths, tempDir);
 
-    const aborted = Boolean(child._mtlCodeAborted || signal);
-    if (code && code !== 0 && !resultReceived && !aborted) {
-      const stderrText = stderrLines.slice(-12).join('\n');
-      const message = stderrText || `Argus backend exited with code ${code}`;
+    const aborted = isMtlCodeUserAbort(child);
+    const failedWithoutResult = !aborted && !resultReceived && (Boolean(signal) || Boolean(code && code !== 0));
+    if (failedWithoutResult) {
+      const message = buildMtlCodeCloseFailureMessage({ code, signal, stderrLines });
       ws.send(createNormalizedMessage({ kind: 'error', content: message, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       notifyRunFailed({
         userId: ws?.userId || null,
@@ -1272,9 +1309,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     if (child && !child.killed) {
       child.kill('SIGTERM');
     }
-    if (capturedSessionId) {
-      removeSession(capturedSessionId);
-    }
+    cleanupRegisteredSessions();
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     const installed = await providerAuthService.isProviderInstalled('claude');
@@ -1753,5 +1788,7 @@ export {
   getActiveClaudeSDKSessions,
   resolveToolApproval,
   getPendingApprovalsForSession,
-  reconnectSessionWriter
+  reconnectSessionWriter,
+  isMtlCodeUserAbort,
+  buildMtlCodeCloseFailureMessage
 };

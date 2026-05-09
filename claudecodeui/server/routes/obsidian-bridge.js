@@ -84,7 +84,8 @@ router.post('/documents', async (req, res) => {
     const projectRoot = await resolveProjectRoot(req.body?.projectName || '');
     const config = readObsidianBridgeConfig();
     const payload = req.body || {};
-    const result = config.wikiPrimaryEnabled
+    const shouldWriteDirect = payload.forceDirectWrite === true || String(payload.writeMode || '').toLowerCase() === 'direct';
+    const result = config.wikiPrimaryEnabled && !shouldWriteDirect
       ? await ingestKnowledgeSourceToWiki({
         source: payload.source || payload.metadata?.source || 'document',
         sourceId: payload.sourceId || payload.sourceArtifactId || payload.argusId || '',

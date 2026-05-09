@@ -56,6 +56,8 @@ test('resolveSkillReferences returns runtime diagnostics for installed and missi
     assert.equal(installed.callable, true);
     assert.equal(installed.exists, true);
     assert.equal(installed.path, skillPath);
+    assert.equal(installed.injectionStatus, 'injected');
+    assert.equal(installed.injectionError, '');
     assert.equal(installed.unavailableReason, '');
     assert.ok(installed.promptLength > 0);
 
@@ -64,6 +66,7 @@ test('resolveSkillReferences returns runtime diagnostics for installed and missi
     assert.equal(missing.callable, false);
     assert.equal(missing.exists, false);
     assert.equal(missing.path, '');
+    assert.equal(missing.injectionStatus, 'not-installed');
     assert.equal(missing.unavailableReason, '未找到已安装的 SKILL.md，后端会提示模型不要依赖该 Skill。');
 
     assert.equal(result.prompt.includes(skillPath), true);

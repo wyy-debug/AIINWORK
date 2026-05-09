@@ -2377,6 +2377,7 @@ function collectConfiguredMcpServerNames(projectPath = '') {
         path.join(process.env.CLAUDE_CONFIG_DIR || home, '.claude.json'),
         projectPath ? path.join(projectPath, '.mtl-code.json') : '',
         projectPath ? path.join(projectPath, '.claude.json') : '',
+        projectPath ? path.join(projectPath, '.mcp.json') : '',
     ]);
     const names = new Set();
 
@@ -2393,9 +2394,36 @@ function collectConfiguredMcpServerNames(projectPath = '') {
                 names.add(serverName.trim());
             }
         }
+
+        if (projectPath) {
+            const projects = config?.projects && typeof config.projects === 'object'
+                ? config.projects
+                : null;
+            const projectConfig = projects?.[projectPath] && typeof projects[projectPath] === 'object'
+                ? projects[projectPath]
+                : null;
+            const projectServers = projectConfig?.mcpServers && typeof projectConfig.mcpServers === 'object'
+                ? projectConfig.mcpServers
+                : null;
+            if (projectServers) {
+                for (const serverName of Object.keys(projectServers)) {
+                    if (serverName.trim()) {
+                        names.add(serverName.trim());
+                    }
+                }
+            }
+        }
     }
 
     return names;
+}
+
+function getMcpBindingServerName(binding) {
+    return String(binding?.app || '').replace(/^MCP:\s*/, '').trim();
+}
+
+function isRequiredMcpBindingStatus(status) {
+    return ['required', 'connected', 'enabled'].includes(String(status || '').trim().toLowerCase());
 }
 
 function summarizeMcpBindings(bindings = [], projectPath = '') {
@@ -2406,18 +2434,33 @@ function summarizeMcpBindings(bindings = [], projectPath = '') {
     return bindings
         .filter((binding) => String(binding?.app || '').startsWith('MCP: '))
         .map((binding) => {
-            const serverName = String(binding.app || '').replace(/^MCP:\s*/, '').trim();
+            const serverName = getMcpBindingServerName(binding);
             const isConfigured = configuredServers.has(serverName);
+            const status = binding.status || 'optional';
             return {
                 slot: binding.slot || '',
                 serverName,
-                status: binding.status || 'optional',
+                status,
                 runtimeToolsStatus: configuredServers.has(serverName) ? 'configured' : 'missing',
+                required: isRequiredMcpBindingStatus(status),
                 message: isConfigured
                     ? 'Selected MCP server is present in the runtime config.'
                     : 'selected MCP server is not present in the runtime config',
             };
         });
+}
+
+function assertRequiredMcpBindingsAvailable(bindings = [], projectPath = '') {
+    const diagnostics = summarizeMcpBindings(bindings, projectPath);
+    const missingRequired = diagnostics.filter((item) => (
+        item.required && item.runtimeToolsStatus === 'missing'
+    ));
+    if (missingRequired.length === 0) {
+        return diagnostics;
+    }
+
+    const names = missingRequired.map((item) => item.serverName).filter(Boolean).join(', ');
+    throw new Error(`Required MCP server is not configured for this Agent: ${names || 'unknown'}`);
 }
 
 function emitRuntimeDiagnostics(writer, data) {
@@ -2744,6 +2787,10 @@ async function applyAgentRuntimeToChatCommand(data) {
         contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
     });
 
+    const mcpDiagnosticsSummary = assertRequiredMcpBindingsAvailable(
+        runtime.agent.appBindings,
+        data?.options?.projectPath || data?.options?.cwd || '',
+    );
     if (allowSessionAgentBinding && concreteSessionId) {
         sessionAgentBindingsDb.setAgent(concreteSessionId, provider, runtime.agent.id, sessionConfiguration);
     }
@@ -2764,10 +2811,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             agentName: runtime.agent.name,
             appBindings: runtime.agent.appBindings,
             mcpBindings: runtime.agent.appBindings.filter((binding) => String(binding?.app || '').startsWith('MCP: ')),
-            mcpDiagnosticsSummary: summarizeMcpBindings(
-                runtime.agent.appBindings,
-                data?.options?.projectPath || data?.options?.cwd || '',
-            ),
+            mcpDiagnosticsSummary,
             sessionSkills,
             effectiveSkills: runtime.agent.skills,
             skillDetails: skillReferences.details,

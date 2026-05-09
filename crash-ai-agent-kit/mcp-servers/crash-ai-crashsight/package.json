@@ -1,0 +1,30 @@
+{
+  "name": "crash-ai-crashsight",
+  "version": "0.1.5",
+  "description": "CrashSight MCP server for daily crash investigation and single-crash analysis context.",
+  "type": "module",
+  "bin": {
+    "crash-ai-crashsight": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "check": "node --check src/core.js && node --check src/server.js && node --test",
+    "publish:hub": "node scripts/publish-to-hub.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "crashsight",
+    "crash",
+    "daily",
+    "triage",
+    "soc"
+  ],
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

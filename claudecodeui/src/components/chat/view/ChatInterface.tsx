@@ -1022,13 +1022,7 @@ function ChatInterface({
       } catch (error) {
         console.warn('Failed to load conversation Agent binding:', error);
         if (!cancelled && agentBindingLoadKeyRef.current === bindingKey) {
-          setSelectedAgentId('');
-          setSelectedAgentAppBindings([]);
-          setSelectedSessionSkillNames([]);
-          setSelectedModelProfileId(defaultModelProfileId);
-          setAgentChoiceState('default');
-          agentBindingHydratedKeyRef.current = bindingKey;
-          agentBindingPersistKeyRef.current = `${bindingKey}:`;
+          agentBindingLoadKeyRef.current = '';
         }
       }
     };
@@ -1199,10 +1193,7 @@ function ChatInterface({
       } catch (error) {
         console.warn('Failed to load project Skill binding:', error);
         if (!cancelled && projectSkillBindingLoadKeyRef.current === bindingKey) {
-          setSelectedProjectSkillNames([]);
-          setSelectedModelProfileId(defaultModelProfileId);
-          projectSkillBindingHydratedKeyRef.current = bindingKey;
-          projectSkillBindingPersistKeyRef.current = `${bindingKey}:${JSON.stringify({ skills: [], modelProfileId: defaultModelProfileId })}`;
+          projectSkillBindingLoadKeyRef.current = '';
         }
       }
     };

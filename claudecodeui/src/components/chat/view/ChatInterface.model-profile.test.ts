@@ -81,3 +81,33 @@ test('MCP diagnostics validate selected MCP servers against runtime config', asy
   expect(source).toContain('runtimeToolsStatus: configuredServers.has(serverName)');
   expect(source).toContain('selected MCP server is not present in the runtime config');
 });
+
+test('MCP diagnostics block missing required Agent MCP bindings before launch', async () => {
+  const source = await readFile(serverIndexSourcePath, 'utf8');
+
+  expect(source).toContain('assertRequiredMcpBindingsAvailable');
+  expect(source).toContain("path.join(projectPath, '.mcp.json')");
+  expect(source).toContain('Required MCP server');
+  expect(source).toContain("runtimeToolsStatus === 'missing'");
+});
+
+test('Agent and project Skill binding load failures do not persist empty selections', async () => {
+  const source = (await readFile(sourcePath, 'utf8')).replace(/\r\n/g, '\n');
+
+  const sessionCatchStart = source.indexOf("console.warn('Failed to load conversation Agent binding:'");
+  const sessionCatchEnd = source.indexOf('};\n\n    void loadSessionAgent();', sessionCatchStart);
+  const sessionCatchBlock = source.slice(sessionCatchStart, sessionCatchEnd);
+
+  expect(sessionCatchBlock).not.toContain("setSelectedAgentId('')");
+  expect(sessionCatchBlock).not.toContain('setSelectedSessionSkillNames([])');
+  expect(sessionCatchBlock).not.toContain('agentBindingHydratedKeyRef.current = bindingKey');
+  expect(sessionCatchBlock).not.toContain('agentBindingPersistKeyRef.current = `${bindingKey}:`');
+
+  const projectCatchStart = source.indexOf("console.warn('Failed to load project Skill binding:'");
+  const projectCatchEnd = source.indexOf('};\n\n    void loadProjectSkillBinding();', projectCatchStart);
+  const projectCatchBlock = source.slice(projectCatchStart, projectCatchEnd);
+
+  expect(projectCatchBlock).not.toContain('setSelectedProjectSkillNames([])');
+  expect(projectCatchBlock).not.toContain('projectSkillBindingHydratedKeyRef.current = bindingKey');
+  expect(projectCatchBlock).not.toContain('projectSkillBindingPersistKeyRef.current = `${bindingKey}');
+});

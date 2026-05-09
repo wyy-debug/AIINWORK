@@ -1,0 +1,117 @@
+{
+  "kind": "mcp-server",
+  "name": "crash-ai-obsidian",
+  "title": "CrashAI Obsidian Writer MCP",
+  "description": "Write CrashAI Markdown reports directly into Obsidian through the existing Argus Obsidian Bridge, with backend port fallback and a 300s timeout for large reports.",
+  "author": "AIINWORK",
+  "version": "0.1.3",
+  "tags": ["mcp", "obsidian", "argus", "crash-ai", "markdown"],
+  "capabilities": [
+    "Test Argus Obsidian Bridge connection with backend port fallback",
+    "Write large CrashAI Markdown reports directly to Obsidian documents",
+    "Use stable argusId values to update the same report note",
+    "Preserve report metadata for later comparison"
+  ],
+  "mcp": {
+    "serverName": "crash-ai-obsidian",
+    "transport": "stdio",
+    "command": "node",
+    "args": ["${installDir}/src/server.js"],
+    "env": {
+      "ARGUS_BASE_URL": "http://127.0.0.1:3001",
+      "ARGUS_PROBE_URLS": "http://127.0.0.1:3987,http://localhost:3987",
+      "ARGUS_OBSIDIAN_TIMEOUT_MS": "300000",
+      "OBSIDIAN_PROJECT_NAME": "CrashAI",
+      "OBSIDIAN_MODE": "project-knowledge",
+      "OBSIDIAN_WRITE_MODE": "direct"
+    },
+    "postInstall": {
+      "type": "npm-install",
+      "args": ["install", "--omit=dev", "--ignore-scripts"]
+    },
+    "setupFields": [
+      {
+        "key": "ARGUS_BASE_URL",
+        "label": "Argus Base URL",
+        "type": "text",
+        "target": "env",
+        "required": true,
+        "defaultValue": "http://127.0.0.1:3001",
+        "description": "Local Argus/MTL-Code backend base URL that exposes /api/obsidian-bridge."
+      },
+      {
+        "key": "ARGUS_PROBE_URLS",
+        "label": "Argus Probe URLs",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "http://127.0.0.1:3987,http://localhost:3987",
+        "description": "Comma-separated fallback Argus backend URLs when ARGUS_BASE_URL is unavailable."
+      },
+      {
+        "key": "ARGUS_OBSIDIAN_TIMEOUT_MS",
+        "label": "Argus Request Timeout MS",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "300000",
+        "description": "Timeout for Obsidian write requests. Large CrashAI reports may need up to 300000 ms."
+      },
+      {
+        "key": "ARGUS_API_TOKEN",
+        "label": "Argus API Token",
+        "type": "password",
+        "target": "env",
+        "required": false,
+        "description": "Optional Argus API token if your backend requires Authorization."
+      },
+      {
+        "key": "OBSIDIAN_PROJECT_NAME",
+        "label": "Obsidian Project Name",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "CrashAI",
+        "description": "Project folder/name used by Argus Obsidian Bridge."
+      },
+      {
+        "key": "OBSIDIAN_MODE",
+        "label": "Obsidian Mode",
+        "type": "select",
+        "target": "env",
+        "required": false,
+        "defaultValue": "project-knowledge",
+        "description": "project-knowledge, second-brain, or ai-memory."
+      },
+      {
+        "key": "OBSIDIAN_WRITE_MODE",
+        "label": "Obsidian Write Mode",
+        "type": "select",
+        "target": "env",
+        "required": false,
+        "defaultValue": "direct",
+        "description": "direct writes documents directly; wiki uses Argus wiki ingest; auto follows Argus backend default."
+      },
+      {
+        "key": "OBSIDIAN_VAULT_ID",
+        "label": "Obsidian Vault ID",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "description": "Optional vault id when Argus has multiple Obsidian vaults."
+      },
+      {
+        "key": "OBSIDIAN_BASE_FOLDER",
+        "label": "Obsidian Base Folder",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "description": "Optional write base folder inside the vault."
+      }
+    ],
+    "tools": [
+      { "name": "obsidian_test_connection", "description": "Test Argus Obsidian Bridge connection." },
+      { "name": "obsidian_write_crash_report", "description": "Write a CrashAI Markdown report into Obsidian." }
+    ]
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "kind": "mcp-server",
+  "name": "crash-ai-crashsight",
+  "title": "CrashAI CrashSight MCP",
+  "description": "Scan CrashSight crashes by date/date range, keep version-filter duplicate rows, extract Redmine links, compare affected versions, and fetch single-crash stack context without dump payloads.",
+  "author": "AIINWORK",
+  "version": "0.1.5",
+  "tags": ["mcp", "crashsight", "crash", "daily", "redmine", "soc"],
+  "capabilities": [
+    "Daily or date-range CrashSight crash scanning without cross-version dedupe",
+    "Application version extraction for report tables",
+    "Version continuation comparison",
+    "Redmine reference extraction with clickable issue links",
+    "Single-crash full stack context without dump payloads"
+  ],
+  "mcp": {
+    "serverName": "crash-ai-crashsight",
+    "transport": "stdio",
+    "command": "node",
+    "args": ["${installDir}/src/server.js"],
+    "env": {
+      "CRASHSIGHT_REGION": "cn",
+      "CRASHSIGHT_BRANCH_FILTERS": "{\"trunk\":\"*trunk*\",\"weekly\":\"*weekly*\"}",
+      "CRASHSIGHT_RATE_LIMIT_PER_MINUTE": "25"
+    },
+    "postInstall": {
+      "type": "npm-install",
+      "args": ["install", "--omit=dev", "--ignore-scripts"]
+    },
+    "setupFields": [
+      {
+        "key": "CRASHSIGHT_REGION",
+        "label": "CrashSight Region",
+        "type": "select",
+        "target": "env",
+        "required": true,
+        "defaultValue": "cn",
+        "description": "cn uses crashsight.qq.com; sg uses crashsight.wetest.net."
+      },
+      {
+        "key": "CRASHSIGHT_LOCAL_USER_ID",
+        "label": "CrashSight localUserId",
+        "type": "password",
+        "target": "env",
+        "required": true,
+        "description": "CrashSight OpenAPI localUserId. Stored only in local MCP config."
+      },
+      {
+        "key": "CRASHSIGHT_OPENAPI_KEY",
+        "label": "CrashSight OpenAPI Key",
+        "type": "password",
+        "target": "env",
+        "required": true,
+        "description": "CrashSight OpenAPI userOpenapiKey. Stored only in local MCP config."
+      },
+      {
+        "key": "CRASHSIGHT_APP_ID_PC",
+        "label": "PC AppId",
+        "type": "text",
+        "target": "env",
+        "required": true,
+        "description": "CrashSight appId for platformId 10."
+      },
+      {
+        "key": "CRASHSIGHT_APP_ID_ANDROID",
+        "label": "Android AppId",
+        "type": "text",
+        "target": "env",
+        "required": true,
+        "description": "CrashSight appId for platformId 1."
+      },
+      {
+        "key": "CRASHSIGHT_APP_ID_IOS",
+        "label": "iOS AppId",
+        "type": "text",
+        "target": "env",
+        "required": true,
+        "description": "CrashSight appId for platformId 2."
+      },
+      {
+        "key": "CRASHSIGHT_BRANCH_FILTERS",
+        "label": "Branch Filters JSON",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "{\"trunk\":\"*trunk*\",\"weekly\":\"*weekly*\"}",
+        "description": "JSON map from branch name to CrashSight version wildcard."
+      },
+      {
+        "key": "CRASH_AI_REDMINE_BASE_URL",
+        "label": "Redmine Base URL",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "http://soc-redmine.wd.com",
+        "description": "Base URL used to format Redmine issue links in scan results."
+      }
+    ],
+    "tools": [
+      { "name": "health_check", "description": "Validate CrashSight configuration and appId mapping." },
+      { "name": "scan_daily_crashes", "description": "Scan CrashSight crashes by date/date range, platform, and version filters; keeps cross-version duplicate rows and returns total counts, application versions, and Redmine links." },
+      { "name": "compare_issue_versions", "description": "Compare one issue across version filters and judge continuation." },
+      { "name": "get_single_crash_analysis_context", "description": "Fetch full stack context for one crash without dump payloads." },
+      { "name": "extract_redmine_refs", "description": "Extract Redmine ids from tags, title, or message." }
+    ]
+  }
+}
