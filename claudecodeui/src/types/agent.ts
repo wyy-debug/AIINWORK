@@ -33,6 +33,63 @@ export interface AgentTriggerRules {
   confidenceThreshold: number;
 }
 
+export type AgentTemplateDialogFieldType =
+  | 'text'
+  | 'textarea'
+  | 'select'
+  | 'multiselect'
+  | 'boolean'
+  | 'number'
+  | 'path'
+  | 'mcpServer'
+  | 'skill'
+  | 'modelProfile';
+
+export interface AgentTemplateDialogField {
+  id: string;
+  label: string;
+  type: AgentTemplateDialogFieldType;
+  required?: boolean;
+  placeholder?: string;
+  description?: string;
+  defaultValue?: string | number | boolean;
+  options?: string[];
+}
+
+export interface AgentTemplateDialogPreset {
+  id: string;
+  label: string;
+  description?: string;
+  answers: Record<string, string | number | boolean | string[]>;
+}
+
+export interface AgentTemplateDialogSchema {
+  title?: string;
+  description?: string;
+  fields: AgentTemplateDialogField[];
+  presets?: AgentTemplateDialogPreset[];
+  defaultPresetId?: string;
+}
+
+export interface AgentTemplateDialogs {
+  setup?: AgentTemplateDialogSchema;
+  launch?: AgentTemplateDialogSchema;
+  result?: AgentTemplateDialogSchema;
+}
+
+export interface AgentTemplatePackageMetadata {
+  packageId?: string;
+  packageVersion?: string;
+  repoId?: string;
+  itemId?: string;
+}
+
+export interface AgentTemplateSelectedDependencies {
+  skills?: string[];
+  mcpServers?: string[];
+  modelProfiles?: string[];
+}
+
 export interface AgentMemoryConfig {
   enabled: boolean;
   namespace: string;
@@ -57,6 +114,15 @@ export interface AgentConfig {
   tools: string[];
   guardrails: string[];
   triggerRules: AgentTriggerRules;
+  templatePackage?: AgentTemplatePackageMetadata;
+  templateDialogs?: AgentTemplateDialogs;
+  templateRuntime?: {
+    tools?: string[];
+    model?: string;
+    permissionMode?: string;
+  };
+  templateCompat?: Record<string, string>;
+  templateSelectedDependencies?: AgentTemplateSelectedDependencies;
   version: string;
   createdAt: string;
   updatedAt: string;

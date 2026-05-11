@@ -75,6 +75,9 @@ import {
 import {
   isInForkChild,
 } from './forkSubagent.js'
+import {
+  normalizeForkTurnsForOverrides,
+} from './inputNormalization.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 import {
   filterAgentsByMcpRequirements,
@@ -167,25 +170,6 @@ function validateSubagentSpawnLifecycle({
 
 // Multi-agent type constants are defined inline inside gated blocks to enable dead code elimination
 
-function hasNonEmptyOverride(value: string | undefined): boolean {
-  return Boolean(value?.trim())
-}
-
-function hasFullHistoryForkOverride(input: {
-  fork_turns?: string
-  agent_type?: string
-  model?: string
-  reasoning_effort?: string
-}): boolean {
-  const forkTurns = input.fork_turns?.trim().toLowerCase()
-  return (
-    forkTurns === 'all' &&
-    (hasNonEmptyOverride(input.agent_type) ||
-      hasNonEmptyOverride(input.model) ||
-      hasNonEmptyOverride(input.reasoning_effort))
-  )
-}
-
 // Base input schema without multi-agent parameters
 const baseInputSchema = lazySchema(() =>
   z.strictObject({
@@ -212,8 +196,6 @@ const baseInputSchema = lazySchema(() =>
       .string()
       .optional()
       .describe('Optional model override for the spawned agent.'),
-  }).refine(input => !hasFullHistoryForkOverride(input), {
-    message: 'fork_turns="all" cannot be combined with agent_type, model, or reasoning_effort.',
   }),
 )
 
@@ -351,15 +333,13 @@ export const AgentTool = buildTool({
       throw new Error('spawn_agent requires task_name.')
     }
     const relativeTaskName = validateSubagentTaskName(taskName)
-    const forkTurns = parseForkTurns(fork_turns)
-    if (hasFullHistoryForkOverride({
+    const normalizedForkTurns = normalizeForkTurnsForOverrides({
       fork_turns,
       agent_type,
       model: modelParam,
       reasoning_effort,
-    })) {
-      throw new Error('fork_turns="all" cannot be combined with agent_type, model, or reasoning_effort.')
-    }
+    })
+    const forkTurns = parseForkTurns(normalizedForkTurns)
     const canonicalTaskName = canonicalSubagentTaskName(
       relativeTaskName,
       getSpawnParentAgentPath(),

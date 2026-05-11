@@ -3,6 +3,7 @@ import { mock, describe, expect, test } from "bun:test";
 // Mock heavy deps
 mock.module("src/utils/model/agent.js", () => ({
   getDefaultSubagentModel: () => undefined,
+  getAgentModel: () => "test-model",
 }));
 
 mock.module("src/utils/settings/constants.js", () => ({

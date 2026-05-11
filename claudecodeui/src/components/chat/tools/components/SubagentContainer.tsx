@@ -1,6 +1,7 @@
 import React from 'react';
 
 import type { ChatMessage } from '../../types/types';
+import type { SubagentControlAction } from '../../utils/subagentControlRequest';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../../../shared/view/ui';
 import { getSubagentBlockerGuidance } from '../../utils/subagentGuidance';
 
@@ -10,6 +11,7 @@ interface SubagentContainerProps {
   toolInput: unknown;
   toolResult?: { content?: unknown; isError?: boolean } | null;
   subagentState: NonNullable<ChatMessage['subagentState']>;
+  onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 }
 
 type PlainObject = Record<string, unknown>;
@@ -133,6 +135,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
   toolInput,
   toolResult,
   subagentState,
+  onControlSubagent,
 }) => {
   const parsedInput = parseObject(toolInput);
   const subagentType = stringifyValue(parsedInput.agent_type) || 'Agent';
@@ -153,12 +156,37 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
     elapsedMs,
     lastTool,
     lastToolSummary,
+    resultSummary,
     runtimeStatus,
     stopReason,
+    subagentEvents = [],
   } = subagentState;
+  const [eventQuery, setEventQuery] = React.useState('');
+  const [controlDraft, setControlDraft] = React.useState<'send' | 'followup' | null>(null);
+  const [controlText, setControlText] = React.useState('');
+  const filteredEvents = React.useMemo(() => {
+    const query = eventQuery.trim().toLowerCase();
+    if (!query) return subagentEvents.slice(-100);
+    return subagentEvents
+      .filter((event) => JSON.stringify(event).toLowerCase().includes(query))
+      .slice(-100);
+  }, [eventQuery, subagentEvents]);
+  const exportEvents = React.useCallback(() => {
+    if (typeof document === 'undefined') return;
+    const blob = new Blob([JSON.stringify(filteredEvents, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `subagent-events-${subagentState.taskId || 'run'}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [filteredEvents, subagentState.taskId]);
 
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
   const status = runtimeStatus || (isComplete ? 'DONE' : 'RUNNING');
+  const taskId = subagentState.taskId || subagentState.registryRecord?.taskId || '';
+  const swarmRunId = stringifyValue((subagentState.registryRecord as Record<string, unknown> | undefined)?.swarmRunId);
+  const swarmRoleId = stringifyValue((subagentState.registryRecord as Record<string, unknown> | undefined)?.swarmRoleId);
   const readToolCount = childTools.filter(child =>
     /^(Read|FileRead|View)$/i.test(child.toolName)
   ).length;
@@ -169,7 +197,8 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
     ].filter(Boolean).join(' · ')
     : '';
   const finalText = toolResult ? extractTextContent(toolResult.content) : '';
-  const shouldShowFinalText = Boolean(finalText && !isAsyncLaunchNoise(finalText));
+  const displayResultText = resultSummary || finalText;
+  const shouldShowFinalText = Boolean(displayResultText && !isAsyncLaunchNoise(displayResultText));
   const blockerGuidance = (status === 'BLOCKED' || status === 'NEED_PARENT_INPUT' || stopReason)
     ? getSubagentBlockerGuidance({
       status,
@@ -223,11 +252,22 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
                 后台运行
               </span>
             )}
+            {swarmRunId && (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('argus-open-panel', { detail: { panel: 'chat' } }))}
+                className="max-w-full rounded-full bg-cyan-50 px-2 py-0.5 text-cyan-700 ring-1 ring-cyan-200 transition-colors hover:bg-cyan-100 dark:bg-cyan-950/30 dark:text-cyan-300 dark:ring-cyan-900"
+                title={swarmRunId}
+              >
+                <span className="block truncate">Swarm{swarmRoleId ? `: ${swarmRoleId}` : ''}</span>
+              </button>
+            )}
           </div>
 
-          {(objective || lastToolSummary || stopReason || blockerGuidance) && (
+          {(objective || resultSummary || lastToolSummary || stopReason || blockerGuidance) && (
             <div className="mt-1.5 space-y-0.5 text-muted-foreground">
               {objective && <div className="line-clamp-1">目标：{objective}</div>}
+              {resultSummary && <div className="line-clamp-2">结果：{resultSummary}</div>}
               {lastToolSummary && <div className="line-clamp-1">最近输出：{lastToolSummary}</div>}
               {blockerGuidance && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
@@ -244,6 +284,85 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
             </div>
           )}
         </div>
+
+        {taskId && onControlSubagent && (
+          <div className="mb-2 flex flex-wrap gap-1.5 text-[11px]">
+            <button
+              type="button"
+              onClick={() => onControlSubagent('wait', taskId)}
+              className="inline-flex h-7 items-center rounded-md border border-border px-2 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+            >
+              Wait
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setControlDraft('send');
+                setControlText('');
+              }}
+              className="inline-flex h-7 items-center rounded-md border border-border px-2 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+            >
+              Send
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setControlDraft('followup');
+                setControlText('');
+              }}
+              className="inline-flex h-7 items-center rounded-md border border-border px-2 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+            >
+              Follow
+            </button>
+          </div>
+        )}
+
+        {taskId && onControlSubagent && controlDraft && (
+          <div className="mb-2 grid gap-1.5 rounded-md border border-border bg-background p-2 text-xs">
+            <input
+              type="text"
+              value={controlText}
+              onChange={(event) => setControlText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && controlText.trim()) {
+                  onControlSubagent(controlDraft, taskId, controlText);
+                  setControlDraft(null);
+                  setControlText('');
+                }
+                if (event.key === 'Escape') {
+                  setControlDraft(null);
+                  setControlText('');
+                }
+              }}
+              placeholder={controlDraft === 'send' ? 'Message' : 'Follow-up objective'}
+              className="h-8 min-w-0 rounded border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-primary"
+            />
+            <div className="flex justify-end gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setControlDraft(null);
+                  setControlText('');
+                }}
+                className="h-6 rounded px-2 text-[11px] text-muted-foreground hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!controlText.trim()}
+                onClick={() => {
+                  onControlSubagent(controlDraft, taskId, controlText);
+                  setControlDraft(null);
+                  setControlText('');
+                }}
+                className="h-6 rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground disabled:opacity-60"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        )}
 
         {currentTool && !isComplete && (
           <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -300,6 +419,49 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
           </Collapsible>
         )}
 
+        {subagentEvents.length > 0 && (
+          <Collapsible className="mt-2">
+            <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+              <svg className="h-2.5 w-2.5 flex-shrink-0 transition-transform duration-150 data-[state=open]:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              <span>Event log ({subagentEvents.length})</span>
+            </CollapsibleTrigger>
+            <CollapsibleContent lazy>
+              <div className="mt-2 rounded-md border border-border bg-background/70 p-2">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <input
+                    value={eventQuery}
+                    onChange={(event) => setEventQuery(event.target.value)}
+                    placeholder="Search events"
+                    className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={exportEvents}
+                    className="h-8 rounded-md border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    Export
+                  </button>
+                </div>
+                <div className="max-h-56 space-y-1 overflow-y-auto font-mono text-[11px]">
+                  {filteredEvents.map((event) => (
+                    <div key={`${event.seq}:${event.type}:${event.timestamp}`} className="rounded border border-border/70 bg-muted/20 px-2 py-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">{event.type}</span>
+                        <span className="text-muted-foreground">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                      </div>
+                      {typeof event.payload?.message === 'string' && (
+                        <div className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">{event.payload.message}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+
         {isComplete && (
           <div className={`mt-1 flex items-center gap-1.5 text-xs ${
             status === 'BLOCKED'
@@ -315,7 +477,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
 
         {isComplete && shouldShowFinalText && (
           <div className="mt-2 line-clamp-6 whitespace-pre-wrap break-words text-xs text-muted-foreground">
-            {finalText}
+            {displayResultText}
           </div>
         )}
       </CollapsibleSection>

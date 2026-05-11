@@ -488,18 +488,26 @@ export const createChatKnowledgeCaptureService = ({
       timestamp: payload.timestamp,
       routingRules: config.routingRules || {},
     });
-    try {
-      const aiClassification = await classifyKnowledgeWithSmallModel({
-        title: assessment.title || buildTitle({ content, timestamp: payload.timestamp }),
-        content,
-        userPrompt: payload.previousUserPrompt || payload.userPrompt || '',
-        ruleAssessment: assessment,
-      });
-      if (aiClassification?.used && aiClassification.assessment) {
-        assessment = aiClassification.assessment;
+    const promptForAssessment = payload.previousUserPrompt || payload.userPrompt || '';
+    const ordinaryShortReply = classifyKnowledgeWithSmallModel === defaultClassifyKnowledgeWithSmallModel
+      && !assessment.shouldCapture
+      && assessment.reason === 'not_knowledge'
+      && normalizeWhitespace(content).length < MIN_INFERRED_CONTENT_LENGTH
+      && !KNOWLEDGE_PROMPT_PATTERN.test(normalizeWhitespace(promptForAssessment));
+    if (!ordinaryShortReply) {
+      try {
+        const aiClassification = await classifyKnowledgeWithSmallModel({
+          title: assessment.title || buildTitle({ content, timestamp: payload.timestamp }),
+          content,
+          userPrompt: promptForAssessment,
+          ruleAssessment: assessment,
+        });
+        if (aiClassification?.used && aiClassification.assessment) {
+          assessment = aiClassification.assessment;
+        }
+      } catch {
+        // Small model classification is advisory; rule-based routing remains the fallback.
       }
-    } catch {
-      // Small model classification is advisory; rule-based routing remains the fallback.
     }
     if (assessment.shouldCapture) {
       assessment = {

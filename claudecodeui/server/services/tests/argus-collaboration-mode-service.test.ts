@@ -64,6 +64,26 @@ test('Argus collaboration mode appends subagent dispatch reminder only when expl
   assert.match(withButton.options.appendSystemPrompt, /spawn_agent/);
 });
 
+test('Argus collaboration mode includes the approved subagent dispatch plan', async () => {
+  const {
+    applyArgusCollaborationModeOptions,
+  } = await import(`../argus-collaboration-mode-service.js?approved-subagents=${Date.now()}`);
+
+  const command = applyArgusCollaborationModeOptions({
+    type: 'claude-command',
+    command: 'dispatch the approved plan',
+    options: {
+      subagentDispatch: true,
+      subagentDispatchPlanApproved: true,
+      subagentDispatchPlan: '# Subagent Dispatch Plan\n\n## Agent Dispatch\n- Explore/backend_review',
+    },
+  });
+
+  assert.match(command.options.appendSystemPrompt, /Approved subagent dispatch plan/i);
+  assert.match(command.options.appendSystemPrompt, /only dispatch the agents described/i);
+  assert.match(command.options.appendSystemPrompt, /Explore\/backend_review/);
+});
+
 test('Codex-style plan mode allowed tools exclude legacy ExitPlanMode and TodoWrite', async () => {
   const {
     getArgusPlanModeAllowedTools,

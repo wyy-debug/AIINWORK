@@ -44,6 +44,50 @@ The plan should be concise, human-readable Markdown with Summary, Key Changes, T
 const SUBAGENT_DISPATCH_PROMPT = `Subagent dispatch authorization:
 The user explicitly clicked the subagent dispatch button for this message. You may use spawn_agent, followup_task, wait_agent, close_agent, send_message, and list_agents only if this task naturally benefits from parallel delegated work. Keep simple or serial tasks local. The button is authorization, not a requirement to spawn.`;
 
+function buildApprovedSubagentDispatchPrompt(plan) {
+  const approvedPlan = typeof plan === 'string' ? plan.trim() : '';
+  if (!approvedPlan) {
+    return '';
+  }
+  return [
+    'Approved subagent dispatch plan:',
+    'The user approved the plan below. Only dispatch the agents described in this approved plan.',
+    'If an approved role cannot be launched, report the blocker instead of inventing extra agents.',
+    '',
+    approvedPlan,
+  ].join('\n');
+}
+
+function buildSubagentRuntimeSnapshotPrompt({ snapshot, dispatchPlanId } = {}) {
+  const hasSnapshot = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot);
+  const stableDispatchPlanId = typeof dispatchPlanId === 'string' ? dispatchPlanId.trim() : '';
+  if (!hasSnapshot && !stableDispatchPlanId) {
+    return '';
+  }
+
+  let snapshotJson = '{}';
+  if (hasSnapshot) {
+    try {
+      snapshotJson = JSON.stringify(snapshot);
+    } catch {
+      snapshotJson = '{"unavailable":true}';
+    }
+  }
+
+  return [
+    'Parent runtime snapshot for subagent dispatch:',
+    stableDispatchPlanId ? `dispatchPlanId: ${stableDispatchPlanId}` : '',
+    hasSnapshot ? snapshotJson : '',
+    '',
+    'Dispatch rules:',
+    '- Use the current Claude runtime and the user-configured model/profile from the parent snapshot; do not request API tokens or invent a provider.',
+    '- Treat each approved role as one embedded child dialog under the current parent dialog.',
+    '- Do not spawn the same approved role twice for the same dispatchPlanId. If a role is already present, reuse its task handle or report the existing task instead of launching a duplicate.',
+    '- Child agents must inherit the parent permission posture, including permission prompts and allowed/disallowed tool rules.',
+    '- Append this instruction to every child agent task message exactly: "Do not call spawn_agent, Task, AgentSpawn, followup_task, or any subagent dispatch/control tool from inside this child task. Work only on your assigned scope and return results to the parent dialog."',
+  ].filter(Boolean).join('\n');
+}
+
 const PLAN_MODE_ALLOWED_TOOLS = Object.freeze([
   'Read',
   'Grep',
@@ -123,6 +167,13 @@ export function applyArgusCollaborationModeOptions(data) {
   }
   if (subagentDispatch) {
     promptParts.push(SUBAGENT_DISPATCH_PROMPT);
+    if (options.subagentDispatchPlanApproved === true) {
+      promptParts.push(buildApprovedSubagentDispatchPrompt(options.subagentDispatchPlan));
+      promptParts.push(buildSubagentRuntimeSnapshotPrompt({
+        snapshot: options.subagentRuntimeSnapshot,
+        dispatchPlanId: options.dispatchPlanId,
+      }));
+    }
   }
   if (promptParts.length === 0) {
     return data;

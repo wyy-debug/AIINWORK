@@ -7,14 +7,15 @@ const projectRoot = path.resolve(import.meta.dirname, '..');
 const hubUrl = (process.env.HUB_URL || process.argv[2] || 'http://localhost:4877').replace(/\/+$/, '');
 const adminToken = process.env.HUB_ADMIN_TOKEN || process.env.MTL_CODE_HUB_ADMIN_TOKEN || '';
 const overwrite = process.env.HUB_OVERWRITE !== 'false';
-const maxFileBytes = 2 * 1024 * 1024;
-const textExtensions = new Set(['.md', '.yaml', '.yml', '.json', '.js', '.mjs', '.txt']);
+const maxFileBytes = 30 * 1024 * 1024;
+const skippedDirs = new Set(['node_modules', 'target', '.git', '.cache']);
+const textExtensions = new Set(['.md', '.yaml', '.yml', '.json', '.js', '.mjs', '.txt', '.toml', '.rs', '.lock']);
 
 async function collectPackageFiles(rootDir, prefix = '') {
   const entries = await fs.readdir(rootDir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name === '.env') continue;
+    if (skippedDirs.has(entry.name) || entry.name === '.env' || entry.name.startsWith('.env.')) continue;
     const absolute = path.join(rootDir, entry.name);
     const relative = path.join(prefix, entry.name).replace(/\\/g, '/');
     if (entry.isDirectory()) {
@@ -70,20 +71,17 @@ await publishItem({
   kind: 'skill',
   name: 'crash-ai-daily-investigation',
   title: 'CrashAI Daily Investigation',
-  description: '按日期或精确时间段巡检 CrashSight，保留跨版本重复命中，关联 Redmine 链接、状态和负责人，并写入 Obsidian Markdown 报告。',
+  description: 'Call the Rust-backed MCP to collect a direct CrashSight Markdown report plus same-response context, then generate a Chinese investigation analysis.',
   author: 'AIINWORK',
-  version: '1.2.4',
+  version: '1.3.5',
   tags: ['crashsight', 'crash', 'redmine', 'daily', 'investigation', 'soc'],
   capabilities: [
-    'Scan CrashSight crashes by date, date range, or exact time range',
-    'Paginate CrashSight results without using rows as a report limit',
-    'Keep cross-version duplicate issue rows in the report',
-    'Show CrashSight entries as clickable links instead of raw issueId values',
-    'Use total crash/device counts and application version in detail rows',
-    'Output every CrashSight item as its own detail row without grouped ranges',
-    'Extract Redmine refs and render clickable Redmine links',
-    'Compare version continuation and possible resolution',
-    'Write Markdown investigation reports to Obsidian',
+    'Call generate_crash_ai_report as the only daily/range data tool',
+    'Read CRASH_AI_DIRECT_REPORT and CRASH_AI_AGENT_CONTEXT_JSON directly from the same tool response',
+    'Generate Chinese judgement, next steps, version assessment, investigation queue, and blockers',
+    'Use Rust concurrent CrashSight pagination and Redmine enrichment',
+    'Use fixed fact table columns with CrashSight and Redmine Markdown links',
+    'Avoid grouped shortcut rows, range rows, and omitted-row summaries',
   ],
   packageFiles: await collectPackageFiles(path.join(projectRoot, 'skills', 'crash-ai-daily-investigation')),
 });
@@ -93,20 +91,19 @@ await publishItem({
   kind: 'agent-template',
   name: 'crash-ai-agent',
   title: 'CrashAIAgent',
-  description: 'CrashSight 排查 Agent：按日期或精确时间段扫描 crash，保留跨版本重复命中，关联 Redmine 链接、状态和负责人，并写入 Obsidian Markdown 报告。',
+  description: 'CrashSight investigation Agent: call the Rust-backed MCP to collect a direct Markdown report plus same-response context, then generate Chinese analysis without reading local tool-result files.',
   author: 'AIINWORK',
-  version: '1.2.4',
+  version: '1.3.5',
   tags: ['crashsight', 'crash', 'redmine', 'daily', 'investigation', 'soc'],
   icon: 'activity',
   capabilities: [
-    'Daily, date-range, or exact-time CrashSight crash investigation',
-    'Paginated CrashSight collection without rows as a report cap',
-    'Cross-version duplicate issue rows are kept',
+    'Daily, date-range, or exact-time CrashSight crash investigation through one MCP call',
+    'Rust concurrent CrashSight pagination and Redmine enrichment',
+    'Tool-generated direct fact Markdown plus Agent-generated analysis sections',
+    'Issue rows are aggregated by issue, platform, and application version',
     'Clickable CrashSight and Redmine links without raw issueId display',
     'Total crash/device counts and application version detail columns',
-    'Full per-crash detail rows without grouped shortcuts',
-    'Redmine status and owner lookup',
-    'Obsidian Markdown report generation with Argus backend port fallback',
+    'No Python/PowerShell/Bash/Read extraction of saved tool-result files',
     'Single-crash deep analysis handoff',
   ],
   dependencies: {
@@ -116,13 +113,11 @@ await publishItem({
     ],
     mcpServers: [
       { name: 'crash-ai-crashsight' },
-      { name: 'crash-ai-obsidian' },
       { name: 'soc-redmine' },
     ],
   },
   supportedApps: [
     { id: 'crash-ai-crashsight', label: 'MCP: crash-ai-crashsight', category: 'MCP' },
-    { id: 'crash-ai-obsidian', label: 'MCP: crash-ai-obsidian', category: 'MCP' },
     { id: 'soc-redmine', label: 'MCP: soc-redmine', category: 'MCP' },
   ],
   appSlots: [
@@ -132,13 +127,6 @@ await publishItem({
       required: true,
       placeholder: 'Select crash-ai-crashsight MCP',
       options: [{ id: 'crash-ai-crashsight', label: 'MCP: crash-ai-crashsight' }],
-    },
-    {
-      id: 'obsidian',
-      label: 'CrashAI Obsidian MCP',
-      required: true,
-      placeholder: 'Select crash-ai-obsidian MCP',
-      options: [{ id: 'crash-ai-obsidian', label: 'MCP: crash-ai-obsidian' }],
     },
     {
       id: 'redmine',

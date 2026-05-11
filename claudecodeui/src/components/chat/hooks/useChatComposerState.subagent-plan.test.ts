@@ -1,0 +1,22 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it } from 'vitest';
+
+describe('useChatComposerState subagent dispatch approval', () => {
+  it('requests a model-generated plan before sending subagentDispatch commands', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(currentDir, 'useChatComposerState.ts'), 'utf8');
+
+    expect(source).toContain('shouldRequestSubagentDispatchPlan');
+    expect(source).toContain('buildSubagentDispatchPlanRequest');
+    expect(source).toContain('buildSubagentRuntimeSnapshot');
+    expect(source).toContain('getSubagentRuntimeDispatchPlanId');
+    expect(source).toContain('oneShotSubagentDispatchRef');
+    expect(source).toContain('subagentRuntimeSnapshot');
+    expect(source).toContain('dispatchPlanId');
+    expect(source).toContain("subagentPlanRequestActive ? 'plan'");
+    expect(source).not.toContain('pendingSubagentDispatchPlan');
+  });
+});

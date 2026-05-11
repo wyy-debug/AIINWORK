@@ -51,6 +51,7 @@ import {
   getArgusPlanModeDeniedTools,
   resolveArgusPermissionMode,
 } from './services/argus-collaboration-mode-service.js';
+import { buildSubagentDirectControlPayload } from './services/subagent-task-control-service.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -607,7 +608,9 @@ async function buildMtlCodeSpawnEnv(options = {}) {
   if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
     spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';
   }
-  if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
+  if (options.coordinatorMode === true) {
+    spawnEnv.MTL_CODE_COORDINATOR_MODE = '1';
+  } else if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
     spawnEnv.MTL_CODE_COORDINATOR_MODE = '0';
   }
   for (const key of [
@@ -1689,13 +1692,41 @@ function sendClaudeSDKGuidance(sessionId, content, clientMessageId = null) {
  * @returns {{success: boolean, error?: string}}
  */
 function stopClaudeSDKTask(sessionId, taskId) {
+  return sendClaudeSDKTaskControl(sessionId, { action: 'stop', taskId });
+}
+
+function getSupportedDirectSubagentActions() {
+  const actions = new Set(['stop']);
+  const configured = String(process.env.MTL_CODE_SUBAGENT_DIRECT_CONTROL_ACTIONS || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (process.env.MTL_CODE_EXPERIMENTAL_SUBAGENT_DIRECT_CONTROL === '1') {
+    configured.push('wait', 'send', 'followup');
+  }
+  for (const action of configured) {
+    if (['wait', 'send', 'followup', 'stop'].includes(action)) {
+      actions.add(action);
+    }
+  }
+  return Array.from(actions);
+}
+
+/**
+ * Sends a direct subagent task control request to the active Argus backend.
+ * Current stable Argus backends support stop_task; wait/send/followup are
+ * future-compatible and fall back through the server when unsupported.
+ * @param {string} sessionId - Active session identifier
+ * @param {{action: string, taskId: string, content?: string}} control - Task control request
+ * @returns {{success: boolean, unsupported?: boolean, error?: string, requestId?: string}}
+ */
+function sendClaudeSDKTaskControl(sessionId, control = {}) {
   const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
-  const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : '';
 
   if (!normalizedSessionId) {
     return { success: false, error: 'No active session id is available.' };
   }
-  if (!normalizedTaskId) {
+  if (!control?.taskId || typeof control.taskId !== 'string' || !control.taskId.trim()) {
     return { success: false, error: 'No task id was provided.' };
   }
 
@@ -1709,17 +1740,24 @@ function stopClaudeSDKTask(sessionId, taskId) {
     return { success: false, error: 'The active backend does not support task control.' };
   }
 
-  const written = writeMtlCodeJson(child, {
-    type: 'control_request',
-    request_id: createRequestId(),
-    request: {
-      subtype: 'stop_task',
-      task_id: normalizedTaskId,
-    },
-  });
+  const requestId = createRequestId();
+  const payload = buildSubagentDirectControlPayload(
+    { ...control, sessionId: normalizedSessionId },
+    requestId,
+    { supportedDirectActions: getSupportedDirectSubagentActions() },
+  );
+  if (!payload) {
+    return {
+      success: false,
+      unsupported: true,
+      error: `Direct subagent control action is unsupported: ${control.action || 'unknown'}`,
+    };
+  }
+
+  const written = writeMtlCodeJson(child, payload);
 
   return written
-    ? { success: true }
+    ? { success: true, requestId }
     : { success: false, error: 'The active backend input stream is no longer writable.' };
 }
 
@@ -1784,6 +1822,7 @@ export {
   abortClaudeSDKSession,
   sendClaudeSDKGuidance,
   stopClaudeSDKTask,
+  sendClaudeSDKTaskControl,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
   resolveToolApproval,

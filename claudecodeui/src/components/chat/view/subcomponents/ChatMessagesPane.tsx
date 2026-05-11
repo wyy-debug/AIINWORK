@@ -5,11 +5,13 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { AgentConfig } from '../../../../types/agent';
+import type { SubagentControlAction } from '../../utils/subagentControlRequest';
 import { createMessageRenderKeyLookup } from '../../utils/messageKeys';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../../../shared/view/ui';
 
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
+import { ChatMultiAgentCollaborationPanel } from './ChatMultiAgentCollaborationPanel';
 
 interface ChatMessagesPaneProps {
   scrollContainerRef: RefObject<HTMLDivElement>;
@@ -65,6 +67,7 @@ interface ChatMessagesPaneProps {
   selectedModelProfileId?: string;
   onModelProfileChange?: (profileId: string) => void;
   obsidianBridgeEnabled?: boolean;
+  onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 }
 
 type ProcessTraceGroupProps = {
@@ -84,6 +87,7 @@ type ProcessTraceGroupProps = {
   getMessageKey: (message: ChatMessage) => string;
   onPreserveScrollForLayoutChange?: () => void;
   obsidianBridgeEnabled?: boolean;
+  onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 };
 
 const parseTimestamp = (value: ChatMessage['timestamp']) => {
@@ -111,6 +115,9 @@ const formatElapsed = (milliseconds: number) => {
 const isProcessMessage = (message: ChatMessage) =>
   Boolean(message.isThinking || message.isToolUse);
 
+const isSubagentProcessMessage = (message: ChatMessage) =>
+  Boolean(message.isSubagentContainer && message.subagentState);
+
 function areProcessTraceGroupPropsEqual(
   previous: ProcessTraceGroupProps,
   next: ProcessTraceGroupProps,
@@ -131,7 +138,8 @@ function areProcessTraceGroupPropsEqual(
     previous.provider === next.provider &&
     previous.getMessageKey === next.getMessageKey &&
     previous.onPreserveScrollForLayoutChange === next.onPreserveScrollForLayoutChange &&
-    previous.obsidianBridgeEnabled === next.obsidianBridgeEnabled
+    previous.obsidianBridgeEnabled === next.obsidianBridgeEnabled &&
+    previous.onControlSubagent === next.onControlSubagent
   );
 }
 
@@ -152,6 +160,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   getMessageKey,
   onPreserveScrollForLayoutChange,
   obsidianBridgeEnabled = false,
+  onControlSubagent,
 }: ProcessTraceGroupProps) {
   const [open, setOpen] = useState(active);
   const wasActiveRef = useRef(active);
@@ -199,6 +208,16 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   }, [messages]);
 
   const shouldRenderDetails = open;
+  const shouldAggregateSubagents = useMemo(
+    () => messages.filter(isSubagentProcessMessage).length >= 2,
+    [messages],
+  );
+  const detailMessages = useMemo(
+    () => shouldAggregateSubagents
+      ? messages.filter((message) => !isSubagentProcessMessage(message))
+      : messages,
+    [messages, shouldAggregateSubagents],
+  );
 
   return (
     <div
@@ -231,12 +250,30 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
         <CollapsibleContent lazy>
           {shouldRenderDetails && (
             <div className="mt-1 space-y-3 border-l border-border/70 pl-3">
-              {messages.map((message, index) => (
+              {shouldAggregateSubagents && (
+                <ChatMultiAgentCollaborationPanel
+                  messages={messages}
+                  onControlSubagent={onControlSubagent}
+                  createDiff={createDiff}
+                  onFileOpen={onFileOpen}
+                  onShowSettings={onShowSettings}
+                  onGrantToolPermission={onGrantToolPermission}
+                  autoExpandTools={Boolean(autoExpandTools && active)}
+                  showRawParameters={showRawParameters}
+                  showThinking={showThinking}
+                  selectedProject={selectedProject}
+                  sessionId={sessionId}
+                  provider={provider}
+                  getMessageKey={getMessageKey}
+                  obsidianBridgeEnabled={obsidianBridgeEnabled}
+                />
+              )}
+              {detailMessages.map((message, index) => (
                 <MessageComponent
                   key={`${groupKey}-${getMessageKey(message)}`}
                   message={message}
                   messageKey={`${groupKey}-${getMessageKey(message)}`}
-                  prevMessage={index > 0 ? messages[index - 1] : null}
+                  prevMessage={index > 0 ? detailMessages[index - 1] : null}
                   createDiff={createDiff}
                   onFileOpen={onFileOpen}
                   onShowSettings={onShowSettings}
@@ -249,6 +286,7 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
                   provider={provider}
                   obsidianBridgeEnabled={obsidianBridgeEnabled}
                   isLatestAssistantReply={false}
+                  onControlSubagent={onControlSubagent}
                 />
               ))}
             </div>
@@ -313,6 +351,7 @@ export default function ChatMessagesPane({
   selectedModelProfileId,
   onModelProfileChange,
   obsidianBridgeEnabled = false,
+  onControlSubagent,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
 
@@ -540,6 +579,7 @@ export default function ChatMessagesPane({
                   getMessageKey={getMessageKey}
                   onPreserveScrollForLayoutChange={onPreserveScrollForLayoutChange}
                   obsidianBridgeEnabled={obsidianBridgeEnabled}
+                  onControlSubagent={onControlSubagent}
                 />
               );
             }
@@ -563,6 +603,7 @@ export default function ChatMessagesPane({
                 provider={provider}
                 obsidianBridgeEnabled={obsidianBridgeEnabled}
                 isLatestAssistantReply={!isSessionRunning && messageKey === latestAssistantReplyKey}
+                onControlSubagent={onControlSubagent}
               />
             );
           })}

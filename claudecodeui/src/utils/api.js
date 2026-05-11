@@ -199,6 +199,61 @@ export const api = {
     });
   },
   agentRepositoryCatalog: () => apiFetch('/api/agent-repository/catalog'),
+  validateSwarmTemplate: (manifest) =>
+    apiFetch('/api/swarms/templates/validate', {
+      method: 'POST',
+      body: JSON.stringify({ manifest }),
+    }),
+  startSwarmRun: (payload = {}) =>
+    apiFetch('/api/swarms/runs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  swarmRuns: ({ limit = 25, status = '', templateId = '' } = {}) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    if (status) params.set('status', status);
+    if (templateId) params.set('templateId', templateId);
+    const query = params.toString();
+    return apiFetch(`/api/swarms/runs${query ? `?${query}` : ''}`);
+  },
+  swarmRun: (runId) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}`),
+  swarmRunEvents: (runId) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/events`),
+  swarmMessageTrace: (runId, messageId) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/messages/${encodeURIComponent(messageId)}/trace`),
+  publishSwarmMessage: (runId, payload = {}) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  replaySwarmMessages: (runId, payload = {}) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/messages/replay`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  controlSwarmRun: (runId, payload = {}) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/control`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  swarmMemory: (runId) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory`),
+  createSwarmMemory: (runId, payload = {}) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSwarmMemory: (runId, memoryId, payload = {}) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory/${encodeURIComponent(memoryId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteSwarmMemory: (runId, memoryId) =>
+    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory/${encodeURIComponent(memoryId)}`, {
+      method: 'DELETE',
+    }),
   hubUsage: ({ days = 7, from = '', to = '' } = {}) => {
     const params = new URLSearchParams();
     if (days) params.set('days', String(days));
@@ -209,6 +264,16 @@ export const api = {
   },
   installAgentRepositoryItem: (payload = {}) =>
     apiFetch('/api/agent-repository/install', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  exportSwarmTemplatePackage: (payload = {}) =>
+    apiFetch('/api/agent-repository/swarm-template/export', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  importSwarmTemplatePackage: (payload = {}) =>
+    apiFetch('/api/agent-repository/swarm-template/import', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

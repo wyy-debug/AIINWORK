@@ -2,6 +2,7 @@ import express from 'express';
 
 import { sessionAgentBindingsDb } from '../database/db.js';
 import { getAgentConfig } from '../services/agent-config-service.js';
+import { normalizeSessionAgentConfiguration } from '../services/session-agent-configuration-service.js';
 
 const router = express.Router();
 
@@ -20,62 +21,21 @@ function normalizeSessionId(value) {
   return sessionId;
 }
 
-function normalizeString(value, fallback = '', maxLength = 160) {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return (text || fallback).slice(0, maxLength);
-}
-
-function isImplementedAppBinding(app) {
-  return String(app || '').trim().startsWith('MCP: ');
-}
-
-function normalizeAppBindings(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((binding) => {
-      const item = binding && typeof binding === 'object' ? binding : {};
-      const slot = normalizeString(item.slot, '', 80);
-      const app = normalizeString(item.app, '', 120);
-      if (!slot || !app) return null;
-      if (!isImplementedAppBinding(app)) return null;
-      const status = ['connected', 'optional', 'disabled'].includes(item.status)
-        ? item.status
-        : 'optional';
-      return { slot, app, status };
-    })
-    .filter(Boolean)
-    .slice(0, 30);
-}
-
-function normalizeSkillNames(value) {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set();
-  return value
-    .map((skill) => normalizeString(skill, '', 120))
-    .filter(Boolean)
-    .filter((skill) => {
-      const key = skill.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 30);
-}
-
-function normalizeModelProfileId(value) {
-  return normalizeString(value, '', 160)
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function normalizeSessionAgentConfiguration(value) {
-  const source = value && typeof value === 'object' ? value : {};
-  return {
-    appBindings: normalizeAppBindings(source.appBindings),
-    skills: normalizeSkillNames(source.skills),
-    modelProfileId: normalizeModelProfileId(source.modelProfileId),
-  };
+function hasSessionAgentConfiguration(configuration) {
+  return Boolean(
+    configuration?.appBindings?.length
+    || configuration?.skills?.length
+    || configuration?.modelProfileId
+    || configuration?.packageId
+    || Object.keys(configuration?.setupAnswers || {}).length
+    || configuration?.setupPresetId
+    || Object.keys(configuration?.launchAnswers || {}).length
+    || configuration?.launchPresetId
+    || configuration?.resultPresetId
+    || configuration?.selectedDependencies?.skills?.length
+    || configuration?.selectedDependencies?.mcpServers?.length
+    || configuration?.selectedDependencies?.modelProfiles?.length
+  );
 }
 
 router.get('/:sessionId/agent', async (req, res) => {
@@ -114,7 +74,7 @@ router.put('/:sessionId/agent', async (req, res) => {
     });
 
     if (!agentId) {
-      if (configuration.appBindings.length === 0 && configuration.skills.length === 0 && !configuration.modelProfileId) {
+      if (!hasSessionAgentConfiguration(configuration)) {
         sessionAgentBindingsDb.deleteAgent(sessionId, provider);
         return res.json({ success: true, sessionId, provider, agentId: '', agent: null, configuration: null });
       }

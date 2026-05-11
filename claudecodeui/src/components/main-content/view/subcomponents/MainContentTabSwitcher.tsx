@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+
 import { Tooltip, PillBar, Pill } from '../../../../shared/view/ui';
 import type { AppTab, Project } from '../../../../types/app';
 import { apiFetch } from '../../../../utils/api';

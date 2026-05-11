@@ -7,6 +7,7 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type {
   ChatMessage,
   SubagentChildTool,
+  SubagentEventEnvelope,
   SubagentRegistryRecord,
   SubagentRegistryStatus,
   SubagentRuntimeSnapshot,
@@ -15,6 +16,7 @@ import type {
 } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 import { extractProposedPlanBlocks } from '../utils/proposedPlan';
+import { buildSubagentEventEnvelopes } from '../utils/subagentEvents';
 
 function isTaskNotificationContent(content: string): boolean {
   const trimmed = decodeHtmlEntities(content).trimStart();
@@ -233,6 +235,30 @@ function taskNotificationRuntimeStatus(status: unknown): SubagentRuntimeStatus {
   return normalized === 'completed' ? 'DONE' : 'BLOCKED';
 }
 
+function toSubagentControlEvent(value: unknown): Pick<SubagentEventEnvelope, 'type' | 'timestamp' | 'payload'> & { taskId?: string } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (!type) return null;
+  const taskId = typeof record.taskId === 'string'
+    ? record.taskId
+    : record.payload && typeof record.payload === 'object' && typeof (record.payload as Record<string, unknown>).taskId === 'string'
+      ? String((record.payload as Record<string, unknown>).taskId)
+      : '';
+  const timestamp = typeof record.timestamp === 'number' || typeof record.timestamp === 'string' || record.timestamp instanceof Date
+    ? record.timestamp
+    : Date.now();
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload as Record<string, unknown>
+    : {};
+  return {
+    type: type as SubagentEventEnvelope['type'],
+    timestamp: typeof timestamp === 'number' ? timestamp : new Date(timestamp).getTime(),
+    payload,
+    ...(taskId ? { taskId } : {}),
+  };
+}
+
 function isObsidianAutoCaptureStatus(message: NormalizedMessage): boolean {
   const event = (message as any).event;
   return message.kind === 'status'
@@ -354,6 +380,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
   const subagentChildToolMap = new Map<string, SubagentChildTool[]>();
   const subagentProgressMap = new Map<string, SubagentRuntimeSnapshot>();
   const subagentRecordMap = new Map<string, SubagentRegistryRecord>();
+  const subagentControlEventsByTaskId = new Map<string, Array<Pick<SubagentEventEnvelope, 'type' | 'timestamp' | 'payload'>>>();
   const subagentTaskIdByToolId = new Map<string, string>();
   const subagentToolIdByTaskId = new Map<string, string>();
   const taskNotificationByToolId = new Map<string, {
@@ -367,6 +394,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     summary?: string;
   }>();
   for (const msg of messages) {
+    if (msg.kind === 'status' && (msg as any).subagentControlEvent) {
+      const event = toSubagentControlEvent((msg as any).subagentControlEvent);
+      if (event?.taskId) {
+        const existing = subagentControlEventsByTaskId.get(event.taskId) || [];
+        subagentControlEventsByTaskId.set(event.taskId, [...existing, event]);
+      }
+      continue;
+    }
     if (msg.kind === 'tool_use' && msg.toolId && msg.taskId && isSubagentToolName(msg.toolName)) {
       subagentToolIdByTaskId.set(msg.taskId, msg.toolId);
     }
@@ -534,6 +569,25 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const terminalStopReason = runtimeStatus === 'BLOCKED' || runtimeStatus === 'NEED_PARENT_INPUT'
           ? (registryRecord?.stopReason || terminalNotification?.summary || runtimeSnapshot?.stopReason)
           : (registryRecord?.stopReason || runtimeSnapshot?.stopReason);
+        const resultSummary = registryRecord?.resultSummary
+          || terminalNotification?.summary
+          || runtimeSnapshot?.lastToolSummary;
+        const subagentEvents = isSubagentContainer
+          ? buildSubagentEventEnvelopes({
+              controlEvents: subagentControlEventsByTaskId.get(
+                registryRecord?.taskId || msg.taskId || (msg.toolId ? subagentTaskIdByToolId.get(msg.toolId) : undefined) || terminalNotification?.taskId || '',
+              ) || [],
+              sessionId: String((msg as any).sessionId || registryRecord?.parentSessionId || ''),
+              parentToolUseId: msg.toolId || registryRecord?.parentToolUseId || '',
+              taskId: registryRecord?.taskId || msg.taskId || (msg.toolId ? subagentTaskIdByToolId.get(msg.toolId) : undefined) || terminalNotification?.taskId || '',
+              threadId: registryRecord?.sessionId || registryRecord?.agentId || '',
+              packageId: String((msg as any).packageId || ''),
+              packageVersion: String((msg as any).packageVersion || ''),
+              dialogInstanceId: String((msg as any).dialogInstanceId || ''),
+              registryRecord,
+              childTools,
+            })
+          : [];
 
         converted.push({
           id: msg.id,
@@ -564,9 +618,15 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
                     : undefined),
                 lastTool: registryRecord?.lastTool || runtimeSnapshot?.lastTool,
                 lastToolSummary: registryRecord?.lastToolSummary || runtimeSnapshot?.lastToolSummary,
+                resultSummary,
+                evidence: registryRecord?.evidence,
+                nextAction: registryRecord?.nextAction,
+                changes: registryRecord?.changes,
+                blockers: registryRecord?.blockers,
                 runtimeStatus,
                 stopReason: terminalStopReason,
                 registryRecord,
+                subagentEvents,
               }
             : undefined,
         });

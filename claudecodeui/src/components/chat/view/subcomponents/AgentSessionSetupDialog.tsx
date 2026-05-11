@@ -4,14 +4,25 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AgentAppBinding, AgentConfig } from '../../../../types/agent';
 import { cn } from '../../../../lib/utils';
 import { api } from '../../../../utils/api';
+import {
+  collectDialogAnswersWithPreset,
+  getDefaultDialogPresetId,
+  isDialogAnswersComplete,
+  normalizeDialogAnswersForSubmit,
+  type DialogAnswers,
+} from '../../utils/agentTemplateDialogs';
+
+import AgentTemplateDialogForm from './AgentTemplateDialogForm';
 
 type AgentSessionSetupDialogProps = {
   agent: AgentConfig;
   initialBindings?: AgentAppBinding[];
+  initialDialogAnswers?: Record<string, unknown>;
+  initialSetupPresetId?: string;
   workspacePath?: string;
   isLoading?: boolean;
   onCancel: () => void;
-  onConfirm: (bindings: AgentAppBinding[]) => void;
+  onConfirm: (bindings: AgentAppBinding[], setupAnswers: DialogAnswers, setupPresetId: string) => void;
 };
 
 type SlotDraft = {
@@ -108,13 +119,26 @@ function createSlotDrafts(agent: AgentConfig, initialBindings?: AgentAppBinding[
 export default function AgentSessionSetupDialog({
   agent,
   initialBindings,
+  initialDialogAnswers,
+  initialSetupPresetId,
   workspacePath = '',
   isLoading,
   onCancel,
   onConfirm,
 }: AgentSessionSetupDialogProps) {
   const initialDrafts = useMemo(() => createSlotDrafts(agent, initialBindings), [agent, initialBindings]);
+  const setupDialog = agent.templateDialogs?.setup;
+  const initialPresetId = useMemo(
+    () => initialSetupPresetId || getDefaultDialogPresetId(setupDialog),
+    [initialSetupPresetId, setupDialog],
+  );
+  const initialSetupAnswers = useMemo(() => ({
+    ...collectDialogAnswersWithPreset(setupDialog, initialPresetId),
+    ...normalizeDialogAnswersForSubmit(initialDialogAnswers || {}),
+  }), [setupDialog, initialPresetId, initialDialogAnswers]);
   const [drafts, setDrafts] = useState<SlotDraft[]>(initialDrafts);
+  const [setupAnswers, setSetupAnswers] = useState<DialogAnswers>(initialSetupAnswers);
+  const [setupPresetId, setSetupPresetId] = useState(initialPresetId);
   const [mcpOptions, setMcpOptions] = useState<McpServerOption[]>([]);
   const [isLoadingMcpOptions, setIsLoadingMcpOptions] = useState(false);
   const [mcpOptionsError, setMcpOptionsError] = useState('');
@@ -123,11 +147,19 @@ export default function AgentSessionSetupDialog({
     const app = draft.app.trim();
     if (!app) return false;
     return !(isMcpSlot(draft.slot) && isCustomMcpPlaceholder(app));
-  });
+  }) && isDialogAnswersComplete(setupDialog, setupAnswers);
 
   useEffect(() => {
     setDrafts(initialDrafts);
   }, [initialDrafts]);
+
+  useEffect(() => {
+    setSetupAnswers(initialSetupAnswers);
+  }, [initialSetupAnswers]);
+
+  useEffect(() => {
+    setSetupPresetId(initialPresetId);
+  }, [initialPresetId]);
 
   useEffect(() => {
     if (!needsMcpOptions) {
@@ -251,6 +283,15 @@ export default function AgentSessionSetupDialog({
           )}
         </div>
 
+        <AgentTemplateDialogForm
+          schema={setupDialog}
+          answers={setupAnswers}
+          selectedPresetId={setupPresetId}
+          titleFallback="Template setup"
+          onAnswersChange={setSetupAnswers}
+          onPresetChange={setSetupPresetId}
+        />
+
         {needsMcpOptions && (
           <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
             <p>
@@ -283,7 +324,7 @@ export default function AgentSessionSetupDialog({
               slot: draft.slot,
               app: draft.app,
               status: draft.status,
-            })))}
+            })), normalizeDialogAnswersForSubmit(setupAnswers), setupPresetId)}
             className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
           >
             启用 Agent

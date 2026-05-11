@@ -2,16 +2,16 @@
   "kind": "mcp-server",
   "name": "crash-ai-crashsight",
   "title": "CrashAI CrashSight MCP",
-  "description": "Scan CrashSight crashes by date/date range, keep version-filter duplicate rows, extract Redmine links, compare affected versions, and fetch single-crash stack context without dump payloads.",
+  "description": "Fast Rust-backed CrashSight fact collector. It scans CrashSight upload records concurrently, aggregates by issue/platform/application version, enriches issue details and Redmine, and returns a direct Markdown report plus same-response context for Agent analysis.",
   "author": "AIINWORK",
-  "version": "0.1.5",
-  "tags": ["mcp", "crashsight", "crash", "daily", "redmine", "soc"],
+  "version": "0.2.7",
+  "tags": ["mcp", "crashsight", "crash", "daily", "redmine", "soc", "rust"],
   "capabilities": [
-    "Daily or date-range CrashSight crash scanning without cross-version dedupe",
-    "Application version extraction for report tables",
-    "Version continuation comparison",
-    "Redmine reference extraction with clickable issue links",
-    "Single-crash full stack context without dump payloads"
+    "Rust-backed concurrent CrashSight scanning",
+    "Direct Markdown report and same-response context output for Agent analysis",
+    "Issue rows are aggregated by issue, platform, and application version",
+    "Redmine status and owner enrichment",
+    "Legacy CrashSight tools retained for compatibility"
   ],
   "mcp": {
     "serverName": "crash-ai-crashsight",
@@ -21,7 +21,8 @@
     "env": {
       "CRASHSIGHT_REGION": "cn",
       "CRASHSIGHT_BRANCH_FILTERS": "{\"trunk\":\"*trunk*\",\"weekly\":\"*weekly*\"}",
-      "CRASHSIGHT_RATE_LIMIT_PER_MINUTE": "25"
+      "CRASH_AI_MAX_CONCURRENCY": "12",
+      "CRASH_AI_REDMINE_CONCURRENCY": "8"
     },
     "postInstall": {
       "type": "npm-install",
@@ -87,19 +88,37 @@
         "description": "JSON map from branch name to CrashSight version wildcard."
       },
       {
-        "key": "CRASH_AI_REDMINE_BASE_URL",
+        "key": "REDMINE_BASE_URL",
         "label": "Redmine Base URL",
         "type": "text",
         "target": "env",
         "required": false,
         "defaultValue": "http://soc-redmine.wd.com",
-        "description": "Base URL used to format Redmine issue links in scan results."
+        "description": "Base URL used to query and format Redmine issue links."
+      },
+      {
+        "key": "REDMINE_API_KEY",
+        "label": "Redmine API Key",
+        "type": "password",
+        "target": "env",
+        "required": false,
+        "description": "Optional Redmine API key for status and owner enrichment."
+      },
+      {
+        "key": "CRASH_AI_MAX_CONCURRENCY",
+        "label": "CrashSight Concurrency",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "12",
+        "description": "Max concurrent CrashSight requests."
       }
     ],
     "tools": [
+      { "name": "generate_crash_ai_report", "description": "Fast Rust-backed fact collection. Returns CRASH_AI_DIRECT_REPORT plus CRASH_AI_AGENT_CONTEXT_JSON for Agent analysis." },
       { "name": "health_check", "description": "Validate CrashSight configuration and appId mapping." },
-      { "name": "scan_daily_crashes", "description": "Scan CrashSight crashes by date/date range, platform, and version filters; keeps cross-version duplicate rows and returns total counts, application versions, and Redmine links." },
-      { "name": "compare_issue_versions", "description": "Compare one issue across version filters and judge continuation." },
+      { "name": "scan_daily_crashes", "description": "Legacy JS scan tool kept for compatibility." },
+      { "name": "compare_issue_versions", "description": "Legacy version comparison tool kept for compatibility." },
       { "name": "get_single_crash_analysis_context", "description": "Fetch full stack context for one crash without dump payloads." },
       { "name": "extract_redmine_refs", "description": "Extract Redmine ids from tags, title, or message." }
     ]

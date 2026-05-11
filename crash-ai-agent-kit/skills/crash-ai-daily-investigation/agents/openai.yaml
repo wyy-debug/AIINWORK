@@ -1,3 +1,3 @@
 display_name: "CrashAI Daily Investigation"
-short_description: "按日期或精确时间段巡检 CrashSight，保留跨版本重复命中，关联 Redmine，并写入 Obsidian 报告。"
-default_prompt: "按指定 date、startDate/endDate 或 startTime/endTime 扫描 CrashSight crash，关联 Redmine 状态和负责人，写入 Obsidian Markdown 报告；如提供 issueId 和 codeRoot，则生成单 Crash 深度分析报告并写入 Obsidian。"
+short_description: "Call the Rust-backed MCP to collect a direct CrashSight Markdown report plus same-response context, then generate a Chinese investigation analysis."
+default_prompt: "For date, startDate/endDate, or startTime/endTime, call crash-ai-crashsight.generate_crash_ai_report. Read CRASH_AI_DIRECT_REPORT and CRASH_AI_AGENT_CONTEXT_JSON directly from the same tool response; do not read saved tool-result files and do not use Python/PowerShell/Bash/Read to extract tool output. Output the direct fact report first without omitting rows, then generate Chinese sections: AI 判断与下一步, 版本延续/解决判断, 需程序排查清单, and 未验证项/阻塞项. Never use range rows, merged rows, or omitted-row summaries. If issueId and codeRoot are provided, use the single-crash deep analysis workflow."

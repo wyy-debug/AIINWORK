@@ -17,7 +17,7 @@ import { AppError, createNormalizedMessage } from '@/shared/utils.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
-import { queryClaudeSDK, abortClaudeSDKSession, sendClaudeSDKGuidance, stopClaudeSDKTask, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
+import { queryClaudeSDK, abortClaudeSDKSession, sendClaudeSDKGuidance, stopClaudeSDKTask, sendClaudeSDKTaskControl, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
@@ -67,13 +67,17 @@ import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes
 import providerRoutes from './modules/providers/provider.routes.js';
 import sessionAgentRoutes from './routes/session-agents.js';
 import settingsRoutes from './routes/settings.js';
+import swarmsRoutes from './routes/swarms.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import triageRoutes from './routes/triage.js';
 import userRoutes from './routes/user.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
+import { normalizeSessionAgentConfiguration } from './services/session-agent-configuration-service.js';
 import { applyArgusCollaborationModeOptions } from './services/argus-collaboration-mode-service.js';
+import { dispatchSubagentTaskControl } from './services/subagent-task-control-service.js';
+import { swarmEventBus } from './services/swarm-broadcast-service.js';
 import {
     buildContextBudgetFromFlatUsage,
     buildContextBudgetFromJsonlLines,
@@ -487,6 +491,9 @@ app.use('/api/agents', authenticateToken, agentsRoutes);
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, sessionAgentRoutes);
 app.use('/api/sessions', authenticateToken, messagesRoutes);
+
+// Swarm orchestration routes (protected)
+app.use('/api/swarms', authenticateToken, swarmsRoutes);
 
 // Managed Git worktree dispatch routes (protected)
 app.use('/api', authenticateToken, worktreeRoutes);
@@ -2243,6 +2250,24 @@ function setWriterAutoCaptureContext(writer, data, provider) {
     });
 }
 
+function broadcastSwarmEvent(eventRecord) {
+    const message = JSON.stringify({
+        type: 'swarm_event',
+        event: eventRecord.type,
+        runId: eventRecord.runId,
+        agentId: eventRecord.agentId || null,
+        messageId: eventRecord.messageId || null,
+        swarmEvent: eventRecord,
+    });
+    connectedClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    });
+}
+
+swarmEventBus.on('swarm_event', broadcastSwarmEvent);
+
 async function waitForWriterAutoCaptureBarrier(writer, data, provider) {
     const sessionId = getConcreteCommandSessionId(data);
     if (!sessionId) return;
@@ -2597,14 +2622,45 @@ async function applyAgentRuntimeToChatCommand(data) {
         Array.isArray(data?.options?.agentAppBindings)
         || Array.isArray(data?.options?.sessionSkills)
         || optionModelProfileId
+        || data?.options?.sessionAgentPackageId
+        || data?.options?.sessionAgentPackageVersion
+        || data?.options?.sessionAgentSetupAnswers
+        || data?.options?.sessionAgentSetupPresetId
+        || data?.options?.sessionAgentLaunchAnswers
+        || data?.options?.sessionAgentLaunchPresetId
+        || data?.options?.sessionAgentResultPresetId
+        || data?.options?.sessionAgentSelectedDependencies
+        || data?.options?.sessionAgentDialogInstanceId
     )
-        ? {
+        ? normalizeSessionAgentConfiguration({
             ...(Array.isArray(data?.options?.agentAppBindings) ? { appBindings: data.options.agentAppBindings } : {}),
             ...(Array.isArray(data?.options?.sessionSkills) ? { skills: data.options.sessionSkills } : {}),
             ...(optionModelProfileId ? { modelProfileId: optionModelProfileId } : {}),
-        }
+            packageId: data?.options?.sessionAgentPackageId,
+            packageVersion: data?.options?.sessionAgentPackageVersion,
+            setupAnswers: data?.options?.sessionAgentSetupAnswers,
+            setupPresetId: data?.options?.sessionAgentSetupPresetId,
+            launchAnswers: data?.options?.sessionAgentLaunchAnswers,
+            launchPresetId: data?.options?.sessionAgentLaunchPresetId,
+            resultPresetId: data?.options?.sessionAgentResultPresetId,
+            selectedDependencies: data?.options?.sessionAgentSelectedDependencies,
+            dialogInstanceId: data?.options?.sessionAgentDialogInstanceId,
+        })
         : null;
     const sessionConfiguration = optionConfiguration || storedBinding?.configuration || null;
+    const sessionAgentPackage = sessionConfiguration
+        ? {
+            packageId: sessionConfiguration.packageId || '',
+            packageVersion: sessionConfiguration.packageVersion || '',
+            setupAnswers: sessionConfiguration.setupAnswers || {},
+            setupPresetId: sessionConfiguration.setupPresetId || '',
+            launchAnswers: sessionConfiguration.launchAnswers || {},
+            launchPresetId: sessionConfiguration.launchPresetId || '',
+            resultPresetId: sessionConfiguration.resultPresetId || '',
+            selectedDependencies: sessionConfiguration.selectedDependencies || {},
+            dialogInstanceId: sessionConfiguration.dialogInstanceId || '',
+        }
+        : null;
     const sessionModelProfileId = normalizeModelProfileId(
         optionModelProfileId || sessionConfiguration?.modelProfileId || ''
     );
@@ -2628,10 +2684,10 @@ async function applyAgentRuntimeToChatCommand(data) {
         : [];
     if (!agentId) {
         if (sessionSkills.length === 0) {
-            if (sessionModelProfileId && allowSessionAgentBinding && concreteSessionId) {
+            if (allowSessionAgentBinding && concreteSessionId && sessionConfiguration) {
                 sessionAgentBindingsDb.setAgent(concreteSessionId, provider, '', {
-                    ...(sessionConfiguration || {}),
-                    modelProfileId: sessionModelProfileId,
+                    ...sessionConfiguration,
+                    ...(sessionModelProfileId ? { modelProfileId: sessionModelProfileId } : {}),
                 });
             }
             if (provider !== 'claude' && !sessionModelProfileId) {
@@ -2659,6 +2715,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                         contextWindowTokens: resolvedContextWindowTokens,
                         model: resolvedSessionModel || data?.options?.model || '',
                         modelProfileId: sessionModelProfileId || '',
+                        sessionAgentPackage,
                         openMythosRuntime,
                         subagents: subagentRuntime,
                     },
@@ -2701,6 +2758,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                 contextWindowTokens: resolvedContextWindowTokens,
                 model: resolvedSessionModel || data?.options?.model || '',
                 modelProfileId: sessionModelProfileId || '',
+                sessionAgentPackage,
                 openMythosRuntime,
                 subagents: subagentRuntime,
             },
@@ -2762,6 +2820,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                     contextWindowTokens: resolvedContextWindowTokens,
                     model: resolvedSessionModel || data?.options?.model || '',
                     modelProfileId: sessionModelProfileId || '',
+                    sessionAgentPackage,
                     openMythosRuntime,
                     subagents: subagentRuntime,
                 },
@@ -2820,6 +2879,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
             model: resolvedSessionModel || runtime.model || data?.options?.model || '',
             modelProfileId: sessionModelProfileId || '',
+            sessionAgentPackage,
             openMythosRuntime,
             subagents: subagentRuntime,
         },
@@ -2843,6 +2903,32 @@ async function applyAgentRuntimeToChatCommand(data) {
         command: [runtime.appendSystemPrompt, '', 'User task:', command].join('\n'),
         options,
     };
+}
+
+function subagentControlStatusText(event) {
+    const action = event?.payload?.action || 'control';
+    const taskId = event?.taskId || event?.payload?.taskId || 'unknown';
+    if (event?.type === 'control_requested') {
+        return `Subagent ${action} requested for ${taskId}.`;
+    }
+    if (event?.type === 'control_accepted') {
+        const mode = event?.payload?.mode || 'direct';
+        return `Subagent ${action} accepted for ${taskId} via ${mode}.`;
+    }
+    const error = event?.payload?.error ? `: ${event.payload.error}` : '';
+    return `Subagent ${action} failed for ${taskId}${error}`;
+}
+
+function sendSubagentControlEvent(writer, event, { sessionId, provider = 'claude' } = {}) {
+    writer.send(createNormalizedMessage({
+        kind: 'status',
+        status: `subagent_${event.type}`,
+        content: subagentControlStatusText(event),
+        sessionId: sessionId || null,
+        provider,
+        taskId: event.taskId || event.payload?.taskId || null,
+        subagentControlEvent: event,
+    }));
 }
 
 // Handle chat WebSocket connections
@@ -2877,6 +2963,52 @@ function handleChatConnection(ws, request) {
 
                 // Use Claude Agents SDK
                 await queryClaudeSDK(commandData.command, commandData.options, writer);
+            } else if (data.type === 'claude-subagent-control') {
+                const provider = data.provider || 'claude';
+                if (provider !== 'claude') {
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: 'Background agent control is only supported by the MTL-Code backend.',
+                        sessionId: data.sessionId || null,
+                        provider
+                    }));
+                } else {
+                    const result = await dispatchSubagentTaskControl({
+                        action: data.action,
+                        sessionId: data.sessionId,
+                        taskId: data.taskId,
+                        content: data.content || data.objective || '',
+                        sendDirectControl: (control) => sendClaudeSDKTaskControl(control.sessionId, control),
+                        sendGuidance: (guidance, control) => sendClaudeSDKGuidance(
+                            control.sessionId,
+                            data.fallback?.command || guidance,
+                            data.clientMessageId || null
+                        ),
+                        emitEvent: (event) => sendSubagentControlEvent(writer, event, {
+                            sessionId: data.sessionId || null,
+                            provider,
+                        }),
+                    });
+                    writer.send({
+                        type: 'subagent-control-response',
+                        provider,
+                        sessionId: data.sessionId || null,
+                        taskId: data.taskId || null,
+                        action: data.action || null,
+                        success: result.success,
+                        mode: result.mode,
+                        fallbackUsed: result.fallbackUsed,
+                        error: result.error,
+                    });
+                    if (!result.success) {
+                        writer.send(createNormalizedMessage({
+                            kind: 'error',
+                            content: result.error || 'Failed to control background agent.',
+                            sessionId: data.sessionId || null,
+                            provider
+                        }));
+                    }
+                }
             } else if (data.type === 'claude-guidance') {
                 const result = sendClaudeSDKGuidance(data.sessionId, data.command || data.content || '', data.clientMessageId || null);
                 writer.send({
@@ -2907,10 +3039,20 @@ function handleChatConnection(ws, request) {
                     const taskIds = Array.isArray(data.taskIds)
                         ? data.taskIds.map((taskId) => String(taskId || '').trim()).filter(Boolean)
                         : [];
-                    const results = taskIds.map((taskId) => ({
-                        taskId,
-                        ...stopClaudeSDKTask(data.sessionId, taskId)
-                    }));
+                    const results = [];
+                    for (const taskId of taskIds) {
+                        const result = await dispatchSubagentTaskControl({
+                            action: 'stop',
+                            sessionId: data.sessionId,
+                            taskId,
+                            sendDirectControl: () => stopClaudeSDKTask(data.sessionId, taskId),
+                            emitEvent: (event) => sendSubagentControlEvent(writer, event, {
+                                sessionId: data.sessionId || null,
+                                provider,
+                            }),
+                        });
+                        results.push({ taskId, ...result });
+                    }
                     const failed = results.filter((result) => !result.success);
                     writer.send(createNormalizedMessage({
                         kind: 'status',

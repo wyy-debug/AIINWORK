@@ -24,6 +24,22 @@ import type {
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { AgentAppBinding, AgentConfig } from '../../../types/agent';
 import { escapeRegExp } from '../utils/chatFormatting';
+import {
+  collectDialogAnswersWithPreset,
+  collectDialogDefaults,
+  getDefaultDialogPresetId,
+  hasDialogInteraction,
+  normalizeDialogAnswersForSubmit,
+  type DialogAnswers,
+} from '../utils/agentTemplateDialogs';
+import {
+  buildSubagentDispatchPlanRequest,
+  shouldRequestSubagentDispatchPlan,
+} from '../utils/subagentDispatchPlan';
+import {
+  buildSubagentRuntimeSnapshot,
+  getSubagentRuntimeDispatchPlanId,
+} from '../utils/subagentRuntimeSnapshot';
 
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
@@ -31,6 +47,18 @@ import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 type PendingViewSession = {
   sessionId: string | null;
   startedAt: number;
+};
+
+type LaunchDialogState = {
+  agent: AgentConfig;
+  answers: DialogAnswers;
+  presetId: string;
+};
+
+type LaunchDialogApproval = {
+  agentId: string;
+  answers: DialogAnswers;
+  presetId: string;
 };
 
 interface UseChatComposerStateArgs {
@@ -48,6 +76,8 @@ interface UseChatComposerStateArgs {
   agents?: AgentConfig[];
   selectedAgentId?: string;
   selectedAgentAppBindings?: AgentAppBinding[];
+  selectedAgentSetupAnswers?: DialogAnswers;
+  selectedAgentSetupPresetId?: string;
   selectedSkillNames?: string[];
   getSelectedSkillNames?: () => string[];
   modelProfileId?: string;
@@ -180,6 +210,8 @@ export function useChatComposerState({
   agents = [],
   selectedAgentId = '',
   selectedAgentAppBindings = [],
+  selectedAgentSetupAnswers = {},
+  selectedAgentSetupPresetId = '',
   selectedSkillNames = [],
   getSelectedSkillNames,
   modelProfileId = '',
@@ -221,6 +253,7 @@ export function useChatComposerState({
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
   const [subagentDispatchRequested, setSubagentDispatchRequested] = useState(false);
+  const [pendingLaunchDialog, setPendingLaunchDialog] = useState<LaunchDialogState | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
@@ -229,7 +262,10 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const oneShotPermissionModeRef = useRef<PermissionMode | string | null>(null);
+  const oneShotSubagentDispatchRef = useRef(false);
+  const approvedSubagentDispatchPlanRef = useRef('');
   const inputValueRef = useRef(input);
+  const launchDialogApprovalRef = useRef<LaunchDialogApproval | null>(null);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -724,6 +760,44 @@ export function useChatComposerState({
           ? selectedAgentAppBindings
           : activeAgent.appBindings
         : [];
+      const activeAgentSetupAnswers = activeAgent && activeAgent.id === selectedAgentId
+        ? selectedAgentSetupAnswers
+        : {};
+      const oneShotSubagentDispatch = oneShotSubagentDispatchRef.current === true;
+      const dispatchRequestedForSend = subagentDispatchRequested || oneShotSubagentDispatch;
+      const subagentPlanRequestActive = provider === 'claude'
+        && shouldRequestSubagentDispatchPlan({
+          prompt: agentInvocation.content || currentInput,
+          explicitDispatch: subagentDispatchRequested,
+        })
+        && !oneShotSubagentDispatch;
+      const launchApproval = activeAgent && launchDialogApprovalRef.current?.agentId === activeAgent.id
+        ? launchDialogApprovalRef.current
+        : null;
+      const needsLaunchDialog = Boolean(
+        activeAgent
+        && dispatchRequestedForSend
+        && !subagentPlanRequestActive
+        && hasDialogInteraction(activeAgent.templateDialogs?.launch),
+      );
+      if (needsLaunchDialog && activeAgent && !launchApproval) {
+        const presetId = getDefaultDialogPresetId(activeAgent.templateDialogs?.launch);
+        setPendingLaunchDialog({
+          agent: activeAgent,
+          presetId,
+          answers: collectDialogAnswersWithPreset(activeAgent.templateDialogs?.launch, presetId),
+        });
+        submitLockRef.current = false;
+        return;
+      }
+      const activeAgentLaunchAnswers = activeAgent && dispatchRequestedForSend && !subagentPlanRequestActive
+        ? (launchApproval?.answers || collectDialogDefaults(activeAgent.templateDialogs?.launch))
+        : {};
+      const activeAgentLaunchPresetId = activeAgent && dispatchRequestedForSend && !subagentPlanRequestActive
+        ? (launchApproval?.presetId || getDefaultDialogPresetId(activeAgent.templateDialogs?.launch))
+        : '';
+      const activeAgentPackage = activeAgent?.templatePackage || {};
+      const activeAgentSelectedDependencies = activeAgent?.templateSelectedDependencies || {};
       const activeSkillNames = (getSelectedSkillNames?.() || selectedSkillNames)
         .map((skill) => skill.trim())
         .filter(Boolean)
@@ -735,6 +809,12 @@ export function useChatComposerState({
       const selectedThinkingMode = thinkingModes.find((mode: { id: string; prefix?: string }) => mode.id === thinkingMode);
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
         messageContent = `${selectedThinkingMode.prefix}: ${messageContent}`;
+      }
+      if (subagentPlanRequestActive) {
+        messageContent = buildSubagentDispatchPlanRequest({
+          prompt: agentInvocation.content || currentInput,
+          agentName: activeAgent?.name || activeAgent?.shortName,
+        });
       }
 
       let uploadedImages: unknown[] = [];
@@ -889,7 +969,7 @@ export function useChatComposerState({
       };
 
       const toolsSettings = getToolsSettings();
-      const permissionModeForSend = oneShotPermissionModeRef.current || permissionMode;
+      const permissionModeForSend = subagentPlanRequestActive ? 'plan' : (oneShotPermissionModeRef.current || permissionMode);
       const skipToolPermissions = Boolean(
         toolsSettings?.skipPermissions
         || toolsSettings?.permissionMode === 'bypassPermissions'
@@ -897,6 +977,34 @@ export function useChatComposerState({
       );
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
+      const shouldSendSubagentDispatch = dispatchRequestedForSend && !subagentPlanRequestActive;
+      const approvedSubagentDispatchPlan = approvedSubagentDispatchPlanRef.current.trim();
+      const dispatchPlanId = shouldSendSubagentDispatch
+        ? getSubagentRuntimeDispatchPlanId({
+          prompt: agentInvocation.content || currentInput,
+          agentId: activeAgent?.id || selectedAgentId,
+          approvedPlan: approvedSubagentDispatchPlan,
+        })
+        : '';
+      const subagentRuntimeSnapshot = shouldSendSubagentDispatch
+        ? buildSubagentRuntimeSnapshot({
+          provider,
+          model: provider === 'cursor'
+            ? cursorModel
+            : provider === 'codex'
+              ? codexModel
+              : provider === 'gemini'
+                ? geminiModel
+                : claudeModel,
+          modelProfileId,
+          projectPath: resolvedProjectPath,
+          permissionMode: permissionModeForSend,
+          toolsSettings,
+          sessionSkills: activeSkillNames,
+          agentAppBindings: activeAgentAppBindings,
+          selectedDependencies: activeAgentSelectedDependencies,
+        })
+        : undefined;
 
       if (provider === 'cursor') {
         sendMessage({
@@ -913,6 +1021,14 @@ export function useChatComposerState({
             modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionAgentPackageId: activeAgentPackage.packageId,
+            sessionAgentPackageVersion: activeAgentPackage.packageVersion,
+            sessionAgentSetupAnswers: normalizeDialogAnswersForSubmit(activeAgentSetupAnswers),
+            sessionAgentSetupPresetId: activeAgent?.id === selectedAgentId ? selectedAgentSetupPresetId : '',
+            sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
+            sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
+            sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
+            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             skipPermissions: skipToolPermissions,
@@ -937,6 +1053,14 @@ export function useChatComposerState({
             modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionAgentPackageId: activeAgentPackage.packageId,
+            sessionAgentPackageVersion: activeAgentPackage.packageVersion,
+            sessionAgentSetupAnswers: normalizeDialogAnswersForSubmit(activeAgentSetupAnswers),
+            sessionAgentSetupPresetId: activeAgent?.id === selectedAgentId ? selectedAgentSetupPresetId : '',
+            sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
+            sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
+            sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
+            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
@@ -960,6 +1084,14 @@ export function useChatComposerState({
             modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionAgentPackageId: activeAgentPackage.packageId,
+            sessionAgentPackageVersion: activeAgentPackage.packageVersion,
+            sessionAgentSetupAnswers: normalizeDialogAnswersForSubmit(activeAgentSetupAnswers),
+            sessionAgentSetupPresetId: activeAgent?.id === selectedAgentId ? selectedAgentSetupPresetId : '',
+            sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
+            sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
+            sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
+            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
@@ -987,6 +1119,14 @@ export function useChatComposerState({
             modelProfileId,
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
+            sessionAgentPackageId: activeAgentPackage.packageId,
+            sessionAgentPackageVersion: activeAgentPackage.packageVersion,
+            sessionAgentSetupAnswers: normalizeDialogAnswersForSubmit(activeAgentSetupAnswers),
+            sessionAgentSetupPresetId: activeAgent?.id === selectedAgentId ? selectedAgentSetupPresetId : '',
+            sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
+            sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
+            sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
+            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
@@ -994,11 +1134,21 @@ export function useChatComposerState({
             files: uploadedFiles,
             clientMessageId,
             clientSessionId: sessionToActivate,
-            ...(subagentDispatchRequested ? { subagentDispatch: true } : {}),
+            ...(shouldSendSubagentDispatch
+              ? {
+                subagentDispatch: true,
+                subagentDispatchPlanApproved: Boolean(approvedSubagentDispatchPlan),
+                subagentDispatchPlan: approvedSubagentDispatchPlan,
+                subagentRuntimeSnapshot,
+                dispatchPlanId,
+              }
+              : {}),
           },
         });
       }
 
+      launchDialogApprovalRef.current = null;
+      setPendingLaunchDialog(null);
       setInput('');
       inputValueRef.current = '';
       resetCommandMenuState();
@@ -1011,6 +1161,8 @@ export function useChatComposerState({
       setThinkingMode('none');
       setSubagentDispatchRequested(false);
       oneShotPermissionModeRef.current = null;
+      oneShotSubagentDispatchRef.current = false;
+      approvedSubagentDispatchPlanRef.current = '';
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -1042,6 +1194,8 @@ export function useChatComposerState({
       selectedProject,
       selectedAgentId,
       selectedAgentAppBindings,
+      selectedAgentSetupAnswers,
+      selectedAgentSetupPresetId,
       selectedSkillNames,
       getSelectedSkillNames,
       subagentDispatchRequested,
@@ -1083,7 +1237,12 @@ export function useChatComposerState({
 
   useEffect(() => {
     const handleSubmitChatInput = (event: Event) => {
-      const detail = (event as CustomEvent<{ text?: string; permissionMode?: PermissionMode | string }>).detail || {};
+      const detail = (event as CustomEvent<{
+        text?: string;
+        permissionMode?: PermissionMode | string;
+        subagentDispatch?: boolean;
+        approvedSubagentPlan?: string;
+      }>).detail || {};
       const text = typeof detail.text === 'string' ? detail.text.trim() : '';
       if (!text) {
         return;
@@ -1092,6 +1251,10 @@ export function useChatComposerState({
       setInput(text);
       inputValueRef.current = text;
       oneShotPermissionModeRef.current = detail.permissionMode || null;
+      oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
+      approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
+        ? detail.approvedSubagentPlan.trim()
+        : '';
       window.setTimeout(() => {
         void handleSubmitRef.current?.(createFakeSubmitEvent());
       }, 0);
@@ -1334,6 +1497,26 @@ export function useChatComposerState({
     [onInputFocusChange],
   );
 
+  const confirmLaunchDialog = useCallback((answers: DialogAnswers, presetId: string) => {
+    if (!pendingLaunchDialog) {
+      return;
+    }
+    launchDialogApprovalRef.current = {
+      agentId: pendingLaunchDialog.agent.id,
+      answers: normalizeDialogAnswersForSubmit(answers),
+      presetId,
+    };
+    setPendingLaunchDialog(null);
+    window.setTimeout(() => {
+      void handleSubmitRef.current?.(createFakeSubmitEvent());
+    }, 0);
+  }, [pendingLaunchDialog]);
+
+  const cancelLaunchDialog = useCallback(() => {
+    launchDialogApprovalRef.current = null;
+    setPendingLaunchDialog(null);
+  }, []);
+
   return {
     input,
     setInput,
@@ -1344,6 +1527,10 @@ export function useChatComposerState({
     setThinkingMode,
     subagentDispatchRequested,
     setSubagentDispatchRequested,
+    pendingLaunchDialog,
+    setPendingLaunchDialog,
+    confirmLaunchDialog,
+    cancelLaunchDialog,
     slashCommandsCount,
     filteredCommands,
     frequentCommands,

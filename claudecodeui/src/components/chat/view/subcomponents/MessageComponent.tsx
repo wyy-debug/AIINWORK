@@ -11,6 +11,7 @@ import type {
 } from '../../types/types';
 import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
+import type { SubagentControlAction } from '../../utils/subagentControlRequest';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Button, Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
@@ -42,6 +43,7 @@ type MessageComponentProps = {
   messageKey?: string;
   obsidianBridgeEnabled?: boolean;
   isLatestAssistantReply?: boolean;
+  onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 };
 
 type InteractiveOption = {
@@ -178,7 +180,7 @@ const formatWikiRoutingReason = (reason = '') => {
   return `命中 ${signals}，建议整理成 Wiki。`;
 };
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, sessionId, provider, messageKey, obsidianBridgeEnabled = false, isLatestAssistantReply = false }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, sessionId, provider, messageKey, obsidianBridgeEnabled = false, isLatestAssistantReply = false, onControlSubagent }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -643,6 +645,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     rawToolInput={typeof message.toolInput === 'string' ? message.toolInput : undefined}
                     isSubagentContainer={message.isSubagentContainer}
                     subagentState={message.subagentState}
+                    onControlSubagent={onControlSubagent}
                   />
                 )}
 

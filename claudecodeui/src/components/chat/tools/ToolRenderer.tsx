@@ -2,6 +2,7 @@ import React, { memo, useMemo, useCallback } from 'react';
 
 import type { Project } from '../../../types/app';
 import type { ChatMessage } from '../types/types';
+import type { SubagentControlAction } from '../utils/subagentControlRequest';
 
 import { getToolConfig } from './configs/toolConfigs';
 import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
@@ -29,6 +30,7 @@ interface ToolRendererProps {
   rawToolInput?: string;
   isSubagentContainer?: boolean;
   subagentState?: ChatMessage['subagentState'];
+  onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 }
 
 function getToolCategory(toolName: string): string {
@@ -80,7 +82,8 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   showRawParameters = false,
   rawToolInput,
   isSubagentContainer,
-  subagentState
+  subagentState,
+  onControlSubagent
 }) => {
   const config = getToolConfig(toolName);
   const displayConfig: any = mode === 'input' ? config.input : config.result;
@@ -115,6 +118,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         toolInput={toolInput}
         toolResult={toolResult}
         subagentState={subagentState}
+        onControlSubagent={onControlSubagent}
       />
     );
   }

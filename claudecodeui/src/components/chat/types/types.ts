@@ -69,6 +69,33 @@ export interface SubagentEventV1 {
   summary?: string;
 }
 
+export interface SubagentEventEnvelope {
+  seq: number;
+  sessionId: string;
+  parentToolUseId: string;
+  taskId: string;
+  threadId: string;
+  packageId?: string;
+  packageVersion?: string;
+  dialogInstanceId?: string;
+  type:
+    | 'started'
+    | 'progress'
+    | 'tool_started'
+    | 'tool_completed'
+    | 'message'
+    | 'completed'
+    | 'blocked'
+    | 'failed'
+    | 'cancelled'
+    | 'token_usage'
+    | 'control_requested'
+    | 'control_accepted'
+    | 'control_failed';
+  timestamp: number;
+  payload: Record<string, unknown>;
+}
+
 export interface SubagentRegistryRecord {
   taskId?: string;
   agentId?: string;
@@ -98,6 +125,9 @@ export interface SubagentRegistryRecord {
   blockers?: string;
   recentActions?: string[];
   events?: SubagentEventV1[];
+  swarmRunId?: string;
+  swarmAgentId?: string;
+  swarmRoleId?: string;
 }
 
 export interface SubagentActivityItem {
@@ -186,9 +216,15 @@ export interface ChatMessage {
     elapsedMs?: number;
     lastTool?: string;
     lastToolSummary?: string;
+    resultSummary?: string;
+    evidence?: string;
+    nextAction?: string;
+    changes?: string;
+    blockers?: string;
     runtimeStatus?: SubagentRuntimeStatus;
     stopReason?: string;
     registryRecord?: SubagentRegistryRecord;
+    subagentEvents?: SubagentEventEnvelope[];
   };
   [key: string]: unknown;
 }

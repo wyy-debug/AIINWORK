@@ -6,6 +6,25 @@ import { spawn } from 'child_process';
 import express from 'express';
 
 import { providerMcpService } from '../modules/providers/services/mcp.service.js';
+import {
+  normalizeAgentTemplateDependencies,
+  normalizeAgentTemplateDialogs,
+  normalizeAgentTemplateManifest,
+  normalizeTemplatePackageFiles,
+} from '../services/agent-template-manifest-service.js';
+import { normalizeSwarmTemplateManifest } from '../services/swarm-template-manifest-service.js';
+import {
+  exportSwarmTemplatePackage,
+  importSwarmTemplatePackage,
+  resolveSwarmRoleBindings,
+} from '../services/swarm-template-package-service.js';
+import { resolveAgentTemplateDependencies } from '../services/agent-repository-dependency-resolver-service.js';
+import { listInstalledSkills } from '../services/agent-skill-service.js';
+import { readMtlCodeModelSettings, readStoredModelProfiles } from '../services/mtl-code-model-service.js';
+import {
+  exportClaudeCodeAgentMarkdown,
+  parseClaudeCodeAgentMarkdown,
+} from '../services/claude-code-agent-compat-service.js';
 
 const router = express.Router();
 
@@ -172,6 +191,9 @@ function normalizeKind(kind) {
   if (value === 'agent' || value === 'agents' || value === 'template' || value === 'agent-template') {
     return 'agent-template';
   }
+  if (value === 'swarm' || value === 'swarms' || value === 'swarm-template') {
+    return 'swarm-template';
+  }
   return null;
 }
 
@@ -186,6 +208,7 @@ function getRawItemSlug(rawItem) {
 function publicKindLabel(kind) {
   if (kind === 'skill') return 'Skill';
   if (kind === 'mcp-server') return 'MCP Server';
+  if (kind === 'swarm-template') return 'Swarm Template';
   return 'Agent Template';
 }
 
@@ -205,91 +228,17 @@ function normalizeInstallName(value) {
     .replace(/^skill-/, '');
 }
 
-function normalizeDependencyEntry(entry, fallbackKind) {
-  if (typeof entry === 'string') {
-    const name = entry.trim();
-    return name ? { kind: fallbackKind, name } : null;
-  }
-  if (!entry || typeof entry !== 'object') return null;
-  const kind = normalizeKind(entry.kind || entry.type) || fallbackKind;
-  if (!['skill', 'mcp-server'].includes(kind)) return null;
-  const name = String(
-    entry.name
-    || entry.serverName
-    || entry.itemId
-    || entry.id
-    || entry.title
-    || '',
-  ).trim();
-  if (!name) return null;
-  const configuration = entry.configuration && typeof entry.configuration === 'object'
-    ? entry.configuration
-    : entry.mcpValues && typeof entry.mcpValues === 'object'
-      ? { mcpValues: entry.mcpValues }
-      : undefined;
-  return {
-    kind,
-    name,
-    id: typeof entry.id === 'string' ? entry.id.trim() : undefined,
-    itemId: typeof entry.itemId === 'string' ? entry.itemId.trim() : undefined,
-    repoId: typeof entry.repoId === 'string' ? entry.repoId.trim() : undefined,
-    optional: Boolean(entry.optional),
-    overwrite: typeof entry.overwrite === 'boolean' ? entry.overwrite : undefined,
-    ...(configuration ? { configuration } : {}),
-  };
-}
-
-function normalizeAgentDependencies(value, rawItem = {}) {
-  const dependencies = { skills: [], mcpServers: [] };
-  const add = (entry, fallbackKind) => {
-    const normalized = normalizeDependencyEntry(entry, fallbackKind);
-    if (!normalized) return;
-    const list = normalized.kind === 'mcp-server' ? dependencies.mcpServers : dependencies.skills;
-    const key = `${normalized.repoId || ''}:${normalized.itemId || normalized.id || normalized.name}`.toLowerCase();
-    if (!list.some((candidate) => `${candidate.repoId || ''}:${candidate.itemId || candidate.id || candidate.name}`.toLowerCase() === key)) {
-      list.push(normalized);
-    }
-  };
-
-  if (Array.isArray(value)) {
-    value.forEach((entry) => add(entry, 'skill'));
-  } else if (value && typeof value === 'object') {
-    [
-      value.skills,
-      value.skillDependencies,
-      value.requiredSkills,
-    ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'skill'));
-    [
-      value.mcpServers,
-      value.mcps,
-      value.mcpDependencies,
-      value.requiredMcpServers,
-      value.requiredMcps,
-    ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'mcp-server'));
-  }
-
-  [
-    rawItem.skills,
-    rawItem.skillDependencies,
-    rawItem.requiredSkills,
-  ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'skill'));
-  [
-    rawItem.mcpServers,
-    rawItem.mcps,
-    rawItem.mcpDependencies,
-    rawItem.requiredMcpServers,
-    rawItem.requiredMcps,
-  ].filter(Array.isArray).flat().forEach((entry) => add(entry, 'mcp-server'));
-
-  return dependencies;
-}
-
 function normalizeRecord(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(
     Object.entries(value)
       .filter((entry) => typeof entry[0] === 'string' && typeof entry[1] === 'string'),
   );
+}
+
+function omitUndefined(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined));
 }
 
 function normalizeMcpField(entry) {
@@ -597,6 +546,26 @@ function normalizeCatalogPackageFiles(rawItem, source) {
     .slice(0, MAX_PACKAGE_FILES);
 }
 
+function mergeDependencyGroups(...groups) {
+  const merged = { skills: [], mcpServers: [], modelProfiles: [] };
+  const seen = new Set();
+  const add = (dependency, key) => {
+    if (!dependency || typeof dependency !== 'object') return;
+    const name = dependency.name || dependency.itemId || dependency.id;
+    const identity = `${dependency.kind || key}:${dependency.repoId || ''}:${dependency.itemId || dependency.id || name}:${Boolean(dependency.optional)}`.toLowerCase();
+    if (!name || seen.has(identity)) return;
+    seen.add(identity);
+    merged[key].push(dependency);
+  };
+  for (const group of groups) {
+    const normalized = normalizeAgentTemplateDependencies(group);
+    for (const dependency of normalized.skills) add(dependency, 'skills');
+    for (const dependency of normalized.mcpServers) add(dependency, 'mcpServers');
+    for (const dependency of normalized.modelProfiles) add(dependency, 'modelProfiles');
+  }
+  return merged;
+}
+
 function likeKey(repoId, itemId) {
   return `${repoId}:${itemId}`;
 }
@@ -624,9 +593,24 @@ function normalizeCatalogItem(rawItem, source, catalog, likesState) {
   const likeUrl = rawItem.likeUrl && source.url
     ? resolveRemoteUrl(source.url, rawItem.likeUrl)
     : rawItem.likeUrl || null;
-  const packageFiles = kind === 'skill' || kind === 'mcp-server'
+  const packageFiles = kind === 'skill' || kind === 'mcp-server' || kind === 'agent-template' || kind === 'swarm-template'
     ? normalizeCatalogPackageFiles(rawItem, source)
     : [];
+  const templateManifest = kind === 'agent-template'
+    ? normalizeAgentTemplateManifest(rawItem.manifest && typeof rawItem.manifest === 'object' ? rawItem.manifest : rawItem, {
+        id: rawItem.id || rawItem.name || slug,
+        version: rawItem.version || '1.0.0',
+      })
+    : null;
+  const swarmManifest = kind === 'swarm-template'
+    ? normalizeSwarmTemplateManifest(rawItem.manifest && typeof rawItem.manifest === 'object' ? rawItem.manifest : rawItem, {
+        id: rawItem.id || rawItem.name || slug,
+        version: rawItem.version || '1.0.0',
+      })
+    : null;
+  const swarmDependencies = swarmManifest
+    ? mergeDependencyGroups(swarmManifest.dependencies, ...swarmManifest.roles.map((role) => role.dependencies))
+    : null;
 
   return {
     id,
@@ -642,7 +626,31 @@ function normalizeCatalogItem(rawItem, source, catalog, likesState) {
     appSlots: normalizeAppSlots(rawItem.appSlots || rawItem.setupSlots || rawItem.applicationSlots),
     capabilities: normalizeStringArray(rawItem.capabilities || rawItem.features),
     ...(kind === 'agent-template'
-      ? { dependencies: normalizeAgentDependencies(rawItem.dependencies || rawItem.requires, rawItem) }
+      ? {
+          packageId: templateManifest.id,
+          packageVersion: templateManifest.version,
+          runtime: templateManifest.runtime,
+          dependencies: templateManifest.dependencies,
+          dialogs: templateManifest.dialogs,
+          examples: templateManifest.examples,
+          compat: templateManifest.compat,
+        }
+      : {}),
+    ...(kind === 'swarm-template'
+      ? {
+          packageId: swarmManifest.id,
+          packageVersion: swarmManifest.version,
+          topology: swarmManifest.topology,
+          roles: swarmManifest.roles,
+          routing: swarmManifest.routing,
+          bus: swarmManifest.bus,
+          memory: swarmManifest.memory,
+          policies: swarmManifest.policies,
+          dependencies: swarmDependencies,
+          dialogs: swarmManifest.dialogs,
+          examples: swarmManifest.examples,
+          compat: swarmManifest.compat,
+        }
       : {}),
     ...(kind === 'mcp-server' ? { mcp: normalizeMcpDefinition(rawItem.mcp || rawItem.mcpServer || rawItem.runtime) } : {}),
     likes,
@@ -804,7 +812,7 @@ async function readItemContent(item) {
 }
 
 async function readItemPackageFiles(item) {
-  if (!['skill', 'mcp-server'].includes(item.kind) || !Array.isArray(item.packageFiles) || item.packageFiles.length === 0) {
+  if (!['skill', 'mcp-server', 'agent-template', 'swarm-template'].includes(item.kind) || !Array.isArray(item.packageFiles) || item.packageFiles.length === 0) {
     return [];
   }
 
@@ -813,7 +821,7 @@ async function readItemPackageFiles(item) {
   for (const packageFile of item.packageFiles) {
     const relativePath = safeRelativePath(packageFile.path);
     if (!relativePath) {
-      throw new Error('Skill package contains an invalid file path');
+      throw new Error(`${publicKindLabel(item.kind)} package contains an invalid file path`);
     }
 
     let buffer;
@@ -831,7 +839,7 @@ async function readItemPackageFiles(item) {
 
     totalBytes += buffer.length;
     if (totalBytes > MAX_PACKAGE_BYTES) {
-      throw new Error(`skill package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
+      throw new Error(`${publicKindLabel(item.kind)} package is too large; maximum is ${Math.round(MAX_PACKAGE_BYTES / 1024 / 1024)}MB`);
     }
     files.push({ path: relativePath, buffer, size: buffer.length });
   }
@@ -1049,6 +1057,16 @@ function getMcpInstallBase(target, projectPath) {
   return path.join(getMtlCodeConfigDir(), 'mcp-servers');
 }
 
+function getSwarmTemplateInstallBase(target, projectPath) {
+  if (target === 'project') {
+    if (!projectPath || typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) {
+      throw new Error('Project install requires an absolute projectPath');
+    }
+    return path.join(path.resolve(projectPath), '.mtl-code', 'swarm-templates');
+  }
+  return path.join(getMtlCodeConfigDir(), 'swarm-templates');
+}
+
 function resolveInstallTarget(kind, name, target, projectPath) {
   const safeName = sanitizeSlug(name);
   if (!validateSlug(safeName)) {
@@ -1065,6 +1083,9 @@ function resolveInstallTarget(kind, name, target, projectPath) {
     if (kind === 'mcp-server') {
       return path.join(getMcpInstallBase(target, projectPath), safeName);
     }
+    if (kind === 'swarm-template') {
+      return path.join(getSwarmTemplateInstallBase(target, projectPath), `${safeName}.json`);
+    }
     return path.join(projectRoot, '.claude', 'agents', `${safeName}.md`);
   }
   const home = getMtlCodeConfigDir();
@@ -1073,6 +1094,9 @@ function resolveInstallTarget(kind, name, target, projectPath) {
   }
   if (kind === 'mcp-server') {
     return path.join(getMcpInstallBase(target, projectPath), safeName);
+  }
+  if (kind === 'swarm-template') {
+    return path.join(getSwarmTemplateInstallBase(target, projectPath), `${safeName}.json`);
   }
   return path.join(home, 'agents', `${safeName}.md`);
 }
@@ -1086,7 +1110,7 @@ async function writeInstallFile(filePath, content, overwrite) {
 function assertInstallPathSafe(targetPath, target = 'user', projectPath = '', kind = '') {
   const resolved = path.resolve(targetPath);
   const base = target === 'project'
-    ? kind === 'mcp-server'
+    ? kind === 'mcp-server' || kind === 'swarm-template'
       ? path.resolve(projectPath, '.mtl-code')
       : path.resolve(projectPath, '.claude')
     : path.resolve(getMtlCodeConfigDir());
@@ -1198,6 +1222,82 @@ function isMissingRequiredMcpConfiguration(error) {
     && /^MCP configuration ".+" is required$/.test(error.message);
 }
 
+function flattenMcpServerNames(groupedServers) {
+  if (!groupedServers || typeof groupedServers !== 'object') return [];
+  return Object.values(groupedServers)
+    .flatMap((servers) => Array.isArray(servers) ? servers : [])
+    .map((server) => server?.name)
+    .filter((name) => typeof name === 'string' && name.trim());
+}
+
+async function readInstalledDependencyNames({ projectPath = '' } = {}) {
+  const [skillsResult, mcpServers, modelSettings] = await Promise.all([
+    listInstalledSkills({ workspacePath: projectPath }),
+    providerMcpService.listProviderMcpServers('claude', { workspacePath: projectPath }).catch(() => ({})),
+    readMtlCodeModelSettings().catch(() => ({})),
+  ]);
+  const profiles = readStoredModelProfiles(modelSettings, process.env);
+  return {
+    skills: Array.isArray(skillsResult?.skills)
+      ? skillsResult.skills.map((skill) => skill.name).filter(Boolean)
+      : [],
+    mcpServers: flattenMcpServerNames(mcpServers),
+    modelProfiles: profiles
+      .flatMap((profile) => [profile.id, profile.name, profile.model])
+      .filter(Boolean),
+  };
+}
+
+function selectedDependenciesFromOptionalIds(dependencies, selectedOptionalDependencyIds = []) {
+  const selectedIds = new Set((Array.isArray(selectedOptionalDependencyIds) ? selectedOptionalDependencyIds : [])
+    .map((value) => normalizeInstallName(value)));
+  const selected = { skills: [], mcpServers: [], modelProfiles: [] };
+  const addIfSelected = (dependency, key, kind) => {
+    const name = dependency.name || dependency.itemId || dependency.id || '';
+    const dependencyId = normalizeInstallName(`${kind}:${name}`);
+    if (dependency.optional && selectedIds.has(dependencyId)) {
+      selected[key].push(name);
+    }
+  };
+  for (const dependency of dependencies?.skills || []) addIfSelected(dependency, 'skills', 'skill');
+  for (const dependency of dependencies?.mcpServers || []) addIfSelected(dependency, 'mcpServers', 'mcp-server');
+  for (const dependency of dependencies?.modelProfiles || []) addIfSelected(dependency, 'modelProfiles', 'model-profile');
+  return selected;
+}
+
+function resolveRoleBindingsForCatalogItem(item, catalog) {
+  if (!item || item.kind !== 'swarm-template') return null;
+  const installedAgents = (catalog?.items || [])
+    .filter((candidate) => candidate.kind === 'agent-template')
+    .map((candidate) => ({
+      id: candidate.packageId || candidate.name || candidate.id,
+      name: candidate.name,
+      templateId: candidate.packageId,
+    }));
+  const bundledAgentTemplates = Array.isArray(item.bundledAgentTemplates)
+    ? item.bundledAgentTemplates
+    : [];
+  return resolveSwarmRoleBindings({
+    manifest: {
+      id: item.packageId || item.name,
+      version: item.packageVersion || item.version,
+      kind: 'swarm-template',
+      topology: item.topology,
+      roles: item.roles,
+      routing: item.routing,
+      bus: item.bus,
+      memory: item.memory,
+      policies: item.policies,
+      dialogs: item.dialogs,
+      dependencies: item.dependencies,
+      examples: item.examples,
+      compat: item.compat,
+    },
+    installedAgents,
+    bundledAgentTemplates,
+  });
+}
+
 async function installRepositoryItem(item, options = {}) {
   const {
     target = 'user',
@@ -1222,15 +1322,24 @@ async function installRepositoryItem(item, options = {}) {
   visited.add(visitKey);
 
   const dependencies = [];
-  if (installDependencies && item.kind === 'agent-template') {
+  if (installDependencies && (item.kind === 'agent-template' || item.kind === 'swarm-template')) {
     const dependencyCatalog = catalog || await loadCatalogs();
     const declared = item.dependencies || { skills: [], mcpServers: [] };
     const dependencyEntries = [
       ...(Array.isArray(declared.skills) ? declared.skills : []),
       ...(Array.isArray(declared.mcpServers) ? declared.mcpServers : []),
+      ...(Array.isArray(declared.modelProfiles) ? declared.modelProfiles : []),
     ];
 
     for (const dependency of dependencyEntries) {
+      if (dependency.kind === 'model-profile') {
+        dependencies.push({
+          kind: dependency.kind,
+          name: dependency.name,
+          status: dependency.optional ? 'declared-optional' : 'needs-configuration',
+        });
+        continue;
+      }
       const dependencyItem = findDependencyItem(dependencyCatalog, dependency, item.repoId);
       if (!dependencyItem) {
         const label = `${dependency.kind === 'mcp-server' ? 'MCP' : 'Skill'} ${dependency.name}`;
@@ -1238,7 +1347,8 @@ async function installRepositoryItem(item, options = {}) {
           dependencies.push({ kind: dependency.kind, name: dependency.name, status: 'missing-optional' });
           continue;
         }
-        throw new Error(`Agent dependency not found: ${label}`);
+        dependencies.push({ kind: dependency.kind, name: dependency.name, status: 'missing-required', error: `Agent dependency not found: ${label}` });
+        continue;
       }
 
       try {
@@ -1283,7 +1393,16 @@ async function installRepositoryItem(item, options = {}) {
           });
           continue;
         }
-        throw new Error(`Agent dependency install failed (${dependencyItem.title || dependencyItem.name}): ${error.message}`);
+        dependencies.push({
+          kind: dependencyItem.kind,
+          repoId: dependencyItem.repoId,
+          itemId: dependencyItem.id,
+          name: dependencyItem.name,
+          title: dependencyItem.title,
+          status: 'failed-required',
+          error: error.message,
+        });
+        continue;
       }
     }
   }
@@ -1305,6 +1424,11 @@ async function installRepositoryItem(item, options = {}) {
     postInstall = await runMcpPostInstallIfNeeded(item, installPath);
     const mcpPayload = buildMcpServerPayload(item, installPath, target, projectPath, configuration);
     mcpServer = await providerMcpService.upsertProviderMcpServer('claude', mcpPayload);
+  } else if (item.kind === 'swarm-template' && Array.isArray(item.packageFiles) && item.packageFiles.length > 0) {
+    const packageFiles = await readItemPackageFiles(item);
+    const installDir = installPath.replace(/\.json$/i, '');
+    await writeInstallPackage(installDir, packageFiles, Boolean(overwrite), { target, projectPath, kind: item.kind });
+    responseInstallPath = installDir;
   } else if (item.kind === 'skill' && Array.isArray(item.packageFiles) && item.packageFiles.length > 0) {
     const packageFiles = await readItemPackageFiles(item);
     const installDir = path.dirname(installPath);
@@ -1316,7 +1440,7 @@ async function installRepositoryItem(item, options = {}) {
       ? applyAgentConfiguration(rawContent, configuration)
       : rawContent;
     await writeInstallFile(installPath, content, Boolean(overwrite));
-    responseContent = item.kind === 'agent-template' ? content : undefined;
+    responseContent = item.kind === 'agent-template' || item.kind === 'swarm-template' ? content : undefined;
   }
 
   await bumpLocalDownload(item);
@@ -1341,7 +1465,33 @@ async function removeInstallTarget(kind, name, target, projectPath) {
   return resolvedTarget;
 }
 
-async function upsertLocalItem({ kind, name, title, description, author, tags, content, packageFiles, overwrite, icon, supportedApps, appSlots, capabilities, dependencies, mcp }) {
+async function upsertLocalItem({
+  kind,
+  name,
+  title,
+  description,
+  author,
+  tags,
+  content,
+  packageFiles,
+  overwrite,
+  icon,
+  supportedApps,
+  appSlots,
+  capabilities,
+  dependencies,
+  mcp,
+  runtime,
+  dialogs,
+  examples,
+  compat,
+  topology,
+  roles,
+  routing,
+  bus,
+  memory,
+  policies,
+}) {
   const id = sanitizeSlug(name || title);
   if (!validateSlug(id)) {
     throw new Error('Name must start with a letter or number and contain only letters, numbers, hyphens, and underscores');
@@ -1358,10 +1508,37 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
     ? `skills/${id}/SKILL.md`
     : kind === 'mcp-server'
       ? `mcp/${id}/package.json`
-      : `agents/${id}/${id}.md`;
-  const normalizedPackageFiles = kind === 'skill' || kind === 'mcp-server'
-    ? normalizePackageFiles(packageFiles, { requireSkillMd: kind === 'skill' && Array.isArray(packageFiles) && packageFiles.length > 0 })
+      : kind === 'swarm-template'
+        ? `swarms/${id}/manifest.json`
+        : `agents/${id}/${id}.md`;
+  const normalizedPackageFiles = kind === 'agent-template' || kind === 'swarm-template'
+    ? normalizeTemplatePackageFiles(packageFiles)
+    : kind === 'skill' || kind === 'mcp-server'
+      ? normalizePackageFiles(packageFiles, { requireSkillMd: kind === 'skill' && Array.isArray(packageFiles) && packageFiles.length > 0 })
     : [];
+  const parsedSwarmContent = kind === 'swarm-template' && content && String(content).trim().startsWith('{')
+    ? JSON.parse(content)
+    : {};
+  const swarmManifest = kind === 'swarm-template'
+    ? normalizeSwarmTemplateManifest({
+        id,
+        version: '1.0.0',
+        kind: 'swarm-template',
+        ...parsedSwarmContent,
+        ...omitUndefined({
+          topology,
+          roles,
+          routing,
+          bus,
+          memory,
+          policies,
+          dependencies,
+          dialogs,
+          examples,
+          compat,
+        }),
+      })
+    : null;
 
   const resolved = resolveLocalContentPath(contentPath);
   if (!resolved) {
@@ -1369,8 +1546,14 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
   }
 
   let catalogPackageFiles = [];
-  if ((kind === 'skill' || kind === 'mcp-server') && normalizedPackageFiles.length > 0) {
-    const packageRootPath = kind === 'mcp-server' ? `mcp/${id}` : `skills/${id}`;
+  if ((kind === 'skill' || kind === 'mcp-server' || kind === 'agent-template' || kind === 'swarm-template') && normalizedPackageFiles.length > 0) {
+    const packageRootPath = kind === 'mcp-server'
+      ? `mcp/${id}`
+      : kind === 'agent-template'
+        ? `agents/${id}/package`
+        : kind === 'swarm-template'
+          ? `swarms/${id}/package`
+        : `skills/${id}`;
     const packageRoot = resolveLocalContentPath(packageRootPath);
     if (!packageRoot) throw new Error('Invalid repository package path');
     if (existingIndex >= 0 && overwrite) {
@@ -1389,14 +1572,16 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
       });
     }
   } else {
-    if (!content || typeof content !== 'string') {
+    if ((!content || typeof content !== 'string') && kind !== 'swarm-template') {
       throw new Error('content is required');
     }
     const finalContent = kind === 'skill'
       ? formatSkillMarkdown({ name: id, title, description, content })
       : kind === 'mcp-server'
         ? String(content || description || `MCP server package for ${title || id}.`)
-        : formatAgentTemplateMarkdown({ name: id, description, prompt: content });
+        : kind === 'swarm-template'
+          ? JSON.stringify(swarmManifest, null, 2)
+          : formatAgentTemplateMarkdown({ name: id, description, prompt: content });
     await ensureDir(path.dirname(resolved));
     await fsp.writeFile(resolved, finalContent, { mode: 0o600 });
   }
@@ -1413,7 +1598,32 @@ async function upsertLocalItem({ kind, name, title, description, author, tags, c
     supportedApps: normalizeSupportedApps(supportedApps),
     appSlots: normalizeAppSlots(appSlots),
     capabilities: normalizeStringArray(capabilities),
-    ...(kind === 'agent-template' ? { dependencies: normalizeAgentDependencies(dependencies) } : {}),
+    ...(kind === 'agent-template'
+      ? {
+          dependencies: normalizeAgentTemplateDependencies(dependencies),
+          runtime: normalizeAgentTemplateManifest({ id, version: '1.0.0', runtime }).runtime,
+          dialogs: normalizeAgentTemplateDialogs(dialogs),
+          examples: normalizeAgentTemplateManifest({ id, version: '1.0.0', examples }).examples,
+          compat: normalizeAgentTemplateManifest({ id, version: '1.0.0', compat }).compat,
+        }
+      : {}),
+    ...(kind === 'swarm-template'
+      ? (() => {
+          const manifest = swarmManifest;
+          return {
+            topology: manifest.topology,
+            roles: manifest.roles,
+            routing: manifest.routing,
+            bus: manifest.bus,
+            memory: manifest.memory,
+            policies: manifest.policies,
+            dependencies: mergeDependencyGroups(manifest.dependencies, ...manifest.roles.map((role) => role.dependencies)),
+            dialogs: manifest.dialogs,
+            examples: manifest.examples,
+            compat: manifest.compat,
+          };
+        })()
+      : {}),
     ...(kind === 'mcp-server' ? { mcp: normalizeMcpDefinition(mcp) } : {}),
     version: '1.0.0',
     likes: existingIndex >= 0 ? Number(catalog.items[existingIndex].likes || 0) : 0,
@@ -1603,7 +1813,7 @@ router.post('/remote-upload', async (req, res) => {
     }
     const kind = normalizeKind(req.body?.kind);
     if (!kind) {
-      return res.status(400).json({ error: 'kind must be "agent-template", "skill", or "mcp-server"' });
+      return res.status(400).json({ error: 'kind must be "agent-template", "swarm-template", "skill", or "mcp-server"' });
     }
     const {
       name,
@@ -1620,8 +1830,22 @@ router.post('/remote-upload', async (req, res) => {
       capabilities,
       dependencies,
       mcp,
+      runtime,
+      dialogs,
+      examples,
+      compat,
+      topology,
+      roles,
+      routing,
+      bus,
+      memory,
+      policies,
     } = req.body || {};
-    if ((!content || typeof content !== 'string') && (!Array.isArray(packageFiles) || packageFiles.length === 0)) {
+    if (
+      (!content || typeof content !== 'string')
+      && (!Array.isArray(packageFiles) || packageFiles.length === 0)
+      && !(kind === 'swarm-template' && Array.isArray(roles) && roles.length > 0)
+    ) {
       return res.status(400).json({ error: 'content is required' });
     }
     const remoteUrl = deriveRemoteHubAdminItemsUrl(source.url);
@@ -1647,6 +1871,16 @@ router.post('/remote-upload', async (req, res) => {
         capabilities,
         dependencies,
         mcp,
+        runtime,
+        dialogs,
+        examples,
+        compat,
+        topology,
+        roles,
+        routing,
+        bus,
+        memory,
+        policies,
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -1674,7 +1908,7 @@ router.post('/local/upload', async (req, res) => {
   try {
     const kind = normalizeKind(req.body?.kind);
     if (!kind) {
-      return res.status(400).json({ error: 'kind must be "agent-template", "skill", or "mcp-server"' });
+      return res.status(400).json({ error: 'kind must be "agent-template", "swarm-template", "skill", or "mcp-server"' });
     }
     const {
       name,
@@ -1691,8 +1925,22 @@ router.post('/local/upload', async (req, res) => {
       capabilities,
       dependencies,
       mcp,
+      runtime,
+      dialogs,
+      examples,
+      compat,
+      topology,
+      roles,
+      routing,
+      bus,
+      memory,
+      policies,
     } = req.body || {};
-    if ((!content || typeof content !== 'string') && (!Array.isArray(packageFiles) || packageFiles.length === 0)) {
+    if (
+      (!content || typeof content !== 'string')
+      && (!Array.isArray(packageFiles) || packageFiles.length === 0)
+      && !(kind === 'swarm-template' && Array.isArray(roles) && roles.length > 0)
+    ) {
       return res.status(400).json({ error: 'content is required' });
     }
     const item = await upsertLocalItem({
@@ -1711,6 +1959,16 @@ router.post('/local/upload', async (req, res) => {
       capabilities,
       dependencies,
       mcp,
+      runtime,
+      dialogs,
+      examples,
+      compat,
+      topology,
+      roles,
+      routing,
+      bus,
+      memory,
+      policies,
     });
     res.json({ success: true, item });
   } catch (error) {
@@ -1771,6 +2029,84 @@ router.post('/items/:repoId/:itemId/like', async (req, res) => {
   }
 });
 
+router.post('/dependencies/resolve', async (req, res) => {
+  try {
+    const {
+      dependencies,
+      selectedDependencies,
+      selectedOptionalDependencyIds,
+      projectPath = '',
+    } = req.body || {};
+    const normalizedDependencies = normalizeAgentTemplateDependencies(dependencies);
+    const installed = await readInstalledDependencyNames({
+      projectPath: typeof projectPath === 'string' ? projectPath : '',
+    });
+    const catalog = await loadCatalogs();
+    const selected = selectedDependencies && typeof selectedDependencies === 'object'
+      ? selectedDependencies
+      : selectedDependenciesFromOptionalIds(normalizedDependencies, selectedOptionalDependencyIds);
+    const result = resolveAgentTemplateDependencies({
+      dependencies: normalizedDependencies,
+      installed,
+      selectedDependencies: selected,
+      catalogItems: catalog.items,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({
+      error: 'Failed to resolve agent template dependencies',
+      details: error.message,
+    });
+  }
+});
+
+router.post('/compat/claude-code/import', (req, res) => {
+  try {
+    const { markdown, id, version } = req.body || {};
+    if (typeof markdown !== 'string' || !markdown.trim()) {
+      return res.status(400).json({ error: 'markdown is required' });
+    }
+    res.json({
+      success: true,
+      ...parseClaudeCodeAgentMarkdown(markdown, { id, version }),
+    });
+  } catch (error) {
+    res.status(400).json({ error: 'Failed to import Claude Code agent', details: error.message });
+  }
+});
+
+router.post('/compat/claude-code/export', (req, res) => {
+  try {
+    const markdown = exportClaudeCodeAgentMarkdown(req.body?.agent || req.body || {});
+    res.type('text/markdown').send(markdown);
+  } catch (error) {
+    res.status(400).json({ error: 'Failed to export Claude Code agent', details: error.message });
+  }
+});
+
+router.post('/swarm-template/export', (req, res) => {
+  try {
+    const payload = exportSwarmTemplatePackage({
+      manifest: req.body?.manifest || req.body?.template || req.body || {},
+      roleBindingResolution: req.body?.roleBindingResolution || null,
+      examples: req.body?.examples || null,
+      transcript: req.body?.transcript || null,
+    });
+    res.json({ success: true, package: payload });
+  } catch (error) {
+    res.status(400).json({ error: 'Failed to export swarm template package', details: error.message });
+  }
+});
+
+router.post('/swarm-template/import', (req, res) => {
+  try {
+    const payload = importSwarmTemplatePackage(req.body?.package || req.body || {});
+    res.json({ success: true, ...payload });
+  } catch (error) {
+    res.status(400).json({ error: 'Failed to import swarm template package', details: error.message });
+  }
+});
+
 router.post('/install', async (req, res) => {
   try {
     const { repoId, itemId, target = 'user', projectPath, overwrite = false, configuration } = req.body || {};
@@ -1789,7 +2125,38 @@ router.post('/install', async (req, res) => {
       configuration,
       catalog,
     });
-    res.json(result);
+    let dependencyResolution = null;
+    let roleBindingResolution = null;
+    let installStatus = 'enabled';
+    if (item.kind === 'agent-template' || item.kind === 'swarm-template') {
+      const selectedDependencies = configuration?.selectedDependencies && typeof configuration.selectedDependencies === 'object'
+        ? configuration.selectedDependencies
+        : {};
+      const installed = await readInstalledDependencyNames({
+        projectPath: typeof projectPath === 'string' ? projectPath : '',
+      });
+      dependencyResolution = resolveAgentTemplateDependencies({
+        dependencies: normalizeAgentTemplateDependencies(item.dependencies || {}),
+        installed,
+        selectedDependencies,
+        catalogItems: catalog.items,
+      });
+      if (dependencyResolution.blockingMissing?.length) {
+        installStatus = 'draft';
+      }
+    }
+    if (item.kind === 'swarm-template') {
+      roleBindingResolution = resolveRoleBindingsForCatalogItem(item, catalog);
+      if (roleBindingResolution?.blockingMissing?.length) {
+        installStatus = 'draft';
+      }
+    }
+    res.json({
+      ...result,
+      status: installStatus,
+      dependencyResolution,
+      roleBindingResolution,
+    });
   } catch (error) {
     const status = error?.code === 'EEXIST' ? 409 : 400;
     if (error?.code === 'EEXIST') {

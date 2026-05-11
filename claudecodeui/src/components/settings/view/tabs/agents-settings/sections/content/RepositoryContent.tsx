@@ -10,6 +10,7 @@ import {
   Heart,
   AlertTriangle,
   Loader2,
+  Network,
   Plus,
   RefreshCw,
   Search,
@@ -22,9 +23,11 @@ import {
 
 import { cn } from '../../../../../../../lib/utils';
 import { api, apiFetch } from '../../../../../../../utils/api';
+import type { AgentTemplateDialogs } from '../../../../../../../types/agent';
 import type { SettingsProject } from '../../../../../types/types';
+import { dependencySelectionId, resolveAgentTemplateDependencyState } from '../../utils/agentRepositoryDependencies';
 
-type RepositoryKind = 'agent-template' | 'skill' | 'mcp-server';
+type RepositoryKind = 'agent-template' | 'swarm-template' | 'skill' | 'mcp-server';
 type InstallScope = 'user' | 'project';
 
 type AppOption = {
@@ -68,6 +71,26 @@ type RepositoryItem = {
   appSlots?: AppSlot[];
   capabilities?: string[];
   dependencies?: AgentDependencies;
+  packageId?: string;
+  packageVersion?: string;
+  runtime?: {
+    tools?: string[];
+    model?: string;
+    permissionMode?: string;
+  };
+  topology?: {
+    type?: string;
+    coordinatorRoleId?: string;
+    edges?: Array<{ from?: string; to?: string; topic?: string }>;
+  };
+  roles?: Array<{ id: string; label?: string; agentTemplateId?: string; count?: number }>;
+  routing?: { topics?: Array<{ name?: string; subscribers?: string[]; ackPolicy?: string }> };
+  bus?: { provider?: string; ackPolicy?: string; retryLimit?: number; ttlMs?: number };
+  memory?: { enabled?: boolean; promotion?: string; scopes?: string[] };
+  policies?: { maxAgents?: number; maxDepth?: number; tokenBudget?: number; timeoutMs?: number; messageSizeLimit?: number };
+  dialogs?: AgentTemplateDialogs;
+  examples?: Array<{ title?: string; transcript?: Array<{ role: string; content: string }> }>;
+  compat?: Record<string, string>;
   mcp?: RepositoryMcpDefinition | null;
   likes: number;
   liked: boolean;
@@ -81,7 +104,7 @@ type RepositoryItem = {
 };
 
 type RepositoryDependency = {
-  kind: 'skill' | 'mcp-server';
+  kind: 'skill' | 'mcp-server' | 'model-profile';
   name: string;
   id?: string;
   itemId?: string;
@@ -93,6 +116,18 @@ type RepositoryDependency = {
 type AgentDependencies = {
   skills?: RepositoryDependency[];
   mcpServers?: RepositoryDependency[];
+  modelProfiles?: RepositoryDependency[];
+};
+
+type DependencyResolutionResponse = {
+  required?: Array<RepositoryDependency & { status: string }>;
+  optional?: Array<RepositoryDependency & { status: string }>;
+  blockingMissing?: Array<RepositoryDependency & { status: string }>;
+  selectedDependencies?: {
+    skills?: string[];
+    mcpServers?: string[];
+    modelProfiles?: string[];
+  };
 };
 
 type McpSetupField = {
@@ -265,7 +300,12 @@ function dependencyName(dependency: RepositoryDependency) {
 }
 
 function dependencyChipLabel(dependency: RepositoryDependency) {
-  return `${dependency.kind === 'mcp-server' ? 'MCP' : 'Skill'}: ${dependencyName(dependency)}`;
+  const kind = dependency.kind === 'mcp-server'
+    ? 'MCP'
+    : dependency.kind === 'model-profile'
+      ? 'Model'
+      : 'Skill';
+  return `${kind}: ${dependencyName(dependency)}${dependency.optional ? ' (optional)' : ''}`;
 }
 
 function getFileRelativePath(file: File) {
@@ -341,6 +381,7 @@ async function readError(response: Response, fallback: string) {
 function kindLabel(kind: RepositoryKind) {
   if (kind === 'skill') return 'Skill';
   if (kind === 'mcp-server') return 'MCP';
+  if (kind === 'swarm-template') return 'Swarm';
   return 'Agent';
 }
 
@@ -350,6 +391,9 @@ function kindAccent(kind: RepositoryKind) {
   }
   if (kind === 'mcp-server') {
     return 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-300';
+  }
+  if (kind === 'swarm-template') {
+    return 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-900/60 dark:bg-cyan-950/30 dark:text-cyan-300';
   }
   return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300';
 }
@@ -446,6 +490,27 @@ function dependencyMcpBindings(_item: RepositoryItem, installResult?: { dependen
     }));
 }
 
+function selectedDependenciesForOptionalIds(item: RepositoryItem, selectedIds: string[]) {
+  const selectedIdSet = new Set(selectedIds);
+  const selected = { skills: [] as string[], mcpServers: [] as string[], modelProfiles: [] as string[] };
+  for (const dependency of item.dependencies?.skills || []) {
+    if (dependency.optional && selectedIdSet.has(dependencySelectionId(dependency))) {
+      selected.skills.push(dependencyName(dependency));
+    }
+  }
+  for (const dependency of item.dependencies?.mcpServers || []) {
+    if (dependency.optional && selectedIdSet.has(dependencySelectionId(dependency))) {
+      selected.mcpServers.push(dependencyName(dependency));
+    }
+  }
+  for (const dependency of item.dependencies?.modelProfiles || []) {
+    if (dependency.optional && selectedIdSet.has(dependencySelectionId(dependency))) {
+      selected.modelProfiles.push(dependencyName(dependency));
+    }
+  }
+  return selected;
+}
+
 function dependencyStatusSummary(installResult?: { dependencies?: Array<{ kind?: string; name?: string; status?: string }> }) {
   const dependencies = installResult?.dependencies || [];
   if (dependencies.length === 0) return '';
@@ -482,15 +547,18 @@ type ItemCardProps = {
   item: RepositoryItem;
   busy: boolean;
   installed: boolean;
+  dependencyResolution?: DependencyResolutionResponse;
   onLike: (item: RepositoryItem) => void;
   onInstall: (item: RepositoryItem) => void;
   onUpdate: (item: RepositoryItem) => void;
   onUninstall: (item: RepositoryItem) => void;
+  onDispatch?: (item: RepositoryItem) => void;
   onDiagnose?: (item: RepositoryItem) => void;
   diagnostics?: McpDiagnostics;
 };
 
-function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninstall, onDiagnose, diagnostics }: ItemCardProps) {
+function ItemCard({ item, busy, installed, dependencyResolution, onLike, onInstall, onUpdate, onUninstall, onDispatch, onDiagnose, diagnostics }: ItemCardProps) {
+  const runtimeReady = !dependencyResolution?.blockingMissing?.length;
   const diagnosticStatusClass = diagnostics?.status === 'ok'
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
     : diagnostics?.status === 'warning'
@@ -555,6 +623,56 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
               )}
               {(item.mcp?.tools || []).slice(0, 3).map((tool) => (
                 <span key={tool.name} className="rounded bg-muted px-1.5 py-0.5">{tool.name}</span>
+              ))}
+            </div>
+          )}
+          {(item.kind === 'agent-template' || item.kind === 'swarm-template') && (
+            <div className="mt-2 flex flex-wrap gap-1 text-xs text-muted-foreground">
+              {dependencyResolution?.blockingMissing?.length ? (
+                <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                  Draft until {dependencyResolution.blockingMissing.length} deps configured
+                </span>
+              ) : dependencyResolution ? (
+                <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+                  Dependencies ready
+                </span>
+              ) : null}
+              {item.kind === 'swarm-template' && item.topology?.type && (
+                <span className="rounded bg-muted px-1.5 py-0.5">Topology: {item.topology.type}</span>
+              )}
+              {item.kind === 'swarm-template' && item.roles?.length ? (
+                <span className="rounded bg-muted px-1.5 py-0.5">Roles: {item.roles.length}</span>
+              ) : null}
+              {item.kind === 'swarm-template' && item.bus?.provider && (
+                <span className="rounded bg-muted px-1.5 py-0.5">Bus: {item.bus.provider}</span>
+              )}
+              {item.kind === 'swarm-template' && item.policies?.maxAgents ? (
+                <span className="rounded bg-muted px-1.5 py-0.5">Max agents: {item.policies.maxAgents}</span>
+              ) : null}
+              {item.runtime?.model && (
+                <span className="rounded bg-muted px-1.5 py-0.5">Model: {item.runtime.model}</span>
+              )}
+              {(item.runtime?.tools || []).slice(0, 4).map((tool) => (
+                <span key={tool} className="rounded bg-muted px-1.5 py-0.5">{tool}</span>
+              ))}
+              {item.dialogs?.setup?.fields?.length ? (
+                <span className="rounded bg-muted px-1.5 py-0.5">Setup dialog: {item.dialogs.setup.fields.length}</span>
+              ) : null}
+              {item.dialogs?.launch?.fields?.length ? (
+                <span className="rounded bg-muted px-1.5 py-0.5">Launch dialog: {item.dialogs.launch.fields.length}</span>
+              ) : null}
+              {item.dialogs?.launch?.presets?.length ? (
+                <span className="rounded bg-muted px-1.5 py-0.5">Launch presets: {item.dialogs.launch.presets.length}</span>
+              ) : null}
+              {dependencyResolution?.required?.slice(0, 3).map((dependency) => (
+                <span key={`required:${dependency.kind}:${dependency.name}`} className="rounded bg-muted px-1.5 py-0.5">
+                  Req {dependency.kind}: {dependency.status}
+                </span>
+              ))}
+              {dependencyResolution?.optional?.slice(0, 3).map((dependency) => (
+                <span key={`optional:${dependency.kind}:${dependency.name}`} className="rounded bg-muted px-1.5 py-0.5">
+                  Opt {dependency.kind}: {dependency.status}
+                </span>
               ))}
             </div>
           )}
@@ -656,6 +774,18 @@ function ItemCard({ item, busy, installed, onLike, onInstall, onUpdate, onUninst
             <Heart className={cn('h-3.5 w-3.5', item.liked && 'fill-current')} />
             <span>{item.likes}</span>
           </button>
+          {item.kind === 'swarm-template' && onDispatch && (
+            <button
+              type="button"
+              onClick={() => onDispatch(item)}
+              disabled={busy || !runtimeReady}
+              title={runtimeReady ? 'Dispatch swarm template' : 'Required dependencies must be ready before dispatch'}
+              className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
+            >
+              <Network className="h-3.5 w-3.5" />
+              Dispatch
+            </button>
+          )}
           {installed ? (
             <>
               {item.kind === 'mcp-server' && onDiagnose && (
@@ -710,6 +840,7 @@ type TemplateGalleryProps = {
   selectedTemplate: RepositoryItem | null;
   selectedKey: string | null;
   busyKey: string | null;
+  dependencyResolutions: Record<string, DependencyResolutionResponse>;
   onSelect: (item: RepositoryItem) => void;
   onLike: (item: RepositoryItem) => void;
   onUseTemplate: (item: RepositoryItem) => void;
@@ -720,6 +851,7 @@ function TemplateGallery({
   selectedTemplate,
   selectedKey,
   busyKey,
+  dependencyResolutions,
   onSelect,
   onLike,
   onUseTemplate,
@@ -759,6 +891,15 @@ function TemplateGallery({
         <div className="relative p-5">
           {selectedTemplate ? (
             <div className="flex h-full flex-col">
+              {dependencyResolutions[templateKey(selectedTemplate)]?.blockingMissing?.length ? (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                  Required dependencies need setup before this template can be enabled.
+                </div>
+              ) : dependencyResolutions[templateKey(selectedTemplate)] ? (
+                <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+                  Required dependencies are available.
+                </div>
+              ) : null}
               <div className="flex min-w-0 items-start gap-4">
                 <span className="inline-flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-50 text-lg text-blue-600 dark:bg-blue-950/40 dark:text-blue-300">
                   {selectedTemplate.icon || <Bot className="h-6 w-6" />}
@@ -804,18 +945,45 @@ function TemplateGallery({
                 </div>
               )}
 
-              {((selectedTemplate.dependencies?.skills || []).length > 0 || (selectedTemplate.dependencies?.mcpServers || []).length > 0) && (
+              {((selectedTemplate.dependencies?.skills || []).length > 0 || (selectedTemplate.dependencies?.mcpServers || []).length > 0 || (selectedTemplate.dependencies?.modelProfiles || []).length > 0) && (
                 <div className="mt-6">
                   <h4 className="text-sm font-medium text-foreground">Dependencies</h4>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {[...(selectedTemplate.dependencies?.skills || []), ...(selectedTemplate.dependencies?.mcpServers || [])].map((dependency) => (
+                    {[...(selectedTemplate.dependencies?.skills || []), ...(selectedTemplate.dependencies?.mcpServers || []), ...(selectedTemplate.dependencies?.modelProfiles || [])].map((dependency) => (
                       <span
                         key={`${dependency.kind}:${dependency.repoId || selectedTemplate.repoId}:${dependencyName(dependency)}`}
                         className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-sm text-foreground"
                       >
                         {dependencyChipLabel(dependency)}
+                        {dependencyResolutions[templateKey(selectedTemplate)] && (
+                          <span className="text-xs text-muted-foreground">
+                            {[
+                              ...(dependencyResolutions[templateKey(selectedTemplate)].required || []),
+                              ...(dependencyResolutions[templateKey(selectedTemplate)].optional || []),
+                            ].find((entry) => entry.kind === dependency.kind && normalizeInstallName(entry.name) === normalizeInstallName(dependencyName(dependency)))?.status || 'declared'}
+                          </span>
+                        )}
                       </span>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedTemplate.dialogs && (
+                <div className="mt-6">
+                  <h4 className="text-sm font-medium text-foreground">Distributed dialogs</h4>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(['setup', 'launch', 'result'] as const).map((key) => {
+                      const schema = selectedTemplate.dialogs?.[key];
+                      const count = schema?.fields?.length || 0;
+                      const presetCount = schema?.presets?.length || 0;
+                      if (count === 0 && presetCount === 0) return null;
+                      return (
+                        <span key={key} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-sm text-foreground">
+                          {key}: {count} fields{presetCount ? `, ${presetCount} presets` : ''}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -859,14 +1027,21 @@ function TemplateGallery({
 type AgentSetupDialogProps = {
   item: RepositoryItem;
   values: Record<string, string>;
+  selectedOptionalDependencyIds: string[];
   busy: boolean;
   onChange: (slotId: string, value: string) => void;
+  onToggleOptionalDependency: (dependencyId: string) => void;
   onClose: () => void;
   onCreate: () => void;
 };
 
-function AgentSetupDialog({ item, values, busy, onChange, onClose, onCreate }: AgentSetupDialogProps) {
+function AgentSetupDialog({ item, values, selectedOptionalDependencyIds, busy, onChange, onToggleOptionalDependency, onClose, onCreate }: AgentSetupDialogProps) {
   const slots = getTemplateSlots(item);
+  const optionalDependencies = [
+    ...(item.dependencies?.skills || []),
+    ...(item.dependencies?.mcpServers || []),
+    ...(item.dependencies?.modelProfiles || []),
+  ].filter((dependency) => dependency.optional);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm">
@@ -913,6 +1088,27 @@ function AgentSetupDialog({ item, values, busy, onChange, onClose, onCreate }: A
             ))
           )}
         </div>
+
+        {optionalDependencies.length > 0 && (
+          <div className="mt-5 rounded-lg border border-border bg-muted/25 p-3">
+            <h4 className="text-sm font-medium text-foreground">Optional dependencies</h4>
+            <div className="mt-2 grid gap-2">
+              {optionalDependencies.map((dependency) => {
+                const id = dependencySelectionId(dependency);
+                return (
+                  <label key={id} className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={selectedOptionalDependencyIds.includes(id)}
+                      onChange={() => onToggleOptionalDependency(id)}
+                    />
+                    <span className="min-w-0 break-words">{dependencyChipLabel(dependency)}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="mt-7 flex items-center justify-between">
           <button
@@ -1118,10 +1314,12 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string | null>(null);
   const [setupItem, setSetupItem] = useState<RepositoryItem | null>(null);
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
+  const [selectedOptionalDependencyIds, setSelectedOptionalDependencyIds] = useState<string[]>([]);
   const [mcpSetupItem, setMcpSetupItem] = useState<RepositoryItem | null>(null);
   const [mcpSetupValues, setMcpSetupValues] = useState<Record<string, string>>({});
   const [mcpSetupAction, setMcpSetupAction] = useState<'install' | 'update'>('install');
   const [mcpDiagnostics, setMcpDiagnostics] = useState<Record<string, McpDiagnostics>>({});
+  const [dependencyResolutions, setDependencyResolutions] = useState<Record<string, DependencyResolutionResponse>>({});
   const selectedProjectPath = installScope === 'project' ? projectPath : '';
 
   const loadCatalog = useCallback(async () => {
@@ -1224,6 +1422,14 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     () => filteredItems.filter((item) => item.kind === 'agent-template'),
     [filteredItems],
   );
+  const swarmTemplates = useMemo(
+    () => filteredItems.filter((item) => item.kind === 'swarm-template'),
+    [filteredItems],
+  );
+  const distributableTemplates = useMemo(
+    () => [...agentTemplates, ...swarmTemplates],
+    [agentTemplates, swarmTemplates],
+  );
   const skillItems = useMemo(
     () => filteredItems.filter((item) => item.kind === 'skill'),
     [filteredItems],
@@ -1232,6 +1438,42 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     () => filteredItems.filter((item) => item.kind === 'mcp-server'),
     [filteredItems],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const templatesWithDependencies = distributableTemplates
+      .filter((item) => (
+        (item.dependencies?.skills || []).length > 0
+        || (item.dependencies?.mcpServers || []).length > 0
+        || (item.dependencies?.modelProfiles || []).length > 0
+      ))
+      .slice(0, 24);
+    if (templatesWithDependencies.length === 0) {
+      setDependencyResolutions({});
+      return;
+    }
+
+    void Promise.all(templatesWithDependencies.map(async (item) => {
+      const response = await apiFetch('/api/agent-repository/dependencies/resolve', {
+        method: 'POST',
+        body: JSON.stringify({
+          dependencies: item.dependencies || {},
+          projectPath: installScope === 'project' ? projectPath : undefined,
+        }),
+      });
+      if (!response.ok) return null;
+      return [templateKey(item), await response.json()] as const;
+    })).then((entries) => {
+      if (cancelled) return;
+      setDependencyResolutions(Object.fromEntries(entries.filter(Boolean) as Array<readonly [string, DependencyResolutionResponse]>));
+    }).catch(() => {
+      if (!cancelled) setDependencyResolutions({});
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [distributableTemplates, installScope, projectPath]);
 
   const installedSkillNames = useMemo(() => {
     const names = new Set<string>();
@@ -1311,6 +1553,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   );
   const itemCounts = useMemo(() => ({
     agents: items.filter((item) => item.kind === 'agent-template').length,
+    swarms: items.filter((item) => item.kind === 'swarm-template').length,
     skills: items.filter((item) => item.kind === 'skill').length,
     mcps: items.filter((item) => item.kind === 'mcp-server').length,
   }), [items]);
@@ -1447,6 +1690,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       setMessage(`${kindLabel(item.kind)}「${item.title || item.name}」${actionText}到${targetText}${installPath}`);
       setSetupItem(null);
       setSetupValues({});
+      setSelectedOptionalDependencyIds([]);
       setMcpSetupItem(null);
       setMcpSetupValues({});
       await loadCatalog();
@@ -1459,6 +1703,54 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     } finally {
       setBusyKey(null);
     }
+  };
+
+  const dispatchSwarmTemplate = (item: RepositoryItem) => {
+    const resolution = dependencyResolutions[templateKey(item)];
+    if (resolution?.blockingMissing?.length) {
+      setActionError('Required dependencies must be available before dispatching this swarm template.');
+      return;
+    }
+    const manifest = {
+      schemaVersion: 1,
+      id: item.packageId || item.name,
+      version: item.packageVersion || item.version || '1.0.0',
+      kind: 'swarm-template',
+      topology: item.topology,
+      roles: item.roles,
+      routing: item.routing,
+      bus: item.bus,
+      memory: item.memory,
+      policies: item.policies,
+      dialogs: item.dialogs,
+      dependencies: item.dependencies,
+      examples: item.examples,
+      compat: item.compat,
+    };
+    const payload = { itemId: item.id, repoId: item.repoId, title: item.title, manifest };
+    try {
+      window.localStorage.setItem('argus:pending-swarm-template', JSON.stringify(payload));
+      window.dispatchEvent(new CustomEvent('argus:dispatch-swarm-template', { detail: payload }));
+      setMessage(`Swarm template "${item.title}" is ready to dispatch from the Swarm dashboard.`);
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to prepare swarm dispatch');
+    }
+  };
+
+  const resolveTemplateDependencies = async (item: RepositoryItem): Promise<DependencyResolutionResponse> => {
+    const response = await apiFetch('/api/agent-repository/dependencies/resolve', {
+      method: 'POST',
+      body: JSON.stringify({
+        dependencies: item.dependencies || {},
+        selectedDependencies: selectedDependenciesForOptionalIds(item, selectedOptionalDependencyIds),
+        projectPath: installScope === 'project' ? projectPath : undefined,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response, 'Resolve agent dependencies failed'));
+    }
+    return response.json();
   };
 
   const uninstallItem = async (item: RepositoryItem) => {
@@ -1498,6 +1790,15 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     }
     setSetupItem(item);
     setSetupValues(nextValues);
+    setSelectedOptionalDependencyIds(
+      [
+        ...(item.dependencies?.skills || []),
+        ...(item.dependencies?.mcpServers || []),
+        ...(item.dependencies?.modelProfiles || []),
+      ]
+        .filter((dependency) => dependency.optional)
+        .map((dependency) => dependencySelectionId(dependency)),
+    );
   };
 
   const openMcpSetup = (item: RepositoryItem, action: 'install' | 'update' = 'install') => {
@@ -1541,20 +1842,61 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       app,
       status: 'optional' as const,
     }));
-    const mcpDependencyBindings = dependencyMcpBindings(setupItem, installResult);
     const mergedBindings = [...selectedBindings];
+    const installedDependencySkills = (installResult.dependencies || [])
+      .filter((dependency: { kind?: string; name?: string; status?: string }) => dependency.kind === 'skill' && ['installed', 'already-installed'].includes(String(dependency.status || '')))
+      .map((dependency: { name?: string }) => dependency.name || '')
+      .filter(Boolean);
+    const installedDependencyMcps = (installResult.dependencies || [])
+      .filter((dependency: { kind?: string; name?: string; status?: string }) => dependency.kind === 'mcp-server' && ['installed', 'already-installed'].includes(String(dependency.status || '')))
+      .map((dependency: { name?: string }) => dependency.name || '')
+      .filter(Boolean);
+    let dependencyResolution: DependencyResolutionResponse;
+    try {
+      dependencyResolution = await resolveTemplateDependencies(setupItem);
+    } catch {
+      const fallbackState = resolveAgentTemplateDependencyState({
+        dependencies: setupItem.dependencies,
+        installedSkills: [...Array.from(installedSkillNames), ...installedDependencySkills],
+        installedMcpServers: [...Array.from(installedMcpServerNames), ...installedDependencyMcps],
+        installedModelProfiles: [],
+        selectedOptionalDependencyIds,
+      });
+      dependencyResolution = {
+        blockingMissing: fallbackState.requiredMissing.map((dependency) => ({
+          kind: dependency.kind as RepositoryDependency['kind'],
+          name: dependency.name || dependency.id || dependency.itemId || '',
+          id: dependency.id,
+          itemId: dependency.itemId,
+          optional: Boolean(dependency.optional),
+          status: 'missing',
+        })),
+        selectedDependencies: fallbackState.selectedDependencies,
+      };
+    }
+    const selectedDependencies = {
+      skills: dependencyResolution.selectedDependencies?.skills || [],
+      mcpServers: dependencyResolution.selectedDependencies?.mcpServers || [],
+      modelProfiles: dependencyResolution.selectedDependencies?.modelProfiles || [],
+    };
+    const hasBlockingRequiredMissing = (dependencyResolution.blockingMissing || []).length > 0;
+    const installedSkillDependencies = selectedDependencies.skills.length > 0
+      ? selectedDependencies.skills
+      : dependencySkillNames(setupItem, installResult).filter((skillName) => !setupItem.dependencies?.skills?.some((dependency) => dependency.optional && dependencyName(dependency) === skillName));
+    const selectedMcpDependencyNames = new Set(selectedDependencies.mcpServers.map(normalizeInstallName));
+    const mcpDependencyBindings = dependencyMcpBindings(setupItem, installResult)
+      .filter((binding) => selectedMcpDependencyNames.has(normalizeInstallName(binding.app.replace(/^MCP:\s*/i, ''))));
     for (const binding of mcpDependencyBindings) {
       if (!mergedBindings.some((candidate) => candidate.app === binding.app)) {
         mergedBindings.push(binding);
       }
     }
-    const installedSkillDependencies = dependencySkillNames(setupItem, installResult);
     const response = await api.createAgent({
       id: toAgentId(setupItem),
       name: setupItem.title || setupItem.name,
       shortName: (setupItem.title || setupItem.name).slice(0, 6),
       description: setupItem.description || '',
-      status: 'enabled',
+      status: hasBlockingRequiredMissing ? 'draft' : 'enabled',
       scope: installScope === 'project' ? 'project' : 'global',
       repository: `${setupItem.repoId}/${setupItem.id}`,
       systemPrompt: prompt || setupItem.description || '',
@@ -1567,6 +1909,16 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         keywords: [setupItem.name, setupItem.title].filter(Boolean),
         confidenceThreshold: 0.8,
       },
+      templatePackage: {
+        packageId: setupItem.packageId || setupItem.name || setupItem.id,
+        packageVersion: setupItem.packageVersion || setupItem.version || '',
+        repoId: setupItem.repoId,
+        itemId: setupItem.id,
+      },
+      templateDialogs: setupItem.dialogs,
+      templateRuntime: setupItem.runtime,
+      templateCompat: setupItem.compat,
+      templateSelectedDependencies: selectedDependencies,
     });
     const data = await response.json();
     if (!response.ok || data?.success === false) {
@@ -1597,7 +1949,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           tags: parseTags(uploadForm.tags),
           supportedApps: parseAppOptions(uploadForm.supportedApps),
           capabilities: parseTags(uploadForm.capabilities),
-          dependencies: uploadForm.kind === 'agent-template'
+          dependencies: uploadForm.kind === 'agent-template' || uploadForm.kind === 'swarm-template'
             ? {
                 skills: parseDependencies(uploadForm.skillDependencies, 'skill'),
                 mcpServers: parseDependencies(uploadForm.mcpDependencies, 'mcp-server'),
@@ -1709,6 +2061,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span className="rounded bg-muted px-2 py-1">{repositories.length} 个仓库</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.agents} 个 Agent</span>
+                <span className="rounded bg-muted px-2 py-1">{itemCounts.swarms} 个 Swarm</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.skills} 个 Skill</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.mcps} MCP</span>
               </div>
@@ -1881,7 +2234,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               />
             </div>
             <div className="inline-flex h-9 overflow-hidden rounded border border-border">
-              {(['all', 'agent-template', 'skill', 'mcp-server'] as const).map((kind) => (
+              {(['all', 'agent-template', 'swarm-template', 'skill', 'mcp-server'] as const).map((kind) => (
                 <button
                   key={kind}
                   type="button"
@@ -1910,10 +2263,44 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   selectedTemplate={selectedTemplate}
                   selectedKey={selectedTemplateKey}
                   busyKey={busyKey}
+                  dependencyResolutions={dependencyResolutions}
                   onSelect={(item) => setSelectedTemplateKey(templateKey(item))}
                   onLike={(item) => void likeItem(item)}
                   onUseTemplate={openTemplateSetup}
                 />
+              )}
+
+              {(kindFilter === 'all' || kindFilter === 'swarm-template') && (
+                <div className="space-y-2">
+                  {swarmTemplates.length > 0 && (
+                    <h3 className="text-sm font-semibold text-foreground">Swarm Templates</h3>
+                  )}
+                  {swarmTemplates.map((item) => {
+                    const busy = busyKey === `like:${item.repoId}:${item.id}`
+                      || busyKey === `install:${item.repoId}:${item.id}`
+                      || busyKey === `update:${item.repoId}:${item.id}`
+                      || busyKey === `uninstall:${item.repoId}:${item.id}`;
+                    return (
+                      <ItemCard
+                        key={`${item.repoId}:${item.id}`}
+                        item={item}
+                        busy={busy}
+                        installed={false}
+                        dependencyResolution={dependencyResolutions[templateKey(item)]}
+                        onLike={(nextItem) => void likeItem(nextItem)}
+                        onInstall={(nextItem) => void installItem(nextItem)}
+                        onUpdate={(nextItem) => void installItem(nextItem, undefined, { overwrite: true, action: 'update' })}
+                        onUninstall={(nextItem) => void uninstallItem(nextItem)}
+                        onDispatch={(nextItem) => dispatchSwarmTemplate(nextItem)}
+                      />
+                    );
+                  })}
+                  {swarmTemplates.length === 0 && kindFilter === 'swarm-template' && (
+                    <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
+                      No Swarm Templates found.
+                    </div>
+                  )}
+                </div>
               )}
 
               {(kindFilter === 'all' || kindFilter === 'skill') && (
@@ -2022,7 +2409,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           </div>
 
           <div className="mt-3 inline-flex h-9 overflow-hidden rounded border border-border">
-            {(['agent-template', 'skill'] as const).map((kind) => (
+            {(['agent-template', 'swarm-template', 'skill'] as const).map((kind) => (
               <button
                 key={kind}
                 type="button"
@@ -2041,7 +2428,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <input
               value={uploadForm.name}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder={uploadForm.kind === 'skill' ? 'skill-name' : 'agent-name'}
+              placeholder={uploadForm.kind === 'skill' ? 'skill-name' : uploadForm.kind === 'swarm-template' ? 'swarm-name' : 'agent-name'}
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
             <input
@@ -2075,7 +2462,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               placeholder="Icon text"
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
-            {uploadForm.kind === 'agent-template' && (
+            {(uploadForm.kind === 'agent-template' || uploadForm.kind === 'swarm-template') && (
               <>
                 <input
                   value={uploadForm.supportedApps}
@@ -2106,7 +2493,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded border border-border text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
               <Upload className="h-4 w-4" />
               加载 Markdown 文件
-              <input type="file" accept=".md,.txt,text/markdown,text/plain" onChange={(event) => void readUploadFile(event)} className="sr-only" />
+              <input type="file" accept=".md,.txt,.json,application/json,text/markdown,text/plain" onChange={(event) => void readUploadFile(event)} className="sr-only" />
             </label>
             {uploadForm.kind === 'skill' && (
               <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded border border-border text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
@@ -2129,7 +2516,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <textarea
               value={uploadForm.content}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, content: event.target.value, packageFiles: [] }))}
-              placeholder={uploadForm.kind === 'skill' ? '粘贴 SKILL.md 内容，或加载完整 Skill 文件夹' : '粘贴 Agent system prompt'}
+              placeholder={uploadForm.kind === 'skill' ? '粘贴 SKILL.md 内容，或加载完整 Skill 文件夹' : uploadForm.kind === 'swarm-template' ? 'Paste swarm-template manifest JSON' : '粘贴 Agent system prompt'}
               rows={10}
               className="min-h-[220px] resize-y rounded border border-border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
             />
@@ -2159,11 +2546,18 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         <AgentSetupDialog
           item={setupItem}
           values={setupValues}
+          selectedOptionalDependencyIds={selectedOptionalDependencyIds}
           busy={busyKey === `install:${setupItem.repoId}:${setupItem.id}`}
           onChange={(slotId, value) => setSetupValues((prev) => ({ ...prev, [slotId]: value }))}
+          onToggleOptionalDependency={(dependencyId) => setSelectedOptionalDependencyIds((previous) => (
+            previous.includes(dependencyId)
+              ? previous.filter((id) => id !== dependencyId)
+              : [...previous, dependencyId]
+          ))}
           onClose={() => {
             setSetupItem(null);
             setSetupValues({});
+            setSelectedOptionalDependencyIds([]);
           }}
           onCreate={() => void createConfiguredAgent()}
         />

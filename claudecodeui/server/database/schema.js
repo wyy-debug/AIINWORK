@@ -246,6 +246,135 @@ export const HUB_USAGE_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS hub_usage_
 export const HUB_USAGE_EVENTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_hub_usage_events_day_ip_user
   ON hub_usage_events(usage_date, ip_address, user_id, provider);`;
 
+export const SWARM_DEFINITIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_definitions (
+  id TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL,
+  version TEXT NOT NULL DEFAULT '1.0.0',
+  manifest_json TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);`;
+
+export const SWARM_RUNS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_runs (
+  id TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  runtime_mode TEXT NOT NULL DEFAULT 'local-control-plane',
+  runtime_status TEXT NOT NULL DEFAULT 'queued',
+  coordinator_session_id TEXT,
+  objective TEXT,
+  session_id TEXT,
+  project_path TEXT,
+  template_json TEXT,
+  launch_answers_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER
+);`;
+
+export const SWARM_AGENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_agents (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  role_index INTEGER NOT NULL DEFAULT 0,
+  label TEXT,
+  status TEXT NOT NULL,
+  task_id TEXT,
+  thread_id TEXT,
+  agent_template_id TEXT,
+  metadata_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES swarm_runs(id) ON DELETE CASCADE
+);`;
+
+export const SWARM_MESSAGES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_messages (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  from_agent_id TEXT,
+  to_agent_id TEXT,
+  topic TEXT,
+  type TEXT NOT NULL,
+  payload_json TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
+  ttl_ms INTEGER NOT NULL DEFAULT 300000,
+  ack_policy TEXT NOT NULL DEFAULT 'at_least_once',
+  retry_limit INTEGER NOT NULL DEFAULT 3,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at_ms INTEGER,
+  delivery_mode TEXT,
+  idempotency_key TEXT,
+  correlation_id TEXT,
+  causation_id TEXT,
+  status TEXT NOT NULL DEFAULT 'published',
+  error TEXT,
+  delivered_to TEXT,
+  acked_by TEXT,
+  created_at_ms INTEGER NOT NULL,
+  delivered_at_ms INTEGER,
+  acked_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES swarm_runs(id) ON DELETE CASCADE
+);`;
+
+export const SWARM_MESSAGES_RUN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_swarm_messages_run ON swarm_messages(run_id, status, created_at_ms);`;
+export const SWARM_MESSAGES_IDEMPOTENCY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_swarm_messages_idempotency ON swarm_messages(run_id, idempotency_key);`;
+
+export const SWARM_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  agent_id TEXT,
+  message_id TEXT,
+  type TEXT NOT NULL,
+  payload_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES swarm_runs(id) ON DELETE CASCADE
+);`;
+
+export const SWARM_EVENTS_RUN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_swarm_events_run ON swarm_events(run_id, created_at_ms);`;
+
+export const SWARM_DELIVERY_TRACE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_delivery_trace (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  agent_id TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  payload_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES swarm_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES swarm_messages(id) ON DELETE CASCADE
+);`;
+
+export const SWARM_DELIVERY_TRACE_MESSAGE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_swarm_delivery_trace_message ON swarm_delivery_trace(message_id, created_at_ms);`;
+
+export const SWARM_ARTIFACTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_artifacts (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  agent_id TEXT,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT,
+  metadata_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES swarm_runs(id) ON DELETE CASCADE
+);`;
+
+export const SWARM_MEMORY_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_memory (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  agent_id TEXT,
+  scope TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  promoteable INTEGER NOT NULL DEFAULT 1,
+  metadata_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES swarm_runs(id) ON DELETE CASCADE
+);`;
+
+export const SWARM_MEMORY_RUN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_swarm_memory_run ON swarm_memory(run_id, created_at_ms);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -359,6 +488,32 @@ ${ACTION_RUN_EVENTS_INDEX_SQL}
 ${HUB_USAGE_EVENTS_TABLE_SQL}
 
 ${HUB_USAGE_EVENTS_INDEX_SQL}
+
+${SWARM_DEFINITIONS_TABLE_SQL}
+
+${SWARM_RUNS_TABLE_SQL}
+
+${SWARM_AGENTS_TABLE_SQL}
+
+${SWARM_MESSAGES_TABLE_SQL}
+
+${SWARM_MESSAGES_RUN_INDEX_SQL}
+
+${SWARM_MESSAGES_IDEMPOTENCY_INDEX_SQL}
+
+${SWARM_EVENTS_TABLE_SQL}
+
+${SWARM_EVENTS_RUN_INDEX_SQL}
+
+${SWARM_DELIVERY_TRACE_TABLE_SQL}
+
+${SWARM_DELIVERY_TRACE_MESSAGE_INDEX_SQL}
+
+${SWARM_ARTIFACTS_TABLE_SQL}
+
+${SWARM_MEMORY_TABLE_SQL}
+
+${SWARM_MEMORY_RUN_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

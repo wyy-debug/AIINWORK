@@ -44,6 +44,7 @@
     "smoke:ui": "node scripts/smoke-ui.mjs",
     "smoke:packaged-debug": "node scripts/packaged-smoke.mjs",
     "smoke:api": "node scripts/smoke-api.mjs",
+    "smoke:swarm-real": "node scripts/smoke-swarm-real.mjs",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
     "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",

@@ -456,8 +456,9 @@ function extractResultText(block: { content?: unknown }): string {
 
 function isEmptyOrUnhelpfulResult(text: string, isError: boolean): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase()
-  if (isError) return true
   if (!normalized) return true
+  if (isPersistedLargeOutput(normalized)) return false
+  if (isError) return isPureToolError(normalized)
   if (
     normalized === '[]' ||
     normalized === '{}' ||
@@ -474,6 +475,31 @@ function isEmptyOrUnhelpfulResult(text: string, isError: boolean): boolean {
     '0 results',
     'nothing found',
     'empty result',
+  ].some(marker => normalized.includes(marker))
+}
+
+function isPersistedLargeOutput(normalized: string): boolean {
+  return (
+    normalized.includes('<persisted-output>') ||
+    normalized.includes('full output saved to:') ||
+    normalized.includes('output saved to:')
+  )
+}
+
+function isPureToolError(normalized: string): boolean {
+  return [
+    '<tool_use_error>',
+    'tool_use_error',
+    'invalid pages parameter',
+    'request was aborted',
+    'api error',
+    'error:',
+    'failed',
+    'exception',
+    'traceback',
+    'enoent',
+    'exited with code',
+    'exit code',
   ].some(marker => normalized.includes(marker))
 }
 

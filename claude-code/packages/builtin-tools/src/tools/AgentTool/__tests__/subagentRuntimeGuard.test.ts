@@ -109,6 +109,32 @@ describe('subagentRuntimeGuard', () => {
     expect(result.snapshot.runtimeStatus).toBe('BLOCKED')
   })
 
+  test('does not treat persisted large output as empty even when marked error', () => {
+    const guard = createSubagentRuntimeGuard({ objective: 'inspect large output', maxSteps: 15 })
+    const persisted = '<persisted-output> Output too large (55.5KB). Full output saved to: C:\\Users\\yckui\\.mtl-code\\projects\\tool-result.txt </persisted-output>'
+
+    guard.observeMessage(assistantTool('a', 'Bash', { command: 'rg x' }))
+    expect(guard.observeMessage(toolResult('a', persisted, true)).shouldStop).toBe(false)
+    guard.observeMessage(assistantTool('b', 'Bash', { command: 'rg y' }))
+    const result = guard.observeMessage(toolResult('b', persisted, true))
+
+    expect(result.shouldStop).toBe(false)
+    expect(result.snapshot.runtimeStatus).toBe('RUNNING')
+  })
+
+  test('still blocks two pure tool errors', () => {
+    const guard = createSubagentRuntimeGuard({ objective: 'read pdf', maxSteps: 15 })
+    guard.observeMessage(assistantTool('a', 'Read', { file_path: 'a.pdf', pages: '' }))
+    expect(
+      guard.observeMessage(toolResult('a', 'Invalid pages parameter: "".', true)).shouldStop,
+    ).toBe(false)
+    guard.observeMessage(assistantTool('b', 'Read', { file_path: 'b.pdf', pages: '' }))
+    const result = guard.observeMessage(toolResult('b', 'Invalid pages parameter: "".', true))
+
+    expect(result.shouldStop).toBe(true)
+    expect(result.snapshot.runtimeStatus).toBe('BLOCKED')
+  })
+
   test('blocks repeated visits to the same URL without progress', () => {
     const guard = createSubagentRuntimeGuard({ objective: 'fetch crash page', maxSteps: 15 })
     guard.observeMessage(assistantTool('a', 'WebFetch', { url: 'https://example.com/crash?id=1' }))

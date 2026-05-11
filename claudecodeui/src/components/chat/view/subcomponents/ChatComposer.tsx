@@ -62,6 +62,7 @@ import type {
 import { ARGUS_DEFAULT_PERMISSION_MODE } from '../../utils/chatStorage';
 import { normalizeContextBudget } from '../../utils/contextBudget';
 import { buildSubagentDetailRows } from '../../utils/subagentDetailRows';
+import type { SubagentControlAction } from '../../utils/subagentControlRequest';
 import { getSubagentBlockerGuidance } from '../../utils/subagentGuidance';
 
 import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
@@ -136,6 +137,7 @@ interface ChatComposerProps {
   onCompleteGoal?: () => Promise<void> | void;
   onClearGoal?: () => Promise<void> | void;
   onStopSubagents?: (taskIds?: string[]) => void;
+  onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
   onReuseSubagentObjective?: (text: string) => void;
   tokenBudget: Record<string, unknown> | null;
   permissionMode: PermissionMode | string;
@@ -230,6 +232,7 @@ export default function ChatComposer({
   onCompleteGoal,
   onClearGoal,
   onStopSubagents,
+  onControlSubagent,
   onReuseSubagentObjective,
   tokenBudget,
   slashCommandsCount,
@@ -297,6 +300,8 @@ export default function ChatComposer({
   const [isSkillMenuOpen, setIsSkillMenuOpen] = useState(false);
   const [isSubagentDetailsOpen, setIsSubagentDetailsOpen] = useState(false);
   const [isSubagentManagerOpen, setIsSubagentManagerOpen] = useState(false);
+  const [subagentControlDraft, setSubagentControlDraft] = useState<{ taskId: string; action: 'send' | 'followup' } | null>(null);
+  const [subagentControlText, setSubagentControlText] = useState('');
   const [isGoalEditorOpen, setIsGoalEditorOpen] = useState(false);
   const [goalObjectiveDraft, setGoalObjectiveDraft] = useState('');
   const [goalBudgetDraft, setGoalBudgetDraft] = useState('');
@@ -1388,8 +1393,88 @@ export default function ChatComposer({
                                   {item.blockers}
                                 </div>
                               ) : null}
+                              {item.taskId && subagentControlDraft?.taskId === item.taskId ? (
+                                <div className="mt-2 grid gap-1.5 rounded-md border border-border bg-background p-2">
+                                  <input
+                                    type="text"
+                                    value={subagentControlText}
+                                    onChange={(event) => setSubagentControlText(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter' && subagentControlText.trim()) {
+                                        onControlSubagent?.(subagentControlDraft.action, item.taskId!, subagentControlText);
+                                        setSubagentControlDraft(null);
+                                        setSubagentControlText('');
+                                      }
+                                      if (event.key === 'Escape') {
+                                        setSubagentControlDraft(null);
+                                        setSubagentControlText('');
+                                      }
+                                    }}
+                                    placeholder={subagentControlDraft.action === 'send' ? 'Message' : 'Follow-up objective'}
+                                    className="h-8 min-w-0 rounded border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-primary"
+                                  />
+                                  <div className="flex justify-end gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSubagentControlDraft(null);
+                                        setSubagentControlText('');
+                                      }}
+                                      className="h-6 rounded px-2 text-[11px] text-muted-foreground hover:bg-muted"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!subagentControlText.trim()}
+                                      onClick={() => {
+                                        onControlSubagent?.(subagentControlDraft.action, item.taskId!, subagentControlText);
+                                        setSubagentControlDraft(null);
+                                        setSubagentControlText('');
+                                      }}
+                                      className="h-6 rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground disabled:opacity-60"
+                                    >
+                                      Send
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                             <div className="mt-0.5 flex shrink-0 items-center gap-1">
+                              {item.taskId && onControlSubagent ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => onControlSubagent('wait', item.taskId!)}
+                                    className="inline-flex h-6 items-center justify-center rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                                    title="Wait for this background agent"
+                                  >
+                                    Wait
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSubagentControlDraft({ taskId: item.taskId!, action: 'send' });
+                                      setSubagentControlText('');
+                                    }}
+                                    className="inline-flex h-6 items-center justify-center rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                                    title="Send a message to this background agent"
+                                  >
+                                    Send
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSubagentControlDraft({ taskId: item.taskId!, action: 'followup' });
+                                      setSubagentControlText('');
+                                    }}
+                                    className="inline-flex h-6 items-center justify-center rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                                    title="Create a follow-up task from this background agent"
+                                  >
+                                    Follow
+                                  </button>
+                                </>
+                              ) : null}
                               {evidenceText ? (
                                 <button
                                   type="button"

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export const SERVER_VERSION = '0.1.5';
+export const SERVER_VERSION = '0.2.7';
 
 export const PLATFORM_IDS = {
   android: 1,

@@ -58,20 +58,20 @@ describe('spawn_agent Codex schema', () => {
     }
   })
 
-  test('full-history fork rejects role model and reasoning overrides', () => {
+  test('accepts full-history fork with role model or reasoning overrides', () => {
     for (const extra of [
       { agent_type: 'reviewer' },
       { model: 'gpt-5.2' },
       { reasoning_effort: 'high' },
     ]) {
-      expect(
-        inputSchema().safeParse({
-          message: 'Review the runtime permission changes.',
-          task_name: 'runtime_review',
-          fork_turns: 'all',
-          ...extra,
-        }).success,
-      ).toBe(false)
+      const parsed = inputSchema().safeParse({
+        message: 'Review the runtime permission changes.',
+        task_name: 'runtime_review',
+        fork_turns: 'all',
+        ...extra,
+      })
+
+      expect(parsed.success).toBe(true)
     }
   })
 

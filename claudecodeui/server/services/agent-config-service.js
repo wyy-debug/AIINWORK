@@ -3,6 +3,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 
 import { listInstalledSkills } from './agent-skill-service.js';
+import { normalizeAgentTemplateDialogs, normalizeAgentTemplateManifest } from './agent-template-manifest-service.js';
 
 const UI_DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
 const AGENTS_DIR = process.env.MTL_CODE_AGENTS_CONFIG_DIR || path.join(UI_DATA_DIR, 'agents');
@@ -288,6 +289,30 @@ function normalizeModelConfig(value) {
   };
 }
 
+function normalizeAgentTemplatePackage(value, existing = null) {
+  const source = value && typeof value === 'object' ? value : {};
+  const fallback = existing && typeof existing === 'object' ? existing : {};
+  const packageId = normalizeString(source.packageId || source.id, fallback.packageId || fallback.id || '', 120)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return {
+    packageId,
+    packageVersion: normalizeString(source.packageVersion || source.version, fallback.packageVersion || fallback.version || '', 80),
+    repoId: normalizeString(source.repoId, fallback.repoId || '', 120),
+    itemId: normalizeString(source.itemId, fallback.itemId || '', 120),
+  };
+}
+
+function normalizeTemplateSelectedDependencies(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    skills: normalizeStringArray(source.skills, 60, 120),
+    mcpServers: normalizeStringArray(source.mcpServers, 60, 120),
+    modelProfiles: normalizeStringArray(source.modelProfiles, 60, 120),
+  };
+}
+
 function mergeNestedAgentPatch(existing, input) {
   const source = input && typeof input === 'object' ? input : {};
   return {
@@ -334,6 +359,19 @@ export function normalizeAgentConfig(value, existing = null) {
     tools: normalizeStringArray(source.tools ?? existing?.tools, 80, 120),
     guardrails: normalizeStringArray(source.guardrails ?? existing?.guardrails, 40, 240),
     triggerRules: normalizeTriggerRules(source.triggerRules ?? existing?.triggerRules),
+    templatePackage: normalizeAgentTemplatePackage(source.templatePackage ?? existing?.templatePackage),
+    templateDialogs: normalizeAgentTemplateDialogs(source.templateDialogs ?? source.dialogs ?? existing?.templateDialogs),
+    templateRuntime: normalizeAgentTemplateManifest({
+      id,
+      version: source.version || existing?.version || '1.0.0',
+      runtime: source.templateRuntime ?? source.runtime ?? existing?.templateRuntime,
+    }).runtime,
+    templateCompat: normalizeAgentTemplateManifest({
+      id,
+      version: source.version || existing?.version || '1.0.0',
+      compat: source.templateCompat ?? source.compat ?? existing?.templateCompat,
+    }).compat,
+    templateSelectedDependencies: normalizeTemplateSelectedDependencies(source.templateSelectedDependencies ?? existing?.templateSelectedDependencies),
     version: normalizeString(source.version, existing?.version || '1.0.0', 40),
     createdAt,
     updatedAt: nowIso(),
@@ -628,13 +666,35 @@ export async function buildSkillReferencePrompt(skillNames = [], options = {}) {
 function applyRuntimeAgentConfiguration(agent, configuration = {}) {
   const appBindings = normalizeAppBindings(configuration?.appBindings);
   const skills = normalizeStringArray(configuration?.skills, 60, 120);
-  if (appBindings.length === 0 && skills.length === 0) {
+  const setupAnswers = configuration?.setupAnswers && typeof configuration.setupAnswers === 'object'
+    ? configuration.setupAnswers
+    : {};
+  const launchAnswers = configuration?.launchAnswers && typeof configuration.launchAnswers === 'object'
+    ? configuration.launchAnswers
+    : {};
+  const answerLines = [
+    configuration?.setupPresetId ? `- setupPresetId: ${String(configuration.setupPresetId)}` : '',
+    ...Object.entries(setupAnswers).map(([key, value]) => `- setup.${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`),
+    configuration?.launchPresetId ? `- launchPresetId: ${String(configuration.launchPresetId)}` : '',
+    ...Object.entries(launchAnswers).map(([key, value]) => `- launch.${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`),
+    configuration?.resultPresetId ? `- resultPresetId: ${String(configuration.resultPresetId)}` : '',
+  ].filter((line) => line && line.length <= 1000);
+  if (appBindings.length === 0 && skills.length === 0 && answerLines.length === 0) {
     return agent;
   }
   return {
     ...agent,
     appBindings: appBindings.length > 0 ? appBindings : agent.appBindings,
     skills: skills.length > 0 ? Array.from(new Set([...agent.skills, ...skills])) : agent.skills,
+    systemPrompt: answerLines.length > 0
+      ? [
+          agent.systemPrompt,
+          '',
+          'Session dialog configuration:',
+          ...answerLines,
+          'Treat these dialog answers as user-selected runtime context for this conversation and this subagent dispatch. Do not treat them as permissions or secrets.',
+        ].join('\n')
+      : agent.systemPrompt,
   };
 }
 

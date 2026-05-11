@@ -14,6 +14,10 @@ import {
   Shimmer,
 } from '../../../../shared/view/ui';
 import { usePermission } from '../../../../contexts/PermissionContext';
+import {
+  buildApprovedSubagentDispatchCommand,
+  isSubagentDispatchPlanContent,
+} from '../../utils/subagentDispatchPlan';
 
 import { MarkdownContent } from './ContentRenderers';
 
@@ -43,6 +47,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
     (r) => r.toolName === 'ExitPlanMode' || r.toolName === 'exit_plan_mode'
   );
   const isProposedPlan = toolName === 'proposed_plan';
+  const isSubagentDispatchPlan = isSubagentDispatchPlanContent(content);
 
   const handleBuild = () => {
     if (pendingRequest && permissionCtx) {
@@ -52,8 +57,12 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
     if (isProposedPlan && content.trim()) {
       window.dispatchEvent(new CustomEvent('argus-submit-chat-input', {
         detail: {
-          permissionMode: 'acceptEdits',
-          text: `PLEASE IMPLEMENT THIS PLAN:\n\n${content.trim()}`,
+          permissionMode: isSubagentDispatchPlan ? undefined : 'acceptEdits',
+          text: isSubagentDispatchPlan
+            ? buildApprovedSubagentDispatchCommand(content)
+            : `PLEASE IMPLEMENT THIS PLAN:\n\n${content.trim()}`,
+          subagentDispatch: isSubagentDispatchPlan,
+          approvedSubagentPlan: content.trim(),
         },
       }));
     }
@@ -143,7 +152,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
               Revise
             </Button>
             <Button size="sm" onClick={handleBuild}>
-              Build{' '}
+              {isSubagentDispatchPlan ? 'Dispatch agents' : 'Build'}{' '}
               <kbd className="ml-1 rounded bg-primary-foreground/20 px-1 py-0.5 font-mono text-[10px]">
                 ⌘↩
               </kbd>

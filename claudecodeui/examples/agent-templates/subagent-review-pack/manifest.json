@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "id": "subagent-review-pack",
+  "version": "1.0.0",
+  "kind": "agent-template",
+  "runtime": {
+    "tools": ["Read", "Grep", "Bash"],
+    "model": "inherit",
+    "permissionMode": "default"
+  },
+  "dependencies": {
+    "required": {
+      "skills": ["code-review-security"]
+    },
+    "optional": {
+      "mcpServers": ["linear"],
+      "modelProfiles": ["sonnet-large"]
+    }
+  },
+  "dialogs": {
+    "setup": {
+      "title": "Review Agent Setup",
+      "description": "Configure the default review stance for this workspace.",
+      "fields": [
+        {
+          "id": "repository_area",
+          "label": "Repository area",
+          "type": "text",
+          "required": true,
+          "placeholder": "server/routes, src/components, docs"
+        },
+        {
+          "id": "risk_level",
+          "label": "Risk level",
+          "type": "select",
+          "defaultValue": "medium",
+          "options": ["low", "medium", "high"]
+        }
+      ],
+      "presets": [
+        {
+          "id": "backend-review",
+          "label": "Backend review",
+          "answers": {
+            "repository_area": "server",
+            "risk_level": "high"
+          }
+        },
+        {
+          "id": "frontend-review",
+          "label": "Frontend review",
+          "answers": {
+            "repository_area": "src/components",
+            "risk_level": "medium"
+          }
+        }
+      ],
+      "defaultPresetId": "backend-review"
+    },
+    "launch": {
+      "title": "Launch Review",
+      "description": "Scope each dispatched subagent run.",
+      "fields": [
+        {
+          "id": "objective",
+          "label": "Objective",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "Find regressions in the launch dialog flow."
+        },
+        {
+          "id": "focus",
+          "label": "Focus",
+          "type": "multiselect",
+          "options": ["bugs", "tests", "security", "ux", "docs"]
+        }
+      ],
+      "presets": [
+        {
+          "id": "bug-hunt",
+          "label": "Bug hunt",
+          "answers": {
+            "objective": "Review the change for behavioral regressions and missing tests.",
+            "focus": ["bugs", "tests"]
+          }
+        },
+        {
+          "id": "security-pass",
+          "label": "Security pass",
+          "answers": {
+            "objective": "Review new runtime and repository surfaces for security issues.",
+            "focus": ["security", "tests"]
+          }
+        }
+      ],
+      "defaultPresetId": "bug-hunt"
+    },
+    "result": {
+      "title": "Review Result",
+      "fields": [
+        {
+          "id": "export_format",
+          "label": "Export format",
+          "type": "select",
+          "defaultValue": "markdown",
+          "options": ["markdown", "json"]
+        },
+        {
+          "id": "include_event_log",
+          "label": "Include event log",
+          "type": "boolean",
+          "defaultValue": true
+        }
+      ],
+      "presets": [
+        {
+          "id": "pr-comment",
+          "label": "PR comment",
+          "answers": {
+            "export_format": "markdown",
+            "include_event_log": false
+          }
+        },
+        {
+          "id": "audit-trace",
+          "label": "Audit trace",
+          "answers": {
+            "export_format": "json",
+            "include_event_log": true
+          }
+        }
+      ],
+      "defaultPresetId": "pr-comment"
+    }
+  },
+  "examples": [
+    {
+      "title": "Review a launch dialog patch",
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Use the bug-hunt preset to review the launch dialog patch."
+        },
+        {
+          "role": "assistant",
+          "content": "I will focus on regressions, missing tests, and recoverability."
+        }
+      ]
+    }
+  ],
+  "compat": {
+    "claudeCode": "markdown-yaml",
+    "argusUi": ">=1.30.9",
+    "mtlCode": "subagents"
+  }
+}

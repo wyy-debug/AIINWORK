@@ -18,6 +18,8 @@ import {
   scanDailyCrashes,
   toolError,
 } from './core.js';
+import { runRustCore } from './rust_bridge.js';
+import { asCrashAiReport } from './tool_output.js';
 
 const config = readConfig();
 const client = new CrashSightApiClient(config);
@@ -41,6 +43,28 @@ const versionFiltersSchema = {
 };
 
 const tools = [
+  {
+    name: 'generate_crash_ai_report',
+    description: 'Fast Rust-backed CrashAI fact collection. Returns CRASH_AI_DIRECT_REPORT plus CRASH_AI_AGENT_CONTEXT_JSON; agents should use the same tool response directly and add analysis sections.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'Single day, YYYYMMDD or YYYY-MM-DD.' },
+        startDate: { type: 'string', description: 'Range start, YYYYMMDD or YYYY-MM-DD.' },
+        endDate: { type: 'string', description: 'Range end, YYYYMMDD or YYYY-MM-DD.' },
+        startTime: { type: 'string', description: 'Exact range start, YYYY-MM-DD HH:mm:ss.' },
+        endTime: { type: 'string', description: 'Exact range end, YYYY-MM-DD HH:mm:ss.' },
+        platform: platformSchema,
+        platforms: { type: 'array', items: platformSchema },
+        versionFilters: versionFiltersSchema,
+        branches: versionFiltersSchema,
+        includeRedmine: { type: 'boolean', description: 'Whether to query Redmine refs. Default true.' },
+        topN: { type: 'number', description: 'Reserved for compatibility; Agent analysis decides final priority lists.' },
+        pageSize: { type: 'number', description: 'CrashSight page size. Default 500.' },
+        maxPages: { type: 'number', description: 'Pagination safety limit. Default 100.' },
+      },
+    },
+  },
   {
     name: 'health_check',
     description: 'Validate CrashSight credentials presence, platform appId mapping, and optional selector access.',
@@ -138,6 +162,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'health_check':
         return asJson(await healthCheck(args, config, client));
+      case 'generate_crash_ai_report':
+        return asCrashAiReport(await runRustCore(args));
       case 'scan_daily_crashes':
         return asJson(await scanDailyCrashes(args, config, client));
       case 'compare_issue_versions':

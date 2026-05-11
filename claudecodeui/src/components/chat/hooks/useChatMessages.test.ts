@@ -116,6 +116,31 @@ describe('normalizedToChatMessages subagent handling', () => {
     expect(subagent?.subagentState?.isComplete).toBe(true);
   });
 
+  it('surfaces task notification summaries as the visible subagent result', () => {
+    const messages = [
+      message({
+        id: 'tool-use-1',
+        kind: 'tool_use',
+        toolName: 'AgentSpawn',
+        toolId: 'tool-1',
+        taskId: 'task-1',
+        toolInput: { objective: 'Review backend' },
+      }),
+      message({
+        id: 'notification-1',
+        kind: 'task_notification',
+        toolId: 'tool-1',
+        taskId: 'task-1',
+        status: 'completed',
+        summary: 'Backend review found no blocking issue.',
+      }),
+    ];
+
+    const [subagent] = normalizedToChatMessages(messages);
+
+    expect(subagent?.subagentState?.resultSummary).toBe('Backend review found no blocking issue.');
+  });
+
   it('filters async launch control text from user-visible chat messages', () => {
     const messages = [
       message({
@@ -178,6 +203,48 @@ describe('normalizedToChatMessages subagent handling', () => {
 
     expect(subagent?.isSubagentContainer).toBe(true);
     expect(subagent?.subagentState?.runtimeStatus).toBe('RUNNING');
+  });
+
+  it('attaches persisted subagent control events to the matching subagent container', () => {
+    const messages = [
+      message({
+        id: 'agent-a',
+        kind: 'tool_use',
+        toolName: 'AgentSpawn',
+        toolId: 'tool-agent-a',
+        taskId: 'task-a',
+        toolInput: { description: 'Analyze crash A' },
+      }),
+      message({
+        id: 'control-a',
+        kind: 'status',
+        status: 'subagent_control_accepted',
+        taskId: 'task-a',
+        subagentControlEvent: {
+          type: 'control_accepted',
+          taskId: 'task-a',
+          timestamp: 42,
+          payload: {
+            action: 'send',
+            mode: 'fallback-guidance',
+          },
+        },
+      } as Partial<NormalizedMessage>),
+    ];
+
+    const [subagent] = normalizedToChatMessages(messages);
+
+    expect(subagent?.subagentState?.subagentEvents).toEqual([
+      expect.objectContaining({
+        type: 'control_accepted',
+        taskId: 'task-a',
+        timestamp: 42,
+        payload: {
+          action: 'send',
+          mode: 'fallback-guidance',
+        },
+      }),
+    ]);
   });
 
   it('groups interleaved subagent child tools by stable task id when parentToolUseId is missing', () => {
