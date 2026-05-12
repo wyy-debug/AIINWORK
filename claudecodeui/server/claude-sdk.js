@@ -663,6 +663,19 @@ function shouldSendCodeReviewToolFallback({
     && isCodeReviewAcknowledgementText(assistantText);
 }
 
+function shouldStartCodeReviewFallbackRunAfterClose({
+  fallbackSent = false,
+  resultReceived = false,
+  aborted = false,
+  sessionId = '',
+} = {}) {
+  return fallbackSent === true
+    && resultReceived !== true
+    && aborted !== true
+    && typeof sessionId === 'string'
+    && sessionId.trim().length > 0;
+}
+
 function getMtlCodeConfigDir() {
   return process.env.MTL_CODE_CONFIG_DIR || path.join(osHomedirFallback(), '.mtl-code');
 }
@@ -1144,6 +1157,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let codeReviewToolUseSeen = false;
   let codeReviewFallbackSent = false;
   let codeReviewAssistantText = '';
+  let codeReviewFallbackPrompt = '';
+  let codeReviewFallbackSessionId = '';
   const stderrLines = [];
 
   const emitNotification = (event) => {
@@ -1344,7 +1359,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         resultReceived = false;
         codeReviewAssistantText = '';
         codeReviewToolUseSeen = false;
-        writeMtlCodeJson(child, createMtlCodeUserMessage(buildCodeReviewToolFallbackPrompt()));
+        codeReviewFallbackPrompt = buildCodeReviewToolFallbackPrompt();
+        codeReviewFallbackSessionId = message.session_id || capturedSessionId || sessionId || clientSessionId || '';
+        writeMtlCodeJson(child, createMtlCodeUserMessage(codeReviewFallbackPrompt));
         return;
       }
       closeMtlCodeInput(child);
@@ -1464,6 +1481,23 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     const aborted = isMtlCodeUserAbort(child);
+    const fallbackResumeSessionId = codeReviewFallbackSessionId || capturedSessionId || sessionId || clientSessionId || '';
+    if (shouldStartCodeReviewFallbackRunAfterClose({
+      fallbackSent: codeReviewFallbackSent,
+      resultReceived,
+      aborted,
+      sessionId: fallbackResumeSessionId,
+    })) {
+      await queryMtlCodeDirect(codeReviewFallbackPrompt || buildCodeReviewToolFallbackPrompt(), {
+        ...options,
+        sessionId: fallbackResumeSessionId,
+        resume: true,
+        clientMessageId: null,
+        argusCodeReviewIntent: false,
+      }, ws);
+      return;
+    }
+
     const failedWithoutResult = !aborted && !resultReceived && (Boolean(signal) || Boolean(code && code !== 0));
     if (failedWithoutResult) {
       const message = buildMtlCodeCloseFailureMessage({ code, signal, stderrLines });
@@ -2013,5 +2047,6 @@ export {
   isMtlCodeUserAbort,
   buildMtlCodeCloseFailureMessage,
   buildCodeReviewToolFallbackPrompt,
-  shouldSendCodeReviewToolFallback
+  shouldSendCodeReviewToolFallback,
+  shouldStartCodeReviewFallbackRunAfterClose
 };

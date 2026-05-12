@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildCodeReviewToolFallbackPrompt,
+  shouldStartCodeReviewFallbackRunAfterClose,
   shouldSendCodeReviewToolFallback,
 } from '../../claude-sdk.js';
 
@@ -68,6 +69,17 @@ test('Argus runtime diagnostics suppress OpenMythos runtime card when final laun
   assert.match(source, /const previewRuntimeCard = openMythosRuntimeCardActive\s*\?/);
 });
 
+test('Argus session runtime prompt merge preserves existing review intent prompts', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../index.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.match(source, /function appendChatSystemPrompt/);
+  assert.match(source, /options\.appendSystemPrompt = appendChatSystemPrompt\(options\.appendSystemPrompt, appendSystemPrompt\)/);
+  assert.match(source, /options\.appendSystemPrompt = appendChatSystemPrompt\(options\.appendSystemPrompt, runtime\.appendSystemPrompt\)/);
+  assert.doesNotMatch(source, /options\.appendSystemPrompt = appendSystemPrompt;/);
+  assert.doesNotMatch(source, /options\.appendSystemPrompt = runtime\.appendSystemPrompt;/);
+});
+
 test('Argus review intent sends a tool-use fallback when first response only acknowledges work', () => {
   assert.equal(shouldSendCodeReviewToolFallback({
     options: { argusCodeReviewIntent: true },
@@ -99,4 +111,27 @@ test('Argus review fallback prompt requires repository inspection before finding
   assert.match(prompt, /git diff/);
   assert.match(prompt, /Report findings first/i);
   assert.doesNotMatch(prompt, /acknowledge/i);
+});
+
+test('Argus starts a resumed fallback run when the print process exits after ack-only review', () => {
+  assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
+    fallbackSent: true,
+    resultReceived: false,
+    aborted: false,
+    sessionId: 'session-123',
+  }), true);
+
+  assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
+    fallbackSent: true,
+    resultReceived: true,
+    aborted: false,
+    sessionId: 'session-123',
+  }), false);
+
+  assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
+    fallbackSent: true,
+    resultReceived: false,
+    aborted: false,
+    sessionId: '',
+  }), false);
 });

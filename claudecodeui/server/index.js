@@ -2179,6 +2179,18 @@ function getConcreteCommandSessionId(data) {
     return String(sessionId);
 }
 
+function appendChatSystemPrompt(existing, addition) {
+    const current = typeof existing === 'string' ? existing.trim() : '';
+    const next = typeof addition === 'string' ? addition.trim() : '';
+    if (!next) {
+        return current || undefined;
+    }
+    if (!current) {
+        return next;
+    }
+    return `${current}\n\n${next}`;
+}
+
 function setWriterAutoCaptureContext(writer, data, provider) {
     writer.setAutoCaptureContext({
         provider,
@@ -2750,7 +2762,8 @@ async function applyAgentRuntimeToChatCommand(data) {
         };
 
         if (data.type === 'claude-command') {
-            options.appendSystemPrompt = appendSystemPrompt;
+            options.appendSystemPrompt = appendChatSystemPrompt(options.appendSystemPrompt, appendSystemPrompt);
+            options.runtimeDiagnostics.appendSystemPromptLength = options.appendSystemPrompt.length;
             return { ...data, options };
         }
 
@@ -2814,7 +2827,8 @@ async function applyAgentRuntimeToChatCommand(data) {
             };
 
             if (data.type === 'claude-command') {
-                options.appendSystemPrompt = appendSystemPrompt;
+                options.appendSystemPrompt = appendChatSystemPrompt(options.appendSystemPrompt, appendSystemPrompt);
+                options.runtimeDiagnostics.appendSystemPromptLength = options.appendSystemPrompt.length;
                 return { ...data, options };
             }
 
@@ -2882,7 +2896,8 @@ async function applyAgentRuntimeToChatCommand(data) {
     }
 
     if (data.type === 'claude-command') {
-        options.appendSystemPrompt = runtime.appendSystemPrompt;
+        options.appendSystemPrompt = appendChatSystemPrompt(options.appendSystemPrompt, runtime.appendSystemPrompt);
+        options.runtimeDiagnostics.appendSystemPromptLength = options.appendSystemPrompt.length;
         return { ...data, options };
     }
 
