@@ -215,11 +215,6 @@ const copyDir = async (src, dest) => {
 };
 
 const ensureMtlCodeBackendBuilt = () => {
-  const nodeEntry = path.join(claudeCodeRoot, 'dist', 'cli-node.js');
-  if (existsSync(nodeEntry)) {
-    return;
-  }
-
   if (!existsSync(bunExe)) {
     throw new Error('Argus backend is not built and Bun was not found. Build ../claude-code first.');
   }
