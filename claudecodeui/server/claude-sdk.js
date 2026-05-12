@@ -539,7 +539,84 @@ function normalizePromptDebugCommand(value) {
   return typeof value === 'string' ? value : '';
 }
 
-function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, cliArgs = [], commands = {}) {
+function getCliArgValue(args = [], flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 && typeof args[index + 1] === 'string' ? args[index + 1] : '';
+}
+
+function buildDumpSystemPromptArgs(cliArgs = []) {
+  const args = ['--dump-system-prompt'];
+  const model = getCliArgValue(cliArgs, '--model');
+  if (model) {
+    args.push('--model', model);
+  }
+  return args;
+}
+
+function runNativeSystemPromptDump(launch, cliArgs = [], childEnv = process.env, cwd = process.cwd()) {
+  return new Promise((resolve) => {
+    const args = [...launch.argsPrefix, ...buildDumpSystemPromptArgs(cliArgs)];
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let child;
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+
+    const timeout = setTimeout(() => {
+      child?.kill?.('SIGTERM');
+      finish('');
+    }, parseInt(process.env.ARGUS_NATIVE_SYSTEM_PROMPT_DEBUG_TIMEOUT_MS || '5000', 10));
+
+    try {
+      child = spawn(launch.command, args, {
+        cwd,
+        env: childEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        shell: launch.shell,
+      });
+    } catch {
+      finish('');
+      return;
+    }
+
+    child.stdout?.on('data', chunk => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', chunk => {
+      stderr += chunk.toString();
+    });
+    child.once('error', () => finish(''));
+    child.once('close', code => {
+      if (code === 0 && stdout.trim()) {
+        finish(stdout.trim());
+        return;
+      }
+      if (stderr.trim()) {
+        console.warn('[Argus] Native system prompt dump failed:', stderr.trim().split('\n').slice(-3).join('\n'));
+      }
+      finish('');
+    });
+  });
+}
+
+async function captureNativeSystemPrompt(launches = [], cliArgs = [], childEnv = process.env, cwd = process.cwd()) {
+  for (const launch of launches) {
+    const prompt = await runNativeSystemPromptDump(launch, cliArgs, childEnv, cwd);
+    if (prompt) {
+      return prompt;
+    }
+  }
+  return '';
+}
+
+function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, cliArgs = [], commands = {}, nativeSystemPrompt = '') {
   const appendSystemPrompt = typeof options.appendSystemPrompt === 'string'
     ? options.appendSystemPrompt
     : '';
@@ -552,6 +629,8 @@ function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, 
   return {
     appendSystemPrompt,
     appendSystemPromptLength: appendSystemPrompt.length,
+    nativeSystemPrompt,
+    nativeSystemPromptLength: nativeSystemPrompt.length,
     originalCommand,
     effectiveCommand,
     effectiveCommandLength: effectiveCommand.length,
@@ -575,7 +654,7 @@ function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, 
   };
 }
 
-function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env, cliArgs = [], sessionId = null, commands = {}) {
+async function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env, cliArgs = [], sessionId = null, commands = {}, nativeSystemPrompt = '') {
   if (options.debugPromptInjection !== true) {
     return;
   }
@@ -585,7 +664,7 @@ function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env, cliA
     text: 'prompt_injection_debug',
     provider: 'claude',
     sessionId,
-    promptInjection: buildPromptInjectionDebugPayload(options, childEnv, cliArgs, commands),
+    promptInjection: buildPromptInjectionDebugPayload(options, childEnv, cliArgs, commands, nativeSystemPrompt),
   }));
 }
 
@@ -1387,10 +1466,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
     const childEnv = await buildMtlCodeSpawnEnv(options);
     const cliArgs = buildMtlCodeArgs(options, childEnv);
-    emitPromptInjectionDebug(ws, options, childEnv, cliArgs, capturedSessionId || sessionId || clientSessionId || null, {
+    const nativeSystemPrompt = options.debugPromptInjection === true
+      ? await captureNativeSystemPrompt(launches, cliArgs, childEnv, cwd)
+      : '';
+    await emitPromptInjectionDebug(ws, options, childEnv, cliArgs, capturedSessionId || sessionId || clientSessionId || null, {
       originalCommand: options.debugPromptInjectionOriginalCommand || command,
       effectiveCommand: finalCommand,
-    });
+    }, nativeSystemPrompt);
     let lastSpawnError = null;
 
     for (const launch of launches) {

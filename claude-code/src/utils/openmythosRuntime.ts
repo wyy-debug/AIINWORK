@@ -426,6 +426,26 @@ export function isOpenMythosReadOnlyPhase(
   )
 }
 
+function hasHardReadOnlyOpenMythosIntent(
+  card: OpenMythosRuntimeCard | undefined,
+): boolean {
+  return Boolean(
+    card?.reasons.includes('code review requested') ||
+      card?.constraints.some(constraint =>
+        constraint.startsWith('Plan mode is active:'),
+      ),
+  )
+}
+
+export function shouldHardBlockOpenMythosReadOnlyPhase(
+  state: OpenMythosRuntimeState | undefined,
+  permissionMode?: PermissionMode,
+): boolean {
+  if (!isOpenMythosReadOnlyPhase(state)) return false
+  if (permissionMode === 'plan') return true
+  return hasHardReadOnlyOpenMythosIntent(state?.card)
+}
+
 export function formatOpenMythosRuntimeReminder(
   card: OpenMythosRuntimeCard,
   state?: OpenMythosRuntimeState,
@@ -442,6 +462,7 @@ export function formatOpenMythosRuntimeReminder(
   const contextCacheLine = contextCache
     ? `- Context cache ledger: compact boundaries=${contextCache.compactBoundaryCount ?? 0}; microcompact boundaries=${contextCache.microcompactBoundaryCount ?? 0}; RAG excerpts=${contextCache.ragExcerptCount ?? 0}; RAG prompt chars=${contextCache.ragPromptLength ?? 0}; tool summaries=${contextCache.toolSummaryCount ?? 0}.`
     : null
+  const hardReadOnlyIntent = hasHardReadOnlyOpenMythosIntent(card)
 
   return [
     'OpenMythos-inspired runtime card for this turn:',
@@ -457,9 +478,11 @@ export function formatOpenMythosRuntimeReminder(
     `- Expert routes: ${expertRoutes}`,
     '- Automatic dispatch: removed; OpenMythos provides advisory routes only.',
     coordinatorInstruction,
-    phase === 'orient' || phase === 'plan'
+    (phase === 'orient' || phase === 'plan') && hardReadOnlyIntent
       ? '- Phase guard: read, inspect, and plan only. Do not write files or run mutating tools until implement/verify/finalize.'
-      : '- Phase guard: write tools are allowed only when they are the smallest safe change and verification remains visible.',
+      : phase === 'orient' || phase === 'plan'
+        ? '- Phase hint: gather enough context before changing state; write tools are allowed when they are the smallest safe change and verification remains visible.'
+        : '- Phase hint: write tools are allowed when they are the smallest safe change and verification remains visible.',
     '- User-facing output guard: do not narrate internal agent-control failures, self-control problems, or fallback plans that ask the user to replace whole files manually. If worker dispatch or tool execution fails, continue locally when possible and report a concise actionable status.',
     contextCacheLine,
   ].join('\n')

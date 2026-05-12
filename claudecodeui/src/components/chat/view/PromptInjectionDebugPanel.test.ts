@@ -22,6 +22,8 @@ test('chat sends prompt injection debug flag and renders the right-side debug pa
 
   expect(types).toContain('PromptInjectionDebugPayload');
   expect(types).toContain('appendSystemPromptLength');
+  expect(types).toContain('nativeSystemPrompt');
+  expect(types).toContain('nativeSystemPromptLength');
   expect(types).toContain('originalCommand');
   expect(types).toContain('effectiveCommand');
   expect(types).toContain('commandChanged');
@@ -47,12 +49,15 @@ test('prompt injection debug panel renders original and effective commands', asy
 
   expect(panel).toContain('effectiveCommand');
   expect(panel).toContain('originalCommand');
+  expect(panel).toContain('nativeSystemPrompt');
   expect(panel).toContain('Command sent to Claude');
   expect(panel).toContain('Original user command');
+  expect(panel).toContain('Native Claude Code system prompt');
   expect(panel).toContain('Command changed');
   expect(panel).toContain('Command captured');
   expect(panel).toContain('copyValue');
   expect(panel).toContain('effectiveCommand || appendSystemPrompt');
+  expect(panel).not.toContain('Native Claude Code system prompt is intentionally not shown here.');
 });
 
 test('local prompt debug events are filtered by active session', async () => {

@@ -121,6 +121,7 @@ import {
   advanceOpenMythosRuntimeState,
   formatOpenMythosRuntimeReminder,
   isOpenMythosReadOnlyPhase,
+  shouldHardBlockOpenMythosReadOnlyPhase,
   shouldEnforceOpenMythosLoopBudget,
   type OpenMythosContextCacheDiagnostics,
   type OpenMythosRuntimeState,
@@ -375,6 +376,18 @@ function createOpenMythosCanUseTool(
     toolUseID,
     forceDecision,
   ) => {
+    const permissionMode = toolUseContext.getAppState().toolPermissionContext.mode
+    if (!shouldHardBlockOpenMythosReadOnlyPhase(runtimeState, permissionMode)) {
+      return canUseTool(
+        tool,
+        input,
+        toolUseContext,
+        assistantMessage,
+        toolUseID,
+        forceDecision,
+      )
+    }
+
     if (
       OPENMYTHOS_READ_ONLY_PHASE_TOOL_NAMES.some(toolName =>
         toolMatchesName(tool, toolName),

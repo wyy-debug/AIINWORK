@@ -76,11 +76,13 @@ export default function PromptInjectionDebugPanel({
 }: PromptInjectionDebugPanelProps) {
   const [copied, setCopied] = useState(false);
   const appendSystemPrompt = payload?.appendSystemPrompt || '';
+  const nativeSystemPrompt = payload?.nativeSystemPrompt || '';
   const originalCommand = payload?.originalCommand || '';
   const effectiveCommand = payload?.effectiveCommand || '';
   const hasPrompt = appendSystemPrompt.trim().length > 0;
   const hasEffectiveCommand = effectiveCommand.trim().length > 0;
   const promptLength = payload?.appendSystemPromptLength ?? appendSystemPrompt.length;
+  const nativeSystemPromptLength = payload?.nativeSystemPromptLength ?? nativeSystemPrompt.length;
   const effectiveCommandLength = payload?.effectiveCommandLength ?? effectiveCommand.length;
   const copyValue = effectiveCommand || appendSystemPrompt;
   const hasCopyValue = copyValue.trim().length > 0;
@@ -158,6 +160,7 @@ export default function PromptInjectionDebugPanel({
             <DebugField label="--append" value={formatBoolean(payload?.cli?.hasAppendSystemPromptFlag)} />
             <DebugField label="cmd changed" value={formatBoolean(payload?.commandChanged)} />
             <DebugField label="cmd length" value={effectiveCommandLength.toLocaleString()} />
+            <DebugField label="native sys" value={nativeSystemPromptLength.toLocaleString()} />
           </div>
 
           <DebugTextBlock
@@ -179,9 +182,12 @@ export default function PromptInjectionDebugPanel({
             maxHeightClass="max-h-[34vh] lg:max-h-[calc(100vh-520px)]"
           />
 
-          <div className="mt-3 text-[11px] leading-5 text-muted-foreground">
-            Native Claude Code system prompt is intentionally not shown here.
-          </div>
+          <DebugTextBlock
+            title="Native Claude Code system prompt"
+            value={nativeSystemPrompt}
+            emptyText="No native system prompt was captured for this run."
+            maxHeightClass="max-h-[34vh] lg:max-h-[calc(100vh-520px)]"
+          />
         </div>
       )}
     </aside>

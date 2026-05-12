@@ -6,6 +6,7 @@ import {
   getOpenMythosRuntimeConfig,
   getOpenMythosPhase,
   isOpenMythosReadOnlyPhase,
+  shouldHardBlockOpenMythosReadOnlyPhase,
   shouldAttachOpenMythosRuntimeCard,
   shouldApplyAdaptiveEffort,
   shouldEnforceOpenMythosLoopBudget,
@@ -114,6 +115,44 @@ describe('openmythos runtime card', () => {
     expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(true)
     expect(state.phase).toBe('orient')
     expect(isOpenMythosReadOnlyPhase(state)).toBe(true)
+  })
+
+  test('hard-blocks read-only phases only for review and plan mode', () => {
+    const implementationCard = buildOpenMythosRuntimeCard('Implement auth migration')
+    const reviewCard = buildOpenMythosRuntimeCard('review代码')
+    if (!implementationCard || !reviewCard) throw new Error('expected runtime cards')
+
+    expect(
+      shouldHardBlockOpenMythosReadOnlyPhase(
+        createOpenMythosRuntimeState(implementationCard),
+        'acceptEdits',
+      ),
+    ).toBe(false)
+    expect(
+      shouldHardBlockOpenMythosReadOnlyPhase(
+        createOpenMythosRuntimeState(implementationCard),
+        'plan',
+      ),
+    ).toBe(true)
+    expect(
+      shouldHardBlockOpenMythosReadOnlyPhase(
+        createOpenMythosRuntimeState(reviewCard),
+        'acceptEdits',
+      ),
+    ).toBe(true)
+  })
+
+  test('uses advisory phase hints instead of write bans for ordinary implementation work', () => {
+    const implementationCard = buildOpenMythosRuntimeCard('Implement auth migration')
+    if (!implementationCard) throw new Error('expected runtime card')
+
+    const reminder = formatOpenMythosRuntimeReminder(
+      implementationCard,
+      createOpenMythosRuntimeState(implementationCard),
+    )
+
+    expect(reminder).toContain('Phase hint')
+    expect(reminder).not.toContain('Do not write files')
   })
 
   test('does not override explicit session or environment effort', () => {

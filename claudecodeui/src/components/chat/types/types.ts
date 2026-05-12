@@ -338,6 +338,8 @@ export interface SubagentRuntimeDiagnostics {
 export interface PromptInjectionDebugPayload {
   appendSystemPrompt: string;
   appendSystemPromptLength: number;
+  nativeSystemPrompt?: string;
+  nativeSystemPromptLength?: number;
   originalCommand?: string;
   effectiveCommand?: string;
   effectiveCommandLength?: number;

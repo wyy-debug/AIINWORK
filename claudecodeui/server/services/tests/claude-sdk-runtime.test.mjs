@@ -47,8 +47,11 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   const source = await fs.readFile(sourcePath, 'utf8');
 
   assert.match(source, /function buildPromptInjectionDebugPayload/);
+  assert.match(source, /function captureNativeSystemPrompt/);
   assert.match(source, /text:\s*'prompt_injection_debug'/);
   assert.match(source, /appendSystemPromptLength/);
+  assert.match(source, /nativeSystemPrompt/);
+  assert.match(source, /nativeSystemPromptLength/);
   assert.match(source, /originalCommand/);
   assert.match(source, /effectiveCommand/);
   assert.match(source, /commandChanged/);
@@ -56,6 +59,7 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   assert.match(source, /bareMode:\s*shouldUseBareMode\(childEnv\)/);
   assert.match(source, /hasBareFlag:\s*cliArgs\.includes\('--bare'\)/);
   assert.match(source, /hasAppendSystemPromptFlag:\s*cliArgs\.includes\('--append-system-prompt'\)/);
+  assert.match(source, /await emitPromptInjectionDebug\(ws,\s*options,\s*childEnv,\s*cliArgs,\s*capturedSessionId \|\| sessionId \|\| clientSessionId \|\| null,\s*\{/);
   assert.match(source, /emitPromptInjectionDebug\(ws,\s*options,\s*childEnv,\s*cliArgs,\s*capturedSessionId \|\| sessionId \|\| clientSessionId \|\| null,\s*\{/);
   assert.match(source, /effectiveCommand:\s*finalCommand/);
 });
