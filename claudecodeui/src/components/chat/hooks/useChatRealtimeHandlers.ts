@@ -117,6 +117,7 @@ export function useChatRealtimeHandlers({
   const projectRefreshTimerRef = useRef<number | null>(null);
   const sessionStreamBuffersRef = useRef(new Map<string, string>());
   const sessionStreamTimersRef = useRef(new Map<string, number>());
+  const temporarySessionAliasesRef = useRef(new Map<string, string>());
 
   const scheduleProjectsRefresh = useCallback((delay = 400) => {
     if (projectRefreshTimerRef.current) {
@@ -140,6 +141,7 @@ export function useChatRealtimeHandlers({
       }
       sessionStreamTimersRef.current.clear();
       sessionStreamBuffersRef.current.clear();
+      temporarySessionAliasesRef.current.clear();
     };
   }, []);
 
@@ -222,6 +224,8 @@ export function useChatRealtimeHandlers({
 
     const sid = msg.sessionId || activeViewSessionId;
     const messageProvider = (msg.provider || provider) as LLMProvider;
+    const remapTemporarySessionId = (sessionId: string | null | undefined) =>
+      sessionId ? (temporarySessionAliasesRef.current.get(sessionId) || sessionId) : sessionId;
 
     const clearSessionStreamTimer = (sessionId: string) => {
       const timer = sessionStreamTimersRef.current.get(sessionId);
@@ -272,10 +276,11 @@ export function useChatRealtimeHandlers({
     }
 
     if (msg.kind === 'status' && msg.text === 'prompt_injection_debug') {
+      const promptDebugSessionId = remapTemporarySessionId(sid);
       if (
-        sid
+        promptDebugSessionId
         && activeViewSessionId
-        && sid !== activeViewSessionId
+        && promptDebugSessionId !== activeViewSessionId
         && !isTemporarySessionId(activeViewSessionId)
       ) {
         return;
@@ -285,7 +290,7 @@ export function useChatRealtimeHandlers({
         : null;
       setPromptInjectionDebug?.(promptInjection ? {
         ...promptInjection,
-        sessionId: sid || promptInjection.sessionId || null,
+        sessionId: promptDebugSessionId || promptInjection.sessionId || null,
         receivedAt: new Date().toLocaleString(),
       } : null);
       return;
@@ -342,11 +347,25 @@ export function useChatRealtimeHandlers({
 
         if (temporarySessionId && isTemporarySessionId(temporarySessionId) && temporarySessionId !== newSessionId) {
           sessionStore.replaceSessionId(temporarySessionId, newSessionId);
+          temporarySessionAliasesRef.current.set(temporarySessionId, newSessionId);
+          setPromptInjectionDebug?.((previous) => {
+            if (previous && previous.sessionId === temporarySessionId) {
+              return {
+                ...previous,
+                sessionId: newSessionId,
+                receivedAt: new Date().toLocaleString(),
+              };
+            }
+            return previous;
+          });
         }
 
         if (!currentSessionId || currentSessionId.startsWith('new-session-')) {
           sessionStorage.setItem('pendingSessionId', newSessionId);
-          if (pendingViewSessionRef.current && !pendingViewSessionRef.current.sessionId) {
+          if (
+            pendingViewSessionRef.current
+            && (!pendingViewSessionRef.current.sessionId || pendingViewSessionRef.current.sessionId === temporarySessionId)
+          ) {
             pendingViewSessionRef.current.sessionId = newSessionId;
           }
           setCurrentSessionId(newSessionId);

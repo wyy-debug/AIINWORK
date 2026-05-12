@@ -67,3 +67,14 @@ test('local prompt debug events are filtered by active session', async () => {
   expect(handlerBlock).toContain('!isTemporarySessionId(activeViewSessionId)');
   expect(handlerBlock).toContain('return;');
 });
+
+test('session creation migrates prompt debug from temporary sessions', async () => {
+  const realtimeHandlers = (await readChatFile('hooks/useChatRealtimeHandlers.ts')).replace(/\r\n/g, '\n');
+  const sessionCreatedStart = realtimeHandlers.indexOf("case 'session_created': {");
+  const sessionCreatedEnd = realtimeHandlers.indexOf("case 'complete': {", sessionCreatedStart);
+  const sessionCreatedBlock = realtimeHandlers.slice(sessionCreatedStart, sessionCreatedEnd);
+
+  expect(sessionCreatedBlock).toContain('setPromptInjectionDebug?.((previous)');
+  expect(sessionCreatedBlock).toContain('previous.sessionId === temporarySessionId');
+  expect(sessionCreatedBlock).toContain('sessionId: newSessionId');
+});

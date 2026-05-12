@@ -156,7 +156,7 @@ const HIGH_RISK_SIGNALS: Signal[] = [
 
 const REVIEW_SIGNALS: Signal[] = [
   {
-    pattern: /\b(code\s*review|review|audit)\b|(?:review|审查|评审)\s*代码|代码\s*(?:review|审查|评审)|代码审查|审查代码|评审代码/i,
+    pattern: /\b(code\s*(?:review|reivew)|review|reivew|audit)\b|(?:review|reivew|审查|评审)\s*(?:全部)?代码|(?:全部)?代码\s*(?:review|reivew|审查|评审)|代码审查|审查代码|评审代码/i,
     reason: 'code review requested',
     weight: 4,
     route: 'Inspect git status and current diff before reporting review findings.',

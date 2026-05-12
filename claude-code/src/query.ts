@@ -90,6 +90,8 @@ import {
 import { ESCALATED_MAX_TOKENS } from './utils/context.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from './services/analytics/growthbook.js'
 import { AGENT_TOOL_NAME } from '@mtl-code/builtin-tools/tools/AgentTool/constants.js'
+import { DISCOVER_SKILLS_TOOL_NAME } from '@mtl-code/builtin-tools/tools/DiscoverSkillsTool/prompt.js'
+import { SKILL_TOOL_NAME } from '@mtl-code/builtin-tools/tools/SkillTool/constants.js'
 import { SLEEP_TOOL_NAME } from '@mtl-code/builtin-tools/tools/SleepTool/prompt.js'
 import { executePostSamplingHooks } from './utils/hooks/postSamplingHooks.js'
 import { executeStopFailureHooks } from './utils/hooks.js'
@@ -148,6 +150,12 @@ const taskSummaryModule = feature('BG_SESSIONS')
   ? (require('./utils/taskSummary.js') as typeof import('./utils/taskSummary.js'))
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
+
+const OPENMYTHOS_READ_ONLY_PHASE_TOOL_NAMES = [
+  AGENT_TOOL_NAME,
+  SKILL_TOOL_NAME,
+  DISCOVER_SKILLS_TOOL_NAME,
+] as const
 
 function* yieldMissingToolResultBlocks(
   assistantMessages: AssistantMessage[],
@@ -367,7 +375,11 @@ function createOpenMythosCanUseTool(
     toolUseID,
     forceDecision,
   ) => {
-    if (toolMatchesName(tool, AGENT_TOOL_NAME)) {
+    if (
+      OPENMYTHOS_READ_ONLY_PHASE_TOOL_NAMES.some(toolName =>
+        toolMatchesName(tool, toolName),
+      )
+    ) {
       return canUseTool(
         tool,
         input,

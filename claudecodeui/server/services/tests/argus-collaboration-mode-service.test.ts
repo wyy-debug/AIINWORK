@@ -45,6 +45,8 @@ test('Argus expands terse Chinese code review requests into explicit workspace r
 
 test('Argus treats casual review-shortcuts as workspace code review intent', async () => {
   for (const input of [
+    'reivew\u5168\u90e8\u4ee3\u7801',
+    'reivew\u4ee3\u7801',
     'review一下',
     'review下',
     '帮我review一下',
