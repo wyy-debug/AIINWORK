@@ -45,6 +45,8 @@ test('Argus expands terse Chinese code review requests into explicit workspace r
 
 test('Argus treats casual review-shortcuts as workspace code review intent', async () => {
   for (const input of [
+    'review下全部代码',
+    '检查下当前改动',
     'reivew\u5168\u90e8\u4ee3\u7801',
     'reivew\u4ee3\u7801',
     'review一下',
@@ -96,6 +98,23 @@ test('Argus leaves non-terse review discussion prompts unchanged', async () => {
   const command = applyArgusCodeReviewIntentToChatCommand(original);
 
   assert.equal(command, original);
+});
+
+test('Argus leaves Chinese code investigation prompts unchanged', async () => {
+  for (const input of [
+    '检查下代码中的提示词是怎么注入的',
+    '检查下代码里的 prompt 为什么会显示这么多',
+    '看下代码中 appendSystemPrompt 是怎么拼进去的',
+  ]) {
+    const original = {
+      type: 'claude-command',
+      command: input,
+      options: {},
+    };
+    const command = applyArgusCodeReviewIntentToChatCommand(original);
+
+    assert.equal(command, original);
+  }
 });
 
 test('Argus collaboration mode also follows persisted toolsSettings permissionMode', async () => {
