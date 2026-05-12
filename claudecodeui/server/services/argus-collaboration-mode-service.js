@@ -152,6 +152,13 @@ const CODE_REVIEW_INTENT_PROMPT = [
   'Final response must report findings first, ordered by severity, with file and line references when possible.',
 ].join('\n');
 
+const TOOL_INSPECTION_INTENT_PROMPT = [
+  'Repository inspection intent active.',
+  'The user is asking about current code, files, prompts, or runtime behavior in this repository.',
+  'Before answering with conclusions, use available tools to search and read the relevant files.',
+  'Do not stop after only acknowledging the request or describing a plan. If tools are unavailable, say that clearly.',
+].join('\n');
+
 function appendPrompt(existing, addition) {
   const current = typeof existing === 'string' ? existing.trim() : '';
   const next = typeof addition === 'string' ? addition.trim() : '';
@@ -181,6 +188,22 @@ function isTerseCodeReviewRequest(command) {
     || CHINESE_REVIEW_SHORTCUT_PATTERN.test(normalized)
     || CHINESE_NATIVE_REVIEW_PATTERN.test(normalized)
     || (ENGLISH_CODE_REVIEW_PATTERN.test(normalized) && ENGLISH_CODE_REVIEW_SCOPE_PATTERN.test(normalized));
+}
+
+const TOOL_INSPECTION_REQUEST_MAX_LENGTH = 260;
+const CHINESE_TOOL_INSPECTION_PATTERN = /(?:\u68c0\u67e5|\u67e5\u770b|\u770b\u4e0b|\u770b\u4e00\u4e0b|\u67e5\u4e00\u4e0b|\u67e5\u4e0b|\u5b9a\u4f4d|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u68b3\u7406|\u6392\u67e5|\u8c03\u67e5).{0,120}(?:\u4ee3\u7801|\u4ed3\u5e93|\u5b9e\u73b0|\u6587\u4ef6|\u63d0\u793a\u8bcd|\u7cfb\u7edf\u63d0\u793a|system\s*prompt|appendSystemPrompt|prompt|inject|\u6ce8\u5165|\u94fe\u8def|\u903b\u8f91|\u51fd\u6570|\u6a21\u5757|\u670d\u52a1|\u524d\u7aef|\u540e\u7aef)|(?:\u4ee3\u7801|\u4ed3\u5e93|\u5b9e\u73b0|\u6587\u4ef6|\u63d0\u793a\u8bcd|\u7cfb\u7edf\u63d0\u793a|system\s*prompt|appendSystemPrompt|prompt|inject|\u6ce8\u5165|\u94fe\u8def|\u903b\u8f91|\u51fd\u6570|\u6a21\u5757|\u670d\u52a1|\u524d\u7aef|\u540e\u7aef).{0,120}(?:\u600e\u4e48|\u5982\u4f55|\u5728\u54ea|\u54ea\u91cc|\u4e3a\u4ec0\u4e48|\u4e3a\u5565|\u770b\u4e0b|\u67e5\u4e0b|\u68c0\u67e5|\u5b9a\u4f4d|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u68b3\u7406|\u6392\u67e5)/i;
+const ENGLISH_TOOL_INSPECTION_PATTERN = /\b(?:inspect|check|look\s+into|find|locate|trace|investigate|search|read)\b.{0,120}\b(?:code|implementation|files?|repo(?:sitory)?|prompt|system\s*prompt|inject|appendSystemPrompt|frontend|backend|server|runtime)\b/i;
+
+function isToolInspectionRequest(command) {
+  const normalized = normalizeReviewIntentCommand(command);
+  if (!normalized || normalized.length > TOOL_INSPECTION_REQUEST_MAX_LENGTH) {
+    return false;
+  }
+  if (isTerseCodeReviewRequest(normalized)) {
+    return false;
+  }
+  return CHINESE_TOOL_INSPECTION_PATTERN.test(normalized)
+    || ENGLISH_TOOL_INSPECTION_PATTERN.test(normalized);
 }
 
 function isShortContinuationRequest(command) {
@@ -259,6 +282,27 @@ export function applyArgusCodeReviewIntentToChatCommand(data) {
       ...(data.options || {}),
       appendSystemPrompt: appendPrompt(data.options?.appendSystemPrompt, CODE_REVIEW_INTENT_PROMPT),
       argusCodeReviewIntent: true,
+    },
+  };
+}
+
+export function applyArgusToolInspectionIntentToChatCommand(data) {
+  if (!data || typeof data !== 'object' || data.type !== 'claude-command') {
+    return data;
+  }
+  if (data.options?.argusCodeReviewIntent === true || data.options?.argusToolInspectionIntent === true) {
+    return data;
+  }
+  if (!isToolInspectionRequest(data.command)) {
+    return data;
+  }
+
+  return {
+    ...data,
+    options: {
+      ...(data.options || {}),
+      appendSystemPrompt: appendPrompt(data.options?.appendSystemPrompt, TOOL_INSPECTION_INTENT_PROMPT),
+      argusToolInspectionIntent: true,
     },
   };
 }

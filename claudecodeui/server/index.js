@@ -81,6 +81,7 @@ import { normalizeSessionAgentConfiguration } from './services/session-agent-con
 import {
     applyArgusCodeReviewIntentToChatCommand,
     applyArgusCollaborationModeOptions,
+    applyArgusToolInspectionIntentToChatCommand,
 } from './services/argus-collaboration-mode-service.js';
 import { dispatchSubagentTaskControl } from './services/subagent-task-control-service.js';
 import { swarmEventBus } from './services/swarm-broadcast-service.js';
@@ -2956,7 +2957,9 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 setWriterAutoCaptureContext(writer, data, 'claude');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'claude');
-                const commandWithIntent = applyArgusCodeReviewIntentToChatCommand(data);
+                const commandWithIntent = applyArgusToolInspectionIntentToChatCommand(
+                    applyArgusCodeReviewIntentToChatCommand(data),
+                );
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithIntent)),
                 ));

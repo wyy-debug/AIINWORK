@@ -681,8 +681,21 @@ const CODE_REVIEW_TOOL_FALLBACK_PROMPT = [
   'If tools are unavailable, state that blocker clearly instead of pretending the review was performed.',
 ].join('\n');
 
+const TOOL_INSPECTION_FALLBACK_PROMPT = [
+  'The previous response did not inspect the repository.',
+  'Do not answer with only a plan, promise, or status update.',
+  'Use the available tools now to search the repository for relevant symbols and files.',
+  'Read the relevant files before answering.',
+  'Then explain the actual implementation path you inspected, with file references when possible.',
+  'If tools are unavailable, state that blocker clearly instead of pretending the inspection was performed.',
+].join('\n');
+
 function buildCodeReviewToolFallbackPrompt() {
   return CODE_REVIEW_TOOL_FALLBACK_PROMPT;
+}
+
+function buildToolInspectionFallbackPrompt() {
+  return TOOL_INSPECTION_FALLBACK_PROMPT;
 }
 
 function extractMtlCodeAssistantText(message = {}) {
@@ -740,6 +753,28 @@ function shouldSendCodeReviewToolFallback({
     && fallbackSent !== true
     && sawToolUse !== true
     && isCodeReviewAcknowledgementText(assistantText);
+}
+
+function isToolInspectionAcknowledgementText(text = '') {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(?:i(?:'ll| will| am going to| can)|let me|i will first|i'll first)\b.{0,200}\b(?:inspect|check|look|search|read|locate|trace|find|investigate|open)\b/i.test(normalized)
+    || /(?:\u6211(?:\u4f1a|\u5c06|\u5148|\u6765)|\u6211\u5148|\u8ba9\u6211|\u5148|\u63a5\u4e0b\u6765|\u51c6\u5907|\u4f1a\u5148).{0,160}(?:\u68c0\u67e5|\u67e5\u770b|\u5b9a\u4f4d|\u641c\u7d22|\u67e5\u627e|\u8bfb\u53d6|\u8bfb|\u68b3\u7406|\u8ffd\u8e2a|\u770b\u4e0b|\u770b\u4e00\u4e0b|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u8c03\u67e5)/i.test(normalized);
+}
+
+function shouldSendToolInspectionFallback({
+  options = {},
+  fallbackSent = false,
+  sawToolUse = false,
+  assistantText = '',
+} = {}) {
+  return options?.argusToolInspectionIntent === true
+    && fallbackSent !== true
+    && sawToolUse !== true
+    && isToolInspectionAcknowledgementText(assistantText);
 }
 
 function shouldStartCodeReviewFallbackRunAfterClose({
@@ -1428,17 +1463,26 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         provider: 'claude',
         contextBudget,
       });
-      if (shouldSendCodeReviewToolFallback({
+      const shouldSendReviewFallback = shouldSendCodeReviewToolFallback({
         options,
         fallbackSent: codeReviewFallbackSent,
         sawToolUse: codeReviewToolUseSeen,
         assistantText: codeReviewAssistantText,
-      })) {
+      });
+      const shouldSendInspectionFallback = shouldSendToolInspectionFallback({
+        options,
+        fallbackSent: codeReviewFallbackSent,
+        sawToolUse: codeReviewToolUseSeen,
+        assistantText: codeReviewAssistantText,
+      });
+      if (shouldSendReviewFallback || shouldSendInspectionFallback) {
         codeReviewFallbackSent = true;
         resultReceived = false;
         codeReviewAssistantText = '';
         codeReviewToolUseSeen = false;
-        codeReviewFallbackPrompt = buildCodeReviewToolFallbackPrompt();
+        codeReviewFallbackPrompt = shouldSendReviewFallback
+          ? buildCodeReviewToolFallbackPrompt()
+          : buildToolInspectionFallbackPrompt();
         codeReviewFallbackSessionId = message.session_id || capturedSessionId || sessionId || clientSessionId || '';
         writeMtlCodeJson(child, createMtlCodeUserMessage(codeReviewFallbackPrompt));
         return;
@@ -1576,6 +1620,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         resume: true,
         clientMessageId: null,
         argusCodeReviewIntent: false,
+        argusToolInspectionIntent: false,
       }, ws);
       return;
     }
@@ -2129,6 +2174,8 @@ export {
   isMtlCodeUserAbort,
   buildMtlCodeCloseFailureMessage,
   buildCodeReviewToolFallbackPrompt,
+  buildToolInspectionFallbackPrompt,
   shouldSendCodeReviewToolFallback,
+  shouldSendToolInspectionFallback,
   shouldStartCodeReviewFallbackRunAfterClose
 };

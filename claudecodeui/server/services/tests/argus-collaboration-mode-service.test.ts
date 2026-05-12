@@ -4,6 +4,7 @@ import { test } from 'vitest';
 import {
   applyArgusCodeReviewIntentToChatCommand,
   applyArgusCollaborationModeOptions,
+  applyArgusToolInspectionIntentToChatCommand,
   getArgusPlanModeAllowedTools,
   getArgusPlanModeDeniedTools,
   resolveArgusPermissionMode,
@@ -100,7 +101,7 @@ test('Argus leaves non-terse review discussion prompts unchanged', async () => {
   assert.equal(command, original);
 });
 
-test('Argus leaves Chinese code investigation prompts unchanged', async () => {
+test('Argus leaves Chinese code investigation command text unchanged but marks it for tool inspection', async () => {
   for (const input of [
     '检查下代码中的提示词是怎么注入的',
     '检查下代码里的 prompt 为什么会显示这么多',
@@ -111,10 +112,28 @@ test('Argus leaves Chinese code investigation prompts unchanged', async () => {
       command: input,
       options: {},
     };
-    const command = applyArgusCodeReviewIntentToChatCommand(original);
+    const command = applyArgusToolInspectionIntentToChatCommand(
+      applyArgusCodeReviewIntentToChatCommand(original),
+    );
 
-    assert.equal(command, original);
+    assert.equal(command.command, input);
+    assert.equal(command.options.argusCodeReviewIntent, undefined);
+    assert.equal(command.options.argusToolInspectionIntent, true);
+    assert.match(command.options.appendSystemPrompt, /Repository inspection intent active/i);
   }
+});
+
+test('Argus leaves ordinary prompt-injection discussion as normal chat', async () => {
+  const original = {
+    type: 'claude-command',
+    command: '讲一下提示词注入是什么',
+    options: {},
+  };
+  const command = applyArgusToolInspectionIntentToChatCommand(
+    applyArgusCodeReviewIntentToChatCommand(original),
+  );
+
+  assert.equal(command, original);
 });
 
 test('Argus collaboration mode also follows persisted toolsSettings permissionMode', async () => {

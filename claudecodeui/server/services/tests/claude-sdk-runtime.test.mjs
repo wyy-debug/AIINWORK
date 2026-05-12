@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildCodeReviewToolFallbackPrompt,
+  buildToolInspectionFallbackPrompt,
   shouldStartCodeReviewFallbackRunAfterClose,
   shouldSendCodeReviewToolFallback,
+  shouldSendToolInspectionFallback,
 } from '../../claude-sdk.js';
 
 test('Argus direct close handling treats only explicit user abort as aborted', async () => {
@@ -115,6 +117,37 @@ test('Argus review fallback prompt requires repository inspection before finding
   assert.match(prompt, /git diff/);
   assert.match(prompt, /Report findings first/i);
   assert.doesNotMatch(prompt, /acknowledge/i);
+});
+
+test('Argus tool inspection intent sends a fallback when first response only plans to inspect code', () => {
+  assert.equal(shouldSendToolInspectionFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: false,
+    sawToolUse: false,
+    assistantText: '我先在仓库里定位和提示词/system prompt/inject相关的实现，然后读关键文件梳理注入链路。',
+  }), true);
+
+  assert.equal(shouldSendToolInspectionFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: false,
+    sawToolUse: true,
+    assistantText: '我先在仓库里定位相关实现。',
+  }), false);
+
+  assert.equal(shouldSendToolInspectionFallback({
+    options: { argusToolInspectionIntent: false },
+    fallbackSent: false,
+    sawToolUse: false,
+    assistantText: '我先在仓库里定位相关实现。',
+  }), false);
+});
+
+test('Argus tool inspection fallback prompt requires searching and reading files', () => {
+  const prompt = buildToolInspectionFallbackPrompt();
+
+  assert.match(prompt, /search the repository/i);
+  assert.match(prompt, /read the relevant files/i);
+  assert.match(prompt, /Do not answer with only a plan/i);
 });
 
 test('Argus starts a resumed fallback run when the print process exits after ack-only review', () => {
