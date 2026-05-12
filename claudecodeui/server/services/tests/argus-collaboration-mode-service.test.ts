@@ -68,6 +68,23 @@ test('Argus treats casual review-shortcuts as workspace code review intent', asy
   }
 });
 
+test('Argus treats short continuation in a review session as workspace review intent', async () => {
+  const command = applyArgusCodeReviewIntentToChatCommand({
+    type: 'claude-command',
+    command: '继续',
+    options: {
+      sessionId: 'session-123',
+      resume: true,
+      sessionSummary: 'review下',
+    },
+  });
+
+  assert.match(command.command, /Review the current workspace changes/i);
+  assert.match(command.command, /Original user request: 继续/i);
+  assert.match(command.options.appendSystemPrompt, /Code review intent active/i);
+  assert.equal(command.options.argusCodeReviewIntent, true);
+});
+
 test('Argus leaves non-terse review discussion prompts unchanged', async () => {
   const original = {
     type: 'claude-command',

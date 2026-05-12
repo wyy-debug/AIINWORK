@@ -133,6 +133,7 @@ const CHINESE_REVIEW_SHORTCUT_PATTERN = /(?:^|[\s,.;:!?，。；：！？])(?:\u
 const CHINESE_NATIVE_REVIEW_PATTERN = /(?:\u5ba1\u67e5|\u8bc4\u5ba1|\u590d\u67e5|\u68c0\u67e5)\s*(?:\u4e00\u4e0b|\u4e0b)?\s*(?:\u4ee3\u7801|\u5f53\u524d|\u8fd9\u4e2a|\u94fe\u8def|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a|diff|pr|commit|repo)?|(?:\u4ee3\u7801|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a)\s*(?:\u5ba1\u67e5|\u8bc4\u5ba1|\u590d\u67e5|\u68c0\u67e5)/i;
 const ENGLISH_CODE_REVIEW_SCOPE_PATTERN = /\b(code|diff|changes?|workspace|worktree|repo(?:sitory)?|pull request|pr|commit|branch|file|module|class|function|current|staged|working tree|audit)\b/i;
 const ENGLISH_CODE_REVIEW_PATTERN = /^(?:please|pls|can you|could you)?\s*(?:do\s+a\s+)?(?:code\s*)?(?:review|audit)\b/i;
+const REVIEW_CONTINUATION_PATTERN = /^(?:continue|proceed|go\s+on|carry\s+on|resume|\u7ee7\u7eed(?:\u5427|\u4e0b|\u4e00\u4e0b)?|\u63a5\u7740(?:\u6765)?|\u7ee7\u7eed\u68c0\u67e5)$/i;
 
 const CODE_REVIEW_INTENT_PROMPT = [
   'Code review intent active.',
@@ -178,6 +179,26 @@ function isTerseCodeReviewRequest(command) {
     || (ENGLISH_CODE_REVIEW_PATTERN.test(normalized) && ENGLISH_CODE_REVIEW_SCOPE_PATTERN.test(normalized));
 }
 
+function isShortContinuationRequest(command) {
+  const normalized = normalizeReviewIntentCommand(command);
+  return Boolean(
+    normalized
+    && normalized.length <= 40
+    && REVIEW_CONTINUATION_PATTERN.test(normalized),
+  );
+}
+
+function hasReviewSessionContext(data) {
+  const options = data?.options && typeof data.options === 'object' ? data.options : {};
+  const candidates = [
+    options.sessionSummary,
+    options.sessionName,
+    options.sessionTitle,
+    data?.sessionSummary,
+  ];
+  return candidates.some(candidate => isTerseCodeReviewRequest(candidate));
+}
+
 function buildWorkspaceReviewCommand(command) {
   const normalized = normalizeReviewIntentCommand(command);
   return [
@@ -221,7 +242,9 @@ export function applyArgusCodeReviewIntentToChatCommand(data) {
   if (data.options?.argusCodeReviewIntent === true) {
     return data;
   }
-  if (!isTerseCodeReviewRequest(data.command)) {
+  const isReviewRequest = isTerseCodeReviewRequest(data.command)
+    || (isShortContinuationRequest(data.command) && hasReviewSessionContext(data));
+  if (!isReviewRequest) {
     return data;
   }
 
