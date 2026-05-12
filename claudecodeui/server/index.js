@@ -78,7 +78,10 @@ import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
 import { normalizeSessionAgentConfiguration } from './services/session-agent-configuration-service.js';
-import { applyArgusCollaborationModeOptions } from './services/argus-collaboration-mode-service.js';
+import {
+    applyArgusCodeReviewIntentToChatCommand,
+    applyArgusCollaborationModeOptions,
+} from './services/argus-collaboration-mode-service.js';
 import { dispatchSubagentTaskControl } from './services/subagent-task-control-service.js';
 import { swarmEventBus } from './services/swarm-broadcast-service.js';
 import {
@@ -2292,8 +2295,13 @@ function createRuntimeDiagnosticsPayload(data) {
         return null;
     }
     const permissions = createRuntimePermissionSnapshot(data);
-    const previewRuntimeCard = diagnostics.openMythosRuntime
-        ? buildOpenMythosRuntimePreview(
+    const bareMode = diagnostics.bareMode === true;
+    const openMythosRuntimeCardActive = Boolean(
+        diagnostics.openMythosRuntime?.enabled
+        && diagnostics.openMythosRuntime?.taskCard
+        && !bareMode
+    );
+    const previewRuntimeCard = openMythosRuntimeCardActive ? buildOpenMythosRuntimePreview(
             data?.command,
             diagnostics.openMythosRuntime,
             permissions.permissionMode,
@@ -2302,6 +2310,8 @@ function createRuntimeDiagnosticsPayload(data) {
     const openMythosRuntime = diagnostics.openMythosRuntime
         ? {
             ...diagnostics.openMythosRuntime,
+            bareMode,
+            openMythosRuntimeCardActive,
             runtimeCard: previewRuntimeCard,
             contextCache: {
                 skillPromptLength: diagnostics.skillPromptLength || 0,
@@ -2312,6 +2322,8 @@ function createRuntimeDiagnosticsPayload(data) {
 
     return {
         ...diagnostics,
+        bareMode,
+        openMythosRuntimeCardActive,
         openMythosRuntime,
         provider: getProviderFromCommandType(data?.type),
         sessionId: data?.options?.sessionId || data?.sessionId || null,
@@ -2641,6 +2653,12 @@ async function applyAgentRuntimeToChatCommand(data) {
     const resolvedContextWindowTokens = sessionModelRuntime?.contextWindowTokens
         || data?.options?.contextWindowTokens
         || null;
+    const sessionBareMode = sessionModelRuntime?.profile?.bareMode === true;
+    const openMythosRuntimeCardActive = Boolean(
+        openMythosRuntime?.enabled
+        && openMythosRuntime?.taskCard
+        && !sessionBareMode
+    );
     const agentId = data?.options?.agentId || (allowSessionAgentBinding ? storedBinding?.agentId : '') || '';
     const sessionSkills = Array.isArray(sessionConfiguration?.skills)
         ? sessionConfiguration.skills.filter((skill) => typeof skill === 'string' && skill.trim()).slice(0, 60)
@@ -2679,6 +2697,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                         model: resolvedSessionModel || data?.options?.model || '',
                         modelProfileId: sessionModelProfileId || '',
                         sessionAgentPackage,
+                        bareMode: sessionBareMode,
+                        openMythosRuntimeCardActive,
                         openMythosRuntime,
                         subagents: subagentRuntime,
                     },
@@ -2722,6 +2742,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                 model: resolvedSessionModel || data?.options?.model || '',
                 modelProfileId: sessionModelProfileId || '',
                 sessionAgentPackage,
+                bareMode: sessionBareMode,
+                openMythosRuntimeCardActive,
                 openMythosRuntime,
                 subagents: subagentRuntime,
             },
@@ -2784,6 +2806,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                     model: resolvedSessionModel || data?.options?.model || '',
                     modelProfileId: sessionModelProfileId || '',
                     sessionAgentPackage,
+                    bareMode: sessionBareMode,
+                    openMythosRuntimeCardActive,
                     openMythosRuntime,
                     subagents: subagentRuntime,
                 },
@@ -2843,6 +2867,8 @@ async function applyAgentRuntimeToChatCommand(data) {
             model: resolvedSessionModel || runtime.model || data?.options?.model || '',
             modelProfileId: sessionModelProfileId || '',
             sessionAgentPackage,
+            bareMode: sessionBareMode,
+            openMythosRuntimeCardActive,
             openMythosRuntime,
             subagents: subagentRuntime,
         },
@@ -2915,9 +2941,16 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 setWriterAutoCaptureContext(writer, data, 'claude');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'claude');
+                const commandWithIntent = applyArgusCodeReviewIntentToChatCommand(data);
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
-                    applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(data)),
+                    applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithIntent)),
                 ));
+                if (commandData?.options?.debugPromptInjection === true) {
+                    commandData.options = {
+                        ...(commandData.options || {}),
+                        debugPromptInjectionOriginalCommand: typeof data.command === 'string' ? data.command : '',
+                    };
+                }
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
                 emitObsidianWikiResult(writer, commandData);

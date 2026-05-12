@@ -79,14 +79,6 @@ const SAMPLE_MANIFEST: SwarmTemplateManifest = {
       fields: [
         { id: 'objective', label: 'Objective', type: 'textarea', required: true },
       ],
-      presets: [
-        {
-          id: 'payment-timeout',
-          label: '支付接口排查',
-          answers: { objective: '请排查支付接口超时问题，并优化系统稳定性。' },
-        },
-      ],
-      defaultPresetId: 'payment-timeout',
     },
   },
 };
@@ -166,12 +158,12 @@ function isOnlineStatus(status?: string) {
 
 export default function SwarmDashboard({ selectedProject, sessionId, latestMessage }: SwarmDashboardProps) {
   const [manifestText, setManifestText] = useState(() => JSON.stringify(getSampleSwarmManifest(), null, 2));
-  const [objective, setObjective] = useState('请排查支付接口超时问题，并优化系统稳定性。');
+  const [objective, setObjective] = useState('');
   const [runtimeMode, setRuntimeMode] = useState<'coordinator-subagents' | 'local-control-plane'>('coordinator-subagents');
   const [run, setRun] = useState<SwarmRunSnapshot | null>(null);
   const [runs, setRuns] = useState<SwarmRunSnapshot[]>([]);
   const [eventQuery, setEventQuery] = useState('');
-  const [messageDraft, setMessageDraft] = useState('请同步当前执行进展。');
+  const [messageDraft, setMessageDraft] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedMessageId, setSelectedMessageId] = useState('');
   const [messageTrace, setMessageTrace] = useState<SwarmDeliveryTrace[]>([]);
@@ -333,6 +325,11 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
   }, [latestMessage, refreshRun, run?.id]);
 
   const startRun = useCallback(async () => {
+    const trimmedObjective = objective.trim();
+    if (!trimmedObjective) {
+      setError('请输入多 Agent 协作目标。');
+      return;
+    }
     setIsBusy(true);
     setError('');
     try {
@@ -344,10 +341,10 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
       }
       const response = await api.startSwarmRun({
         template: validateData.manifest,
-        objective,
+        objective: trimmedObjective,
         sessionId: sessionId || '',
         projectPath: selectedProject.fullPath || selectedProject.path || '',
-        launchAnswers: { objective },
+        launchAnswers: { objective: trimmedObjective },
         runtimeMode,
       });
       const data = await response.json();
@@ -494,6 +491,7 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
           <input
             value={objective}
             onChange={(event) => setObjective(event.target.value)}
+            placeholder="输入多 Agent 协作目标"
             className="h-9 min-w-[220px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs outline-none transition focus:border-blue-400 focus:bg-white dark:border-border dark:bg-background dark:focus:border-primary"
           />
           <select
@@ -504,7 +502,7 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
             <option value="coordinator-subagents">真实 Subagent</option>
             <option value="local-control-plane">Local Stub</option>
           </select>
-          <button type="button" onClick={startRun} disabled={isBusy} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60">
+          <button type="button" onClick={startRun} disabled={isBusy || !objective.trim()} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60">
             <Play className="h-3.5 w-3.5" />
             Dispatch
           </button>
@@ -610,12 +608,12 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
                 <div className="relative flex items-center justify-center">
                   <div className="absolute left-0 right-0 top-1/2 border-t border-dashed border-blue-500" />
                   <span className="relative bg-[#f6f8fb] px-2 text-xs font-medium text-blue-600 dark:bg-background">{card.lane.dispatchLabel}</span>
-                  <span className="absolute -right-1 top-1/2 h-0 w-0 -translate-y-1/2 border-y-[5px] border-l-[8px] border-y-transparent border-l-blue-500" />
+                  <span className="absolute -right-1 top-1/2 h-0 w-0 -translate-y-1/2 border-y-[5px] border-l-8 border-y-transparent border-l-blue-500" />
                 </div>
                 <div className="relative flex items-center justify-center">
                   <div className="absolute left-0 right-0 top-1/2 border-t border-dashed border-emerald-500" />
                   <span className="relative bg-[#f6f8fb] px-2 text-xs font-medium text-emerald-600 dark:bg-background">{card.lane.returnLabel}</span>
-                  <span className="absolute -left-1 top-1/2 h-0 w-0 -translate-y-1/2 border-y-[5px] border-r-[8px] border-y-transparent border-r-emerald-500" />
+                  <span className="absolute -left-1 top-1/2 h-0 w-0 -translate-y-1/2 border-y-[5px] border-r-8 border-y-transparent border-r-emerald-500" />
                 </div>
               </div>
             ))}

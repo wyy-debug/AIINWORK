@@ -9,12 +9,13 @@ const adminToken = process.env.HUB_ADMIN_TOKEN || process.env.MTL_CODE_HUB_ADMIN
 const overwrite = process.env.HUB_OVERWRITE !== 'false';
 const maxFileBytes = 2 * 1024 * 1024;
 const textExtensions = new Set(['.md', '.yaml', '.yml', '.json', '.js', '.mjs', '.txt']);
+const ignoredDirectories = new Set(['node_modules', '.env', '.git', 'target']);
 
 async function collectPackageFiles(rootDir, prefix = '') {
   const entries = await fs.readdir(rootDir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name === '.env') continue;
+    if (ignoredDirectories.has(entry.name)) continue;
     const absolute = path.join(rootDir, entry.name);
     const relative = path.join(prefix, entry.name).replace(/\\/g, '/');
     if (entry.isDirectory()) {

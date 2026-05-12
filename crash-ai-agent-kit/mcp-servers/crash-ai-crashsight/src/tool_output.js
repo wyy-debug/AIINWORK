@@ -16,9 +16,10 @@ export function formatCrashAiReportText(value = {}) {
     JSON.stringify(context),
     '',
     'CRASH_AI_OUTPUT_RULES',
-    '- 直接使用本工具响应中的 CRASH_AI_DIRECT_REPORT 和 CRASH_AI_AGENT_CONTEXT_JSON。',
+    '- Use CRASH_AI_AGENT_CONTEXT_JSON directly from this tool response.',
     '- 不要运行 Python、PowerShell、Read 或 shell 命令反读本地保存的工具结果文件。',
-    '- 最终报告必须保留事实表的每一行；不要用范围行、合并行、概括行替代低频 Crash。',
+    '- 最终只输出「目前存在问题」和「遗漏未开单问题」两段，按 android、pc、iOS 分组。',
+    '- rowFacts.redmineRefs 非空的条目归入「目前存在问题」；为空的条目归入「遗漏未开单问题」。',
   ].join('\n');
 }
 
@@ -44,6 +45,7 @@ function toRowFact(row = {}) {
     applicationVersion: row.applicationVersion,
     continuedVersionCount: row.continuedVersionCount,
     tags: row.tags,
+    redmineRefs: row.redmineRefs,
     redmineLinks: row.redmineLinks,
     redmineStatus: row.redmineStatus,
     redmineOwner: row.redmineOwner,

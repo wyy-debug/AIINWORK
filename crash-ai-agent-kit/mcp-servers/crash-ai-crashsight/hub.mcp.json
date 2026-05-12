@@ -2,12 +2,14 @@
   "kind": "mcp-server",
   "name": "crash-ai-crashsight",
   "title": "CrashAI CrashSight MCP",
-  "description": "Fast Rust-backed CrashSight fact collector. It scans CrashSight upload records concurrently, aggregates by issue/platform/application version, enriches issue details and Redmine, and returns a direct Markdown report plus same-response context for Agent analysis.",
+  "description": "Fast Rust-backed CrashSight fact collector. It scans CrashSight issue-list pages with upload-time early-stop and OpenAPI rate-limit protection, extracts tags/Redmine refs directly from list rows, enriches Redmine, and returns a direct Markdown report plus same-response context for Agent analysis.",
   "author": "AIINWORK",
-  "version": "0.2.7",
+  "version": "0.2.11",
   "tags": ["mcp", "crashsight", "crash", "daily", "redmine", "soc", "rust"],
   "capabilities": [
-    "Rust-backed concurrent CrashSight scanning",
+    "Rust-backed CrashSight issue-list scanning with start/end hints, local upload-time filtering, and early-stop",
+    "Extracts CrashSight tagInfoList/tagName Redmine references directly from list rows",
+    "CrashSight OpenAPI 25/min limit protection with a conservative 20/min default",
     "Direct Markdown report and same-response context output for Agent analysis",
     "Issue rows are aggregated by issue, platform, and application version",
     "Redmine status and owner enrichment",
@@ -22,7 +24,12 @@
       "CRASHSIGHT_REGION": "cn",
       "CRASHSIGHT_BRANCH_FILTERS": "{\"trunk\":\"*trunk*\",\"weekly\":\"*weekly*\"}",
       "CRASH_AI_MAX_CONCURRENCY": "12",
-      "CRASH_AI_REDMINE_CONCURRENCY": "8"
+      "CRASH_AI_REDMINE_CONCURRENCY": "8",
+      "CRASH_AI_OPENAPI_RATE_LIMIT_PER_MINUTE": "20",
+      "CRASH_AI_OPENAPI_MAX_RETRIES": "8",
+      "CRASH_AI_CORE_TIMEOUT_MS": "",
+      "CRASH_AI_ENRICH_MISSING_ISSUE_DETAILS": "true",
+      "CRASH_AI_USE_SERVER_DATE_FILTER": "false"
     },
     "postInstall": {
       "type": "npm-install",
@@ -111,7 +118,52 @@
         "target": "env",
         "required": false,
         "defaultValue": "12",
-        "description": "Max concurrent CrashSight requests."
+        "description": "Max concurrent CrashSight tasks. Actual OpenAPI starts are still rate-limited."
+      },
+      {
+        "key": "CRASH_AI_OPENAPI_RATE_LIMIT_PER_MINUTE",
+        "label": "CrashSight OpenAPI Rate",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "20",
+        "description": "CrashSight official limit is 25 requests/minute per user across all OpenAPI endpoints. Default 20/minute keeps headroom."
+      },
+      {
+        "key": "CRASH_AI_OPENAPI_MAX_RETRIES",
+        "label": "CrashSight Retry Count",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "8",
+        "description": "Retries for 429/rate-limit/temporary 5xx responses before reporting a tool error."
+      },
+      {
+        "key": "CRASH_AI_CORE_TIMEOUT_MS",
+        "label": "Rust Core Timeout ms",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "",
+        "description": "Optional explicit Rust core timeout. Leave empty for adaptive timeout based on platforms, branches, maxPages, and OpenAPI rate limit."
+      },
+      {
+        "key": "CRASH_AI_ENRICH_MISSING_ISSUE_DETAILS",
+        "label": "Fetch Missing Issue Details",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "true",
+        "description": "When true, fetch issueInfo for rows missing tags/Redmine refs. Default true prevents filed Redmine issues from being misclassified as unfiled."
+      },
+      {
+        "key": "CRASH_AI_USE_SERVER_DATE_FILTER",
+        "label": "Use Server Date Filter",
+        "type": "text",
+        "target": "env",
+        "required": false,
+        "defaultValue": "false",
+        "description": "Optional. CrashSight issueUploadTimeRelativeMillis can miss in-range issues on some projects, so the default is false. The MCP still sends start/end hints and filters by upload time with early-stop locally."
       }
     ],
     "tools": [

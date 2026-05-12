@@ -154,6 +154,21 @@ const HIGH_RISK_SIGNALS: Signal[] = [
   },
 ]
 
+const REVIEW_SIGNALS: Signal[] = [
+  {
+    pattern: /\b(code\s*review|review|audit)\b|(?:review|审查|评审)\s*代码|代码\s*(?:review|审查|评审)|代码审查|审查代码|评审代码/i,
+    reason: 'code review requested',
+    weight: 4,
+    route: 'Inspect git status and current diff before reporting review findings.',
+    expert: {
+      kind: 'verification',
+      label: 'Review verifier',
+      reason: 'code review requested',
+      required: false,
+    },
+  },
+]
+
 const IMPLEMENTATION_SIGNALS: Signal[] = [
   {
     pattern: /\b(implement|build|add|fix|change|update|wire|integrate)\b/i,
@@ -282,18 +297,22 @@ export function buildOpenMythosRuntimeCard(
 ): OpenMythosRuntimeCard | null {
   const config = getOpenMythosRuntimeConfig()
   if (!config.enabled || !input?.trim()) return null
-  if (isEnvTruthy(process.env.MTL_CODE_SIMPLE)) return null
 
   const normalized = input.replace(/\s+/g, ' ').trim()
   const isTaskNotification = isOpenMythosTaskNotificationInput(normalized)
   const goal = truncate(normalized, 260)
   const signals = [
     ...HIGH_RISK_SIGNALS,
+    ...REVIEW_SIGNALS,
     ...IMPLEMENTATION_SIGNALS,
     ...FRONTEND_SIGNALS,
   ].filter(s =>
     s.pattern.test(normalized),
   )
+  const hasReviewSignal = signals.some(
+    signal => signal.reason === 'code review requested',
+  )
+  if (isEnvTruthy(process.env.MTL_CODE_SIMPLE) && !hasReviewSignal) return null
   const score =
     signals.reduce((sum, signal) => sum + signal.weight, 0) +
     Math.min(3, Math.floor(normalized.length / 600))
@@ -305,7 +324,7 @@ export function buildOpenMythosRuntimeCard(
     config.minEffort,
     config.maxEffort,
   )
-  const loopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2
+  const baseLoopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2
 
   const reasons = unique(signals.map(s => s.reason)).slice(0, 4)
   if (reasons.length === 0) {
@@ -342,6 +361,7 @@ export function buildOpenMythosRuntimeCard(
   const phasePlan: OpenMythosPhase[] = config.phaseAdapter
     ? buildPhasePlan(effort)
     : ['implement', 'finalize']
+  const loopBudget = Math.max(baseLoopBudget, phasePlan.length)
   return {
     goal,
     effort,

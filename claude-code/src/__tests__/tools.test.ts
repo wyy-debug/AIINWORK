@@ -253,6 +253,31 @@ describe('Codex-style plan mode tools', () => {
     expect(enabledToolNames).not.toContain('Bash')
   })
 
+  test('keeps read-only planning tools available in bare Argus Codex-style plan mode', () => {
+    process.env.MTL_CODE_SIMPLE = '1'
+    process.env.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1'
+    const planPermissionContext = {
+      ...getEmptyToolPermissionContext(),
+      mode: 'plan',
+    } as any
+
+    const enabledToolNames = getTools(planPermissionContext).map(tool => tool.name)
+
+    expect(enabledToolNames).toContain('Read')
+    expect(enabledToolNames).toContain('Glob')
+    expect(enabledToolNames).toContain('Grep')
+    expect(enabledToolNames).toContain('WebFetch')
+    expect(enabledToolNames).toContain('WebSearch')
+    expect(enabledToolNames).toContain('request_user_input')
+    expect(enabledToolNames).toContain('AskUserQuestion')
+    expect(enabledToolNames).not.toContain('ExitPlanMode')
+    expect(enabledToolNames).not.toContain('TodoWrite')
+    expect(enabledToolNames).not.toContain('Write')
+    expect(enabledToolNames).not.toContain('Edit')
+    expect(enabledToolNames).not.toContain('MultiEdit')
+    expect(enabledToolNames).not.toContain('Bash')
+  })
+
   test('does not merge MCP tools into Argus Codex-style plan mode', () => {
     process.env.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1'
     const planPermissionContext = {

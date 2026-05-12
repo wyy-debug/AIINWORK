@@ -298,6 +298,8 @@ export interface OpenMythosRuntimeDiagnostics {
   phaseAdapter?: boolean;
   expertRouting?: boolean;
   contextCacheDiagnostics?: boolean;
+  bareMode?: boolean;
+  openMythosRuntimeCardActive?: boolean;
   minEffort: string;
   maxEffort: string;
   runtimeCard?: {
@@ -333,6 +335,26 @@ export interface SubagentRuntimeDiagnostics {
   maxDepth?: number;
 }
 
+export interface PromptInjectionDebugPayload {
+  appendSystemPrompt: string;
+  appendSystemPromptLength: number;
+  originalCommand?: string;
+  effectiveCommand?: string;
+  effectiveCommandLength?: number;
+  commandChanged?: boolean;
+  permissionMode?: string;
+  codexStylePlanMode?: boolean;
+  coordinatorMode?: boolean;
+  claudeNativeMemoryEnabled?: boolean;
+  bareMode?: boolean;
+  cli?: {
+    hasBareFlag?: boolean;
+    hasAppendSystemPromptFlag?: boolean;
+  };
+  sessionId?: string | null;
+  receivedAt?: string;
+}
+
 export interface AgentRuntimeDiagnostics {
   type?: 'agent' | 'skills' | string;
   provider?: string;
@@ -355,6 +377,8 @@ export interface AgentRuntimeDiagnostics {
   appendSystemPromptLength?: number;
   model?: string;
   modelProfileId?: string;
+  bareMode?: boolean;
+  openMythosRuntimeCardActive?: boolean;
   openMythosRuntime?: OpenMythosRuntimeDiagnostics | null;
   subagents?: SubagentRuntimeDiagnostics | null;
   contextWindowTokens?: number | null;

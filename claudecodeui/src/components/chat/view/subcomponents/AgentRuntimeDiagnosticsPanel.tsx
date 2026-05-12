@@ -199,6 +199,8 @@ function OpenMythosRuntimeSection({
         <Field label="缓存诊断" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
         <Field label="最低 effort" value={formatText(runtime?.minEffort)} />
         <Field label="最高 effort" value={formatText(runtime?.maxEffort)} />
+        <Field label="bare mode" value={formatBoolean(runtime?.bareMode)} />
+        <Field label="runtime card active" value={formatBoolean(runtime?.openMythosRuntimeCardActive)} />
         <Field label="派发策略" value={runtime ? '仅建议，不自动派发' : EMPTY_TEXT} />
       </div>
 

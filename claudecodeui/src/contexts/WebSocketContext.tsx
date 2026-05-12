@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
+import { ARGUS_WEBSOCKET_MESSAGE_EVENT } from '../components/chat/utils/debugSettings';
+
 type WebSocketContextType = {
   ws: WebSocket | null;
   sendMessage: (message: any) => void;
@@ -51,6 +53,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       websocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          window.dispatchEvent(new CustomEvent(ARGUS_WEBSOCKET_MESSAGE_EVENT, {
+            detail: data,
+          }));
           setLatestMessage(data);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);

@@ -7,6 +7,7 @@ import { QuickSettingsPanel } from '../../quick-settings-panel';
 import type {
   AgentRuntimeDiagnostics,
   ChatInterfaceProps,
+  PromptInjectionDebugPayload,
   Provider,
 } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
@@ -18,6 +19,12 @@ import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { getClaudeSettings } from '../utils/chatStorage';
+import {
+  ARGUS_DEBUG_SETTINGS_CHANGED_EVENT,
+  ARGUS_PROMPT_INJECTION_DEBUG_EVENT,
+  ARGUS_WEBSOCKET_MESSAGE_EVENT,
+  getArgusDebugSettings,
+} from '../utils/debugSettings';
 import {
   clearStoredConversationDraft,
   CONVERSATION_DRAFT_EVENT,
@@ -33,6 +40,7 @@ import { hasDialogInteraction, type DialogAnswers } from '../utils/agentTemplate
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
+import PromptInjectionDebugPanel from './subcomponents/PromptInjectionDebugPanel';
 import AgentSessionSetupDialog from './subcomponents/AgentSessionSetupDialog';
 import AgentLaunchDialog from './subcomponents/AgentLaunchDialog';
 
@@ -64,9 +72,11 @@ const isTemporarySessionId = (sessionId: string | null | undefined) =>
 
 const INTERACTIVE_PERMISSION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const MAX_RUNTIME_DIAGNOSTICS_CACHE_SIZE = 100;
+const MAX_PROMPT_INJECTION_DEBUG_CACHE_SIZE = 100;
 const SUBAGENT_UI_HARD_DISABLED = true;
 const OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT = 'argusObsidianBridgeSettingsChanged';
 const runtimeDiagnosticsBySessionCache = new Map<string, AgentRuntimeDiagnostics>();
+const promptInjectionDebugBySessionCache = new Map<string, PromptInjectionDebugPayload>();
 
 function cacheRuntimeDiagnostics(sessionKey: string, diagnostics: AgentRuntimeDiagnostics) {
   if (!sessionKey) return;
@@ -77,6 +87,18 @@ function cacheRuntimeDiagnostics(sessionKey: string, diagnostics: AgentRuntimeDi
   const oldestKey = runtimeDiagnosticsBySessionCache.keys().next().value;
   if (oldestKey) {
     runtimeDiagnosticsBySessionCache.delete(oldestKey);
+  }
+}
+
+function cachePromptInjectionDebug(sessionKey: string, payload: PromptInjectionDebugPayload) {
+  if (!sessionKey) return;
+  promptInjectionDebugBySessionCache.set(sessionKey, payload);
+  if (promptInjectionDebugBySessionCache.size <= MAX_PROMPT_INJECTION_DEBUG_CACHE_SIZE) {
+    return;
+  }
+  const oldestKey = promptInjectionDebugBySessionCache.keys().next().value;
+  if (oldestKey) {
+    promptInjectionDebugBySessionCache.delete(oldestKey);
   }
 }
 
@@ -209,6 +231,9 @@ function ChatInterface({
   const [draftSessionGoal, setDraftSessionGoal] = useState<DraftSessionGoal | null>(null);
   const [pendingAgentSetup, setPendingAgentSetup] = useState<AgentConfig | null>(null);
   const [agentRuntimeDiagnostics, setAgentRuntimeDiagnostics] = useState<AgentRuntimeDiagnostics | null>(null);
+  const [promptInjectionDebug, setPromptInjectionDebug] = useState<PromptInjectionDebugPayload | null>(null);
+  const [argusDebugSettings, setArgusDebugSettings] = useState(() => getArgusDebugSettings());
+  const [isPromptDebugCollapsed, setIsPromptDebugCollapsed] = useState(false);
   const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
     selectedSession ? 'default' : 'pending',
   );
@@ -227,6 +252,17 @@ function ChatInterface({
   const isWorktreeProject = Boolean(!isConversationSpace && worktreeMeta?.id);
   const agentBindingEnabled = isConversationSpace || isWorktreeProject;
   const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
+  const showPromptInjectionPanel = argusDebugSettings.showPromptInjectionPanel;
+
+  useEffect(() => {
+    const reloadDebugSettings = () => setArgusDebugSettings(getArgusDebugSettings());
+    window.addEventListener(ARGUS_DEBUG_SETTINGS_CHANGED_EVENT, reloadDebugSettings);
+    window.addEventListener('storage', reloadDebugSettings);
+    return () => {
+      window.removeEventListener(ARGUS_DEBUG_SETTINGS_CHANGED_EVENT, reloadDebugSettings);
+      window.removeEventListener('storage', reloadDebugSettings);
+    };
+  }, []);
 
   useEffect(() => {
     selectedAgentIdRef.current = selectedAgentId;
@@ -635,6 +671,110 @@ function ChatInterface({
     [currentSessionId, selectedSession?.id],
   );
 
+  const setCachedPromptInjectionDebug = useCallback<React.Dispatch<React.SetStateAction<PromptInjectionDebugPayload | null>>>(
+    (valueOrUpdater) => {
+      setPromptInjectionDebug((previous) => {
+        const next = typeof valueOrUpdater === 'function'
+          ? valueOrUpdater(previous)
+          : valueOrUpdater;
+
+        if (next) {
+          const sessionKey = String(
+            next.sessionId
+            || selectedSession?.id
+            || currentSessionId
+            || pendingViewSessionRef.current?.sessionId
+            || '',
+          );
+          const nextWithSession = sessionKey && !next.sessionId
+            ? { ...next, sessionId: sessionKey }
+            : next;
+          if (sessionKey) {
+            cachePromptInjectionDebug(sessionKey, nextWithSession);
+          }
+          return nextWithSession;
+        }
+
+        return next;
+      });
+    },
+    [currentSessionId, selectedSession?.id],
+  );
+
+  const applyPromptInjectionDebugPayload = useCallback((
+    payload: PromptInjectionDebugPayload | null,
+    fallbackSessionId: string | null = null,
+  ) => {
+    if (!payload) {
+      setCachedPromptInjectionDebug(null);
+      return;
+    }
+
+    setCachedPromptInjectionDebug({
+      ...payload,
+      sessionId: fallbackSessionId || payload.sessionId || null,
+      receivedAt: payload.receivedAt || new Date().toLocaleString(),
+    });
+  }, [setCachedPromptInjectionDebug]);
+
+  useEffect(() => {
+    const handlePromptInjectionDebugEvent = (event: Event) => {
+      const payload = (event as CustomEvent<PromptInjectionDebugPayload | null>).detail || null;
+      const sid = typeof payload?.sessionId === 'string' ? payload.sessionId : null;
+      const activeViewSessionId = selectedSession?.id
+        || currentSessionId
+        || pendingViewSessionRef.current?.sessionId
+        || '';
+      if (
+        sid
+        && activeViewSessionId
+        && sid !== activeViewSessionId
+        && !isTemporarySessionId(activeViewSessionId)
+      ) {
+        return;
+      }
+      applyPromptInjectionDebugPayload(payload);
+    };
+
+    const handleWebSocketMessageEvent = (event: Event) => {
+      const msg = (event as CustomEvent<{
+        kind?: string;
+        text?: string;
+        sessionId?: string | null;
+        promptInjection?: PromptInjectionDebugPayload | null;
+      }>).detail;
+      if (!msg || msg.kind !== 'status' || msg.text !== 'prompt_injection_debug') {
+        return;
+      }
+
+      const sid = typeof msg.sessionId === 'string' ? msg.sessionId : null;
+      const activeViewSessionId = selectedSession?.id
+        || currentSessionId
+        || pendingViewSessionRef.current?.sessionId
+        || '';
+      if (
+        sid
+        && activeViewSessionId
+        && sid !== activeViewSessionId
+        && !isTemporarySessionId(activeViewSessionId)
+      ) {
+        return;
+      }
+
+      const payload = msg.promptInjection && typeof msg.promptInjection === 'object'
+        ? msg.promptInjection
+        : null;
+      applyPromptInjectionDebugPayload(payload, sid);
+    };
+
+    window.addEventListener(ARGUS_PROMPT_INJECTION_DEBUG_EVENT, handlePromptInjectionDebugEvent);
+    window.addEventListener(ARGUS_WEBSOCKET_MESSAGE_EVENT, handleWebSocketMessageEvent);
+    return () => {
+      window.removeEventListener(ARGUS_PROMPT_INJECTION_DEBUG_EVENT, handlePromptInjectionDebugEvent);
+      window.removeEventListener(ARGUS_WEBSOCKET_MESSAGE_EVENT, handleWebSocketMessageEvent);
+    };
+  }, [applyPromptInjectionDebugPayload, currentSessionId, selectedSession?.id]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -859,6 +999,7 @@ function ChatInterface({
       setSelectedModelProfileId(defaultModelProfileId);
       setAgentChoiceState(nextAgentId ? 'agent' : 'default');
       setAgentRuntimeDiagnostics(null);
+      setPromptInjectionDebug(null);
       return;
     }
     setPendingAgentSetup(null);
@@ -871,6 +1012,7 @@ function ChatInterface({
     setSelectedModelProfileId(defaultModelProfileId);
     setAgentChoiceState(isConversationSpace ? 'pending' : 'default');
     setAgentRuntimeDiagnostics(null);
+    setPromptInjectionDebug(null);
   }, [
     currentSessionId,
     isConversationSpace,
@@ -948,6 +1090,38 @@ function ChatInterface({
           sessionId: sessionKey,
         };
         cacheRuntimeDiagnostics(sessionKey, migrated);
+        return migrated;
+      }
+
+      return null;
+    });
+  }, [currentSessionId, isConversationSpace, selectedProject?.name, selectedSession?.id]);
+
+  useEffect(() => {
+    const sessionKey = selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || '';
+    if (!sessionKey) {
+      setPromptInjectionDebug(null);
+      return;
+    }
+
+    const cached = promptInjectionDebugBySessionCache.get(sessionKey);
+    if (cached) {
+      setPromptInjectionDebug(cached);
+      return;
+    }
+
+    setPromptInjectionDebug((previous) => {
+      if (
+        previous
+        && previous.sessionId
+        && isTemporarySessionId(previous.sessionId)
+        && !isTemporarySessionId(sessionKey)
+      ) {
+        const migrated = {
+          ...previous,
+          sessionId: sessionKey,
+        };
+        cachePromptInjectionDebug(sessionKey, migrated);
         return migrated;
       }
 
@@ -1521,6 +1695,7 @@ function ChatInterface({
     setClaudeStatus,
     setIsUserScrolledUp,
     setPendingPermissionRequests,
+    setPromptInjectionDebug: setCachedPromptInjectionDebug,
   });
 
   const handleReuseSubagentObjective = useCallback((text: string) => {
@@ -1632,6 +1807,7 @@ function ChatInterface({
     setClaudeStatus,
     setTokenBudget,
     setAgentRuntimeDiagnostics: setCachedAgentRuntimeDiagnostics,
+    setPromptInjectionDebug: setCachedPromptInjectionDebug,
     setPendingPermissionRequests,
     pendingViewSessionRef,
     streamBufferRef,
@@ -1728,62 +1904,74 @@ function ChatInterface({
   return (
     <PermissionContext.Provider value={permissionContextValue}>
       <div className="flex h-full min-h-0 flex-col">
-        <ChatMessagesPane
-          scrollContainerRef={scrollContainerRef}
-          onPreserveScrollForLayoutChange={preserveScrollForLayoutChange}
-          isLoadingSessionMessages={isLoadingSessionMessages}
-          sessionLoadError={sessionLoadError}
-          chatMessages={chatMessages}
-          selectedSession={selectedSession}
-          currentSessionId={currentSessionId}
-          provider={provider}
-          setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
-          textareaRef={textareaRef}
-          claudeModel={claudeModel}
-          setClaudeModel={setClaudeModel}
-          cursorModel={cursorModel}
-          setCursorModel={setCursorModel}
-          codexModel={codexModel}
-          setCodexModel={setCodexModel}
-          geminiModel={geminiModel}
-          setGeminiModel={setGeminiModel}
-          tasksEnabled={tasksEnabled}
-          isTaskMasterInstalled={isTaskMasterInstalled}
-          onShowAllTasks={onShowAllTasks}
-          setInput={setInput}
-          isLoadingMoreMessages={isLoadingMoreMessages}
-          hasMoreMessages={hasMoreMessages}
-          totalMessages={totalMessages}
-          sessionMessagesCount={loadedMessageCount || Math.min(chatMessages.length, totalMessages || chatMessages.length)}
-          visibleMessageCount={visibleMessageCount}
-          visibleMessages={visibleMessages}
-          isSessionRunning={isLoading}
-          loadMoreHistoryMessages={loadMoreHistoryMessages}
-          loadEarlierMessages={loadEarlierMessages}
-          loadAllMessages={loadAllMessages}
-          allMessagesLoaded={allMessagesLoaded}
-          isLoadingAllMessages={isLoadingAllMessages}
-          loadAllJustFinished={loadAllJustFinished}
-          showLoadAllOverlay={showLoadAllOverlay}
-          createDiff={createDiff}
-          onFileOpen={onFileOpen}
-          onShowSettings={onShowSettings}
-          onGrantToolPermission={handleGrantToolPermission}
-          autoExpandTools={autoExpandTools}
-          showRawParameters={showRawParameters}
-          showThinking={showThinking}
-          selectedProject={selectedProject}
-          isConversationSpace={isConversationSpace}
-          agents={agentBindingEnabled ? enabledAgents : []}
-          selectedAgentName={agentBindingEnabled ? selectedAgent?.shortName || selectedAgent?.name || '' : ''}
-          agentChoiceState={agentChoiceState}
-          onUseDefaultAgent={useDefaultConversationAgent}
-          onSelectConversationAgent={selectAgentForConversation}
-          selectedModelProfileId={selectedModelProfileId}
-          onModelProfileChange={setSelectedModelProfileId}
-          obsidianBridgeEnabled={obsidianBridgeEnabled}
-          onControlSubagent={handleControlSubagent}
-        />
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <ChatMessagesPane
+              scrollContainerRef={scrollContainerRef}
+              onPreserveScrollForLayoutChange={preserveScrollForLayoutChange}
+              isLoadingSessionMessages={isLoadingSessionMessages}
+              sessionLoadError={sessionLoadError}
+              chatMessages={chatMessages}
+              selectedSession={selectedSession}
+              currentSessionId={currentSessionId}
+              provider={provider}
+              setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
+              textareaRef={textareaRef}
+              claudeModel={claudeModel}
+              setClaudeModel={setClaudeModel}
+              cursorModel={cursorModel}
+              setCursorModel={setCursorModel}
+              codexModel={codexModel}
+              setCodexModel={setCodexModel}
+              geminiModel={geminiModel}
+              setGeminiModel={setGeminiModel}
+              tasksEnabled={tasksEnabled}
+              isTaskMasterInstalled={isTaskMasterInstalled}
+              onShowAllTasks={onShowAllTasks}
+              setInput={setInput}
+              isLoadingMoreMessages={isLoadingMoreMessages}
+              hasMoreMessages={hasMoreMessages}
+              totalMessages={totalMessages}
+              sessionMessagesCount={loadedMessageCount || Math.min(chatMessages.length, totalMessages || chatMessages.length)}
+              visibleMessageCount={visibleMessageCount}
+              visibleMessages={visibleMessages}
+              isSessionRunning={isLoading}
+              loadMoreHistoryMessages={loadMoreHistoryMessages}
+              loadEarlierMessages={loadEarlierMessages}
+              loadAllMessages={loadAllMessages}
+              allMessagesLoaded={allMessagesLoaded}
+              isLoadingAllMessages={isLoadingAllMessages}
+              loadAllJustFinished={loadAllJustFinished}
+              showLoadAllOverlay={showLoadAllOverlay}
+              createDiff={createDiff}
+              onFileOpen={onFileOpen}
+              onShowSettings={onShowSettings}
+              onGrantToolPermission={handleGrantToolPermission}
+              autoExpandTools={autoExpandTools}
+              showRawParameters={showRawParameters}
+              showThinking={showThinking}
+              selectedProject={selectedProject}
+              isConversationSpace={isConversationSpace}
+              agents={agentBindingEnabled ? enabledAgents : []}
+              selectedAgentName={agentBindingEnabled ? selectedAgent?.shortName || selectedAgent?.name || '' : ''}
+              agentChoiceState={agentChoiceState}
+              onUseDefaultAgent={useDefaultConversationAgent}
+              onSelectConversationAgent={selectAgentForConversation}
+              selectedModelProfileId={selectedModelProfileId}
+              onModelProfileChange={setSelectedModelProfileId}
+              obsidianBridgeEnabled={obsidianBridgeEnabled}
+              onControlSubagent={handleControlSubagent}
+            />
+          </div>
+
+          {showPromptInjectionPanel && (
+            <PromptInjectionDebugPanel
+              payload={promptInjectionDebug}
+              collapsed={isPromptDebugCollapsed}
+              onToggleCollapsed={() => setIsPromptDebugCollapsed((previous) => !previous)}
+            />
+          )}
+        </div>
 
         <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}

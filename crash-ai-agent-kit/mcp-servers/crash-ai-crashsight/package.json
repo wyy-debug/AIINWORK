@@ -1,6 +1,6 @@
 {
   "name": "crash-ai-crashsight",
-  "version": "0.2.7",
+  "version": "0.2.11",
   "description": "CrashSight MCP server for daily crash investigation and single-crash analysis context.",
   "type": "module",
   "bin": {

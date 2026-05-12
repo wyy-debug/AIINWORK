@@ -30,6 +30,7 @@ describe('swarm-runtime-adapter-service', () => {
     });
 
     expect(prompt).toContain('spawn_agent');
+    expect(prompt).toContain('Argus swarm task_name');
     expect(prompt).toContain('swarm_run_1__queen__0');
     expect(prompt).toContain('swarm_run_1__reviewer__0');
     expect(prompt).toContain('Review authentication changes');
@@ -137,6 +138,39 @@ describe('swarm-runtime-adapter-service', () => {
       roleIndex: 0,
       taskId: 'task-reviewer-real',
       threadId: '/root/swarm_swarm_run_abc_123__reviewer__0',
+    });
+  });
+
+  it('maps spawn_agent roles when the tool only preserves task name in the message body', () => {
+    const mappings = extractSpawnAgentMappings([
+      {
+        kind: 'tool_use',
+        toolId: 'tool-reviewer',
+        toolName: 'spawn_agent',
+        toolInput: {
+          agent_type: 'worker',
+          message: [
+            'Argus swarm task_name: swarm_swarm_run_abc_123__reviewer__0',
+            'Role: Reviewer',
+            'Review authentication changes.',
+          ].join('\n'),
+        },
+      },
+      {
+        kind: 'tool_result',
+        toolId: 'tool-reviewer',
+        toolUseResult: {
+          taskId: 'task-reviewer-real',
+          threadId: 'thread-reviewer-real',
+        },
+      },
+    ]);
+
+    expect(mappings.get('reviewer:0')).toMatchObject({
+      roleId: 'reviewer',
+      roleIndex: 0,
+      taskId: 'task-reviewer-real',
+      threadId: 'thread-reviewer-real',
     });
   });
 

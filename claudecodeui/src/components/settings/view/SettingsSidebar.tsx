@@ -1,4 +1,4 @@
-import { Bot, Palette, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Bot, Bug, Palette, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
@@ -20,6 +20,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { id: 'agents', labelKey: 'mainTabs.argusHub', defaultLabel: '模型 / Hub', icon: Bot },
   { id: 'runtime', labelKey: 'mainTabs.runtime', defaultLabel: '运行时', icon: ShieldCheck },
+  { id: 'debug', labelKey: 'mainTabs.debug', defaultLabel: 'Debug', icon: Bug },
   { id: 'appearance', labelKey: 'mainTabs.appearance', defaultLabel: '外观', icon: Palette },
 ];
 

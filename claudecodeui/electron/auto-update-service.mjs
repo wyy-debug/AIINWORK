@@ -88,14 +88,52 @@ export async function maybePromptForStartupUpdate({
   currentVersion = app?.getVersion?.() || '0.0.0',
   readDirectory = readdir,
 }) {
-  void app;
-  void dialog;
-  void shell;
-  void mainWindow;
-  void env;
-  void currentVersion;
-  void readDirectory;
-  return { checked: false, reason: 'disabled' };
+  if (isAutoUpdateDisabled(env)) {
+    return { checked: false, reason: 'disabled' };
+  }
+  if (!app?.isPackaged) {
+    return { checked: false, reason: 'not_packaged' };
+  }
+
+  const manifestLocation = resolveConfiguredUpdateManifest(env);
+  const updateDir = resolveConfiguredUpdateDir(env);
+  if (!manifestLocation && !updateDir) {
+    return { checked: false, reason: 'not_configured' };
+  }
+
+  const latest = manifestLocation
+    ? await readUpdateManifest({ manifestLocation })
+    : await findLatestInstaller({ updateDir, currentVersion, readDirectory });
+  if (!latest || compareVersions(latest.version, currentVersion) <= 0) {
+    return { checked: true, updateAvailable: false };
+  }
+
+  const response = await showUpdateDialog({ dialog, mainWindow, currentVersion, latest });
+  if (response !== 0) {
+    return { checked: true, updateAvailable: true, launched: false, version: latest.version };
+  }
+
+  const cacheDir = path.join(app.getPath('userData'), 'updates');
+  const installerPath = await downloadInstallerToCache({
+    release: {
+      ...latest,
+      installerUrl: latest.installerUrl || latest.filePath,
+    },
+    cacheDir,
+  });
+  const openResult = await shell.openPath(installerPath);
+  if (typeof openResult === 'string' && openResult.trim()) {
+    throw new Error(openResult);
+  }
+  app.quit?.();
+
+  return {
+    checked: true,
+    updateAvailable: true,
+    launched: true,
+    version: latest.version,
+    installerPath,
+  };
 }
 
 function firstConfiguredValue(env, keys) {
@@ -106,6 +144,11 @@ function firstConfiguredValue(env, keys) {
     }
   }
   return '';
+}
+
+function isAutoUpdateDisabled(env) {
+  const value = String(env?.ARGUS_DISABLE_AUTO_UPDATE || env?.ARGUS_AUTO_UPDATE_DISABLED || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(value);
 }
 
 function parseInstallerEntry(updateDir, fileName) {

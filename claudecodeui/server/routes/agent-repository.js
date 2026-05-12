@@ -899,7 +899,67 @@ function normalizeMcpValues(configuration) {
   return normalizeRecord(source);
 }
 
-function buildMcpServerPayload(item, installDir, target, projectPath, configuration) {
+function readRecordString(record, key) {
+  if (!record || typeof record !== 'object' || !key) return '';
+  const direct = record[key];
+  if (typeof direct === 'string') return direct;
+  const lowerKey = key.toLowerCase();
+  const entry = Object.entries(record).find(([entryKey]) => entryKey.toLowerCase() === lowerKey);
+  return typeof entry?.[1] === 'string' ? entry[1] : '';
+}
+
+function firstConfiguredValue(...candidates) {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+  }
+  return '';
+}
+
+function readExistingMcpSetupValue(field, existingServer) {
+  const key = String(field.key || '').trim();
+  if (!key || !existingServer || typeof existingServer !== 'object') return '';
+  if (field.target === 'header') return readRecordString(existingServer.headers, key);
+  if (field.target === 'cwd') return typeof existingServer.cwd === 'string' ? existingServer.cwd : '';
+  if (field.target === 'url') return typeof existingServer.url === 'string' ? existingServer.url : '';
+  if (field.target === 'env') return readRecordString(existingServer.env, key);
+  return '';
+}
+
+function readPayloadMcpSetupValue(field, payload) {
+  const key = String(field.key || '').trim();
+  if (!key) return '';
+  if (field.target === 'header') return readRecordString(payload.headers, key);
+  if (field.target === 'cwd') return payload.cwd;
+  if (field.target === 'url') return payload.url;
+  if (field.target === 'env') return readRecordString(payload.env, key);
+  return '';
+}
+
+function resolveMcpSetupValue(field, values, payload, options = {}) {
+  const key = String(field.key || '').trim();
+  if (!key) return '';
+  return firstConfiguredValue(
+    readRecordString(values, key),
+    readExistingMcpSetupValue(field, options.existingServer),
+    options.allowProcessEnvFallback === true && field.target === 'env'
+      ? readRecordString(options.env || process.env, key)
+      : '',
+    typeof field.defaultValue === 'string' ? field.defaultValue : '',
+    readPayloadMcpSetupValue(field, payload),
+  );
+}
+
+async function findExistingMcpServer(item, target, projectPath) {
+  const mcp = item.mcp || {};
+  const serverName = sanitizeSlug(mcp.serverName || item.name || item.id, 'mcp-server');
+  const scope = target === 'project' ? 'project' : 'user';
+  const servers = await providerMcpService.listProviderMcpServersForScope('claude', scope, {
+    workspacePath: scope === 'project' ? projectPath : undefined,
+  });
+  return servers.find((server) => server.name === serverName) || null;
+}
+
+function buildMcpServerPayload(item, installDir, target, projectPath, configuration, options = {}) {
   const mcp = item.mcp || {};
   const serverName = sanitizeSlug(mcp.serverName || item.name || item.id, 'mcp-server');
   const transport = ['stdio', 'http', 'sse'].includes(mcp.transport) ? mcp.transport : 'stdio';
@@ -923,7 +983,7 @@ function buildMcpServerPayload(item, installDir, target, projectPath, configurat
   for (const field of setupFields) {
     const key = String(field.key || '').trim();
     if (!key) continue;
-    const value = values[key] || field.defaultValue || '';
+    const value = resolveMcpSetupValue(field, values, { env, headers, cwd, url }, options);
     if (field.required && !String(value).trim()) {
       throw new Error(`MCP configuration "${field.label || key}" is required`);
     }
@@ -1422,7 +1482,11 @@ async function installRepositoryItem(item, options = {}) {
     }
     responseInstallPath = installPath;
     postInstall = await runMcpPostInstallIfNeeded(item, installPath);
-    const mcpPayload = buildMcpServerPayload(item, installPath, target, projectPath, configuration);
+    const existingMcpServer = await findExistingMcpServer(item, target, projectPath).catch(() => null);
+    const mcpPayload = buildMcpServerPayload(item, installPath, target, projectPath, configuration, {
+      existingServer: existingMcpServer,
+      env: process.env,
+    });
     mcpServer = await providerMcpService.upsertProviderMcpServer('claude', mcpPayload);
   } else if (item.kind === 'swarm-template' && Array.isArray(item.packageFiles) && item.packageFiles.length > 0) {
     const packageFiles = await readItemPackageFiles(item);

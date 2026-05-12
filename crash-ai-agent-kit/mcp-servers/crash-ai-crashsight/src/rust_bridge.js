@@ -25,11 +25,11 @@ export async function runRustCore(args = {}, env = process.env, options = {}) {
     });
     let stdout = '';
     let stderr = '';
-    const timeoutMs = Number.parseInt(String(env.CRASH_AI_CORE_TIMEOUT_MS || '300000'), 10);
+    const timeoutMs = estimateRustCoreTimeoutMs(args, env);
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`CrashAI Rust core timed out after ${timeoutMs}ms`));
-    }, Number.isFinite(timeoutMs) ? timeoutMs : 300000);
+    }, timeoutMs);
 
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -52,4 +52,52 @@ export async function runRustCore(args = {}, env = process.env, options = {}) {
 
     child.stdin.end(JSON.stringify(args));
   });
+}
+
+export function estimateRustCoreTimeoutMs(args = {}, env = process.env) {
+  const explicit = Number.parseInt(String(env.CRASH_AI_CORE_TIMEOUT_MS || ''), 10);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+
+  const rateLimit = readInteger(
+    env.CRASH_AI_OPENAPI_RATE_LIMIT_PER_MINUTE || env.CRASHSIGHT_RATE_LIMIT_PER_MINUTE,
+    20,
+    1,
+    25,
+  );
+  const platforms = countList(args.platforms ?? args.platform, 3);
+  const versions = countList(args.versionFilters ?? args.branches, defaultBranchFilterCount(env));
+  const maxPages = readInteger(args.maxPages, 100, 1, 1000);
+  const scanCalls = platforms * versions * maxPages;
+
+  // Scan calls are the lower bound. issueInfo and retry calls can add minutes,
+  // so keep a fixed headroom and a generous floor for report generation.
+  const minMs = Math.ceil((scanCalls / rateLimit) * 60_000);
+  const withHeadroom = minMs + 10 * 60_000;
+  return Math.min(Math.max(withHeadroom, 10 * 60_000), 2 * 60 * 60_000);
+}
+
+function countList(value, fallback) {
+  if (Array.isArray(value)) return Math.max(value.filter((item) => String(item ?? '').trim()).length, 1);
+  if (value === undefined || value === null || String(value).trim() === '') return fallback;
+  return 1;
+}
+
+function defaultBranchFilterCount(env) {
+  const raw = env.CRASHSIGHT_BRANCH_FILTERS;
+  if (!raw) return 2;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Math.max(Object.keys(parsed).length, 1);
+    }
+  } catch {
+    // keep fallback
+  }
+  return 2;
+}
+
+function readInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value || ''), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
 }

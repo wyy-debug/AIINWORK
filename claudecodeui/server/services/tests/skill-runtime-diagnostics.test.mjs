@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import { test, vi } from 'vitest';
 
 test('resolveSkillReferences returns runtime diagnostics for installed and missing skills', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-runtime-diagnostics-'));
@@ -44,7 +44,8 @@ test('resolveSkillReferences returns runtime diagnostics for installed and missi
   const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
   process.env.MTL_CODE_CONFIG_DIR = configRoot;
   try {
-    const { resolveSkillReferences } = await import(`../agent-config-service.js?skillDiagnostics=${Date.now()}`);
+    vi.resetModules();
+    const { resolveSkillReferences } = await import('../agent-config-service.js');
     const result = await resolveSkillReferences([
       'crashsight-single-crash-analysis',
       'missing-skill',

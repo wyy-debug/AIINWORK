@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import { test, vi } from 'vitest';
 
 test('resolveMtlCodeModelRuntime makes subagents inherit the selected session model profile', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
@@ -30,7 +30,8 @@ test('resolveMtlCodeModelRuntime makes subagents inherit the selected session mo
   const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
   process.env.MTL_CODE_CONFIG_DIR = configRoot;
   try {
-    const { resolveMtlCodeModelRuntime } = await import(`../mtl-code-model-service.js?subagentModel=${Date.now()}`);
+    vi.resetModules();
+    const { resolveMtlCodeModelRuntime } = await import('../mtl-code-model-service.js');
     const runtime = await resolveMtlCodeModelRuntime('mimo-v2-5');
 
     assert.equal(runtime?.env.ANTHROPIC_MODEL, 'mimo-v2.5');
@@ -70,7 +71,8 @@ test('resolveMtlCodeModelRuntime uses request model override for Anthropic relay
   const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
   process.env.MTL_CODE_CONFIG_DIR = configRoot;
   try {
-    const { resolveMtlCodeModelRuntime } = await import(`../mtl-code-model-service.js?requestModel=${Date.now()}`);
+    vi.resetModules();
+    const { resolveMtlCodeModelRuntime } = await import('../mtl-code-model-service.js');
     const runtime = await resolveMtlCodeModelRuntime('relay-gpt-mini');
 
     assert.equal(runtime?.profile.model, 'gpt-5.4-mini');

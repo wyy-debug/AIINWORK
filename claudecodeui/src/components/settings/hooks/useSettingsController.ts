@@ -4,10 +4,15 @@ import { useTheme } from '../../../contexts/ThemeContext';
 import { apiFetch } from '../../../utils/api';
 import { ARGUS_DEFAULT_PERMISSION_MODE, getClaudeSettings } from '../../chat/utils/chatStorage';
 import {
+  getArgusDebugSettings,
+  saveArgusDebugSettings,
+} from '../../chat/utils/debugSettings';
+import {
   DEFAULT_CODE_EDITOR_SETTINGS,
   DEFAULT_CURSOR_PERMISSIONS,
 } from '../constants/constants';
 import type {
+  ArgusDebugSettings,
   ClaudePermissionsState,
   CodeEditorSettingsState,
   CodexPermissionMode,
@@ -52,7 +57,7 @@ type NotificationPreferencesResponse = {
   preferences?: NotificationPreferencesState;
 };
 
-const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'runtime', 'appearance'];
+const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'runtime', 'debug', 'appearance'];
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
   // Keep backwards compatibility with older callers that still pass "tools".
@@ -138,6 +143,9 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   ));
   const [codexPermissionMode, setCodexPermissionMode] = useState<CodexPermissionMode>('default');
   const [geminiPermissionMode, setGeminiPermissionMode] = useState<GeminiPermissionMode>('default');
+  const [argusDebugSettings, setArgusDebugSettings] = useState<ArgusDebugSettings>(() => (
+    getArgusDebugSettings()
+  ));
 
   const loadSettings = useCallback(async () => {
     try {
@@ -171,6 +179,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         {},
       );
       setGeminiPermissionMode(savedGeminiSettings.permissionMode || 'default');
+      setArgusDebugSettings(getArgusDebugSettings());
 
       try {
         const notificationResponse = await apiFetch('/api/settings/notification-preferences');
@@ -194,6 +203,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
       setCursorPermissions(createEmptyCursorPermissions());
       setNotificationPreferences(createDefaultNotificationPreferences());
       setCodexPermissionMode('default');
+      setArgusDebugSettings(getArgusDebugSettings());
       setProjectSortOrder('name');
     }
   }, []);
@@ -230,6 +240,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         lastUpdated: now,
       }));
 
+      saveArgusDebugSettings(argusDebugSettings);
+
       const notificationResponse = await apiFetch('/api/settings/notification-preferences', {
         method: 'PUT',
         body: JSON.stringify(notificationPreferences),
@@ -254,6 +266,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     cursorPermissions.skipPermissions,
     notificationPreferences,
     geminiPermissionMode,
+    argusDebugSettings,
     projectSortOrder,
   ]);
 
@@ -356,5 +369,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     setCodexPermissionMode,
     geminiPermissionMode,
     setGeminiPermissionMode,
+    argusDebugSettings,
+    setArgusDebugSettings,
   };
 }

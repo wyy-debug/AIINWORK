@@ -4,7 +4,7 @@
   "description": "CrashAIAgent kit for CrashSight daily investigation and single-crash deep analysis.",
   "type": "module",
   "scripts": {
-    "validate": "node scripts/validate-skills.mjs && npm --prefix mcp-servers/crash-ai-crashsight run check && npm --prefix mcp-servers/crash-ai-obsidian run check",
+    "validate": "node scripts/validate-skills.mjs && node scripts/validate-report-format.mjs && npm --prefix mcp-servers/crash-ai-crashsight run check && npm --prefix mcp-servers/crash-ai-obsidian run check",
     "publish:hub": "node scripts/publish-to-hub.mjs"
   },
   "license": "AGPL-3.0-or-later"

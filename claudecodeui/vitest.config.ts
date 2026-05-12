@@ -1,12 +1,25 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: [
+      { find: '@/modules', replacement: fileURLToPath(new URL('./server/modules', import.meta.url)) },
+      { find: '@/shared', replacement: fileURLToPath(new URL('./server/shared', import.meta.url)) },
+      { find: '@/sessionManager.js', replacement: fileURLToPath(new URL('./server/sessionManager.js', import.meta.url)) },
+      { find: '@/projects.js', replacement: fileURLToPath(new URL('./server/projects.js', import.meta.url)) },
+      { find: '@/database', replacement: fileURLToPath(new URL('./server/database', import.meta.url)) },
+      { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
+    ],
+  },
   test: {
     environment: 'node',
     include: [
       'src/**/*.test.ts',
       'scripts/**/*.test.mjs',
       'obsidian-plugins/**/*.test.mjs',
+      'server/services/tests/**/*.{test,spec}.{ts,mjs}',
+      'server/routes/tests/**/*.{test,spec}.{ts,mjs}',
       'server/services/tests/artifact-service.test.mjs',
       'server/services/tests/chat-knowledge-capture-service.test.mjs',
       'server/services/tests/obsidian-auto-capture-orchestrator.test.mjs',

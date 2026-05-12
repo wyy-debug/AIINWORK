@@ -535,6 +535,134 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
   return args;
 }
 
+function normalizePromptDebugCommand(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, cliArgs = [], commands = {}) {
+  const appendSystemPrompt = typeof options.appendSystemPrompt === 'string'
+    ? options.appendSystemPrompt
+    : '';
+  const originalCommand = normalizePromptDebugCommand(
+    commands.originalCommand || options.debugPromptInjectionOriginalCommand
+  );
+  const effectiveCommand = normalizePromptDebugCommand(commands.effectiveCommand);
+  const permissionMode = normalizePermissionMode(resolveArgusPermissionMode(options));
+
+  return {
+    appendSystemPrompt,
+    appendSystemPromptLength: appendSystemPrompt.length,
+    originalCommand,
+    effectiveCommand,
+    effectiveCommandLength: effectiveCommand.length,
+    commandChanged: Boolean(originalCommand && effectiveCommand && originalCommand !== effectiveCommand),
+    permissionMode,
+    codexStylePlanMode: Boolean(
+      options.codexStylePlanMode
+      || permissionMode === 'plan'
+      || childEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE === '1'
+    ),
+    coordinatorMode: Boolean(
+      options.coordinatorMode === true
+      || childEnv.MTL_CODE_COORDINATOR_MODE === '1'
+    ),
+    claudeNativeMemoryEnabled: isClaudeNativeMemoryEnabled(childEnv),
+    bareMode: shouldUseBareMode(childEnv),
+    cli: {
+      hasBareFlag: cliArgs.includes('--bare'),
+      hasAppendSystemPromptFlag: cliArgs.includes('--append-system-prompt'),
+    },
+  };
+}
+
+function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env, cliArgs = [], sessionId = null, commands = {}) {
+  if (options.debugPromptInjection !== true) {
+    return;
+  }
+
+  ws.send(createNormalizedMessage({
+    kind: 'status',
+    text: 'prompt_injection_debug',
+    provider: 'claude',
+    sessionId,
+    promptInjection: buildPromptInjectionDebugPayload(options, childEnv, cliArgs, commands),
+  }));
+}
+
+const CODE_REVIEW_TOOL_FALLBACK_PROMPT = [
+  'The previous response did not inspect the repository.',
+  'Skip greetings, promises, and status updates.',
+  'Use the available tools now to inspect the review scope before any user-visible answer.',
+  'Run at least these checks when the tools are available:',
+  '- git status --short',
+  '- git diff --stat',
+  '- git diff',
+  '- git diff --staged when staged files exist',
+  'Then report findings first, ordered by severity, with file and line references when possible.',
+  'If tools are unavailable, state that blocker clearly instead of pretending the review was performed.',
+].join('\n');
+
+function buildCodeReviewToolFallbackPrompt() {
+  return CODE_REVIEW_TOOL_FALLBACK_PROMPT;
+}
+
+function extractMtlCodeAssistantText(message = {}) {
+  const content = message?.message?.role === 'assistant'
+    ? message.message.content
+    : message?.role === 'assistant'
+      ? message.content
+      : null;
+
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return '';
+  }
+
+  return content
+    .map(part => {
+      if (part?.type === 'text' && typeof part.text === 'string') {
+        return part.text;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function messageHasMtlCodeToolUse(message = {}) {
+  if (message?.type === 'tool_use') {
+    return true;
+  }
+
+  const content = message?.message?.content || message?.content;
+  return Array.isArray(content) && content.some(part => part?.type === 'tool_use');
+}
+
+function isCodeReviewAcknowledgementText(text = '') {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(?:i(?:'|’)?ll|i will|let me|i can|i(?:'|’)?m going to|will)\b.{0,160}\b(?:inspect|check|review|look|analy[sz]e|diff|status|repository|working tree)\b/i.test(normalized)
+    || /(?:我会|我将|我先|我来|会先|先来|让我|准备|接下来).{0,80}(?:检查|查看|审查|评审|review|diff|状态|仓库|工作区)/i.test(normalized);
+}
+
+function shouldSendCodeReviewToolFallback({
+  options = {},
+  fallbackSent = false,
+  sawToolUse = false,
+  assistantText = '',
+} = {}) {
+  return options?.argusCodeReviewIntent === true
+    && fallbackSent !== true
+    && sawToolUse !== true
+    && isCodeReviewAcknowledgementText(assistantText);
+}
+
 function getMtlCodeConfigDir() {
   return process.env.MTL_CODE_CONFIG_DIR || path.join(osHomedirFallback(), '.mtl-code');
 }
@@ -1013,6 +1141,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let child = null;
   let childClosed = false;
   let resultReceived = false;
+  let codeReviewToolUseSeen = false;
+  let codeReviewFallbackSent = false;
+  let codeReviewAssistantText = '';
   const stderrLines = [];
 
   const emitNotification = (event) => {
@@ -1164,6 +1295,16 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     ensureSessionRegistered(message.session_id);
 
+    if (messageHasMtlCodeToolUse(message)) {
+      codeReviewToolUseSeen = true;
+    }
+    const assistantText = extractMtlCodeAssistantText(message);
+    if (assistantText) {
+      codeReviewAssistantText = codeReviewAssistantText
+        ? `${codeReviewAssistantText}\n${assistantText}`
+        : assistantText;
+    }
+
     if (message.type === 'control_request') {
       await handleControlRequest(message);
       return;
@@ -1193,6 +1334,19 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         provider: 'claude',
         contextBudget,
       });
+      if (shouldSendCodeReviewToolFallback({
+        options,
+        fallbackSent: codeReviewFallbackSent,
+        sawToolUse: codeReviewToolUseSeen,
+        assistantText: codeReviewAssistantText,
+      })) {
+        codeReviewFallbackSent = true;
+        resultReceived = false;
+        codeReviewAssistantText = '';
+        codeReviewToolUseSeen = false;
+        writeMtlCodeJson(child, createMtlCodeUserMessage(buildCodeReviewToolFallbackPrompt()));
+        return;
+      }
       closeMtlCodeInput(child);
     }
   };
@@ -1216,6 +1370,10 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
     const childEnv = await buildMtlCodeSpawnEnv(options);
     const cliArgs = buildMtlCodeArgs(options, childEnv);
+    emitPromptInjectionDebug(ws, options, childEnv, cliArgs, capturedSessionId || sessionId || clientSessionId || null, {
+      originalCommand: options.debugPromptInjectionOriginalCommand || command,
+      effectiveCommand: finalCommand,
+    });
     let lastSpawnError = null;
 
     for (const launch of launches) {
@@ -1853,5 +2011,7 @@ export {
   getPendingApprovalsForSession,
   reconnectSessionWriter,
   isMtlCodeUserAbort,
-  buildMtlCodeCloseFailureMessage
+  buildMtlCodeCloseFailureMessage,
+  buildCodeReviewToolFallbackPrompt,
+  shouldSendCodeReviewToolFallback
 };

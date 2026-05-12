@@ -6,6 +6,7 @@ import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
+import DebugSettingsTab from '../view/tabs/DebugSettingsTab';
 import RuntimeSettingsTab from '../view/tabs/RuntimeSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { AgentCategory, SettingsProps } from '../types/types';
@@ -39,6 +40,8 @@ function Settings({ isOpen, onClose, projects = [], selectedProject = null, init
     setCodexPermissionMode,
     geminiPermissionMode,
     setGeminiPermissionMode,
+    argusDebugSettings,
+    setArgusDebugSettings,
   } = useSettingsController({
     isOpen,
     initialTab
@@ -106,6 +109,13 @@ function Settings({ isOpen, onClose, projects = [], selectedProject = null, init
                     setAgentInitialCategory('small-model');
                     setActiveTab('agents');
                   }}
+                />
+              )}
+
+              {activeTab === 'debug' && (
+                <DebugSettingsTab
+                  settings={argusDebugSettings}
+                  onSettingsChange={setArgusDebugSettings}
                 />
               )}
 

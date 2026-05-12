@@ -15,11 +15,16 @@ import { apiFetch } from '../../../utils/api';
 import { thinkingModes } from '../constants/thinkingModes';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { getClaudeSettings, safeLocalStorage } from '../utils/chatStorage';
+import {
+  ARGUS_PROMPT_INJECTION_DEBUG_EVENT,
+  getArgusDebugSettings,
+} from '../utils/debugSettings';
 import type {
   ChatMessage,
   ChatUploadedFile,
   PendingPermissionRequest,
   PermissionMode,
+  PromptInjectionDebugPayload,
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { AgentAppBinding, AgentConfig } from '../../../types/agent';
@@ -111,6 +116,7 @@ interface UseChatComposerStateArgs {
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  setPromptInjectionDebug?: Dispatch<SetStateAction<PromptInjectionDebugPayload | null>>;
 }
 
 interface MentionableFile {
@@ -159,6 +165,37 @@ const getNotificationSessionSummary = (
 
   return normalizedFallback.length > 80 ? `${normalizedFallback.slice(0, 77)}...` : normalizedFallback;
 };
+
+function buildPendingPromptInjectionDebug({
+  originalCommand,
+  effectiveCommand,
+  permissionMode,
+  coordinatorMode,
+  sessionId,
+}: {
+  originalCommand: string;
+  effectiveCommand: string;
+  permissionMode: PermissionMode | string;
+  coordinatorMode: boolean;
+  sessionId: string;
+}): PromptInjectionDebugPayload {
+  const original = originalCommand.trim();
+  const effective = effectiveCommand.trim();
+  return {
+    appendSystemPrompt: '',
+    appendSystemPromptLength: 0,
+    originalCommand: original,
+    effectiveCommand: effective,
+    effectiveCommandLength: effective.length,
+    commandChanged: Boolean(original && effective && original !== effective),
+    permissionMode: String(permissionMode || ''),
+    codexStylePlanMode: permissionMode === 'plan',
+    coordinatorMode,
+    cli: {},
+    sessionId,
+    receivedAt: 'Waiting for backend final launch',
+  };
+}
 
 const normalizeAgentToken = (value: string) => value.trim().toLowerCase();
 
@@ -280,6 +317,7 @@ export function useChatComposerState({
   setClaudeStatus,
   setIsUserScrolledUp,
   setPendingPermissionRequests,
+  setPromptInjectionDebug,
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
@@ -1015,6 +1053,7 @@ export function useChatComposerState({
       };
 
       const toolsSettings = getToolsSettings();
+      const debugPromptInjection = getArgusDebugSettings().showPromptInjectionPanel;
       const permissionModeForSend = subagentPlanRequestActive ? 'plan' : (oneShotPermissionModeRef.current || permissionMode);
       const skipToolPermissions = Boolean(
         toolsSettings?.skipPermissions
@@ -1051,6 +1090,19 @@ export function useChatComposerState({
           selectedDependencies: activeAgentSelectedDependencies,
         })
         : undefined;
+      if (provider === 'claude' && debugPromptInjection) {
+        const pendingPromptInjection = buildPendingPromptInjectionDebug({
+          originalCommand: currentInput,
+          effectiveCommand: messageContent,
+          permissionMode: permissionModeForSend,
+          coordinatorMode: shouldSendSubagentDispatch,
+          sessionId: sessionToActivate,
+        });
+        setPromptInjectionDebug?.(pendingPromptInjection);
+        window.dispatchEvent(new CustomEvent(ARGUS_PROMPT_INJECTION_DEBUG_EVENT, {
+          detail: pendingPromptInjection,
+        }));
+      }
 
       if (provider === 'cursor') {
         sendMessage({
@@ -1183,6 +1235,7 @@ export function useChatComposerState({
             files: uploadedFiles,
             clientMessageId,
             clientSessionId: sessionToActivate,
+            ...(debugPromptInjection ? { debugPromptInjection: true } : {}),
             ...(explicitWikiContext ? { explicitWikiContext } : {}),
             ...(shouldSendSubagentDispatch
               ? {
@@ -1254,6 +1307,7 @@ export function useChatComposerState({
       modelProfileId,
       allowSessionAgentBinding,
       sendMessage,
+      setPromptInjectionDebug,
       setCanAbortSession,
       addMessage,
       setClaudeStatus,

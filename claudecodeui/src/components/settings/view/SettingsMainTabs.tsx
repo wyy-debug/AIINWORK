@@ -16,6 +16,7 @@ type MainTabConfig = {
 const TAB_CONFIG: MainTabConfig[] = [
   { id: 'agents', labelKey: 'mainTabs.argusHub', label: '模型 / Hub' },
   { id: 'runtime', labelKey: 'mainTabs.runtime', label: '运行时' },
+  { id: 'debug', labelKey: 'mainTabs.debug', label: 'Debug' },
   { id: 'appearance', labelKey: 'mainTabs.appearance', label: '外观' },
 ];
 

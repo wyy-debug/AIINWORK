@@ -10,6 +10,7 @@ import type {
 export const SETTINGS_MAIN_TABS: SettingsMainTab[] = [
   'agents',
   'runtime',
+  'debug',
   'appearance',
 ];
 

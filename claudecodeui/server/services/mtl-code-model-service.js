@@ -413,6 +413,16 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
       },
     },
     {
+      pattern: /\b(code\s*review|review|audit)\b|(?:review|审查|评审)\s*代码|代码\s*(?:review|审查|评审)|代码审查|审查代码|评审代码/i,
+      reason: 'code review requested',
+      weight: 4,
+      route: {
+        kind: 'verification',
+        label: 'Review verifier',
+        required: false,
+      },
+    },
+    {
       pattern: /\b(implement|build|add|fix|change|update|wire|integrate)\b/i,
       reason: 'implementation requested',
       weight: 2,
@@ -443,10 +453,11 @@ export function buildOpenMythosRuntimePreview(input, config, permissionMode = ''
     + Math.min(3, Math.floor(prompt.length / 600));
   const inferredEffort = riskScore >= 10 ? 'max' : riskScore >= 8 ? 'xhigh' : riskScore >= 4 ? 'high' : riskScore >= 2 ? 'medium' : 'low';
   const effort = clampOpenMythosEffort(inferredEffort, normalizedConfig.minEffort, normalizedConfig.maxEffort);
-  const loopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
+  const baseLoopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
   const phasePlan = normalizedConfig.phaseAdapter
     ? buildOpenMythosPhasePlan(effort)
     : ['implement', 'finalize'];
+  const loopBudget = Math.max(baseLoopBudget, phasePlan.length);
   const expertRoutes = normalizedConfig.expertRouting
     ? buildOpenMythosExpertRoutes(signals, effort)
     : [];

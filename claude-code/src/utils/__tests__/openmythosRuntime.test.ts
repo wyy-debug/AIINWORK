@@ -4,6 +4,7 @@ import {
   createOpenMythosRuntimeState,
   formatOpenMythosRuntimeReminder,
   getOpenMythosRuntimeConfig,
+  getOpenMythosPhase,
   isOpenMythosReadOnlyPhase,
   shouldAttachOpenMythosRuntimeCard,
   shouldApplyAdaptiveEffort,
@@ -60,6 +61,33 @@ describe('openmythos runtime card', () => {
       'verify',
       'finalize',
     ])
+  })
+
+  test('treats terse code review requests as multi-turn tool work', () => {
+    const card = buildOpenMythosRuntimeCard('review代码')
+
+    expect(card?.effort).toBe('high')
+    expect(card?.loopBudget).toBeGreaterThanOrEqual(4)
+    expect(card?.reasons).toContain('code review requested')
+    expect(card?.routes.join(' ')).toContain('Inspect git status')
+    expect(card?.phasePlan).toEqual([
+      'orient',
+      'plan',
+      'implement',
+      'verify',
+      'finalize',
+    ])
+    expect(card?.loopBudget).toBeGreaterThanOrEqual(card?.phasePlan.length ?? 0)
+    expect(getOpenMythosPhase(card!, card!.loopBudget)).toBe('finalize')
+  })
+
+  test('keeps code review runtime card active in bare simple mode', () => {
+    process.env.MTL_CODE_SIMPLE = '1'
+
+    const card = buildOpenMythosRuntimeCard('review代码')
+
+    expect(card?.reasons).toContain('code review requested')
+    expect(card?.routes.join(' ')).toContain('Inspect git status')
   })
 
   test('formats reminder as advisory-only and never mentions old dispatch tools', () => {

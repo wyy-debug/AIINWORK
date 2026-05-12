@@ -337,6 +337,17 @@ function shouldUseCodexStylePlanToolSurface(
 }
 
 export const getTools = (permissionContext: ToolPermissionContext): Tools => {
+  if (shouldUseCodexStylePlanToolSurface(permissionContext)) {
+    const planTools = filterToolsByDenyRules(
+      getAllBaseTools().filter(tool =>
+        CODEX_STYLE_PLAN_MODE_TOOL_NAMES.has(tool.name),
+      ),
+      permissionContext,
+    )
+    const isEnabled = planTools.map(tool => tool.isEnabled())
+    return planTools.filter((_, i) => isEnabled[i])
+  }
+
   // Simple mode: only Bash, Read, and Edit tools
   if (isEnvTruthy(process.env.MTL_CODE_SIMPLE)) {
     const simpleSubagentTools = getCodexSubagentTools()
@@ -389,10 +400,6 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
   ])
 
   let tools = getAllBaseTools().filter(tool => !specialTools.has(tool.name))
-
-  if (shouldUseCodexStylePlanToolSurface(permissionContext)) {
-    tools = tools.filter(tool => CODEX_STYLE_PLAN_MODE_TOOL_NAMES.has(tool.name))
-  }
 
   // Filter out tools that are denied by the deny rules
   let allowedTools = filterToolsByDenyRules(tools, permissionContext)

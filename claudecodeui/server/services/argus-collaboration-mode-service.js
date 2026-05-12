@@ -112,6 +112,41 @@ const PLAN_MODE_DENIED_TOOLS = Object.freeze([
   'EnterPlanMode',
 ]);
 
+const TERSE_CODE_REVIEW_REQUESTS = new Set([
+  'reviewcode',
+  'codereview',
+  'review代码',
+  '代码review',
+  '代码审查',
+  '审查代码',
+  '代码评审',
+  '评审代码',
+  'review一下代码',
+  '帮我review代码',
+  '帮我审查代码',
+  '帮我评审代码',
+]);
+
+const CASUAL_CODE_REVIEW_REQUEST_PATTERN = /^(?:please|pls|\u5e2e\u6211|\u8bf7|\u9ebb\u70e6)?(?:review|code\s*review|\u5ba1\u67e5|\u8bc4\u5ba1)(?:\u4e00\u4e0b|\u4e0b|\u4ee3\u7801|code|\u5f53\u524d\u4ee3\u7801|\u5f53\u524d\u6539\u52a8|\u6539\u52a8|diff|changes)?$/i;
+const REVIEW_SHORTCUT_MAX_LENGTH = 180;
+const CHINESE_REVIEW_SHORTCUT_PATTERN = /(?:^|[\s,.;:!?，。；：！？])(?:\u4f60\s*)?(?:(?:\u518d\u6b21|\u518d|\u5e2e\u6211|\u8bf7|\u9ebb\u70e6|\u597d\u597d|\u5f7b\u5e95|\u4ed4\u7ec6|\u4e25\u683c)\s*)+(?:code\s*)?review\s*(?:\u4e00\u4e0b|\u4e0b)?|(?:^|[\s,.;:!?，。；：！？])(?:code\s*)?review\s*(?:\u4e00\u4e0b|\u4e0b)/i;
+const CHINESE_NATIVE_REVIEW_PATTERN = /(?:\u5ba1\u67e5|\u8bc4\u5ba1|\u590d\u67e5|\u68c0\u67e5)\s*(?:\u4e00\u4e0b|\u4e0b)?\s*(?:\u4ee3\u7801|\u5f53\u524d|\u8fd9\u4e2a|\u94fe\u8def|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a|diff|pr|commit|repo)?|(?:\u4ee3\u7801|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a)\s*(?:\u5ba1\u67e5|\u8bc4\u5ba1|\u590d\u67e5|\u68c0\u67e5)/i;
+const ENGLISH_CODE_REVIEW_SCOPE_PATTERN = /\b(code|diff|changes?|workspace|worktree|repo(?:sitory)?|pull request|pr|commit|branch|file|module|class|function|current|staged|working tree|audit)\b/i;
+const ENGLISH_CODE_REVIEW_PATTERN = /^(?:please|pls|can you|could you)?\s*(?:do\s+a\s+)?(?:code\s*)?(?:review|audit)\b/i;
+
+const CODE_REVIEW_INTENT_PROMPT = [
+  'Code review intent active.',
+  'Do not answer with an acknowledgement, promise, or plan such as "I will inspect".',
+  'Before any user-visible review response, call the available tools to inspect the repository.',
+  'Required checks when tools are available:',
+  '- git status --short',
+  '- git diff --stat',
+  '- git diff',
+  '- git diff --staged when staged files exist',
+  'If required tool access is unavailable, report that as a blocker instead of pretending the review was performed.',
+  'Final response must report findings first, ordered by severity, with file and line references when possible.',
+].join('\n');
+
 function appendPrompt(existing, addition) {
   const current = typeof existing === 'string' ? existing.trim() : '';
   const next = typeof addition === 'string' ? addition.trim() : '';
@@ -122,6 +157,45 @@ function appendPrompt(existing, addition) {
     return next;
   }
   return `${current}\n\n${next}`;
+}
+
+function normalizeReviewIntentCommand(command) {
+  return typeof command === 'string'
+    ? command.trim().replace(/\s+/g, ' ')
+    : '';
+}
+
+function isTerseCodeReviewRequest(command) {
+  const normalized = normalizeReviewIntentCommand(command);
+  if (!normalized || normalized.length > REVIEW_SHORTCUT_MAX_LENGTH) {
+    return false;
+  }
+  const compact = normalized.replace(/\s+/g, '').toLowerCase();
+  return TERSE_CODE_REVIEW_REQUESTS.has(compact)
+    || CASUAL_CODE_REVIEW_REQUEST_PATTERN.test(compact)
+    || CHINESE_REVIEW_SHORTCUT_PATTERN.test(normalized)
+    || CHINESE_NATIVE_REVIEW_PATTERN.test(normalized)
+    || (ENGLISH_CODE_REVIEW_PATTERN.test(normalized) && ENGLISH_CODE_REVIEW_SCOPE_PATTERN.test(normalized));
+}
+
+function buildWorkspaceReviewCommand(command) {
+  const normalized = normalizeReviewIntentCommand(command);
+  return [
+    'Review the current workspace changes or requested code scope in this repository.',
+    '',
+    'Before answering, inspect the current repository state and relevant diffs.',
+    'Use the available tools to check at least:',
+    '- git status',
+    '- git diff for the current working tree',
+    '- staged diff when staged files exist',
+    '- relevant files, symbols, or call chains named in the original request',
+    '',
+    'Do not modify files. Do not only acknowledge the request.',
+    'Report findings first, ordered by severity, with file and line references when possible.',
+    'If there are no actionable findings, say that clearly and mention any remaining test or verification gaps.',
+    '',
+    `Original user request: ${normalized}`,
+  ].join('\n');
 }
 
 export function getArgusPlanModeAllowedTools() {
@@ -138,6 +212,28 @@ export function buildCodexStylePlanModePrompt() {
 
 export function buildSubagentDispatchPrompt() {
   return SUBAGENT_DISPATCH_PROMPT;
+}
+
+export function applyArgusCodeReviewIntentToChatCommand(data) {
+  if (!data || typeof data !== 'object' || data.type !== 'claude-command') {
+    return data;
+  }
+  if (data.options?.argusCodeReviewIntent === true) {
+    return data;
+  }
+  if (!isTerseCodeReviewRequest(data.command)) {
+    return data;
+  }
+
+  return {
+    ...data,
+    command: buildWorkspaceReviewCommand(data.command),
+    options: {
+      ...(data.options || {}),
+      appendSystemPrompt: appendPrompt(data.options?.appendSystemPrompt, CODE_REVIEW_INTENT_PROMPT),
+      argusCodeReviewIntent: true,
+    },
+  };
 }
 
 export function resolveArgusPermissionMode(options = {}) {

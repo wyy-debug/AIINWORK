@@ -31,26 +31,31 @@ function basenameTaskName(value) {
 }
 
 function parseAssignmentName(value) {
-  const text = basenameTaskName(value);
-  const safeMatch = /^swarm_([a-z0-9_]+)__([a-z0-9_]+)__(\d+)$/.exec(text);
+  const rawText = normalizeText(value);
+  const text = basenameTaskName(rawText);
+  const safeMatch = /^swarm_([a-z0-9_]+)__([a-z0-9_]+)__(\d+)$/.exec(text)
+    || /(?:^|[^a-z0-9_])(swarm_([a-z0-9_]+)__([a-z0-9_]+)__(\d+))(?:$|[^a-z0-9_])/i.exec(rawText);
   if (safeMatch) {
+    const hasEmbeddedMatch = safeMatch.length === 5;
     return {
-      runId: safeMatch[1],
-      roleId: safeMatch[2],
-      safeRoleId: safeMatch[2],
-      roleIndex: Number(safeMatch[3]),
-      taskName: text,
+      runId: hasEmbeddedMatch ? safeMatch[2] : safeMatch[1],
+      roleId: hasEmbeddedMatch ? safeMatch[3] : safeMatch[2],
+      safeRoleId: hasEmbeddedMatch ? safeMatch[3] : safeMatch[2],
+      roleIndex: Number(hasEmbeddedMatch ? safeMatch[4] : safeMatch[3]),
+      taskName: hasEmbeddedMatch ? safeMatch[1] : text,
     };
   }
 
-  const match = /^swarm:([^:]+):([^:]+):(\d+)$/.exec(text);
+  const match = /^swarm:([^:]+):([^:]+):(\d+)$/.exec(text)
+    || /(?:^|\s)(swarm:([^:\s]+):([^:\s]+):(\d+))(?:$|\s)/.exec(rawText);
   if (!match) return null;
+  const hasEmbeddedMatch = match.length === 5;
   return {
-    runId: match[1],
-    roleId: match[2],
-    safeRoleId: sanitizeTaskNamePart(match[2], 'role'),
-    roleIndex: Number(match[3]),
-    taskName: text,
+    runId: hasEmbeddedMatch ? match[2] : match[1],
+    roleId: hasEmbeddedMatch ? match[3] : match[2],
+    safeRoleId: sanitizeTaskNamePart(hasEmbeddedMatch ? match[3] : match[2], 'role'),
+    roleIndex: Number(hasEmbeddedMatch ? match[4] : match[3]),
+    taskName: hasEmbeddedMatch ? match[1] : text,
   };
 }
 
@@ -80,7 +85,8 @@ export function buildSwarmCoordinatorPrompt({
   const assignments = roleAssignments({ run, template });
   return [
     'You are the hidden Argus Swarm coordinator for this run.',
-    'Spawn every listed role exactly once by calling spawn_agent with task_name, message, and agent_type: "worker". Use the provided task_name values exactly.',
+    'Spawn every listed role exactly once by calling spawn_agent with agent_type: "worker".',
+    'The spawn_agent message for each role must start with "Argus swarm task_name: <task_name>" using the provided task_name exactly.',
     'Do not write a user-visible summary, topology recap, or "all agents acknowledged" message.',
     'A role is launched only when spawn_agent creates or starts a background task. If the tool is unavailable or rejects, report one concise blocker and do not claim success.',
     'After the spawn_agent calls, do not complete delegated role work in the coordinator. The Subagents page will track task_started, task_progress, and task_notification events.',
@@ -195,6 +201,9 @@ function parseAssignmentFromMessage(message = {}) {
     input.task_name,
     input.taskName,
     input.name,
+    input.message,
+    input.content,
+    input.prompt,
     taskNameFromRecord(result),
     taskNameFromRecord(record),
     message.taskName,
@@ -264,12 +273,13 @@ export function extractSpawnAgentMappings(messages = []) {
     const kind = normalizeText(message?.kind || message?.type);
     if (kind === 'tool_use' && isSpawnAgentToolName(message.toolName || message.name)) {
       const input = getToolInput(message);
-      const assignment = parseAssignmentName(input.task_name || input.taskName || input.name);
+      const assignment = parseAssignmentName(input.task_name || input.taskName || input.name)
+        || parseAssignmentFromMessage(message);
       if (!assignment) continue;
       const toolId = normalizeText(message.toolId || message.id || message.tool_use_id);
       const partial = {
         ...assignment,
-        taskName: input.task_name || input.taskName || input.name,
+        taskName: input.task_name || input.taskName || input.name || assignment.taskName,
         taskId: normalizeText(message.taskId || message.task_id),
         threadId: normalizeText(message.threadId || message.thread_id),
       };

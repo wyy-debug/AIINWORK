@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export const SERVER_VERSION = '0.2.7';
+export const SERVER_VERSION = '0.2.11';
 
 export const PLATFORM_IDS = {
   android: 1,
@@ -41,7 +41,12 @@ export function readConfig(env = process.env) {
     localUserId: String(env.CRASHSIGHT_LOCAL_USER_ID || '').trim(),
     openApiKey: String(env.CRASHSIGHT_OPENAPI_KEY || '').trim(),
     timeoutMs: readInteger(env.CRASHSIGHT_TIMEOUT_MS, 30_000, 3_000, 120_000),
-    rateLimitPerMinute: readInteger(env.CRASHSIGHT_RATE_LIMIT_PER_MINUTE, 25, 1, 25),
+    rateLimitPerMinute: readInteger(
+      env.CRASH_AI_OPENAPI_RATE_LIMIT_PER_MINUTE || env.CRASHSIGHT_RATE_LIMIT_PER_MINUTE,
+      20,
+      1,
+      25,
+    ),
     branchFilters: parseBranchFilters(env.CRASHSIGHT_BRANCH_FILTERS),
     appIds: {
       pc: String(env.CRASHSIGHT_APP_ID_PC || '').trim(),
@@ -232,8 +237,8 @@ function buildSignedUrl(config, apiPath, timestamp = Math.floor(Date.now() / 100
 }
 
 export class RateLimiter {
-  constructor(perMinute = 25, sleep = defaultSleep, now = () => Date.now()) {
-    this.intervalMs = Math.ceil(60_000 / Math.max(1, Math.min(25, Number(perMinute) || 25)));
+  constructor(perMinute = 20, sleep = defaultSleep, now = () => Date.now()) {
+    this.intervalMs = Math.ceil(60_000 / Math.max(1, Math.min(25, Number(perMinute) || 20)));
     this.sleep = sleep;
     this.now = now;
     this.nextAt = 0;

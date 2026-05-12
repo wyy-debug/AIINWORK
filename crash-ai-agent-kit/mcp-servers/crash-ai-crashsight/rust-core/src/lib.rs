@@ -3,13 +3,14 @@ use base64::Engine;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
 use futures::{StreamExt, stream};
 use hmac::{Hmac, Mac};
-use reqwest::Client;
+use reqwest::{Client, StatusCode, header};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -44,6 +45,16 @@ struct Config {
     crash_concurrency: usize,
     redmine_concurrency: usize,
     redmine_api_key: String,
+    crash_rate_limiter: Arc<CrashSightRateLimiter>,
+    crash_max_retries: usize,
+    enrich_missing_issue_details: bool,
+    use_server_date_filter: bool,
+}
+
+#[derive(Debug)]
+struct CrashSightRateLimiter {
+    min_interval: Duration,
+    next_allowed: Mutex<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +72,7 @@ struct DateRange {
     end_time: String,
     start_ms: i64,
     end_ms: i64,
+    server_filter_millis: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -179,6 +191,63 @@ fn read_config() -> Config {
         crash_concurrency: read_usize_env("CRASH_AI_MAX_CONCURRENCY", 12, 1, 64),
         redmine_concurrency: read_usize_env("CRASH_AI_REDMINE_CONCURRENCY", 8, 1, 32),
         redmine_api_key: env::var("REDMINE_API_KEY").unwrap_or_default(),
+        crash_rate_limiter: Arc::new(CrashSightRateLimiter::new(read_usize_env(
+            "CRASH_AI_OPENAPI_RATE_LIMIT_PER_MINUTE",
+            20,
+            1,
+            25,
+        ))),
+        crash_max_retries: read_usize_env("CRASH_AI_OPENAPI_MAX_RETRIES", 8, 0, 20),
+        enrich_missing_issue_details: read_bool_env("CRASH_AI_ENRICH_MISSING_ISSUE_DETAILS", true),
+        use_server_date_filter: read_bool_env("CRASH_AI_USE_SERVER_DATE_FILTER", false),
+    }
+}
+
+impl CrashSightRateLimiter {
+    fn new(max_per_minute: usize) -> Self {
+        let max_per_minute = max_per_minute.clamp(1, 25) as u64;
+        let min_interval_ms = 60_000u64.div_ceil(max_per_minute);
+        Self {
+            min_interval: Duration::from_millis(min_interval_ms),
+            next_allowed: Mutex::new(Instant::now()),
+        }
+    }
+
+    #[cfg(test)]
+    fn disabled() -> Self {
+        Self {
+            min_interval: Duration::ZERO,
+            next_allowed: Mutex::new(Instant::now()),
+        }
+    }
+
+    #[cfg(test)]
+    fn min_interval(&self) -> Duration {
+        self.min_interval
+    }
+
+    async fn wait(&self) {
+        if self.min_interval.is_zero() {
+            return;
+        }
+        let delay = {
+            let now = Instant::now();
+            let mut next_allowed = self
+                .next_allowed
+                .lock()
+                .expect("CrashSight rate limiter mutex poisoned");
+            if *next_allowed <= now {
+                *next_allowed = now + self.min_interval;
+                Duration::ZERO
+            } else {
+                let delay = *next_allowed - now;
+                *next_allowed += self.min_interval;
+                delay
+            }
+        };
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
     }
 }
 
@@ -198,31 +267,25 @@ pub async fn generate_report(input: ReportInput) -> Result<Report> {
     let date_range = normalize_date_range(&input)?;
     let platforms = resolve_platforms(&input, &config)?;
     let version_filters = resolve_version_filters(&input, &config);
-    let page_size = input.page_size.unwrap_or(500).clamp(1, 500);
+    let page_size = input.page_size.unwrap_or(100).clamp(1, 100);
     let max_pages = input.max_pages.unwrap_or(100).clamp(1, 1000);
 
     let scan_start = Instant::now();
-    let combos: Vec<_> = platforms
-        .iter()
-        .flat_map(|platform| {
-            version_filters
-                .iter()
-                .map(move |version| (platform.clone(), version.clone()))
-        })
-        .collect();
+    let combos: Vec<_> = platforms.to_vec();
 
     let scan_results = stream::iter(combos)
-        .map(|(platform, version_filter)| {
+        .map(|platform| {
             let client = client.clone();
             let config = config.clone();
             let date_range = date_range.clone();
+            let version_filters = version_filters.clone();
             async move {
                 scan_combo(
                     &client,
                     &config,
                     &date_range,
                     &platform,
-                    &version_filter,
+                    &version_filters,
                     page_size,
                     max_pages,
                 )
@@ -256,8 +319,11 @@ pub async fn generate_report(input: ReportInput) -> Result<Report> {
         }
     }
     rows = merge_rows(rows);
-    let issue_detail_errors = enrich_issue_details(&client, &config, &mut rows).await;
-    errors.extend(issue_detail_errors);
+    let include_redmine = input.include_redmine.unwrap_or(true);
+    if include_redmine && config.enrich_missing_issue_details {
+        let issue_detail_errors = enrich_issue_details(&client, &config, &mut rows).await;
+        errors.extend(issue_detail_errors);
+    }
     rows.sort_by(|a, b| {
         b.total_affected_devices
             .cmp(&a.total_affected_devices)
@@ -269,7 +335,7 @@ pub async fn generate_report(input: ReportInput) -> Result<Report> {
     let crash_ms = scan_start.elapsed().as_millis();
 
     let redmine_start = Instant::now();
-    let redmine = if input.include_redmine.unwrap_or(true) {
+    let redmine = if include_redmine {
         enrich_redmine(&client, &config, &mut rows).await
     } else {
         Vec::new()
@@ -326,6 +392,7 @@ struct PartialScan {
     filtered_out_by_date: usize,
     pages_scanned: usize,
     possibly_truncated: bool,
+    stop_after_page: bool,
 }
 
 #[derive(Debug, Default)]
@@ -350,34 +417,35 @@ async fn scan_combo(
     config: &Config,
     date_range: &DateRange,
     platform: &Platform,
-    version_filter: &str,
+    version_filters: &[String],
     page_size: usize,
     max_pages: usize,
 ) -> Result<PartialScan> {
     let mut partial = PartialScan::default();
     let mut seen_page_keys = BTreeSet::new();
     let mut merged_rows = BTreeMap::<String, IssueRow>::new();
+    let mut use_server_date_filter =
+        config.use_server_date_filter && date_range.server_filter_millis.is_some();
+    let mut page = 1usize;
 
-    for page in 1..=max_pages {
+    while page <= max_pages {
         let offset = (page - 1) * page_size;
-        let body = json!({
-            "appId": platform.app_id,
-            "platformId": platform.id,
-            "pid": platform.id.to_string(),
-            "exceptionTypeList": "Crash,Native,ExtensionCrash",
-            "rows": page_size,
-            "page": page,
-            "pageNum": page,
-            "offset": offset,
-            "start": offset,
-            "version": version_filter,
-            "startDate": date_range.start_date,
-            "endDate": date_range.end_date,
-        });
+        let body = build_issue_list_body(
+            platform,
+            "",
+            date_range,
+            page_size,
+            page,
+            use_server_date_filter,
+        );
         let data =
-            post_crashsight(client, config, "/uniform/openapi/queryCrashList", &body).await?;
+            post_crashsight(client, config, "/uniform/openapi/queryIssueList", &body).await?;
         let raw_records = crash_records_from_response(&data);
         if raw_records.is_empty() {
+            if page == 1 && use_server_date_filter {
+                use_server_date_filter = false;
+                continue;
+            }
             break;
         }
         let raw_count = raw_records.len();
@@ -397,8 +465,12 @@ async fn scan_combo(
         partial.api_row_count += raw_count;
         partial.pages_scanned += 1;
         let page_partial =
-            aggregate_crash_list_page(platform, version_filter, &data, date_range, config);
+            aggregate_crash_list_page(platform, version_filters, &data, date_range, config);
         partial.filtered_out_by_date += page_partial.filtered_out_by_date;
+        if page_partial.stop_after_page {
+            merge_issue_rows(&mut merged_rows, page_partial.rows);
+            break;
+        }
         merge_issue_rows(&mut merged_rows, page_partial.rows);
         if raw_count < page_size {
             break;
@@ -411,9 +483,50 @@ async fn scan_combo(
         if page == max_pages {
             partial.possibly_truncated = true;
         }
+        page += 1;
     }
     partial.rows = merged_rows.into_values().collect();
     Ok(partial)
+}
+
+fn build_issue_list_body(
+    platform: &Platform,
+    version_filter: &str,
+    date_range: &DateRange,
+    page_size: usize,
+    page: usize,
+    use_server_date_filter: bool,
+) -> Value {
+    let offset = (page - 1) * page_size;
+    let mut body = json!({
+        "appId": platform.app_id,
+        "platformId": platform.id,
+        "pid": platform.id.to_string(),
+        "exceptionCategoryList": "CRASH",
+        "exceptionTypeList": "Crash,Native,ExtensionCrash",
+        "sortField": "uploadTime",
+        "sortOrder": "desc",
+        "rows": page_size,
+        "page": page,
+        "pageNum": page,
+        "offset": offset,
+        "start": offset,
+        "startDate": date_range.start_date,
+        "endDate": date_range.end_date,
+        "startTime": date_range.start_time,
+        "endTime": date_range.end_time,
+        "issueUploadStartTime": date_range.start_time,
+        "issueUploadEndTime": date_range.end_time,
+    });
+    if use_server_date_filter {
+        if let Some(millis) = date_range.server_filter_millis {
+            body["issueUploadTimeRelativeMillis"] = json!(millis);
+        }
+    }
+    if !version_filter.trim().is_empty() {
+        body["version"] = json!(version_filter);
+    }
+    body
 }
 
 async fn post_crashsight(
@@ -422,29 +535,75 @@ async fn post_crashsight(
     api_path: &str,
     body: &Value,
 ) -> Result<Value> {
-    let url = signed_url(config, api_path)?;
-    let response = client
-        .post(url)
-        .header("Accept", "application/json")
-        .json(body)
-        .send()
-        .await
-        .with_context(|| format!("CrashSight request failed: {api_path}"))?;
-    let status = response.status();
-    let parsed: Value = response.json().await.context("parse CrashSight JSON")?;
-    if !status.is_success() {
-        return Err(anyhow!("CrashSight HTTP {status}: {parsed}"));
+    for attempt in 0..=config.crash_max_retries {
+        config.crash_rate_limiter.wait().await;
+        let url = signed_url(config, api_path)?;
+        let response = match client
+            .post(url)
+            .header("Accept", "application/json")
+            .json(body)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if attempt < config.crash_max_retries => {
+                tokio::time::sleep(crashsight_retry_delay(attempt, false, None)).await;
+                let _ = error;
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("CrashSight request failed: {api_path}"));
+            }
+        };
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_retry_after);
+        let text = response
+            .text()
+            .await
+            .with_context(|| format!("read CrashSight response body: {api_path}"))?;
+        let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
+        if is_crashsight_rate_limited(status, &parsed) {
+            if attempt < config.crash_max_retries {
+                tokio::time::sleep(crashsight_retry_delay(attempt, true, retry_after)).await;
+                continue;
+            }
+            return Err(anyhow!(
+                "CrashSight OpenAPI rate limited after {} attempts for {}. Official limit is 25 requests/minute per user across all OpenAPI endpoints; current MCP default is 20/minute.",
+                attempt + 1,
+                api_path
+            ));
+        }
+        if status.is_server_error() && attempt < config.crash_max_retries {
+            tokio::time::sleep(crashsight_retry_delay(attempt, false, retry_after)).await;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(anyhow!("CrashSight HTTP {status}: {parsed}"));
+        }
+        return unwrap_crashsight(parsed, api_path);
     }
-    unwrap_crashsight(parsed, api_path)
+    Err(anyhow!(
+        "CrashSight request exhausted retries for {api_path}"
+    ))
 }
 
 fn aggregate_crash_list_page(
     platform: &Platform,
-    version_filter: &str,
+    version_filters: &[String],
     data: &Value,
     date_range: &DateRange,
     config: &Config,
 ) -> PartialScan {
+    if let Some(rows) =
+        issue_rows_from_response(platform, version_filters, data, date_range, config)
+    {
+        return rows;
+    }
     let mut partial = PartialScan::default();
     let fallback_issue_ids = issue_ids_from_response(data);
     let mut aggregates = BTreeMap::<String, CrashAggregate>::new();
@@ -473,22 +632,23 @@ fn aggregate_crash_list_page(
             continue;
         }
 
-        let application_version = first_non_empty(&[
-            text_at(
-                &record,
-                &[
-                    "productVersion",
-                    "crashVersion",
-                    "version",
-                    "appVersion",
-                    "crashMap.productVersion",
-                    "detailMap.productVersion",
-                    "esMap.productVersion",
-                    "esMap.version",
-                ],
-            ),
-            version_filter.to_string(),
-        ]);
+        let application_version = clean_version_text(&text_at(
+            &record,
+            &[
+                "productVersion",
+                "crashVersion",
+                "version",
+                "appVersion",
+                "crashMap.productVersion",
+                "detailMap.productVersion",
+                "esMap.productVersion",
+                "esMap.version",
+            ],
+        ));
+        let Some(matched_filters) = matched_version_filters(&application_version, version_filters)
+        else {
+            continue;
+        };
         let key = format!(
             "{}|{}|{}",
             platform.id,
@@ -503,7 +663,7 @@ fn aggregate_crash_list_page(
             application_version: application_version.clone(),
             ..Default::default()
         });
-        entry.version_filters.insert(version_filter.to_string());
+        entry.version_filters.insert(matched_filters);
         entry.crash_count += 1;
         let crash_id = text_at(
             &record,
@@ -569,6 +729,70 @@ fn aggregate_crash_list_page(
         .map(|aggregate| aggregate.into_issue_row(config))
         .collect();
     partial
+}
+
+fn issue_rows_from_response(
+    platform: &Platform,
+    version_filters: &[String],
+    data: &Value,
+    date_range: &DateRange,
+    config: &Config,
+) -> Option<PartialScan> {
+    let issues = data.get("issueList").and_then(Value::as_array)?;
+    if issues.is_empty() {
+        return Some(PartialScan::default());
+    }
+    let mut partial = PartialScan {
+        api_row_count: issues.len(),
+        ..Default::default()
+    };
+    for issue in issues.iter().filter(|item| item.is_object()) {
+        let upload_ms = first_non_zero_i64(&[
+            timestamp_from_issue(
+                issue,
+                &[
+                    "latestUploadTimestamp",
+                    "lastestUploadTimestamp",
+                    "lastUploadTimestamp",
+                    "latestUploadTime",
+                    "lastestUploadTime",
+                    "lastUploadTime",
+                ],
+            ),
+            timestamp_from_issue(
+                issue,
+                &["firstUploadTimestamp", "firstUploadTime", "firstCrashTime"],
+            ),
+        ]);
+        if upload_ms != 0 && upload_ms < date_range.start_ms {
+            partial.filtered_out_by_date += 1;
+            partial.stop_after_page = true;
+            continue;
+        }
+        if upload_ms != 0 && upload_ms > date_range.end_ms {
+            partial.filtered_out_by_date += 1;
+            continue;
+        }
+        let mut row = normalize_issue_row(
+            platform.label,
+            platform.id,
+            &platform.app_id,
+            "",
+            issue,
+            &config.base_url,
+            &config.redmine_base_url,
+        );
+        let Some(matched_filters) =
+            matched_version_filters(&row.application_version, version_filters)
+        else {
+            continue;
+        };
+        row.version_filter = matched_filters;
+        if !row.issue_id.is_empty() {
+            partial.rows.push(row);
+        }
+    }
+    Some(partial)
 }
 
 impl CrashAggregate {
@@ -722,6 +946,9 @@ async fn enrich_issue_details(
     let requests = rows
         .iter()
         .filter_map(|row| {
+            if !row.tags.is_empty() || !row.redmine_refs.is_empty() {
+                return None;
+            }
             let platform = platform_from_label(&row.platform)?;
             let app_id = config.app_ids.get(platform.0).cloned().unwrap_or_default();
             if app_id.is_empty() || row.issue_id.is_empty() {
@@ -1048,24 +1275,27 @@ pub fn normalize_issue_row(
             "esMap.userCount",
         ],
     );
-    let application_version = text_at(
-        issue,
-        &[
-            "appVersion",
-            "applicationVersion",
-            "productVersion",
-            "versionName",
-            "buildVersion",
-            "esMap.appVersion",
-            "esMap.applicationVersion",
-            "esMap.productVersion",
-            "esMap.versionName",
-            "lastMatchedReport.crashMap.productVersion",
-            "issueVersion",
-            "version",
-            "esMap.issueVersion",
-        ],
-    );
+    let application_version = first_non_empty(&[
+        clean_version_text(&text_at(
+            issue,
+            &[
+                "appVersion",
+                "applicationVersion",
+                "productVersion",
+                "versionName",
+                "buildVersion",
+                "esMap.appVersion",
+                "esMap.applicationVersion",
+                "esMap.productVersion",
+                "esMap.versionName",
+                "lastMatchedReport.crashMap.productVersion",
+                "issueVersion",
+                "version",
+                "esMap.issueVersion",
+            ],
+        )),
+        issue_versions_first_version(issue),
+    ]);
     IssueRow {
         id: 0,
         platform: platform.to_string(),
@@ -1444,12 +1674,94 @@ fn normalize_date_range(input: &ReportInput) -> Result<DateRange> {
         end_time: end.format("%Y-%m-%d %H:%M:%S").to_string(),
         start_ms: start.timestamp_millis(),
         end_ms: end.timestamp_millis(),
+        server_filter_millis: server_filter_millis_for(start.timestamp_millis()),
     })
+}
+
+fn server_filter_millis_for(start_ms: i64) -> Option<u64> {
+    let now_ms = Local::now().timestamp_millis();
+    let age_ms = now_ms.saturating_sub(start_ms).max(0) as u64;
+    const HOUR: u64 = 60 * 60 * 1000;
+    const DAY: u64 = 24 * HOUR;
+    [7 * DAY, 15 * DAY, 30 * DAY]
+        .into_iter()
+        .find(|bucket| *bucket >= age_ms)
+}
+
+fn matched_version_filters(application_version: &str, filters: &[String]) -> Option<String> {
+    let version = clean_version_text(application_version);
+    if filters.is_empty() {
+        return Some(String::new());
+    }
+    let matched = filters
+        .iter()
+        .filter(|filter| wildcard_match(filter, &version))
+        .cloned()
+        .collect::<Vec<_>>();
+    if matched.is_empty() {
+        None
+    } else {
+        Some(matched.join(", "))
+    }
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let pattern = pattern.trim().to_ascii_lowercase();
+    let text = text.trim().to_ascii_lowercase();
+    if pattern.is_empty() {
+        return true;
+    }
+    if pattern == "*" {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return text.contains(&pattern);
+    }
+    let mut cursor = 0usize;
+    for part in pattern.split('*').filter(|part| !part.is_empty()) {
+        let Some(index) = text[cursor..].find(part) else {
+            return false;
+        };
+        cursor += index + part.len();
+    }
+    true
+}
+
+fn clean_version_text(value: &str) -> String {
+    let text = value.trim();
+    if text.is_empty() || text == "#$cv#$" || text.eq_ignore_ascii_case("null") {
+        String::new()
+    } else {
+        text.to_string()
+    }
+}
+
+fn issue_versions_first_version(issue: &Value) -> String {
+    issue
+        .get("issueVersions")
+        .and_then(Value::as_array)
+        .and_then(|versions| versions.first())
+        .and_then(|first| {
+            first
+                .get("version")
+                .or_else(|| first.get("appVersion"))
+                .or_else(|| first.get("productVersion"))
+        })
+        .and_then(Value::as_str)
+        .map(clean_version_text)
+        .unwrap_or_default()
 }
 
 fn parse_datetime(raw: &str, end_of_day: bool) -> Result<DateTime<Local>> {
     let text = raw.trim().replace('T', " ").replace('/', "-");
-    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y%m%d%H%M%S"] {
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S %.f",
+        "%Y-%m-%d %H:%M:%S %f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y%m%d%H%M%S",
+    ] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(&text, fmt) {
             return Local
                 .from_local_datetime(&naive)
@@ -1506,6 +1818,26 @@ fn timestamp_from_crash_record(record: &Value) -> i64 {
         }
     }
     0
+}
+
+fn timestamp_from_issue(issue: &Value, paths: &[&str]) -> i64 {
+    for path in paths {
+        if let Some(value) = value_at(issue, path) {
+            let ts = timestamp_from_value(value);
+            if ts != 0 {
+                return ts;
+            }
+        }
+    }
+    0
+}
+
+fn first_non_zero_i64(values: &[i64]) -> i64 {
+    values
+        .iter()
+        .copied()
+        .find(|value| *value != 0)
+        .unwrap_or(0)
 }
 
 fn timestamp_from_value(value: &Value) -> i64 {
@@ -1643,6 +1975,65 @@ fn signed_url(config: &Config, api_path: &str) -> Result<String> {
         urlencoding::encode(&config.local_user_id),
         ts
     ))
+}
+
+fn parse_retry_after(raw: &str) -> Option<Duration> {
+    raw.trim()
+        .parse::<u64>()
+        .ok()
+        .map(|seconds| Duration::from_secs(seconds.clamp(1, 300)))
+}
+
+fn crashsight_retry_delay(
+    attempt: usize,
+    rate_limited: bool,
+    retry_after: Option<Duration>,
+) -> Duration {
+    if let Some(delay) = retry_after {
+        return delay;
+    }
+    if rate_limited {
+        return Duration::from_secs(65);
+    }
+    Duration::from_secs(2u64.saturating_pow(attempt.min(5) as u32))
+}
+
+fn is_crashsight_rate_limited(status: StatusCode, parsed: &Value) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS
+        || numeric_code_at(parsed, &["ret.code", "code"]) == Some(429)
+        || value_contains_rate_limit_text(parsed)
+}
+
+fn numeric_code_at(value: &Value, paths: &[&str]) -> Option<i64> {
+    for path in paths {
+        if let Some(value) = value_at(value, path) {
+            if let Some(code) = value.as_i64() {
+                return Some(code);
+            }
+            if let Some(code) = value.as_str().and_then(|text| text.trim().parse().ok()) {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+fn value_contains_rate_limit_text(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            let lower = text.to_ascii_lowercase();
+            lower.contains("too many")
+                || lower.contains("rate limit")
+                || lower.contains("ratelimit")
+                || text.contains("限流")
+                || text.contains("频率")
+                || text.contains("請求")
+                || text.contains("请求")
+        }
+        Value::Array(items) => items.iter().any(value_contains_rate_limit_text),
+        Value::Object(map) => map.values().any(value_contains_rate_limit_text),
+        _ => false,
+    }
 }
 
 fn unwrap_crashsight(parsed: Value, api_path: &str) -> Result<Value> {
@@ -1800,6 +2191,18 @@ fn read_usize_env(name: &str, default: usize, min: usize, max: usize) -> usize {
         .clamp(min, max)
 }
 
+fn read_bool_env(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
 fn trim_slash(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
@@ -1826,7 +2229,236 @@ mod tests {
             crash_concurrency: 12,
             redmine_concurrency: 8,
             redmine_api_key: String::new(),
+            crash_rate_limiter: Arc::new(CrashSightRateLimiter::disabled()),
+            crash_max_retries: 2,
+            enrich_missing_issue_details: true,
+            use_server_date_filter: false,
         }
+    }
+
+    #[test]
+    fn crashsight_rate_limiter_uses_safe_spacing_under_official_limit() {
+        let official_limit = CrashSightRateLimiter::new(25);
+        assert_eq!(official_limit.min_interval(), Duration::from_millis(2400));
+
+        let safe_default = CrashSightRateLimiter::new(20);
+        assert_eq!(safe_default.min_interval(), Duration::from_millis(3000));
+    }
+
+    #[test]
+    fn detects_crashsight_rate_limit_responses() {
+        assert!(is_crashsight_rate_limited(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &json!({})
+        ));
+        assert!(is_crashsight_rate_limited(
+            reqwest::StatusCode::OK,
+            &json!({ "ret": { "code": 429, "message": "同一用户所有接口合计 25 次/分钟" } })
+        ));
+        assert!(is_crashsight_rate_limited(
+            reqwest::StatusCode::OK,
+            &json!({ "message": "too many requests" })
+        ));
+        assert!(!is_crashsight_rate_limited(
+            reqwest::StatusCode::OK,
+            &json!({ "ret": { "code": 200, "message": "OK" } })
+        ));
+    }
+
+    #[test]
+    fn missing_issue_detail_enrichment_is_enabled_by_default() {
+        let config = test_config();
+
+        assert!(config.enrich_missing_issue_details);
+    }
+
+    #[test]
+    fn parses_crashsight_millisecond_timestamp_text() {
+        let parsed = parse_datetime("2026-05-11 17:17:51 171", false).unwrap();
+
+        assert_eq!(
+            parsed.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-05-11 17:17:51"
+        );
+    }
+
+    #[test]
+    fn builds_issue_list_body_like_crashsight_list_page_filters() {
+        let platform = Platform {
+            id: 1,
+            label: "Android",
+            app_id: "android-app".to_string(),
+        };
+        let date_range = DateRange {
+            start_date: "20260511".to_string(),
+            end_date: "20260512".to_string(),
+            start_time: "2026-05-11 00:00:00".to_string(),
+            end_time: "2026-05-12 10:00:00".to_string(),
+            start_ms: 0,
+            end_ms: 0,
+            server_filter_millis: Some(7 * 24 * 60 * 60 * 1000),
+        };
+
+        let body = build_issue_list_body(&platform, "*trunk*", &date_range, 100, 2, true);
+
+        assert_eq!(body["appId"], "android-app");
+        assert_eq!(body["platformId"], 1);
+        assert_eq!(body["exceptionCategoryList"], "CRASH");
+        assert_eq!(body["sortField"], "uploadTime");
+        assert_eq!(body["sortOrder"], "desc");
+        assert_eq!(body["rows"], 100);
+        assert_eq!(body["start"], 100);
+        assert_eq!(body["version"], "*trunk*");
+        assert_eq!(body["issueUploadTimeRelativeMillis"], 604800000);
+
+        let fallback_body = build_issue_list_body(&platform, "*trunk*", &date_range, 100, 2, false);
+        assert!(fallback_body.get("issueUploadTimeRelativeMillis").is_none());
+    }
+
+    #[test]
+    fn issue_list_rows_are_used_directly_with_tags_and_counts() {
+        let config = test_config();
+        let platform = Platform {
+            id: 10,
+            label: "PC",
+            app_id: "pc-app".to_string(),
+        };
+        let date_range = DateRange {
+            start_date: "20260511".to_string(),
+            end_date: "20260511".to_string(),
+            start_time: "2026-05-11 00:00:00".to_string(),
+            end_time: "2026-05-11 23:59:59".to_string(),
+            start_ms: parse_datetime("2026-05-11 00:00:00", false)
+                .unwrap()
+                .timestamp_millis(),
+            end_ms: parse_datetime("2026-05-11 23:59:59", false)
+                .unwrap()
+                .timestamp_millis(),
+            server_filter_millis: None,
+        };
+        let data = json!({
+            "issueList": [{
+                "issueId": "ISSUE-LIST-1",
+                "crashNum": 144,
+                "deviceCount": 28,
+                "appVersion": "Soc_PC_trunk_1",
+                "latestUploadTime": "2026-05-11 10:00:00",
+                "tagInfoList": [{ "tagName": "http://soc-redmine.wd.com/issues/116204" }]
+            }]
+        });
+
+        let filters = vec!["*trunk*".to_string(), "*weekly*".to_string()];
+        let partial = aggregate_crash_list_page(&platform, &filters, &data, &date_range, &config);
+
+        assert_eq!(partial.rows.len(), 1);
+        let row = &partial.rows[0];
+        assert_eq!(row.issue_id, "ISSUE-LIST-1");
+        assert_eq!(row.total_crash_num, 144);
+        assert_eq!(row.total_affected_devices, 28);
+        assert_eq!(row.application_version, "Soc_PC_trunk_1");
+        assert_eq!(row.redmine_refs, vec![116204]);
+    }
+
+    #[test]
+    fn issue_list_rows_can_be_filtered_locally_from_issue_versions() {
+        let config = test_config();
+        let platform = Platform {
+            id: 1,
+            label: "Android",
+            app_id: "android-app".to_string(),
+        };
+        let date_range = DateRange {
+            start_date: "20260511".to_string(),
+            end_date: "20260512".to_string(),
+            start_time: "2026-05-11 00:00:00".to_string(),
+            end_time: "2026-05-12 10:00:00".to_string(),
+            start_ms: parse_datetime("2026-05-11 00:00:00", false)
+                .unwrap()
+                .timestamp_millis(),
+            end_ms: parse_datetime("2026-05-12 10:00:00", false)
+                .unwrap()
+                .timestamp_millis(),
+            server_filter_millis: None,
+        };
+        let data = json!({
+            "issueList": [
+                {
+                    "issueId": "PUBLISH-ISSUE",
+                    "appVersion": "#$cv#$",
+                    "crashNum": 1,
+                    "deviceCount": 1,
+                    "lastestUploadTime": "2026-05-11 11:27:25 771",
+                    "issueVersions": [{ "version": "publish.260506.184026.1040110.1.135.1.1027" }]
+                },
+                {
+                    "issueId": "DAILY-ISSUE",
+                    "appVersion": "#$cv#$",
+                    "crashNum": 1,
+                    "deviceCount": 1,
+                    "lastestUploadTime": "2026-05-11 12:00:00 000",
+                    "issueVersions": [{ "version": "daily.260506.184026" }]
+                }
+            ]
+        });
+        let filters = vec!["*publish*".to_string()];
+
+        let partial = aggregate_crash_list_page(&platform, &filters, &data, &date_range, &config);
+
+        assert_eq!(partial.rows.len(), 1);
+        assert_eq!(partial.rows[0].issue_id, "PUBLISH-ISSUE");
+        assert_eq!(
+            partial.rows[0].application_version,
+            "publish.260506.184026.1040110.1.135.1.1027"
+        );
+        assert_eq!(partial.rows[0].version_filter, "*publish*");
+    }
+
+    #[test]
+    fn issue_list_page_stops_after_rows_older_than_start_time() {
+        let config = test_config();
+        let platform = Platform {
+            id: 1,
+            label: "Android",
+            app_id: "android-app".to_string(),
+        };
+        let date_range = DateRange {
+            start_date: "20260511".to_string(),
+            end_date: "20260512".to_string(),
+            start_time: "2026-05-11 00:00:00".to_string(),
+            end_time: "2026-05-12 10:00:00".to_string(),
+            start_ms: parse_datetime("2026-05-11 00:00:00", false)
+                .unwrap()
+                .timestamp_millis(),
+            end_ms: parse_datetime("2026-05-12 10:00:00", false)
+                .unwrap()
+                .timestamp_millis(),
+            server_filter_millis: None,
+        };
+        let data = json!({
+            "issueList": [
+                {
+                    "issueId": "IN-RANGE",
+                    "crashNum": 4,
+                    "deviceCount": 3,
+                    "appVersion": "trunk.260506",
+                    "lastestUploadTime": "2026-05-11 17:17:51 171"
+                },
+                {
+                    "issueId": "OLDER",
+                    "crashNum": 47,
+                    "deviceCount": 12,
+                    "appVersion": "trunk.260328",
+                    "lastestUploadTime": "2026-04-03 15:28:02 650"
+                }
+            ]
+        });
+
+        let filters = vec!["*trunk*".to_string(), "*weekly*".to_string()];
+        let partial = aggregate_crash_list_page(&platform, &filters, &data, &date_range, &config);
+
+        assert_eq!(partial.rows.len(), 1);
+        assert_eq!(partial.filtered_out_by_date, 1);
+        assert!(partial.stop_after_page);
     }
 
     #[test]
@@ -1861,6 +2493,7 @@ mod tests {
             end_ms: parse_datetime("2026-05-11 23:59:59", false)
                 .unwrap()
                 .timestamp_millis(),
+            server_filter_millis: None,
         };
         let data = json!({
             "numFound": 3,
@@ -1889,7 +2522,8 @@ mod tests {
             }
         });
 
-        let partial = aggregate_crash_list_page(&platform, "*trunk*", &data, &date_range, &config);
+        let filters = vec!["*trunk*".to_string(), "*weekly*".to_string()];
+        let partial = aggregate_crash_list_page(&platform, &filters, &data, &date_range, &config);
 
         assert_eq!(partial.api_row_count, 3);
         assert_eq!(partial.rows.len(), 2);

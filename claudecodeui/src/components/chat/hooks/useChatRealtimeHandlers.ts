@@ -3,7 +3,11 @@ import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, t
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import { notifyAgentCompletion } from '../../../utils/nativeNotifications';
-import type { AgentRuntimeDiagnostics, PendingPermissionRequest } from '../types/types';
+import type {
+  AgentRuntimeDiagnostics,
+  PendingPermissionRequest,
+  PromptInjectionDebugPayload,
+} from '../types/types';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -47,6 +51,7 @@ type LatestChatMessage = {
   contextBudget?: unknown;
   tokenBudget?: unknown;
   agentRuntime?: AgentRuntimeDiagnostics;
+  promptInjection?: PromptInjectionDebugPayload;
   newSessionId?: string;
   aborted?: boolean;
   [key: string]: any;
@@ -64,6 +69,7 @@ interface UseChatRealtimeHandlersArgs {
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
   setAgentRuntimeDiagnostics?: Dispatch<SetStateAction<AgentRuntimeDiagnostics | null>>;
+  setPromptInjectionDebug?: Dispatch<SetStateAction<PromptInjectionDebugPayload | null>>;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   streamBufferRef: MutableRefObject<string>;
@@ -94,6 +100,7 @@ export function useChatRealtimeHandlers({
   setClaudeStatus,
   setTokenBudget,
   setAgentRuntimeDiagnostics,
+  setPromptInjectionDebug,
   setPendingPermissionRequests,
   pendingViewSessionRef,
   streamBufferRef,
@@ -259,6 +266,26 @@ export function useChatRealtimeHandlers({
       setAgentRuntimeDiagnostics?.(runtime ? {
         ...runtime,
         sessionId: sid || runtime.sessionId || null,
+        receivedAt: new Date().toLocaleString(),
+      } : null);
+      return;
+    }
+
+    if (msg.kind === 'status' && msg.text === 'prompt_injection_debug') {
+      if (
+        sid
+        && activeViewSessionId
+        && sid !== activeViewSessionId
+        && !isTemporarySessionId(activeViewSessionId)
+      ) {
+        return;
+      }
+      const promptInjection = msg.promptInjection && typeof msg.promptInjection === 'object'
+        ? msg.promptInjection as PromptInjectionDebugPayload
+        : null;
+      setPromptInjectionDebug?.(promptInjection ? {
+        ...promptInjection,
+        sessionId: sid || promptInjection.sessionId || null,
         receivedAt: new Date().toLocaleString(),
       } : null);
       return;

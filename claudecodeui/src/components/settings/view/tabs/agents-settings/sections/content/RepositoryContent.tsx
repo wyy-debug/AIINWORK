@@ -26,6 +26,7 @@ import { api, apiFetch } from '../../../../../../../utils/api';
 import type { AgentTemplateDialogs } from '../../../../../../../types/agent';
 import type { SettingsProject } from '../../../../../types/types';
 import { dependencySelectionId, resolveAgentTemplateDependencyState } from '../../utils/agentRepositoryDependencies';
+import { emptyMcpConfiguration, shouldPromptForMcpSetup } from '../../utils/mcpInstallFlow';
 
 type RepositoryKind = 'agent-template' | 'swarm-template' | 'skill' | 'mcp-server';
 type InstallScope = 'user' | 'project';
@@ -1813,17 +1814,36 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     setMcpSetupAction(action);
   };
 
+  const installMcpItem = async (
+    item: RepositoryItem,
+    action: 'install' | 'update' = 'install',
+    configuration: { mcpValues?: Record<string, string> } = emptyMcpConfiguration(),
+  ) => {
+    const result = await installItem(
+      item,
+      configuration,
+      { overwrite: action === 'update' ? true : overwriteInstall, action },
+    );
+    if (result?.success) {
+      await diagnoseMcpItem(item);
+    }
+    return result;
+  };
+
+  const startMcpInstall = (item: RepositoryItem, action: 'install' | 'update' = 'install') => {
+    if (shouldPromptForMcpSetup(action, getMcpSetupFields(item))) {
+      openMcpSetup(item, action);
+      return;
+    }
+    void installMcpItem(item, action);
+  };
+
   const saveConfiguredMcp = async () => {
     if (!mcpSetupItem) return;
-    const result = await installItem(
-      mcpSetupItem,
-      { mcpValues: mcpSetupValues },
-      { overwrite: mcpSetupAction === 'update' ? true : overwriteInstall, action: mcpSetupAction },
-    );
+    const result = await installMcpItem(mcpSetupItem, mcpSetupAction, { mcpValues: mcpSetupValues });
     if (result?.success) {
       setMcpSetupItem(null);
       setMcpSetupValues({});
-      await diagnoseMcpItem(mcpSetupItem);
     }
   };
 
@@ -2356,8 +2376,8 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                         installed={installed}
                         diagnostics={mcpDiagnostics[templateKey(item)]}
                         onLike={(nextItem) => void likeItem(nextItem)}
-                        onInstall={(nextItem) => openMcpSetup(nextItem, 'install')}
-                        onUpdate={(nextItem) => openMcpSetup(nextItem, 'update')}
+                        onInstall={(nextItem) => startMcpInstall(nextItem, 'install')}
+                        onUpdate={(nextItem) => startMcpInstall(nextItem, 'update')}
                         onUninstall={(nextItem) => void uninstallItem(nextItem)}
                         onDiagnose={(nextItem) => void diagnoseMcpItem(nextItem)}
                       />

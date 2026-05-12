@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "crash-ai-core"
-version = "0.2.7"
+version = "0.2.11"
 dependencies = [
  "anyhow",
  "base64",
