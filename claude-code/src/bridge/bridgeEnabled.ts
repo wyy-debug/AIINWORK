@@ -83,13 +83,13 @@ export async function getBridgeDisabledReason(): Promise<string | null> {
       return null
     }
     if (!isClaudeAISubscriber()) {
-      return 'Remote Control requires a claude.ai subscription. Run `mtl-code auth login` to sign in with your claude.ai account.'
+      return 'Remote Control requires Claude web auth, which is disabled in Argus custom model mode.'
     }
     if (!hasProfileScope()) {
-      return 'Remote Control requires a full-scope login token. Long-lived tokens (from `mtl-code setup-token` or MTL_CODE_OAUTH_TOKEN) are limited to inference-only for security reasons. Run `mtl-code auth login` to use Remote Control.'
+      return 'Remote Control requires full-scope Claude web auth, which is disabled in Argus custom model mode.'
     }
     if (!getOauthAccountInfo()?.organizationUuid) {
-      return 'Unable to determine your organization for Remote Control eligibility. Run `mtl-code auth login` to refresh your account information.'
+      return 'Unable to determine your organization for Remote Control eligibility. Claude web auth is disabled in Argus custom model mode.'
     }
     if (!(await checkGate_CACHED_OR_BLOCKING('tengu_ccr_bridge'))) {
       return 'Remote Control is not yet enabled for your account.'

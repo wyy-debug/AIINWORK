@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Load environment variables before other imports execute
 import './load-env.js';
-import { spawn } from 'child_process';
 import fs, { promises as fsPromises } from 'fs';
 import http from 'http';
 import os from 'os';
@@ -25,6 +24,10 @@ import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGemini
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
 import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
+import {
+    applyExplicitWikiIntentToChatCommand,
+    applyObsidianWikiPolicyPromptToChatCommand,
+} from './services/obsidian-memory-policy-service.js';
 import {
     createObsidianAutoCaptureOrchestrator,
     createObsidianAutoCaptureStatusMessage,
@@ -529,76 +532,10 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 
 // System update endpoint
 app.post('/api/system/update', authenticateToken, async (req, res) => {
-    try {
-        // Get the project root directory (parent of server directory)
-        const projectRoot = APP_ROOT;
-
-        console.log('Starting system update from directory:', projectRoot);
-
-        // Platform deployments use their own update workflow from the project root.
-        const updateCommand = IS_PLATFORM
-        // In platform, husky and dev dependencies are not needed
-            ? 'npm run update:platform'
-            : installMode === 'git'
-                ? 'git checkout main && git pull && npm install'
-                : 'npm install -g mtl-code-ui@latest';
-
-        const updateCwd = IS_PLATFORM || installMode === 'git'
-            ? projectRoot
-            : os.homedir();
-
-        const child = spawn('sh', ['-c', updateCommand], {
-            cwd: updateCwd,
-            env: process.env
-        });
-
-        let output = '';
-        let errorOutput = '';
-
-        child.stdout.on('data', (data) => {
-            const text = data.toString();
-            output += text;
-            console.log('Update output:', text);
-        });
-
-        child.stderr.on('data', (data) => {
-            const text = data.toString();
-            errorOutput += text;
-            console.error('Update error:', text);
-        });
-
-        child.on('close', (code) => {
-            if (code === 0) {
-                res.json({
-                    success: true,
-                    output: output || 'Update completed successfully',
-                    message: 'Update completed. Please restart the server to apply changes.'
-                });
-            } else {
-                res.status(500).json({
-                    success: false,
-                    error: 'Update command failed',
-                    output: output,
-                    errorOutput: errorOutput
-                });
-            }
-        });
-
-        child.on('error', (error) => {
-            console.error('Update process error:', error);
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
-        });
-
-    } catch (error) {
-        console.error('System update error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(410).json({
+        success: false,
+        error: 'Argus system update is disabled. Manage updates outside the app runtime.'
+    });
 });
 
 app.get('/api/projects', authenticateToken, async (req, res) => {
@@ -2527,6 +2464,32 @@ function emitObsidianContextResult(writer, data) {
     }));
 }
 
+function emitObsidianWikiResult(writer, data) {
+    const wiki = data?.options?.obsidianWiki;
+    if (!wiki || typeof wiki !== 'object') {
+        return;
+    }
+    writer.send(createNormalizedMessage({
+        kind: 'status',
+        text: '',
+        event: 'obsidian_wiki_result',
+        provider: getProviderFromCommandType(data?.type),
+        sessionId: data?.options?.sessionId || data?.sessionId || null,
+        messageId: data?.options?.clientMessageId || data?.clientMessageId || null,
+        obsidianWiki: wiki,
+        intent: wiki.intent,
+        status: wiki.status,
+        candidateIds: wiki.candidateIds,
+        error: wiki.error,
+    }));
+}
+
+async function applyObsidianKnowledgeRuntimeToChatCommand(data) {
+    const wikiData = await applyExplicitWikiIntentToChatCommand(data);
+    const contextData = await applyObsidianContextToChatCommand(wikiData);
+    return applyObsidianWikiPolicyPromptToChatCommand(contextData);
+}
+
 function normalizeUploadedChatFiles(files) {
     if (!Array.isArray(files)) {
         return [];
@@ -2952,11 +2915,12 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 setWriterAutoCaptureContext(writer, data, 'claude');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'claude');
-                const commandData = await applyObsidianContextToChatCommand(applyUploadedFilesToChatCommand(
+                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(data)),
                 ));
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
+                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3076,11 +3040,12 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'cursor-command') {
                 setWriterAutoCaptureContext(writer, data, 'cursor');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'cursor');
-                const commandData = await applyObsidianContextToChatCommand(
+                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
+                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3089,11 +3054,12 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'codex-command') {
                 setWriterAutoCaptureContext(writer, data, 'codex');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'codex');
-                const commandData = await applyObsidianContextToChatCommand(
+                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
+                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3102,11 +3068,12 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'gemini-command') {
                 setWriterAutoCaptureContext(writer, data, 'gemini');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'gemini');
-                const commandData = await applyObsidianContextToChatCommand(
+                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
                 );
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
+                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3245,11 +3212,9 @@ function handleShellConnection(ws) {
                 urlDetectionBuffer = '';
                 announcedAuthUrls.clear();
 
-                // Login commands (Claude/Cursor auth) should never reuse cached sessions
+                // Cursor auth commands should never reuse cached sessions.
                 const isLoginCommand = initialCommand && (
-                    initialCommand.includes('setup-token') ||
-                    initialCommand.includes('cursor-agent login') ||
-                    initialCommand.includes('auth login')
+                    initialCommand.includes('cursor-agent login')
                 );
 
                 // Include command hash in session key so different commands get separate sessions

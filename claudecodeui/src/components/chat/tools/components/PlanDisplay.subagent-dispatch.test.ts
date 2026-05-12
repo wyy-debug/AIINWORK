@@ -12,7 +12,9 @@ describe('PlanDisplay subagent dispatch approval', () => {
     expect(source).toContain('isSubagentDispatchPlanContent(content)');
     expect(source).toContain('subagentDispatch: isSubagentDispatchPlan');
     expect(source).toContain('approvedSubagentPlan: content.trim()');
-    expect(source).toContain("permissionMode: isSubagentDispatchPlan ? undefined : 'acceptEdits'");
+    expect(source).toContain("permissionMode: 'acceptEdits'");
+    expect(source).toContain('submittedPlanKey');
+    expect(source).toContain('hasSubmittedProposedPlan');
     expect(source).toContain('Dispatch agents');
   });
 });

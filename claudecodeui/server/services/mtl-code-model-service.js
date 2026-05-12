@@ -30,6 +30,7 @@ export const OPENAI_MODEL_ENV_KEYS = {
 
 export const MTL_CODE_MODEL_ENV_KEYS = {
   uiBareMode: 'MTL_CODE_UI_BARE',
+  claudeNativeMemoryEnabled: 'MTL_CODE_CLAUDE_NATIVE_MEMORY',
   maxContextTokens: 'MTL_CODE_MAX_CONTEXT_TOKENS',
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
@@ -134,6 +135,14 @@ const readBooleanEnv = (env, key, fallback) => {
 };
 
 const readBooleanEnvDefaultTrue = (env, key) => readBooleanEnv(env, key, true);
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
+const resolveClaudeNativeMemoryEnabled = (profile = {}) => (
+  hasOwn(profile, 'claudeNativeMemoryEnabled')
+    ? profile.claudeNativeMemoryEnabled !== false
+    : true
+);
 
 function normalizeOpenMythosBoolean(value, fallback) {
   if (typeof value === 'boolean') {
@@ -672,6 +681,11 @@ function createProfileFromEnv(settings, env) {
   const authToken = useOpenAI
     ? legacyOpenAIKey || anthropicAuthToken
     : anthropicAuthToken || legacyOpenAIKey;
+  const claudeNativeMemoryEnabled = readBooleanEnv(
+    env,
+    MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled,
+    true,
+  );
 
   return {
     id: 'default',
@@ -683,7 +697,8 @@ function createProfileFromEnv(settings, env) {
     requestModel: '',
     authToken,
     contextWindowTokens: resolveProfileContextWindow({ model }, env),
-    bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_MODEL_ENV_KEYS.uiBareMode),
+    claudeNativeMemoryEnabled,
+    bareMode: !claudeNativeMemoryEnabled,
   };
 }
 
@@ -699,6 +714,7 @@ export function readStoredModelProfiles(settings, env = {}) {
       const baseUrl = readOptionalString(profile.baseUrl) || '';
       const name = readOptionalString(profile.name) || model || `Model ${index + 1}`;
       const id = normalizeProfileId(profile.id || name || `model-${index + 1}`) || `model-${index + 1}`;
+      const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile);
       return {
         id,
         name,
@@ -709,7 +725,8 @@ export function readStoredModelProfiles(settings, env = {}) {
         requestModel: readOptionalString(profile.requestModel) || '',
         authToken: readOptionalString(profile.authToken) || '',
         contextWindowTokens: resolveProfileContextWindow(profile, env),
-        bareMode: profile.bareMode !== false,
+        claudeNativeMemoryEnabled,
+        bareMode: !claudeNativeMemoryEnabled,
       };
     })
     .filter(Boolean);
@@ -777,9 +794,11 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   const subagents = readSubagentRuntimeConfig(settings, settingsEnv);
   const goals = readGoalRuntimeConfig(settings, settingsEnv);
   const coordinatorModeEnabled = false;
+  const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile);
   const runtimeEnv = {
     MTL_CODE_USE_OPENAI: usesOpenAI ? '1' : '0',
-    [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: profile.bareMode !== false ? '1' : '0',
+    [MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled]: claudeNativeMemoryEnabled ? '1' : '0',
+    [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: claudeNativeMemoryEnabled ? '0' : '1',
     [MTL_CODE_MODEL_ENV_KEYS.maxContextTokens]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.coordinatorMode]: coordinatorModeEnabled ? '1' : '0',
@@ -805,7 +824,16 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   }
 
   return {
-    profile: { ...profile, protocol, baseUrl: normalizedBaseUrl, model, requestModel: profile.requestModel || '', contextWindowTokens },
+    profile: {
+      ...profile,
+      protocol,
+      baseUrl: normalizedBaseUrl,
+      model,
+      requestModel: profile.requestModel || '',
+      contextWindowTokens,
+      claudeNativeMemoryEnabled,
+      bareMode: !claudeNativeMemoryEnabled,
+    },
     env: Object.fromEntries(Object.entries(runtimeEnv).filter(([, value]) => Boolean(value))),
     contextWindowTokens,
     openMythosRuntime,

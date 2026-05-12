@@ -34,7 +34,7 @@ export function getUpsellMessage({
     if (isExtraUsageCommandEnabled) {
       return '/extra-usage to finish what you\u2019re working on.'
     }
-    return '/login to switch to an API usage-billed account.'
+    return 'Custom model rate limit reached. Adjust the configured provider limit or wait for reset.'
   }
 
   if (shouldAutoOpenRateLimitOptionsMenu) {
@@ -42,7 +42,7 @@ export function getUpsellMessage({
   }
 
   if (!isTeamOrEnterprise && !isExtraUsageCommandEnabled) {
-    return '/upgrade to increase your usage limit.'
+    return 'Custom model rate limit reached. Adjust the configured provider limit or wait for reset.'
   }
 
   if (isTeamOrEnterprise) {
@@ -55,7 +55,7 @@ export function getUpsellMessage({
     return '/extra-usage to request more usage from your admin.'
   }
 
-  return '/upgrade or /extra-usage to finish what you\u2019re working on.'
+  return 'Custom model rate limit reached. Adjust the configured provider limit or wait for reset.'
 }
 
 type RateLimitMessageProps = {

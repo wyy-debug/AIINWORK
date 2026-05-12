@@ -321,10 +321,9 @@ function renderErrorSpecificGuidance(
     case 'auth':
       return (
         <Box marginY={1} flexDirection="column">
-          <Text dimColor>Teleport requires a Claude account</Text>
           <Text dimColor>
-            Run <Text bold>/login</Text> and select &quot;Claude account with
-            subscription&quot;
+            Teleport requires Claude web auth, which is disabled in Argus
+            custom model mode.
           </Text>
         </Box>
       )

@@ -2,6 +2,7 @@ import {
   FileText,
   Globe2,
   MessageSquare,
+  Network,
   Terminal,
   Folder,
   ClipboardCheck,
@@ -52,6 +53,7 @@ const CONTEXT_PANEL_LABELS: Record<string, string> = {
   automations: 'Automations',
   browser: 'Preview',
   artifacts: 'Results',
+  swarms: 'Subagents',
   tasks: 'Tasks',
   preview: 'Preview',
   agents: 'Agents',
@@ -110,6 +112,7 @@ export default function MainContentTabSwitcher({
       : []),
     { kind: 'builtin', id: 'actions', label: 'Run', icon: Play },
     { kind: 'builtin', id: 'browser', label: 'Preview', icon: Globe2 },
+    { kind: 'builtin', id: 'swarms', label: 'Subagents', icon: Network },
     ...(resultCount > 0 || activeTab === 'artifacts'
       ? [{ kind: 'builtin' as const, id: 'artifacts' as AppTab, label: 'Results', icon: FileText, badge: resultCount }]
       : []),

@@ -5,7 +5,6 @@ import {
 } from 'src/utils/background/remote/preconditions.js'
 import { gracefulShutdownSync } from 'src/utils/gracefulShutdown.js'
 import { Box, Text } from '@anthropic/ink'
-import { ConsoleOAuthFlow } from './ConsoleOAuthFlow.js'
 import { Select } from './CustomSelect/index.js'
 import { Dialog } from '@anthropic/ink'
 import { TeleportStash } from './TeleportStash.js'
@@ -29,7 +28,6 @@ export function TeleportError({
 }: TeleportErrorProps): React.ReactNode {
   const [currentError, setCurrentError] =
     useState<TeleportLocalErrorType | null>(null)
-  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false)
 
   // Check for errors on mount and when error resolution occurs
   const checkErrors = useCallback(async () => {
@@ -63,25 +61,12 @@ export function TeleportError({
     gracefulShutdownSync(0)
   }, [])
 
-  const handleLoginComplete = useCallback(() => {
-    setIsLoggingIn(false)
-    void checkErrors()
-  }, [checkErrors])
-
-  const handleLoginWithClaudeAI = useCallback(() => {
-    setIsLoggingIn(true)
-  }, [setIsLoggingIn])
-
   const handleLoginDialogSelect = useCallback(
     (value: string) => {
-      if (value === 'login') {
-        handleLoginWithClaudeAI()
-      } else {
-        // User selected exit
-        onCancel()
-      }
+      void value
+      onCancel()
     },
-    [handleLoginWithClaudeAI, onCancel],
+    [onCancel],
   )
 
   const handleStashComplete = useCallback(() => {
@@ -103,27 +88,16 @@ export function TeleportError({
       )
 
     case 'needsLogin': {
-      if (isLoggingIn) {
-        return (
-          <ConsoleOAuthFlow
-            onDone={handleLoginComplete}
-            mode="login"
-            forceLoginMethod="claudeai"
-          />
-        )
-      }
-
       return (
-        <Dialog title="Log in to Claude" onCancel={onCancel}>
+        <Dialog title="Remote setup unavailable" onCancel={onCancel}>
           <Box flexDirection="column">
-            <Text dimColor>Teleport requires a Claude.ai account.</Text>
             <Text dimColor>
-              Your Claude Pro/Max subscription will be used by MTL-Code.
+              Teleport requires Claude web auth, which is disabled in Argus
+              custom model mode.
             </Text>
           </Box>
           <Select
             options={[
-              { label: 'Login with Claude account', value: 'login' },
               { label: 'Exit', value: 'exit' },
             ]}
             onChange={handleLoginDialogSelect}

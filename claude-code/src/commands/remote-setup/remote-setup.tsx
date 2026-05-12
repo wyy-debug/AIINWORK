@@ -82,7 +82,9 @@ function Web({ onDone }: { onDone: LocalJSXCommandOnDone }) {
           logEvent('tengu_remote_setup_result', {
             result: 'not_signed_in' as SafeString,
           })
-          onDone('Not signed in to Claude. Run /login first.')
+          onDone(
+            'Remote setup requires Claude web auth, which is disabled in Argus custom model mode.',
+          )
           return
         case 'gh_not_installed':
         case 'gh_not_authenticated': {

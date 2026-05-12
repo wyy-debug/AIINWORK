@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FileDiff, FileText, Globe2, Layers3, Play, Search } from 'lucide-react';
+import { FileDiff, FileText, Globe2, Layers3, Network, Play, Search } from 'lucide-react';
 import type { Dispatch, SetStateAction } from 'react';
 
 import type { AppTab, Project } from '../../../types/app';
@@ -26,9 +26,11 @@ const BUILT_IN: CommandItem[] = [
   { name: '/actions', description: 'Open project run actions', tab: 'actions' },
   { name: '/preview', description: 'Open local preview', tab: 'browser' },
   { name: '/browser', description: 'Open local preview', tab: 'browser' },
-	  { name: '/results', description: 'Open saved results', tab: 'artifacts' },
-	  { name: '/artifacts', description: 'Open saved results', tab: 'artifacts' },
-	  { name: '/worktree', description: 'Open Worktree controls', tab: 'actions', mode: 'worktree' },
+  { name: '/results', description: 'Open saved results', tab: 'artifacts' },
+  { name: '/artifacts', description: 'Open saved results', tab: 'artifacts' },
+  { name: '/subagents', description: 'Open Subagent workspace', tab: 'swarms' },
+  { name: '/swarms', description: 'Open Subagent workspace', tab: 'swarms' },
+  { name: '/worktree', description: 'Open Worktree controls', tab: 'actions', mode: 'worktree' },
   { name: '/status', description: 'Show Argus status', tab: 'chat' },
   { name: '/mcp', description: 'Open MCP settings', tab: 'chat', mode: 'mcp' },
   { name: '/plan-mode', description: 'Insert a plan-mode instruction', tab: 'chat', mode: 'plan-mode' },
@@ -41,6 +43,7 @@ const iconFor = (name: string) => {
   if (name.includes('browser')) return Globe2;
   if (name.includes('preview')) return Globe2;
   if (name.includes('artifact') || name.includes('result')) return FileText;
+  if (name.includes('subagent') || name.includes('swarm')) return Network;
   if (name.includes('action') || name.includes('worktree')) return Play;
   if (name.includes('run')) return Play;
   return Layers3;

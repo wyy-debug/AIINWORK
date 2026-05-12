@@ -14,3 +14,24 @@ test('Argus direct close handling treats only explicit user abort as aborted', a
   assert.match(source, /buildMtlCodeCloseFailureMessage/);
   assert.match(source, /Argus backend exited with signal/);
 });
+
+test('Argus coordinator dispatch enables native subagent tools for the spawned runtime', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.match(source, /options\.coordinatorMode === true/);
+  assert.match(source, /spawnEnv\.MTL_CODE_COORDINATOR_MODE = '1'/);
+  assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.subagentsEnabled\] = '1'/);
+});
+
+test('Claude native memory disables bare mode and clears auto-memory blockers', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.match(source, /function isClaudeNativeMemoryEnabled/);
+  assert.match(source, /function applyClaudeNativeMemoryEnv/);
+  assert.match(source, /spawnEnv\.MTL_CODE_UI_BARE = '0'/);
+  assert.match(source, /delete spawnEnv\.MTL_CODE_SIMPLE/);
+  assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY/);
+  assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY = '1'/);
+});

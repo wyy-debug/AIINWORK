@@ -17,5 +17,8 @@ describe('ModelConfigContent', () => {
     expect(source).toContain('requestModel');
     expect(source).toContain('请求模型名覆盖');
     expect(source).toContain('中转站按模型名分流');
+    expect(source).toContain('claudeNativeMemoryEnabled');
+    expect(source).toContain('Claude 原生记忆');
+    expect(source).toContain('Claude 原生记忆不可用');
   });
 });

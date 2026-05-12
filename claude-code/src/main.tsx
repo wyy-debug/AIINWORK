@@ -6011,7 +6011,7 @@ async function run(): Promise<CommanderCommand> {
 				process.stderr.write(
 					"Usage: mtl-code ssh <user@host | ssh-config-alias> [dir]\n\n" +
 						"Runs MTL-Code on a remote Linux host. You don't need to install\n" +
-						"anything on the remote or run `mtl-code auth login` there — the binary is\n" +
+						"anything on the remote or run native Claude login there — the binary is\n" +
 						"deployed over SSH and API auth tunnels back through your local machine.\n",
 				);
 				process.exit(1);
@@ -6094,7 +6094,7 @@ async function run(): Promise<CommanderCommand> {
 		.configureHelp(createSortedHelpConfig());
 
 	auth.command("login")
-		.description("Sign in to your Anthropic account")
+		.description("Disabled: configure custom model credentials in Argus settings")
 		.option(
 			"--email <email>",
 			"Pre-populate email address on the login page",
@@ -6132,7 +6132,7 @@ async function run(): Promise<CommanderCommand> {
 		});
 
 	auth.command("logout")
-		.description("Log out from your Anthropic account")
+		.description("Disabled: custom model credentials are managed by Argus")
 		.action(async () => {
 			const { authLogout } = await import("./cli/handlers/auth.js");
 			await authLogout();
@@ -6379,7 +6379,7 @@ async function run(): Promise<CommanderCommand> {
   program
     .command('setup-token')
     .description(
-      'Set up a long-lived authentication token (requires Claude subscription)',
+      'Disabled: native Claude token setup is not used by Argus',
     )
     .action(async () => {
       const [{ setupTokenHandler }, { createRoot }] = await Promise.all([

@@ -5,7 +5,6 @@ import { logEvent } from '../../services/analytics/index.js'
 import {
   formatGrantAmount,
   getCachedOverageCreditGrant,
-  refreshOverageCreditGrantCache,
 } from '../../services/api/overageCreditGrant.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { truncate } from '../../utils/format.js'
@@ -29,9 +28,7 @@ const MAX_IMPRESSIONS = 3
  *   (welcome feed, tips).
  */
 export function isEligibleForOverageCreditGrant(): boolean {
-  const info = getCachedOverageCreditGrant()
-  if (!info || !info.available || info.granted) return false
-  return formatGrantAmount(info) !== null
+  return false
 }
 
 export function shouldShowOverageCreditUpsell(): boolean {
@@ -50,8 +47,7 @@ export function shouldShowOverageCreditUpsell(): boolean {
  * unconditionally on mount — it no-ops if cache is fresh.
  */
 export function maybeRefreshOverageCreditCache(): void {
-  if (getCachedOverageCreditGrant() !== null) return
-  void refreshOverageCreditGrantCache()
+  return
 }
 
 export function useShowOverageCreditUpsell(): boolean {

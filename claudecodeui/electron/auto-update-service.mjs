@@ -88,52 +88,14 @@ export async function maybePromptForStartupUpdate({
   currentVersion = app?.getVersion?.() || '0.0.0',
   readDirectory = readdir,
 }) {
-  const manifestLocation = resolveConfiguredUpdateManifest(env);
-  const updateDir = resolveConfiguredUpdateDir(env);
-  if (!manifestLocation && !updateDir) {
-    return { checked: false, reason: 'not_configured' };
-  }
-
-  const checkInDev = env?.ARGUS_AUTO_UPDATE_IN_DEV === 'true' || env?.ARGUS_UPDATE_CHECK_IN_DEV === 'true';
-  if (!app?.isPackaged && !checkInDev) {
-    return { checked: false, reason: 'not_packaged' };
-  }
-
-  const latest = manifestLocation
-    ? await readUpdateManifest({ manifestLocation }).then((release) => (
-      release && compareVersions(release.version, currentVersion) > 0 ? release : null
-    )).catch(() => null)
-    : await findLatestInstaller({ updateDir, currentVersion, readDirectory });
-
-  if (!latest) {
-    return { checked: true, updateAvailable: false };
-  }
-
-  const response = await showUpdateDialog({
-    dialog,
-    mainWindow,
-    currentVersion,
-    latest,
-  });
-
-  if (response !== 0) {
-    return { checked: true, updateAvailable: true, launched: false, latest };
-  }
-
-  const installerPath = await downloadInstallerToCache({
-    release: {
-      ...latest,
-      installerUrl: latest.installerUrl || latest.filePath,
-    },
-    cacheDir: path.join(app.getPath('userData'), 'updates'),
-  });
-  const openResult = await shell.openPath(installerPath);
-  if (typeof openResult === 'string' && openResult) {
-    return { checked: true, updateAvailable: true, launched: false, error: openResult, latest };
-  }
-
-  app.quit();
-  return { checked: true, updateAvailable: true, launched: true, latest };
+  void app;
+  void dialog;
+  void shell;
+  void mainWindow;
+  void env;
+  void currentVersion;
+  void readDirectory;
+  return { checked: false, reason: 'disabled' };
 }
 
 function firstConfiguredValue(env, keys) {

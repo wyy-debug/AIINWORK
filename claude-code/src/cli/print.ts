@@ -2943,6 +2943,7 @@ function runHeadlessStreaming(
     service: OAuthService
     flow: Promise<void>
   } | null = null
+  const nativeClaudeOAuthAllowed = false as boolean
 
   // This is essentially spawning a parallel async task- we have two
   // running in parallel- one reading from stdin and adding to the
@@ -3670,7 +3671,19 @@ function runHeadlessStreaming(
               `No active OAuth flow for server: ${serverName}`,
             )
           }
-        } else if (req.subtype === 'claude_authenticate') {
+        } else if (
+          req.subtype === 'claude_authenticate' ||
+          req.subtype === 'claude_oauth_callback' ||
+          req.subtype === 'claude_oauth_wait_for_completion'
+        ) {
+          sendControlResponseError(
+            msg,
+            'Native Claude OAuth is disabled. Configure the custom model credentials in Argus settings.',
+          )
+        } else if (
+          nativeClaudeOAuthAllowed &&
+          process.env.MTL_CODE_NATIVE_CLAUDE_OAUTH === '__never__'
+        ) {
           // Anthropic OAuth over the control channel. The SDK client owns
           // the user's browser (we're headless in -p mode); we hand back
           // both URLs and wait. Automatic URL → localhost listener catches

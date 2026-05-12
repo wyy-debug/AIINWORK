@@ -32,13 +32,13 @@ const buildProjectScopedFolders = (projectName = '') => {
   return [
     `Argus/Wiki/${projectSegment}`,
     'Argus/_Indexes',
-    `Argus/AIMemory/${projectSegment}`,
   ];
 };
 
 const buildContextBlock = (context = '') => [
   'Argus Wiki Context',
   'Use the compiled Wiki as the source of truth only when it is relevant to the current user request.',
+  'Wiki context is historical project material. Verify current files, functions, flags, and project state before recommending action from it.',
   '',
   context,
 ].filter(Boolean).join('\n');
@@ -72,6 +72,33 @@ const appendToSystemPrompt = (existing = '', block = '') => (
   [readString(existing), block].filter(Boolean).join('\n\n')
 );
 
+const isArchivedMemoryResult = (result = {}) => {
+  const status = readString(result.properties?.status || result.status).toLowerCase();
+  return ['archived', 'forgotten', 'deleted'].includes(status);
+};
+
+const buildContextFromResults = (results = []) => results.map((result) => [
+  `Path: ${result.path}`,
+  `Title: ${result.title || ''}`,
+  result.snippet || '',
+].filter(Boolean).join('\n')).join('\n\n---\n\n');
+
+const isWikiReadbackFolder = (folder = '', { includeRaw = false } = {}) => {
+  const value = readString(folder).replace(/\\/g, '/').replace(/\/+$/g, '');
+  return value === 'Argus/_Indexes'
+    || value.startsWith('Argus/_Indexes/')
+    || value === 'Argus/Wiki'
+    || value.startsWith('Argus/Wiki/')
+    || (includeRaw && (value === 'Argus/Raw' || value.startsWith('Argus/Raw/')));
+};
+
+const filterWikiReadbackFolders = (folders = [], options = {}) => {
+  const filtered = (Array.isArray(folders) ? folders : [])
+    .map(readString)
+    .filter((folder) => isWikiReadbackFolder(folder, options));
+  return [...new Set(filtered)];
+};
+
 export const applyObsidianContextToChatCommand = async (data = {}, {
   buildObsidianContext = defaultBuildObsidianContext,
   getActiveObsidianNote = defaultGetActiveObsidianNote,
@@ -81,8 +108,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   const command = typeof data.command === 'string' ? data.command : '';
   const options = data.options && typeof data.options === 'object' ? data.options : {};
   const config = readObsidianBridgeConfig();
-  const readbackEnabled = config.wikiReadbackEnabled !== false
-    || config.aiMemoryReadbackEnabled === true;
+  const readbackEnabled = config.wikiReadbackEnabled !== false;
   if (!config.enabled || !readbackEnabled || !command.trim()) {
     return data;
   }
@@ -92,10 +118,12 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   if (config.wikiReadbackIncludeRaw) {
     scopedFolders.push(`Argus/Raw/${sanitizeVaultSegment(projectName, 'General')}`);
   }
-  const folders = config.aiMemoryProjectScopeEnabled
-    || config.wikiReadbackProjectScopeEnabled !== false
+  const folders = config.wikiReadbackProjectScopeEnabled !== false
     ? scopedFolders
-    : config.readableVaultFolders;
+    : filterWikiReadbackFolders(config.readableVaultFolders, {
+      includeRaw: Boolean(config.wikiReadbackIncludeRaw),
+    });
+  const readbackFolders = folders.length > 0 ? folders : scopedFolders;
   const limit = Number.isFinite(Number(config.wikiReadbackMaxResults))
     ? Number(config.wikiReadbackMaxResults)
     : Number.isFinite(Number(config.aiMemoryMaxResults))
@@ -113,10 +141,15 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
     const result = await buildObsidianContext({
       query: command.slice(0, 2000),
       projectName,
-      folders,
+      folders: readbackFolders,
       limit,
     });
-    const baseContext = readString(result?.context);
+    const rawResults = Array.isArray(result?.results) ? result.results : [];
+    const filteredResults = rawResults.filter((entry) => !isArchivedMemoryResult(entry));
+    const archivedResultCount = rawResults.length - filteredResults.length;
+    const baseContext = archivedResultCount > 0
+      ? buildContextFromResults(filteredResults)
+      : readString(result?.context);
     const refinement = config.wikiReadbackRefineEnabled === false
       ? { refined: false, context: baseContext, sources: [] }
       : await refineWikiReadbackContext({
@@ -124,7 +157,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
         projectName,
         context: baseContext,
         activeNote,
-        results: result?.results,
+        results: filteredResults,
       });
     const context = readString(refinement?.context) || baseContext;
     const activeBlock = buildActiveNoteBlock(activeNote);
@@ -135,7 +168,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       ]
       : buildSources({
         activeNote,
-        results: result?.results,
+        results: filteredResults,
       });
     if (!context && !activeBlock) {
       return {
@@ -144,7 +177,8 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           ...options,
           obsidianContext: {
             used: false,
-            resultCount: Array.isArray(result?.results) ? result.results.length : 0,
+            resultCount: filteredResults.length,
+            archivedResultCount,
             source: 'wiki',
             sources,
           },
@@ -161,7 +195,8 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           appendSystemPrompt: appendToSystemPrompt(options.appendSystemPrompt, block),
           obsidianContext: {
             used: true,
-            resultCount: Array.isArray(result?.results) ? result.results.length : 0,
+            resultCount: filteredResults.length,
+            archivedResultCount,
             projectName,
             source: 'wiki',
             refined: Boolean(refinement?.refined),
@@ -182,7 +217,8 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
         ...options,
         obsidianContext: {
           used: true,
-          resultCount: Array.isArray(result?.results) ? result.results.length : 0,
+          resultCount: filteredResults.length,
+          archivedResultCount,
           projectName,
           source: 'wiki',
           refined: Boolean(refinement?.refined),

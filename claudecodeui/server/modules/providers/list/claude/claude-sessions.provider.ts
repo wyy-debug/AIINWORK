@@ -174,6 +174,24 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER })];
     }
 
+    if (raw.type === 'system' && raw.subtype === 'task_started') {
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'status',
+        status: 'subagent_started',
+        toolId: typeof raw.tool_use_id === 'string' ? raw.tool_use_id : undefined,
+        taskId: typeof raw.task_id === 'string' ? raw.task_id : undefined,
+        content: typeof raw.description === 'string' ? raw.description : undefined,
+        summary: typeof raw.description === 'string' ? raw.description : undefined,
+        taskType: raw.task_type,
+        workflowName: raw.workflow_name,
+        prompt: raw.prompt,
+      })];
+    }
+
     if (raw.type === 'system' && raw.subtype === 'task_progress') {
       return [createNormalizedMessage({
         id: baseId,

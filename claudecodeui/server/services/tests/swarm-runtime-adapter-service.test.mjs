@@ -34,6 +34,8 @@ describe('swarm-runtime-adapter-service', () => {
     expect(prompt).toContain('swarm_run_1__reviewer__0');
     expect(prompt).toContain('Review authentication changes');
     expect(prompt).toContain('"risk":"high"');
+    expect(prompt).toContain('Do not write a user-visible summary');
+    expect(prompt).not.toContain('After spawning, stop');
   });
 
   it('extracts role mappings from normalized spawn_agent tool messages', () => {
@@ -102,6 +104,52 @@ describe('swarm-runtime-adapter-service', () => {
       taskId: 'task-reviewer-real',
       threadId: '/root/swarm_swarm_run_abc_123__reviewer__0',
     });
+  });
+
+  it('maps async task_started status events back to spawn_agent roles', () => {
+    const mappings = extractSpawnAgentMappings([
+      {
+        kind: 'tool_use',
+        toolId: 'tool-reviewer',
+        toolName: 'spawn_agent',
+        toolInput: {
+          task_name: 'swarm_swarm_run_abc_123__reviewer__0',
+          message: 'Review authentication changes',
+          agent_type: 'worker',
+        },
+      },
+      {
+        kind: 'tool_result',
+        toolId: 'tool-reviewer',
+        content: '{"task_name":"/root/swarm_swarm_run_abc_123__reviewer__0","nickname":"worker"}',
+      },
+      {
+        kind: 'status',
+        status: 'subagent_started',
+        toolId: 'tool-reviewer',
+        taskId: 'task-reviewer-real',
+        content: 'swarm_swarm_run_abc_123__reviewer__0',
+      },
+    ]);
+
+    expect(mappings.get('reviewer:0')).toMatchObject({
+      roleId: 'reviewer',
+      roleIndex: 0,
+      taskId: 'task-reviewer-real',
+      threadId: '/root/swarm_swarm_run_abc_123__reviewer__0',
+    });
+  });
+
+  it('does not treat assistant acknowledgement text as a spawned task', () => {
+    const mappings = extractSpawnAgentMappings([
+      {
+        kind: 'text',
+        role: 'assistant',
+        content: 'All four agents have been acknowledged. My role as coordinator is done for now.',
+      },
+    ]);
+
+    expect(mappings.size).toBe(0);
   });
 
   it('starts one headless coordinator session and returns mapped task ids for role spawns', async () => {

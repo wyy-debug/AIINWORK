@@ -80,8 +80,10 @@ export function buildSwarmCoordinatorPrompt({
   const assignments = roleAssignments({ run, template });
   return [
     'You are the hidden Argus Swarm coordinator for this run.',
-    'Spawn every listed role exactly once by calling spawn_agent. Use the provided task_name values exactly.',
-    'After spawning, stop. Do not complete the delegated role work in the coordinator.',
+    'Spawn every listed role exactly once by calling spawn_agent with task_name, message, and agent_type: "worker". Use the provided task_name values exactly.',
+    'Do not write a user-visible summary, topology recap, or "all agents acknowledged" message.',
+    'A role is launched only when spawn_agent creates or starts a background task. If the tool is unavailable or rejects, report one concise blocker and do not claim success.',
+    'After the spawn_agent calls, do not complete delegated role work in the coordinator. The Subagents page will track task_started, task_progress, and task_notification events.',
     '',
     `Run ID: ${normalizeText(run?.id)}`,
     `Template ID: ${normalizeText(template?.id)}`,
@@ -112,7 +114,17 @@ function getToolInput(message = {}) {
 }
 
 function getToolResult(message = {}) {
-  return toRecord(message.toolUseResult || message.result || message.output || message.content);
+  const toolResult = toRecord(message.toolResult);
+  const hasToolResult = Object.keys(toolResult).length > 0;
+  return toRecord(
+    message.toolUseResult
+    || toolResult.toolUseResult
+    || message.result
+    || message.output
+    || toolResult.content
+    || message.content
+    || (hasToolResult ? toolResult : null),
+  );
 }
 
 function getTaskIdFromResult(result = {}, fallback = '') {
@@ -121,6 +133,7 @@ function getTaskIdFromResult(result = {}, fallback = '') {
     || result.task_id
     || result.agentId
     || result.agent_id
+    || result.id
     || result.task?.id
     || fallback,
   );
@@ -133,8 +146,99 @@ function getThreadIdFromResult(result = {}) {
     || result.sessionId
     || result.session_id
     || result.thread?.id
+    || result.agentPath
+    || result.agent_path
     || result.task_name
     || result.taskName,
+  );
+}
+
+function normalizeToolName(value) {
+  return normalizeText(value).replace(/\s+/g, '').toLowerCase();
+}
+
+function isSpawnAgentToolName(value) {
+  const name = normalizeToolName(value);
+  return name === 'spawn_agent' || name === 'agentspawn' || name === 'agent' || name === 'task';
+}
+
+function getSubagentRecord(message = {}) {
+  const direct = toRecord(message.subagentRecord || message.subagent_record);
+  if (Object.keys(direct).length) return direct;
+  const runtime = toRecord(message.subagentRuntime || message.subagent_runtime);
+  const fromRuntime = toRecord(runtime.subagentRecord || runtime.subagent_record || runtime.record);
+  if (Object.keys(fromRuntime).length) return fromRuntime;
+  const snapshot = toRecord(message.subagentSnapshot || message.subagent_snapshot);
+  return toRecord(snapshot.subagentRecord || snapshot.subagent_record || snapshot.record || snapshot);
+}
+
+function taskNameFromRecord(record = {}) {
+  return normalizeText(
+    record.task_name
+    || record.taskName
+    || record.agentPath
+    || record.agent_path
+    || record.threadId
+    || record.thread_id
+    || record.sessionId
+    || record.session_id
+    || record.agentId
+    || record.agent_id,
+  );
+}
+
+function parseAssignmentFromMessage(message = {}) {
+  const input = getToolInput(message);
+  const result = getToolResult(message);
+  const record = getSubagentRecord(message);
+  const candidates = [
+    input.task_name,
+    input.taskName,
+    input.name,
+    taskNameFromRecord(result),
+    taskNameFromRecord(record),
+    message.taskName,
+    message.task_name,
+    message.content,
+    message.summary,
+    message.description,
+  ];
+  for (const candidate of candidates) {
+    const assignment = parseAssignmentName(candidate);
+    if (assignment) return assignment;
+  }
+  return null;
+}
+
+function taskIdFromMessage(message = {}, fallback = '') {
+  const result = getToolResult(message);
+  const record = getSubagentRecord(message);
+  return normalizeText(
+    message.taskId
+    || message.task_id
+    || record.taskId
+    || record.task_id
+    || record.agentId
+    || record.agent_id
+    || getTaskIdFromResult(result)
+    || fallback,
+  );
+}
+
+function threadIdFromMessage(message = {}, fallback = '') {
+  const result = getToolResult(message);
+  const record = getSubagentRecord(message);
+  return normalizeText(
+    message.threadId
+    || message.thread_id
+    || record.threadId
+    || record.thread_id
+    || record.sessionId
+    || record.session_id
+    || record.agentPath
+    || record.agent_path
+    || getThreadIdFromResult(result)
+    || fallback,
   );
 }
 
@@ -158,7 +262,7 @@ export function extractSpawnAgentMappings(messages = []) {
 
   for (const message of Array.isArray(messages) ? messages : []) {
     const kind = normalizeText(message?.kind || message?.type);
-    if (kind === 'tool_use' && normalizeText(message.toolName || message.name) === 'spawn_agent') {
+    if (kind === 'tool_use' && isSpawnAgentToolName(message.toolName || message.name)) {
       const input = getToolInput(message);
       const assignment = parseAssignmentName(input.task_name || input.taskName || input.name);
       if (!assignment) continue;
@@ -176,7 +280,7 @@ export function extractSpawnAgentMappings(messages = []) {
 
     if (kind === 'tool_result') {
       const toolId = normalizeText(message.toolId || message.tool_use_id || message.id);
-      const partial = byToolId.get(toolId);
+      const partial = byToolId.get(toolId) || parseAssignmentFromMessage(message);
       if (!partial) continue;
       const result = getToolResult(message);
       const mapped = {
@@ -189,18 +293,18 @@ export function extractSpawnAgentMappings(messages = []) {
       continue;
     }
 
-    if (kind === 'task_notification') {
+    if (kind === 'task_notification' || (kind === 'status' && ['subagent_started', 'subagent_progress'].includes(normalizeText(message.status)))) {
       const toolId = normalizeText(message.toolId || message.tool_use_id || message.id);
-      const partial = byToolId.get(toolId);
+      const partial = byToolId.get(toolId) || parseAssignmentFromMessage(message);
       if (!partial) continue;
       const mapped = {
         ...partial,
-        taskId: normalizeText(message.taskId || message.task_id) || partial.taskId,
-        threadId: normalizeText(message.threadId || message.thread_id) || partial.threadId,
+        taskId: taskIdFromMessage(message, partial.taskId),
+        threadId: threadIdFromMessage(message, partial.threadId),
         status: normalizeText(message.status) || partial.status,
         summary: normalizeText(message.summary) || partial.summary,
       };
-      byToolId.set(toolId, mapped);
+      if (toolId) byToolId.set(toolId, mapped);
       setMapping(mappings, mapped);
     }
   }
@@ -256,6 +360,7 @@ function buildCoordinatorOptions({ run = {}, projectPath = '', sessionId = '' } 
     appendSystemPrompt: [
       'Argus Swarm coordinator mode is active.',
       'The user explicitly requested multi-agent swarm dispatch. You may use spawn_agent, wait_agent, send_message, followup_task, close_agent, and list_agents for this swarm run.',
+      'Keep dispatch setup silent. Native task_started, task_progress, and task_notification events are the source of truth for the Subagents page.',
     ].join('\n'),
   };
 }

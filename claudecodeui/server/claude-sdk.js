@@ -21,6 +21,7 @@ import { MTL_CODE_MODEL } from '../shared/modelConstants.js';
 
 import {
   ANTHROPIC_MODEL_ENV_KEYS,
+  MTL_CODE_MODEL_ENV_KEYS,
   OPENAI_MODEL_ENV_KEYS,
   applyAnthropicRuntimeModelDefaults,
   applyOpenMythosRuntimeToEnv,
@@ -410,6 +411,28 @@ function shouldUseBareMode(env = process.env) {
   return value !== '0' && value !== 'false' && value !== 'off';
 }
 
+function isClaudeNativeMemoryEnabled(env = process.env) {
+  const value = String(env[MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled] ?? '').trim().toLowerCase();
+  if (!value) {
+    return true;
+  }
+  return value !== '0' && value !== 'false' && value !== 'off';
+}
+
+function applyClaudeNativeMemoryEnv(spawnEnv) {
+  if (isClaudeNativeMemoryEnabled(spawnEnv)) {
+    spawnEnv[MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled] = '1';
+    spawnEnv.MTL_CODE_UI_BARE = '0';
+    delete spawnEnv.MTL_CODE_SIMPLE;
+    delete spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY;
+    return;
+  }
+
+  spawnEnv[MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled] = '0';
+  spawnEnv.MTL_CODE_UI_BARE = '1';
+  spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY = '1';
+}
+
 function hasRequestedMcpBindings(options = {}) {
   const bindings = options.runtimeDiagnostics?.mcpBindings;
   return Array.isArray(bindings) && bindings.length > 0;
@@ -443,8 +466,7 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
     'stream-json',
     '--verbose',
     '--permission-prompt-tool',
-    'stdio',
-    '--enable-auth-status'
+    'stdio'
   ];
 
   if (shouldUseBareMode(env)) {
@@ -604,12 +626,14 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     MTLCODE: '1',
     MTL_CODE_PROVIDER_MANAGED_BY_HOST: '1',
   };
+  applyClaudeNativeMemoryEnv(spawnEnv);
   pruneInactiveProviderEnv(spawnEnv);
   if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
     spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';
   }
   if (options.coordinatorMode === true) {
     spawnEnv.MTL_CODE_COORDINATOR_MODE = '1';
+    spawnEnv[MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled] = '1';
   } else if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
     spawnEnv.MTL_CODE_COORDINATOR_MODE = '0';
   }

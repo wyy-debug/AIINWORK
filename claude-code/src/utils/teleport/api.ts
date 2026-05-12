@@ -185,7 +185,7 @@ export async function prepareApiRequest(): Promise<{
   const accessToken = getClaudeAIOAuthTokens()?.accessToken
   if (accessToken === undefined) {
     throw new Error(
-      'MTL-Code web sessions require authentication with a Claude.ai account. API key authentication is not sufficient. Please run /login to authenticate, or check your authentication status with /status.',
+      'MTL-Code web sessions require Claude.ai web auth, which is disabled in Argus custom model mode.',
     )
   }
 
@@ -314,7 +314,9 @@ export async function fetchSession(
     }
 
     if (response.status === 401) {
-      throw new Error('Session expired. Please run /login to sign in again.')
+      throw new Error(
+        'Session expired. Claude web auth is disabled in Argus custom model mode.',
+      )
     }
 
     throw new Error(

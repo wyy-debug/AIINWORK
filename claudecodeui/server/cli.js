@@ -172,7 +172,6 @@ Commands:
   start          Start the Argus server (default)
   sandbox        Manage Docker sandbox environments
   status         Show configuration and data locations
-  update         Update to the latest version
   help           Show this help information
   version        Show version information
 
@@ -222,47 +221,15 @@ function isNewerVersion(v1, v2) {
 
 // Check for updates
 async function checkForUpdates(silent = false) {
-    try {
-        const { execSync } = await import('child_process');
-        const latestVersion = execSync('npm show mtl-code-ui version', { encoding: 'utf8' }).trim();
-        const currentVersion = packageJson.version;
-
-        if (isNewerVersion(latestVersion, currentVersion)) {
-            console.log(`\n${c.warn('[UPDATE]')} New version available: ${c.bright(latestVersion)} (current: ${currentVersion})`);
-            console.log(`         Run ${c.bright('mtl-code-ui update')} to update\n`);
-            return { hasUpdate: true, latestVersion, currentVersion };
-        } else if (!silent) {
-            console.log(`${c.ok('[OK]')} You are on the latest version (${currentVersion})`);
-        }
-        return { hasUpdate: false, latestVersion, currentVersion };
-    } catch (e) {
-        if (!silent) {
-            console.log(`${c.warn('[WARN]')} Could not check for updates`);
-        }
-        return { hasUpdate: false, error: e.message };
+    if (!silent) {
+        console.log(`${c.info('[INFO]')} Argus update checks are disabled.`);
     }
+    return { hasUpdate: false, latestVersion: null, currentVersion: packageJson.version };
 }
 
 // Update the package
 async function updatePackage() {
-    try {
-        const { execSync } = await import('child_process');
-        console.log(`${c.info('[INFO]')} Checking for updates...`);
-
-        const { hasUpdate, latestVersion, currentVersion } = await checkForUpdates(true);
-
-        if (!hasUpdate) {
-            console.log(`${c.ok('[OK]')} Already on the latest version (${currentVersion})`);
-            return;
-        }
-
-        console.log(`${c.info('[INFO]')} Updating from ${currentVersion} to ${latestVersion}...`);
-        execSync('npm update -g mtl-code-ui', { stdio: 'inherit' });
-        console.log(`${c.ok('[OK]')} Update complete! Restart mtl-code-ui to use the new version.`);
-    } catch (e) {
-        console.error(`${c.error('[ERROR]')} Update failed: ${e.message}`);
-        console.log(`${c.tip('[TIP]')} Try running manually: npm update -g mtl-code-ui`);
-    }
+    console.log(`${c.info('[INFO]')} Argus package updates are disabled.`);
 }
 
 // ── Sandbox command ─────────────────────────────────────────
@@ -614,9 +581,6 @@ async function sandboxCommand(args) {
 
 // Start the server
 async function startServer() {
-    // Check for updates silently on startup
-    checkForUpdates(true);
-
     // Import and run the server
     await import('./index.js');
 }

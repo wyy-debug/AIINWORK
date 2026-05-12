@@ -1500,6 +1500,7 @@ function ChatInterface({
     modelProfileId: selectedModelProfileId,
     allowSessionAgentBinding: agentBindingEnabled || activeSkillNames.length > 0 || Boolean(selectedModelProfileId),
     obsidianBridgeEnabled,
+    recentMessages: chatMessages,
     isLoading,
     canAbortSession,
     tokenBudget,

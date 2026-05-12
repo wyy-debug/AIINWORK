@@ -38,5 +38,6 @@ describe('argus-collaboration-mode-service approved subagent dispatch', () => {
     expect(command.options.appendSystemPrompt).toMatch(/do not spawn the same approved role twice/i);
     expect(command.options.appendSystemPrompt).toMatch(/append this instruction to every child agent task/i);
     expect(command.options.appendSystemPrompt).toMatch(/Do not call spawn_agent/i);
+    expect(command.options.coordinatorMode).toBe(true);
   });
 });

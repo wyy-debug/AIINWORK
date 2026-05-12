@@ -1731,6 +1731,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     try {
       window.localStorage.setItem('argus:pending-swarm-template', JSON.stringify(payload));
       window.dispatchEvent(new CustomEvent('argus:dispatch-swarm-template', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('argus-open-panel', { detail: { panel: 'swarms' } }));
       setMessage(`Swarm template "${item.title}" is ready to dispatch from the Swarm dashboard.`);
       setActionError(null);
     } catch (error) {

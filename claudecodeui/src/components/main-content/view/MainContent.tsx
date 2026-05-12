@@ -7,6 +7,7 @@ import ReviewPanel from '../../review/view/ReviewPanel';
 import ActionsPanel from '../../actions/view/ActionsPanel';
 import BrowserPanel from '../../browser/view/BrowserPanel';
 import ArtifactsPanel from '../../artifacts/view/ArtifactsPanel';
+import SwarmDashboard from '../../swarms/view/SwarmDashboard';
 import GlobalCommandMenu from '../../command-menu/view/GlobalCommandMenu';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
@@ -131,7 +132,7 @@ function MainContent({
     return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
-  const visibleActiveTab = isConversationSpace ? 'chat' : activeTab;
+  const visibleActiveTab = activeTab;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -222,6 +223,16 @@ function MainContent({
           {visibleActiveTab === 'artifacts' && (
             <div className="h-full overflow-hidden">
               <ArtifactsPanel selectedProject={selectedProject} sessionId={selectedSession?.id || null} />
+            </div>
+          )}
+
+          {visibleActiveTab === 'swarms' && (
+            <div className="h-full overflow-hidden">
+              <SwarmDashboard
+                selectedProject={selectedProject}
+                sessionId={selectedSession?.id || null}
+                latestMessage={latestMessage}
+              />
             </div>
           )}
         </div>

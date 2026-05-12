@@ -53,6 +53,7 @@ type ModelProfile = {
   model: string;
   requestModel: string;
   contextWindowTokens: number;
+  claudeNativeMemoryEnabled: boolean;
   bareMode: boolean;
 };
 
@@ -67,6 +68,7 @@ type MtlCodeModelConfig = {
     model: string;
   };
   runtime: {
+    claudeNativeMemoryEnabled: boolean;
     bareMode: boolean;
     contextWindowTokens: number;
   };
@@ -217,7 +219,8 @@ const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   model: patch.model || '',
   requestModel: patch.requestModel || '',
   contextWindowTokens: patch.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
-  bareMode: patch.bareMode !== false,
+  claudeNativeMemoryEnabled: patch.claudeNativeMemoryEnabled !== false,
+  bareMode: patch.claudeNativeMemoryEnabled !== false ? false : patch.bareMode !== false,
 });
 
 const toProfile = (value: unknown, index: number): ModelProfile | null => {
@@ -225,6 +228,7 @@ const toProfile = (value: unknown, index: number): ModelProfile | null => {
     return null;
   }
   const contextWindowTokens = Number(value.contextWindowTokens);
+  const claudeNativeMemoryEnabled = value.claudeNativeMemoryEnabled !== false;
   return createProfile({
     id: typeof value.id === 'string' && value.id ? value.id : `model-${index + 1}`,
     name: typeof value.name === 'string' && value.name ? value.name : `Model ${index + 1}`,
@@ -239,7 +243,8 @@ const toProfile = (value: unknown, index: number): ModelProfile | null => {
       Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
         : DEFAULT_CONTEXT_WINDOW_TOKENS,
-    bareMode: value.bareMode !== false,
+    claudeNativeMemoryEnabled,
+    bareMode: claudeNativeMemoryEnabled ? false : value.bareMode !== false,
   });
 };
 
@@ -256,7 +261,8 @@ const createEmptyConfig = (): MtlCodeModelConfig => {
       model: '',
     },
     runtime: {
-      bareMode: true,
+      claudeNativeMemoryEnabled: true,
+      bareMode: false,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     openMythosRuntime: DEFAULT_OPENMYTHOS_RUNTIME_CONFIG,
@@ -276,6 +282,7 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
     || fallback.profiles[0];
   const runtime = isObjectRecord(data.runtime) ? data.runtime : {};
   const contextWindowTokens = Number(runtime.contextWindowTokens);
+  const claudeNativeMemoryEnabled = activeProfile.claudeNativeMemoryEnabled !== false;
 
   return {
     provider: 'anthropic',
@@ -289,7 +296,8 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
       model: activeProfile.model,
     },
     runtime: {
-      bareMode: runtime.bareMode !== false && activeProfile.bareMode !== false,
+      claudeNativeMemoryEnabled,
+      bareMode: !claudeNativeMemoryEnabled,
       contextWindowTokens:
         Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
           ? contextWindowTokens

@@ -318,7 +318,7 @@ function NotificationContent({
           <Text color="error" wrap="truncate">
             {isEnvTruthy(process.env.MTL_CODE_REMOTE)
               ? 'Authentication error · Try again'
-              : 'Not logged in · Run /login'}
+              : 'Model credentials missing · configure Argus model settings'}
           </Text>
         </Box>
       )}

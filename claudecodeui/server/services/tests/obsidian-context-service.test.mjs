@@ -18,6 +18,11 @@ describe('obsidian context service', () => {
       },
     }, {
       buildObsidianContext,
+      refineWikiReadbackContext: vi.fn(async ({ context }) => ({
+        refined: false,
+        context,
+        sources: [],
+      })),
       readObsidianBridgeConfig: () => ({
         enabled: true,
         aiMemoryReadbackEnabled: true,
@@ -38,7 +43,7 @@ describe('obsidian context service', () => {
     expect(buildObsidianContext).toHaveBeenCalledWith({
       query: 'Summarize today.',
       projectName: 'App',
-      folders: ['Argus/Wiki/App', 'Argus/_Indexes', 'Argus/AIMemory/App'],
+      folders: ['Argus/Wiki/App', 'Argus/_Indexes'],
       limit: 3,
     });
   });
@@ -57,6 +62,11 @@ describe('obsidian context service', () => {
       options: { projectName: 'App' },
     }, {
       buildObsidianContext,
+      refineWikiReadbackContext: vi.fn(async ({ context }) => ({
+        refined: false,
+        context,
+        sources: [],
+      })),
       readObsidianBridgeConfig: () => ({
         enabled: true,
         wikiReadbackEnabled: true,
@@ -76,7 +86,7 @@ describe('obsidian context service', () => {
     expect(buildObsidianContext).toHaveBeenCalledWith({
       query: 'Continue the GPUScene review.',
       projectName: 'App',
-      folders: ['Argus/Wiki/App', 'Argus/_Indexes', 'Argus/AIMemory/App'],
+      folders: ['Argus/Wiki/App', 'Argus/_Indexes'],
       limit: 8,
     });
   });
@@ -134,6 +144,11 @@ describe('obsidian context service', () => {
     }, {
       buildObsidianContext,
       getActiveObsidianNote,
+      refineWikiReadbackContext: vi.fn(async ({ context }) => ({
+        refined: false,
+        context,
+        sources: [],
+      })),
       readObsidianBridgeConfig: () => ({
         enabled: true,
         aiMemoryReadbackEnabled: true,
@@ -212,5 +227,65 @@ describe('obsidian context service', () => {
       context: 'Unrefined context',
       results: [{ path: 'Argus/Wiki/App/Plan.md', title: 'Plan' }],
     }));
+  });
+
+  it('filters archived AIMemory entries from injected readback context', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const buildObsidianContext = vi.fn(async () => ({
+      success: true,
+      context: [
+        'Path: Argus/AIMemory/App/Active.md',
+        'Title: Active',
+        'Use concise answers.',
+        '',
+        '---',
+        '',
+        'Path: Argus/AIMemory/App/Archived.md',
+        'Title: Archived',
+        'Old memory that should not be injected.',
+      ].join('\n'),
+      results: [
+        {
+          path: 'Argus/AIMemory/App/Active.md',
+          title: 'Active',
+          snippet: 'Use concise answers.',
+          properties: { status: 'active' },
+        },
+        {
+          path: 'Argus/AIMemory/App/Archived.md',
+          title: 'Archived',
+          snippet: 'Old memory that should not be injected.',
+          properties: { status: 'archived' },
+        },
+      ],
+    }));
+
+    const result = await service.applyObsidianContextToChatCommand({
+      type: 'claude-command',
+      command: 'Continue.',
+      options: { projectName: 'App' },
+    }, {
+      buildObsidianContext,
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        aiMemoryReadbackEnabled: true,
+        aiMemoryMaxResults: 5,
+        aiMemoryProjectScopeEnabled: true,
+      }),
+      refineWikiReadbackContext: vi.fn(async ({ context, results }) => ({
+        refined: false,
+        context,
+        sources: results,
+      })),
+    });
+
+    expect(result.options.appendSystemPrompt).toContain('Use concise answers.');
+    expect(result.options.appendSystemPrompt).not.toContain('Old memory that should not be injected.');
+    expect(result.options.appendSystemPrompt).toContain('Wiki context is historical project material.');
+    expect(result.options.obsidianContext).toMatchObject({
+      used: true,
+      resultCount: 1,
+      archivedResultCount: 1,
+    });
   });
 });

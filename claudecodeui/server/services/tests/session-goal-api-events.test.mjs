@@ -25,3 +25,12 @@ test('Claude normalizer forwards runtime thread goal system events', async () =>
   expect(source).toContain('eventId');
   expect(source).toContain('lifecycleType');
 });
+
+test('Claude normalizer forwards subagent task start system events', async () => {
+  const source = await readFile(join(repoRoot, 'modules/providers/list/claude/claude-sessions.provider.ts'), 'utf8');
+
+  expect(source).toContain("raw.subtype === 'task_started'");
+  expect(source).toContain("status: 'subagent_started'");
+  expect(source).toContain('taskType');
+  expect(source).toContain('workflowName');
+});

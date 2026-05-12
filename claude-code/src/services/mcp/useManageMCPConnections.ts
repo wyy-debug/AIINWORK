@@ -596,7 +596,7 @@ export function useManageMCPConnections(
                   gate.kind === 'disabled'
                     ? 'Channels are not currently available'
                     : gate.kind === 'auth'
-                      ? 'Channels require claude.ai authentication · run /login'
+                      ? 'Channels require Claude web auth, which is disabled in Argus custom model mode'
                       : gate.kind === 'policy'
                         ? 'Channels are not enabled for your org · have an administrator set channelsEnabled: true in managed settings'
                         : gate.reason

@@ -77,6 +77,20 @@ const extractTextContent = (value: unknown): string => {
 const isAsyncLaunchNoise = (text: string): boolean =>
   /Async agent launched successfully|agentId: .*internal ID|The agent is working in the background|output_file/i.test(text);
 
+const openSwarmRun = (runId: string) => {
+  try {
+    window.localStorage.setItem('argus:pending-swarm-run-id', runId);
+  } catch {
+    // Non-critical handoff state; the panel can still open without it.
+  }
+  window.dispatchEvent(new CustomEvent('argus-open-panel', {
+    detail: { panel: 'swarms', runId },
+  }));
+  window.dispatchEvent(new CustomEvent('argus:open-swarm-run', {
+    detail: { runId },
+  }));
+};
+
 const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => {
   const input = parseObject(toolInput);
   const pick = (...keys: string[]) => {
@@ -255,7 +269,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
             {swarmRunId && (
               <button
                 type="button"
-                onClick={() => window.dispatchEvent(new CustomEvent('argus-open-panel', { detail: { panel: 'chat' } }))}
+                onClick={() => openSwarmRun(swarmRunId)}
                 className="max-w-full rounded-full bg-cyan-50 px-2 py-0.5 text-cyan-700 ring-1 ring-cyan-200 transition-colors hover:bg-cyan-100 dark:bg-cyan-950/30 dark:text-cyan-300 dark:ring-cyan-900"
                 title={swarmRunId}
               >

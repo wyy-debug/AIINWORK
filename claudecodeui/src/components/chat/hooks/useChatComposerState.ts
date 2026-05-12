@@ -61,6 +61,13 @@ type LaunchDialogApproval = {
   presetId: string;
 };
 
+type ProgrammaticChatSubmit = {
+  text: string;
+  permissionMode?: PermissionMode | string;
+  subagentDispatch?: boolean;
+  approvedSubagentPlan?: string;
+};
+
 interface UseChatComposerStateArgs {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
@@ -83,6 +90,7 @@ interface UseChatComposerStateArgs {
   modelProfileId?: string;
   obsidianBridgeEnabled?: boolean;
   allowSessionAgentBinding?: boolean;
+  recentMessages?: ChatMessage[];
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -154,6 +162,40 @@ const getNotificationSessionSummary = (
 
 const normalizeAgentToken = (value: string) => value.trim().toLowerCase();
 
+const isReferentialWikiCommand = (value: string) => {
+  const text = value.trim();
+  if (!text) return false;
+  return /^(?:save|add|write|persist|document)\s+(?:this|that|the above|that answer|this answer)\s+(?:to|into)\s+(?:obsidian|wiki|knowledge\s*base|kb)\s*[.!?]*$/i.test(text)
+    || /^(?:save|add|write|persist|document)\s+(?:to|into)\s+(?:obsidian|wiki|knowledge\s*base|kb)\s*[.!?]*$/i.test(text)
+    || /^(?:\u4fdd\u5b58\u5230|\u5b58\u5230|\u5199\u5165|\u5199\u5230|\u52a0\u5165|\u6dfb\u52a0\u5230|\u6c89\u6dc0\u5230|\u8bb0\u5f55\u5230)\s*(?:Obsidian|Wiki|\u77e5\u8bc6\u5e93|\u9879\u76ee\u77e5\u8bc6\u5e93)\s*(?:\u8fd9\u4e2a|\u8fd9\u6761|\u8fd9\u4ef6\u4e8b|\u8fd9\u6bb5|\u521a\u624d\u90a3\u4e2a|\u4e0a\u9762|\u4ee5\u4e0a)?\s*[.!?\u3002\uFF01\uFF1F]*$/i.test(text)
+    || /^(?:\u8fd9\u4e2a|\u8fd9\u6761|\u8fd9\u4ef6\u4e8b|\u8fd9\u6bb5|\u521a\u624d\u90a3\u4e2a|\u4e0a\u9762|\u4ee5\u4e0a)\s*(?:\u4fdd\u5b58\u5230|\u5b58\u5230|\u5199\u5165|\u5199\u5230|\u52a0\u5165|\u6dfb\u52a0\u5230|\u6c89\u6dc0\u5230|\u8bb0\u5f55\u5230)\s*(?:Obsidian|Wiki|\u77e5\u8bc6\u5e93|\u9879\u76ee\u77e5\u8bc6\u5e93)\s*[.!?\u3002\uFF01\uFF1F]*$/i.test(text);
+};
+
+const buildExplicitWikiContext = (input: string, messages: ChatMessage[] = []) => {
+  if (!isReferentialWikiCommand(input)) {
+    return undefined;
+  }
+
+  const candidate = [...messages].reverse().find((message) => {
+    const content = typeof message.content === 'string' ? message.content.trim() : '';
+    return content
+      && !message.isThinking
+      && !message.isToolUse
+      && !message.isContextCompaction
+      && !['error', 'status', 'system'].includes(String(message.type || '').toLowerCase());
+  });
+
+  if (!candidate || typeof candidate.content !== 'string') {
+    return undefined;
+  }
+
+  return {
+    text: candidate.content.trim().slice(0, 4000),
+    messageId: typeof candidate.id === 'string' ? candidate.id : '',
+    messageType: String(candidate.type || ''),
+  };
+};
+
 const resolveAgentInvocation = (
   rawInput: string,
   agents: AgentConfig[] = [],
@@ -217,6 +259,7 @@ export function useChatComposerState({
   modelProfileId = '',
   obsidianBridgeEnabled = false,
   allowSessionAgentBinding = false,
+  recentMessages = [],
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -266,6 +309,8 @@ export function useChatComposerState({
   const approvedSubagentDispatchPlanRef = useRef('');
   const inputValueRef = useRef(input);
   const launchDialogApprovalRef = useRef<LaunchDialogApproval | null>(null);
+  const pendingSubmitChatInputRef = useRef<ProgrammaticChatSubmit | null>(null);
+  const isLoadingRef = useRef(isLoading);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -902,6 +947,7 @@ export function useChatComposerState({
         effectiveSessionId && !isTemporarySessionId(effectiveSessionId) ? effectiveSessionId : null;
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
       const clientMessageId = createClientUserMessageId();
+      const explicitWikiContext = buildExplicitWikiContext(currentInput, recentMessages);
 
       const userMessage: ChatMessage = {
         id: clientMessageId,
@@ -1036,6 +1082,7 @@ export function useChatComposerState({
             toolsSettings,
             files: uploadedFiles,
             clientMessageId,
+            ...(explicitWikiContext ? { explicitWikiContext } : {}),
           },
         });
       } else if (provider === 'codex') {
@@ -1067,6 +1114,7 @@ export function useChatComposerState({
             permissionMode: permissionModeForSend === 'plan' ? 'default' : permissionModeForSend,
             files: uploadedFiles,
             clientMessageId,
+            ...(explicitWikiContext ? { explicitWikiContext } : {}),
           },
         });
       } else if (provider === 'gemini') {
@@ -1100,6 +1148,7 @@ export function useChatComposerState({
             toolsSettings,
             files: uploadedFiles,
             clientMessageId,
+            ...(explicitWikiContext ? { explicitWikiContext } : {}),
           },
         });
       } else {
@@ -1134,8 +1183,10 @@ export function useChatComposerState({
             files: uploadedFiles,
             clientMessageId,
             clientSessionId: sessionToActivate,
+            ...(explicitWikiContext ? { explicitWikiContext } : {}),
             ...(shouldSendSubagentDispatch
               ? {
+                coordinatorMode: true,
                 subagentDispatch: true,
                 subagentDispatchPlanApproved: Boolean(approvedSubagentDispatchPlan),
                 subagentDispatchPlan: approvedSubagentDispatchPlan,
@@ -1188,6 +1239,7 @@ export function useChatComposerState({
       onSessionProcessing,
       pendingViewSessionRef,
       permissionMode,
+      recentMessages,
       provider,
       resetCommandMenuState,
       scrollToBottom,
@@ -1216,6 +1268,35 @@ export function useChatComposerState({
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
+
+  const submitProgrammaticChatInput = useCallback((detail: ProgrammaticChatSubmit) => {
+    const text = typeof detail.text === 'string' ? detail.text.trim() : '';
+    if (!text) {
+      return;
+    }
+
+    setInput(text);
+    inputValueRef.current = text;
+    oneShotPermissionModeRef.current = detail.permissionMode || null;
+    oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
+    approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
+      ? detail.approvedSubagentPlan.trim()
+      : '';
+    window.setTimeout(() => {
+      void handleSubmitRef.current?.(createFakeSubmitEvent());
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+    if (isLoading || !pendingSubmitChatInputRef.current) {
+      return;
+    }
+
+    const pendingSubmit = pendingSubmitChatInputRef.current;
+    pendingSubmitChatInputRef.current = null;
+    window.setTimeout(() => submitProgrammaticChatInput(pendingSubmit), 0);
+  }, [isLoading, submitProgrammaticChatInput]);
 
   useEffect(() => {
     const handleAppendChatInput = (event: Event) => {
@@ -1248,21 +1329,32 @@ export function useChatComposerState({
         return;
       }
 
-      setInput(text);
-      inputValueRef.current = text;
-      oneShotPermissionModeRef.current = detail.permissionMode || null;
-      oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
-      approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
-        ? detail.approvedSubagentPlan.trim()
-        : '';
-      window.setTimeout(() => {
-        void handleSubmitRef.current?.(createFakeSubmitEvent());
-      }, 0);
+      const programmaticSubmit: ProgrammaticChatSubmit = {
+        text,
+        permissionMode: detail.permissionMode,
+        subagentDispatch: detail.subagentDispatch,
+        approvedSubagentPlan: detail.approvedSubagentPlan,
+      };
+      if (detail.subagentDispatch === true && isLoadingRef.current) {
+        const pendingSubmit = pendingSubmitChatInputRef.current;
+        if (
+          !pendingSubmit
+          || pendingSubmit.text !== programmaticSubmit.text
+          || pendingSubmit.approvedSubagentPlan !== programmaticSubmit.approvedSubagentPlan
+        ) {
+          pendingSubmitChatInputRef.current = programmaticSubmit;
+          setInput(text);
+          inputValueRef.current = text;
+        }
+        return;
+      }
+
+      submitProgrammaticChatInput(programmaticSubmit);
     };
 
     window.addEventListener('argus-submit-chat-input', handleSubmitChatInput);
     return () => window.removeEventListener('argus-submit-chat-input', handleSubmitChatInput);
-  }, []);
+  }, [submitProgrammaticChatInput]);
 
   useEffect(() => {
     if (!isLoading) {

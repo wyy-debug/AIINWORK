@@ -556,7 +556,7 @@ export async function teleportResumeCodeSession(
           'no_access_token' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       })
       throw new Error(
-        'MTL-Code web sessions require authentication with a Claude.ai account. API key authentication is not sufficient. Please run /login to authenticate, or check your authentication status with /status.',
+        'MTL-Code web sessions require Claude.ai web auth, which is disabled in Argus custom model mode.',
       )
     }
 

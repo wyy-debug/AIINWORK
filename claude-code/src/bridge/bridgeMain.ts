@@ -2396,7 +2396,7 @@ export async function bridgeMain(args: string[]): Promise<void> {
         await clearBridgePointer(resumePointerDir)
       }
       console.error(
-        `Error: Session ${resumeSessionId} not found. It may have been archived or expired, or your login may have lapsed (run \`claude /login\`).`,
+        `Error: Session ${resumeSessionId} not found. It may have been archived or expired. Claude web auth is disabled in Argus custom model mode.`,
       )
       // eslint-disable-next-line custom-rules/no-process-exit
       process.exit(1)

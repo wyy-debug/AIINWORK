@@ -1,10 +1,10 @@
 import type { Command } from '../../commands.js'
-import { isEnvTruthy } from '../../utils/envUtils.js'
 
 export default {
   type: 'local-jsx',
   name: 'logout',
-  description: 'Sign out from your Anthropic account',
-  isEnabled: () => !isEnvTruthy(process.env.DISABLE_LOGOUT_COMMAND),
+  description:
+    'Native Claude logout is disabled; custom model credentials are managed by Argus',
+  isEnabled: () => false,
   load: () => import('./logout.js'),
 } satisfies Command

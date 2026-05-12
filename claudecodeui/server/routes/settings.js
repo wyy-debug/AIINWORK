@@ -57,6 +57,7 @@ const ANTHROPIC_ENV_KEYS = {
 };
 const MTL_CODE_ENV_KEYS = {
   uiBareMode: 'MTL_CODE_UI_BARE',
+  claudeNativeMemoryEnabled: 'MTL_CODE_CLAUDE_NATIVE_MEMORY',
   maxContextTokens: 'MTL_CODE_MAX_CONTEXT_TOKENS',
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
@@ -166,6 +167,28 @@ const readBooleanEnvDefaultTrue = (env, key) => {
   return value !== '0' && value !== 'false' && value !== 'off';
 };
 
+const readBooleanEnv = (env, key, fallback) => {
+  const value = readStringEnv(env, key).toLowerCase();
+  if (!value) {
+    return fallback;
+  }
+  if (['1', 'true', 'yes', 'on'].includes(value)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(value)) {
+    return false;
+  }
+  return fallback;
+};
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
+const resolveClaudeNativeMemoryEnabled = (profile = {}, fallback = true) => (
+  hasOwn(profile, 'claudeNativeMemoryEnabled')
+    ? profile.claudeNativeMemoryEnabled !== false
+    : fallback
+);
+
 const createStableId = (prefix = 'model') => (
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 );
@@ -204,19 +227,23 @@ const resolveProfileContextWindow = (profile, env) => {
     || DEFAULT_CONTEXT_WINDOW_TOKENS;
 };
 
-const sanitizeModelProfile = (profile, env = {}) => ({
-  id: profile.id,
-  name: profile.name,
-  provider: 'anthropic',
-  protocol: normalizeModelProtocol(profile.protocol),
-  baseUrl: profile.baseUrl || '',
-  model: profile.model || '',
-  requestModel: profile.requestModel || '',
-  apiKey: '',
-  apiKeyConfigured: Boolean(profile.authToken),
-  contextWindowTokens: resolveProfileContextWindow(profile, env),
-  bareMode: profile.bareMode !== false,
-});
+const sanitizeModelProfile = (profile, env = {}) => {
+  const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile);
+  return {
+    id: profile.id,
+    name: profile.name,
+    provider: 'anthropic',
+    protocol: normalizeModelProtocol(profile.protocol),
+    baseUrl: profile.baseUrl || '',
+    model: profile.model || '',
+    requestModel: profile.requestModel || '',
+    apiKey: '',
+    apiKeyConfigured: Boolean(profile.authToken),
+    contextWindowTokens: resolveProfileContextWindow(profile, env),
+    claudeNativeMemoryEnabled,
+    bareMode: !claudeNativeMemoryEnabled,
+  };
+};
 
 const createProfileFromEnv = (settings, env) => {
   const modelType = readOptionalString(settings.modelType);
@@ -236,6 +263,11 @@ const createProfileFromEnv = (settings, env) => {
   const authToken = useOpenAI
     ? legacyOpenAIKey || anthropicAuthToken
     : anthropicAuthToken || legacyOpenAIKey;
+  const claudeNativeMemoryEnabled = readBooleanEnv(
+    env,
+    MTL_CODE_ENV_KEYS.claudeNativeMemoryEnabled,
+    true,
+  );
 
   return {
     id: 'default',
@@ -247,7 +279,8 @@ const createProfileFromEnv = (settings, env) => {
     requestModel: '',
     authToken,
     contextWindowTokens: resolveProfileContextWindow({ model }, env),
-    bareMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.uiBareMode),
+    claudeNativeMemoryEnabled,
+    bareMode: !claudeNativeMemoryEnabled,
   };
 };
 
@@ -263,6 +296,7 @@ const readStoredModelProfiles = (settings, env) => {
       const baseUrl = readOptionalString(profile.baseUrl);
       const name = readOptionalString(profile.name) || model || `Model ${index + 1}`;
       const id = normalizeProfileId(profile.id || name || `model-${index + 1}`);
+      const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile);
       return {
         id,
         name,
@@ -273,7 +307,8 @@ const readStoredModelProfiles = (settings, env) => {
         requestModel: readOptionalString(profile.requestModel),
         authToken: readOptionalString(profile.authToken),
         contextWindowTokens: resolveProfileContextWindow(profile, env),
-        bareMode: profile.bareMode !== false,
+        claudeNativeMemoryEnabled,
+        bareMode: !claudeNativeMemoryEnabled,
       };
     })
     .filter(Boolean);
@@ -305,6 +340,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
   const profiles = readStoredModelProfiles(settings, env);
   const activeProfile = resolveActiveModelProfile(settings, profiles);
   const activeContextWindowTokens = resolveProfileContextWindow(activeProfile, env);
+  const activeClaudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(activeProfile);
   const smallModelRuntime = readSmallModelRuntimeConfig(settings, env);
   const smallModelProfile = resolveSmallModelProfile(smallModelRuntime, profiles, activeProfile);
 
@@ -324,7 +360,8 @@ const toMtlCodeModelConfig = (settings, filePath) => {
       model: activeProfile.model,
     },
     runtime: {
-      bareMode: activeProfile.bareMode !== false,
+      claudeNativeMemoryEnabled: activeClaudeNativeMemoryEnabled,
+      bareMode: !activeClaudeNativeMemoryEnabled,
       contextWindowTokens: activeContextWindowTokens,
       coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
     },
@@ -374,6 +411,7 @@ const normalizeModelConfigInput = (body) => {
     ?? readObjectRecord(payload.openai)
     ?? {};
   const runtime = readObjectRecord(payload.runtime) ?? {};
+  const runtimeClaudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(runtime);
   const contextWindowTokens = Number.parseInt(String(runtime.contextWindowTokens ?? ''), 10);
   const rawProfiles = Array.isArray(payload.profiles) ? payload.profiles : [];
   const profiles = rawProfiles
@@ -387,6 +425,7 @@ const normalizeModelConfigInput = (body) => {
       const name = readOptionalString(profile.name) || model || `Model ${index + 1}`;
       const id = normalizeProfileId(profile.id || name || `model-${index + 1}`);
       const profileContextWindowTokens = Number.parseInt(String(profile.contextWindowTokens ?? ''), 10);
+      const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile, runtimeClaudeNativeMemoryEnabled);
       return {
         id,
         name,
@@ -399,7 +438,8 @@ const normalizeModelConfigInput = (body) => {
         contextWindowTokens: Number.isFinite(profileContextWindowTokens) && profileContextWindowTokens > 0
           ? profileContextWindowTokens
           : undefined,
-        bareMode: profile.bareMode !== false,
+        claudeNativeMemoryEnabled,
+        bareMode: !claudeNativeMemoryEnabled,
       };
     })
     .filter(Boolean);
@@ -417,7 +457,8 @@ const normalizeModelConfigInput = (body) => {
       contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
         : undefined,
-      bareMode: runtime.bareMode !== false,
+      claudeNativeMemoryEnabled: runtimeClaudeNativeMemoryEnabled,
+      bareMode: !runtimeClaudeNativeMemoryEnabled,
     });
   }
 
@@ -431,7 +472,8 @@ const normalizeModelConfigInput = (body) => {
       model: toStringEnv(canonicalizeAnthropicModel(anthropic.model)),
     },
     runtime: {
-      bareMode: runtime.bareMode !== false,
+      claudeNativeMemoryEnabled: runtimeClaudeNativeMemoryEnabled,
+      bareMode: !runtimeClaudeNativeMemoryEnabled,
       coordinatorMode: Object.prototype.hasOwnProperty.call(runtime, 'coordinatorMode')
         ? runtime.coordinatorMode !== false
         : undefined,
@@ -472,6 +514,7 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
     const model = canonicalizeAnthropicModel(incoming.model) || '';
     const requestModel = readOptionalString(incoming.requestModel) || '';
     const protocol = normalizeModelProtocol(incoming.protocol);
+    const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(incoming);
     const profile = {
       id,
       name: incoming.name || model || `Model ${uniqueProfiles.length + 1}`,
@@ -485,7 +528,8 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
         || getMimoContextWindow(model)
         || existing?.contextWindowTokens
         || DEFAULT_CONTEXT_WINDOW_TOKENS,
-      bareMode: incoming.bareMode !== false,
+      claudeNativeMemoryEnabled,
+      bareMode: !claudeNativeMemoryEnabled,
     };
     uniqueProfiles.push(profile);
   }
@@ -504,6 +548,7 @@ const mergeAndStoreModelProfiles = (settings, env, input) => {
     requestModel: profile.requestModel || '',
     authToken: profile.authToken,
     contextWindowTokens: profile.contextWindowTokens,
+    claudeNativeMemoryEnabled: profile.claudeNativeMemoryEnabled,
     bareMode: profile.bareMode,
   }));
   settings[ACTIVE_MODEL_PROFILE_KEY] = activeProfile.id;
@@ -516,8 +561,10 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
   const requestModel = readOptionalString(profile.requestModel) || profile.model;
   const protocol = normalizeModelProtocol(profile.protocol);
   const usesOpenAI = isOpenAIModelProtocol(protocol);
+  const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile);
 
-  env[MTL_CODE_ENV_KEYS.uiBareMode] = profile.bareMode !== false ? '1' : '0';
+  env[MTL_CODE_ENV_KEYS.claudeNativeMemoryEnabled] = claudeNativeMemoryEnabled ? '1' : '0';
+  env[MTL_CODE_ENV_KEYS.uiBareMode] = claudeNativeMemoryEnabled ? '0' : '1';
 
   const contextWindowTokens = resolveProfileContextWindow(profile, env);
   env[MTL_CODE_ENV_KEYS.maxContextTokens] = String(contextWindowTokens);

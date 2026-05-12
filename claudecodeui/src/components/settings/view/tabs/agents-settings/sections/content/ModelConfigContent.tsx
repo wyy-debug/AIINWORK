@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Bot,
+  BrainCircuit,
   CheckCircle2,
   Gauge,
   KeyRound,
@@ -27,6 +28,7 @@ type ModelProfile = {
   model: string;
   requestModel: string;
   contextWindowTokens: number;
+  claudeNativeMemoryEnabled: boolean;
   bareMode: boolean;
 };
 
@@ -72,6 +74,7 @@ type MtlCodeModelConfig = {
   };
   anthropic: AnthropicModelConfig;
   runtime: {
+    claudeNativeMemoryEnabled: boolean;
     bareMode: boolean;
     contextWindowTokens: number;
   };
@@ -114,7 +117,8 @@ const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   model: patch.model || '',
   requestModel: patch.requestModel || '',
   contextWindowTokens: patch.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
-  bareMode: patch.bareMode !== false,
+  claudeNativeMemoryEnabled: patch.claudeNativeMemoryEnabled !== false,
+  bareMode: patch.claudeNativeMemoryEnabled !== false ? false : patch.bareMode !== false,
 });
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
@@ -182,7 +186,8 @@ const createEmptyConfig = (): MtlCodeModelConfig => {
       model: '',
     },
     runtime: {
-      bareMode: true,
+      claudeNativeMemoryEnabled: true,
+      bareMode: false,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     openMythosRuntime: DEFAULT_OPENMYTHOS_RUNTIME_CONFIG,
@@ -196,6 +201,7 @@ const toProfile = (value: unknown, index: number): ModelProfile | null => {
   }
 
   const contextWindowTokens = Number(data.contextWindowTokens);
+  const claudeNativeMemoryEnabled = data.claudeNativeMemoryEnabled !== false;
   return createProfile({
     id: typeof data.id === 'string' && data.id ? data.id : makeId(`model-${index + 1}`),
     name: typeof data.name === 'string' && data.name ? data.name : data.model || `Model ${index + 1}`,
@@ -210,7 +216,8 @@ const toProfile = (value: unknown, index: number): ModelProfile | null => {
       Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
         : DEFAULT_CONTEXT_WINDOW_TOKENS,
-    bareMode: data.bareMode !== false,
+    claudeNativeMemoryEnabled,
+    bareMode: claudeNativeMemoryEnabled ? false : data.bareMode !== false,
   });
 };
 
@@ -230,9 +237,11 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
       model: data?.anthropic?.model || '',
       protocol: 'anthropic',
       contextWindowTokens: data?.runtime?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
-      bareMode: data?.runtime?.bareMode !== false,
+      claudeNativeMemoryEnabled: data?.runtime?.claudeNativeMemoryEnabled !== false,
+      bareMode: data?.runtime?.claudeNativeMemoryEnabled !== false ? false : data?.runtime?.bareMode !== false,
       requestModel: '',
     });
+  const claudeNativeMemoryEnabled = activeProfile.claudeNativeMemoryEnabled !== false;
 
   return {
     provider: 'anthropic',
@@ -250,7 +259,8 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
       model: activeProfile.model || fallback.anthropic.model,
     },
     runtime: {
-      bareMode: activeProfile.bareMode,
+      claudeNativeMemoryEnabled,
+      bareMode: !claudeNativeMemoryEnabled,
       contextWindowTokens: activeProfile.contextWindowTokens,
     },
     openMythosRuntime: normalizeOpenMythosRuntime(data?.openMythosRuntime),
@@ -329,11 +339,28 @@ export default function ModelConfigContent() {
     [config.profiles, selectedProfileId],
   );
 
+  const mergeProfilePatch = (profile: ModelProfile, patch: Partial<ModelProfile>): ModelProfile => {
+    const next = { ...profile, ...patch };
+    if (patch.bareMode === true) {
+      next.claudeNativeMemoryEnabled = false;
+    }
+    if (patch.claudeNativeMemoryEnabled === true) {
+      next.bareMode = false;
+    }
+    if (patch.claudeNativeMemoryEnabled === false) {
+      next.bareMode = true;
+    }
+    if (next.claudeNativeMemoryEnabled !== false) {
+      next.bareMode = false;
+    }
+    return next;
+  };
+
   const updateProfile = (profileId: string, patch: Partial<ModelProfile>) => {
     setConfig((current) => ({
       ...current,
       profiles: current.profiles.map((profile) => (
-        profile.id === profileId ? { ...profile, ...patch } : profile
+        profile.id === profileId ? mergeProfilePatch(profile, patch) : profile
       )),
     }));
     setStatus(null);
@@ -402,7 +429,8 @@ export default function ModelConfigContent() {
           model: activeProfile?.model || '',
         },
         runtime: {
-          bareMode: activeProfile?.bareMode !== false,
+          claudeNativeMemoryEnabled: activeProfile?.claudeNativeMemoryEnabled !== false,
+          bareMode: activeProfile?.claudeNativeMemoryEnabled === false,
           contextWindowTokens: activeProfile?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
         },
         openMythosRuntime: config.openMythosRuntime,
@@ -466,7 +494,8 @@ export default function ModelConfigContent() {
                 protocol: 'anthropic',
                 requestModel: '',
                 contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
-                bareMode: true,
+                claudeNativeMemoryEnabled: true,
+                bareMode: false,
               })}
             >
               <Plus className="mr-1 h-3.5 w-3.5" />
@@ -667,6 +696,40 @@ export default function ModelConfigContent() {
           <div className="rounded-lg border border-border bg-background p-4">
             <div className="flex items-start justify-between gap-4">
               <div className="flex gap-3">
+                <BrainCircuit className="mt-0.5 h-4 w-4 text-primary" />
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    {t('mtlCodeModel.claudeNativeMemory', { defaultValue: 'Claude 原生记忆' })}
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t('mtlCodeModel.claudeNativeMemoryDescription', {
+                      defaultValue: '开启后不使用 --bare，以恢复 Claude memory、CLAUDE.md 和 topic recall 等原生上下文能力。',
+                    })}
+                  </p>
+                  {selectedProfile.bareMode && (
+                    <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                      {t('mtlCodeModel.claudeNativeMemoryUnavailableInBare', {
+                        defaultValue: '轻量启动已开启，Claude 原生记忆不可用。',
+                      })}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <SettingsToggle
+                checked={selectedProfile.claudeNativeMemoryEnabled}
+                onChange={(claudeNativeMemoryEnabled) => updateProfile(selectedProfile.id, {
+                  claudeNativeMemoryEnabled,
+                  bareMode: !claudeNativeMemoryEnabled,
+                })}
+                ariaLabel={t('mtlCodeModel.claudeNativeMemory', { defaultValue: 'Claude 原生记忆' })}
+                disabled={isLoading || isSaving}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-background p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex gap-3">
                 <Rocket className="mt-0.5 h-4 w-4 text-primary" />
                 <div>
                   <div className="text-sm font-medium text-foreground">
@@ -674,14 +737,17 @@ export default function ModelConfigContent() {
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {t('mtlCodeModel.bareModeDescription', {
-                      defaultValue: '使用 --bare 启动 Argus，让新会话更干净。',
+                      defaultValue: '使用 --bare 启动 Argus。开启后 Claude 原生记忆、CLAUDE.md 和 topic recall 不可用。',
                     })}
                   </p>
                 </div>
               </div>
               <SettingsToggle
                 checked={selectedProfile.bareMode}
-                onChange={(bareMode) => updateProfile(selectedProfile.id, { bareMode })}
+                onChange={(bareMode) => updateProfile(selectedProfile.id, {
+                  bareMode,
+                  claudeNativeMemoryEnabled: !bareMode,
+                })}
                 ariaLabel={t('mtlCodeModel.bareMode', { defaultValue: '轻量启动' })}
                 disabled={isLoading || isSaving}
               />

@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('MainContent swarm page rendering', () => {
-  it('does not mount a standalone SwarmDashboard page', () => {
+  it('mounts the Subagent dashboard as the swarms main page', () => {
     const currentDir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(resolve(currentDir, 'MainContent.tsx'), 'utf8');
 
-    expect(source).not.toContain('SwarmDashboard');
-    expect(source).not.toContain("visibleActiveTab === 'swarms'");
+    expect(source).toContain('SwarmDashboard');
+    expect(source).toContain("visibleActiveTab === 'swarms'");
   });
 });

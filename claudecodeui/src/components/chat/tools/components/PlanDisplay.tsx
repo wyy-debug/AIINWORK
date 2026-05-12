@@ -42,12 +42,19 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   toolName,
 }) => {
   const permissionCtx = usePermission();
+  const [submittedPlanKey, setSubmittedPlanKey] = React.useState('');
 
   const pendingRequest = permissionCtx?.pendingPermissionRequests.find(
     (r) => r.toolName === 'ExitPlanMode' || r.toolName === 'exit_plan_mode'
   );
   const isProposedPlan = toolName === 'proposed_plan';
   const isSubagentDispatchPlan = isSubagentDispatchPlanContent(content);
+  const proposedPlanSubmitKey = isProposedPlan && content.trim() ? `${toolName}:${content.trim()}` : '';
+  const hasSubmittedProposedPlan = Boolean(proposedPlanSubmitKey && submittedPlanKey === proposedPlanSubmitKey);
+
+  React.useEffect(() => {
+    setSubmittedPlanKey('');
+  }, [content, toolName]);
 
   const handleBuild = () => {
     if (pendingRequest && permissionCtx) {
@@ -55,9 +62,13 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
       return;
     }
     if (isProposedPlan && content.trim()) {
+      if (hasSubmittedProposedPlan) {
+        return;
+      }
+      setSubmittedPlanKey(proposedPlanSubmitKey);
       window.dispatchEvent(new CustomEvent('argus-submit-chat-input', {
         detail: {
-          permissionMode: isSubagentDispatchPlan ? undefined : 'acceptEdits',
+          permissionMode: 'acceptEdits',
           text: isSubagentDispatchPlan
             ? buildApprovedSubagentDispatchCommand(content)
             : `PLEASE IMPLEMENT THIS PLAN:\n\n${content.trim()}`,
@@ -147,12 +158,15 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
               variant="ghost"
               size="sm"
               onClick={handleRevise}
+              disabled={hasSubmittedProposedPlan}
               className="text-muted-foreground"
             >
               Revise
             </Button>
-            <Button size="sm" onClick={handleBuild}>
-              {isSubagentDispatchPlan ? 'Dispatch agents' : 'Build'}{' '}
+            <Button size="sm" onClick={handleBuild} disabled={hasSubmittedProposedPlan}>
+              {hasSubmittedProposedPlan
+                ? (isSubagentDispatchPlan ? 'Dispatching...' : 'Starting...')
+                : (isSubagentDispatchPlan ? 'Dispatch agents' : 'Build')}{' '}
               <kbd className="ml-1 rounded bg-primary-foreground/20 px-1 py-0.5 font-mono text-[10px]">
                 ⌘↩
               </kbd>

@@ -8,7 +8,6 @@ import {
   Database,
   Download,
   FileText,
-  MessageSquare,
   MoreVertical,
   Network,
   Pause,
@@ -40,6 +39,7 @@ import {
   summarizeMessageTrace,
   summarizeSwarmRun,
 } from '../utils/swarmDashboard';
+import { SAMPLE_SWARM_ROLES, SAMPLE_SWARM_TOPOLOGY } from '../constants/sampleSwarmManifest';
 
 type SwarmDashboardProps = {
   selectedProject: Project;
@@ -90,6 +90,14 @@ const SAMPLE_MANIFEST: SwarmTemplateManifest = {
     },
   },
 };
+
+function getSampleSwarmManifest(): SwarmTemplateManifest {
+  return {
+    ...SAMPLE_MANIFEST,
+    topology: SAMPLE_SWARM_TOPOLOGY,
+    roles: SAMPLE_SWARM_ROLES,
+  };
+}
 
 function formatTime(value?: number) {
   if (!value) return '';
@@ -157,7 +165,7 @@ function isOnlineStatus(status?: string) {
 }
 
 export default function SwarmDashboard({ selectedProject, sessionId, latestMessage }: SwarmDashboardProps) {
-  const [manifestText, setManifestText] = useState(() => JSON.stringify(SAMPLE_MANIFEST, null, 2));
+  const [manifestText, setManifestText] = useState(() => JSON.stringify(getSampleSwarmManifest(), null, 2));
   const [objective, setObjective] = useState('请排查支付接口超时问题，并优化系统稳定性。');
   const [runtimeMode, setRuntimeMode] = useState<'coordinator-subagents' | 'local-control-plane'>('coordinator-subagents');
   const [run, setRun] = useState<SwarmRunSnapshot | null>(null);
@@ -175,7 +183,7 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
   const collaboration = useMemo(
     () => buildSwarmCollaborationView(run || {
       objective,
-      topology: SAMPLE_MANIFEST.topology,
+      topology: SAMPLE_SWARM_TOPOLOGY,
       agents: [],
       messages: [],
       events: [],
@@ -281,6 +289,40 @@ export default function SwarmDashboard({ selectedProject, sessionId, latestMessa
       setIsBusy(false);
     }
   }, [refreshRun]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const openRun = (runId: string) => {
+      const trimmedRunId = runId.trim();
+      if (!trimmedRunId) return;
+      try {
+        window.localStorage.removeItem('argus:pending-swarm-run-id');
+      } catch {
+        // Ignore storage cleanup failures.
+      }
+      void resumeRun(trimmedRunId);
+    };
+
+    const handleOpenRun = (event: Event) => {
+      const detail = (event as CustomEvent<{ runId?: unknown }>).detail || {};
+      if (typeof detail.runId === 'string') {
+        openRun(detail.runId);
+      }
+    };
+
+    window.addEventListener('argus:open-swarm-run', handleOpenRun);
+    try {
+      const pendingRunId = window.localStorage.getItem('argus:pending-swarm-run-id');
+      if (pendingRunId) {
+        openRun(pendingRunId);
+      }
+    } catch {
+      // Ignore unavailable localStorage.
+    }
+
+    return () => window.removeEventListener('argus:open-swarm-run', handleOpenRun);
+  }, [resumeRun]);
 
   useEffect(() => {
     if (!run?.id || !latestMessage || typeof latestMessage !== 'object') return;

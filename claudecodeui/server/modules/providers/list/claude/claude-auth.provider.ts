@@ -185,52 +185,15 @@ export class ClaudeProviderAuth implements IProviderAuth {
         authenticated: false,
         email: anthropicModel,
         method: 'anthropic_compatible',
-        error: 'Anthropic-compatible Argus config is missing ANTHROPIC_AUTH_TOKEN.',
+        error: 'Anthropic-compatible Argus config is missing ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY.',
       };
     }
 
-    try {
-      let content: string | null = null;
-      for (const homeDir of getProviderHomeDirs()) {
-        try {
-          const credPath = path.join(homeDir, '.credentials.json');
-          content = await readFile(credPath, 'utf8');
-          break;
-        } catch {
-          // Try the next compatible credential directory.
-        }
-      }
-
-      if (!content) {
-        return { authenticated: false, email: null, method: null };
-      }
-
-      const creds = readObjectRecord(JSON.parse(content)) ?? {};
-      const oauth = readObjectRecord(creds.claudeAiOauth);
-      const accessToken = readOptionalString(oauth?.accessToken);
-
-      if (accessToken) {
-        const expiresAt = typeof oauth?.expiresAt === 'number' ? oauth.expiresAt : undefined;
-        const email = readOptionalString(creds.email) ?? readOptionalString(creds.user) ?? null;
-        if (!expiresAt || Date.now() < expiresAt) {
-          return {
-            authenticated: true,
-            email,
-            method: 'credentials_file',
-          };
-        }
-
-        return {
-          authenticated: false,
-          email,
-          method: 'credentials_file',
-          error: 'OAuth token has expired. Please re-authenticate with mtl-code login',
-        };
-      }
-
-      return { authenticated: false, email: null, method: null };
-    } catch {
-      return { authenticated: false, email: null, method: null };
-    }
+    return {
+      authenticated: false,
+      email: null,
+      method: null,
+      error: 'Configure custom model credentials in Argus settings.',
+    };
   }
 }

@@ -34,6 +34,8 @@ describe('subagentDispatchPlan', () => {
     expect(request).toContain('Subagent Dispatch Plan');
     expect(request).toContain('Agent Dispatch');
     expect(request).toContain('how many agents');
+    expect(request).toContain('Allowed agent_type values are default, explorer, and worker');
+    expect(request).toContain('| 1 | worker | backend_review |');
     expect(request).toContain('Review backend and frontend changes');
     expect(request).toContain('Review Agent');
   });
@@ -49,6 +51,8 @@ describe('subagentDispatchPlan', () => {
 
     expect(isSubagentDispatchPlanContent(content)).toBe(true);
     expect(buildApprovedSubagentDispatchCommand(content)).toContain('PLEASE DISPATCH THESE SUBAGENTS');
+    expect(buildApprovedSubagentDispatchCommand(content)).toContain('native manager/coordinator path');
+    expect(buildApprovedSubagentDispatchCommand(content)).toContain('Do not print internal preparation narration');
     expect(buildApprovedSubagentDispatchCommand(content)).toContain(content);
   });
 

@@ -19,9 +19,20 @@ export const setObsidianMemoryStoreForTests = (store) => {
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 
+export const OBSIDIAN_MEMORY_KINDS = Object.freeze([
+  'fact',
+  'preference',
+  'decision',
+  'person',
+  'project',
+  'technology',
+  'reference',
+  'forget',
+]);
+
 const normalizeKind = (value = '') => {
   const kind = readString(value).toLowerCase();
-  return ['fact', 'preference', 'decision', 'person', 'project', 'technology'].includes(kind) ? kind : 'fact';
+  return OBSIDIAN_MEMORY_KINDS.includes(kind) ? kind : 'fact';
 };
 
 const normalizeText = (value = '') => readString(value).replace(/\s+/g, ' ');
@@ -57,8 +68,23 @@ const inferKindAndText = (line = '') => {
   return { kind: normalizeKind(kind), text: normalizeText(match[2]) };
 };
 
+const inferObsidianMemoryKindAndText = (line = '') => {
+  const text = normalizeText(line);
+  const match = text.match(/^(preference|pref|decision|fact|person|project|technology|reference|ref|forget)\s*[:：]\s*(.+)$/i);
+  if (!match) {
+    return inferKindAndText(line);
+  }
+  const normalized = match[1].toLowerCase();
+  const kind = normalized === 'pref'
+    ? 'preference'
+    : normalized === 'ref'
+      ? 'reference'
+      : normalized;
+  return { kind: normalizeKind(kind), text: normalizeText(match[2]) };
+};
+
 const buildCandidate = (candidate = {}, source = {}) => {
-  const inferred = candidate.text ? candidate : inferKindAndText(candidate);
+  const inferred = candidate.text ? candidate : inferObsidianMemoryKindAndText(candidate);
   const kind = normalizeKind(candidate.kind || inferred.kind);
   const text = normalizeText(candidate.text || inferred.text);
   const stableKey = readString(candidate.stableKey) || `${kind}:${slug(text)}`;
@@ -69,6 +95,9 @@ const buildCandidate = (candidate = {}, source = {}) => {
     source: candidate.source || source || {},
     confidence: Number.isFinite(Number(candidate.confidence)) ? Math.min(Math.max(Number(candidate.confidence), 0), 1) : 0.75,
     stableKey,
+    action: readString(candidate.action),
+    targetPath: readString(candidate.targetPath),
+    matches: Array.isArray(candidate.matches) ? candidate.matches : [],
     status: readString(candidate.status) || 'pending',
     expiresAt: readString(candidate.expiresAt),
     createdAt: readString(candidate.createdAt) || new Date().toISOString(),
@@ -84,7 +113,7 @@ const candidatesFromInput = ({ text = '', candidates = [], source = {} } = {}) =
     .split(/\r?\n/)
     .map((line) => normalizeText(line))
     .filter(Boolean)
-    .map((line) => buildCandidate(inferKindAndText(line), source))
+    .map((line) => buildCandidate(inferObsidianMemoryKindAndText(line), source))
     .filter((candidate) => candidate.text);
 };
 
@@ -137,6 +166,9 @@ export const commitMemoryCandidates = async (payload = {}, {
 
   for (const candidate of candidates) {
     if (!candidateIds.has(candidate.id) || candidate.status === 'rejected' || candidate.status === 'expired') {
+      continue;
+    }
+    if (candidate.action === 'forget' || candidate.kind === 'forget') {
       continue;
     }
     const title = titleForCandidate(candidate);

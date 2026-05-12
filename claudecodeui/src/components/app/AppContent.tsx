@@ -85,7 +85,6 @@ export default function AppContent() {
       if (value === 'run') return 'actions';
       if (value === 'preview') return 'browser';
       if (value === 'results') return 'artifacts';
-      if (value === 'swarms') return 'chat';
       return value;
     };
 
@@ -100,6 +99,7 @@ export default function AppContent() {
         || tab === 'actions'
         || tab === 'browser'
         || tab === 'artifacts'
+        || tab === 'swarms'
       ) {
         setActiveTab(tab);
       }

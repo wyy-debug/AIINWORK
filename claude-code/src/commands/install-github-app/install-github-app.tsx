@@ -9,7 +9,7 @@ import { GITHUB_ACTION_SETUP_DOCS_URL } from '../../constants/github-app.js'
 import { useExitOnCtrlCDWithKeybindings } from '../../hooks/useExitOnCtrlCDWithKeybindings.js'
 import { type KeyboardEvent, Box } from '@anthropic/ink'
 import type { LocalJSXCommandOnDone } from '../../types/command.js'
-import { getAnthropicApiKey, isAnthropicAuthEnabled } from '../../utils/auth.js'
+import { getAnthropicApiKey } from '../../utils/auth.js'
 import { openBrowser } from '../../utils/browser.js'
 import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { getGithubRepo } from '../../utils/git.js'
@@ -22,7 +22,6 @@ import { CreatingStep } from './CreatingStep.js'
 import { ErrorStep } from './ErrorStep.js'
 import { ExistingWorkflowStep } from './ExistingWorkflowStep.js'
 import { InstallAppStep } from './InstallAppStep.js'
-import { OAuthFlowStep } from './OAuthFlowStep.js'
 import { SuccessStep } from './SuccessStep.js'
 import { setupGitHubActions } from './setupGitHubActions.js'
 import type { State, Warning, Workflow } from './types.js'
@@ -53,11 +52,10 @@ function InstallGitHubApp(props: {
   const [state, setState] = useState({
     ...INITIAL_STATE,
     useExistingKey: !!existingApiKey,
-    selectedApiKeyOption: (existingApiKey
-      ? 'existing'
-      : isAnthropicAuthEnabled()
-        ? 'oauth'
-        : 'new') as 'existing' | 'new' | 'oauth',
+    selectedApiKeyOption: (existingApiKey ? 'existing' : 'new') as
+      | 'existing'
+      | 'new'
+      | 'oauth',
   })
   useExitOnCtrlCDWithKeybindings()
 
@@ -466,7 +464,12 @@ function InstallGitHubApp(props: {
       // In the new flow, api-key step only appears when user has no existing key
       // They either entered a new key or will create OAuth token
       if (state.selectedApiKeyOption === 'oauth') {
-        // OAuth flow already handled by handleCreateOAuthToken
+        setState(prev => ({
+          ...prev,
+          step: 'error',
+          error:
+            'Claude OAuth token creation is disabled. Use a custom model API key secret instead.',
+        }))
         return
       }
 
@@ -549,34 +552,6 @@ function InstallGitHubApp(props: {
   const handleApiKeyOptionChange = (option: 'existing' | 'new' | 'oauth') => {
     setState(prev => ({ ...prev, selectedApiKeyOption: option }))
   }
-
-  const handleCreateOAuthToken = useCallback(() => {
-    logEvent('tengu_install_github_app_step_completed', {
-      step: 'api-key' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-    })
-    setState(prev => ({ ...prev, step: 'oauth-flow' }))
-  }, [])
-
-  const handleOAuthSuccess = useCallback(
-    (token: string) => {
-      logEvent('tengu_install_github_app_step_completed', {
-        step: 'oauth-flow' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-      })
-      setState(prev => ({
-        ...prev,
-        apiKeyOrOAuthToken: token,
-        useExistingKey: false,
-        secretName: 'MTL_CODE_OAUTH_TOKEN',
-        authType: 'oauth_token',
-      }))
-      void runSetupGitHubActions(token, 'MTL_CODE_OAUTH_TOKEN')
-    },
-    [runSetupGitHubActions],
-  )
-
-  const handleOAuthCancel = useCallback(() => {
-    setState(prev => ({ ...prev, step: 'api-key' }))
-  }, [])
 
   const handleSecretNameChange = (value: string) => {
     if (value && !/^[a-zA-Z0-9_]+$/.test(value)) return
@@ -691,9 +666,7 @@ function InstallGitHubApp(props: {
           onApiKeyChange={handleApiKeyChange}
           onToggleUseExistingKey={handleToggleUseExistingKey}
           onSubmit={handleSubmit}
-          onCreateOAuthToken={
-            isAnthropicAuthEnabled() ? handleCreateOAuthToken : undefined
-          }
+          onCreateOAuthToken={undefined}
           selectedOption={state.selectedApiKeyOption}
           onSelectOption={handleApiKeyOptionChange}
         />
@@ -753,12 +726,7 @@ function InstallGitHubApp(props: {
         />
       )
     case 'oauth-flow':
-      return (
-        <OAuthFlowStep
-          onSuccess={handleOAuthSuccess}
-          onCancel={handleOAuthCancel}
-        />
-      )
+      return null
   }
 }
 
