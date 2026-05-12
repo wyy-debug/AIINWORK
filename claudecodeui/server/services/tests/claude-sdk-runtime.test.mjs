@@ -150,6 +150,17 @@ test('Argus tool inspection fallback prompt requires searching and reading files
   assert.match(prompt, /Do not answer with only a plan/i);
 });
 
+test('Argus fallback resume clears both review and tool-inspection intent flags', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  const resumeStart = source.indexOf('await queryMtlCodeDirect(codeReviewFallbackPrompt');
+  const resumeBlock = source.slice(resumeStart, resumeStart + 700);
+
+  assert.match(resumeBlock, /argusCodeReviewIntent:\s*false/);
+  assert.match(resumeBlock, /argusToolInspectionIntent:\s*false/);
+});
+
 test('Argus starts a resumed fallback run when the print process exits after ack-only review', () => {
   assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
     fallbackSent: true,

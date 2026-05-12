@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import {
+  applyObsidianWikiPolicyPromptToChatCommand,
+} from '../obsidian-memory-policy-service.js';
+import {
   applyArgusCodeReviewIntentToChatCommand,
   applyArgusCollaborationModeOptions,
   applyArgusToolInspectionIntentToChatCommand,
@@ -134,6 +137,39 @@ test('Argus leaves ordinary prompt-injection discussion as normal chat', async (
   );
 
   assert.equal(command, original);
+});
+
+test('Argus tool inspection survives Obsidian policy prompt injection', async () => {
+  const originalCommand = '检查下代码中的提示词是怎么注入的';
+  const command = applyObsidianWikiPolicyPromptToChatCommand(
+    applyArgusToolInspectionIntentToChatCommand(
+      applyArgusCodeReviewIntentToChatCommand({
+        type: 'claude-command',
+        command: originalCommand,
+        options: {},
+      }),
+    ),
+    {
+      readObsidianBridgeConfig: () => ({ enabled: true }),
+    },
+  ) as {
+    command: string;
+    options: {
+      argusCodeReviewIntent?: boolean;
+      argusToolInspectionIntent?: boolean;
+      appendSystemPrompt: string;
+    };
+  };
+
+  assert.equal(command.command, originalCommand);
+  assert.equal(command.options.argusCodeReviewIntent, undefined);
+  assert.equal(command.options.argusToolInspectionIntent, true);
+  assert.match(command.options.appendSystemPrompt, /Repository inspection intent active/i);
+  assert.match(command.options.appendSystemPrompt, /Obsidian Wiki Policy/i);
+  assert.ok(
+    command.options.appendSystemPrompt.indexOf('Repository inspection intent active')
+      < command.options.appendSystemPrompt.indexOf('Obsidian Wiki Policy'),
+  );
 });
 
 test('Argus collaboration mode also follows persisted toolsSettings permissionMode', async () => {

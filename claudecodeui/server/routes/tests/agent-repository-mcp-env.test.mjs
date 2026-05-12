@@ -6,6 +6,15 @@ import { afterAll as after, beforeAll as before, test } from 'vitest';
 
 import express from 'express';
 
+const FETCH_BLOCKED_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69,
+  77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119,
+  123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515,
+  526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990,
+  993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566,
+  6665, 6666, 6667, 6668, 6669, 6697, 10080,
+]);
+
 const patchHomeDir = (nextHomeDir) => {
   const original = os.homedir;
   os.homedir = () => nextHomeDir;
@@ -14,17 +23,30 @@ const patchHomeDir = (nextHomeDir) => {
   };
 };
 
-const listen = async (handler) => new Promise((resolve, reject) => {
-  const server = handler.listen(0, '127.0.0.1', () => {
+const close = (targetServer) => new Promise((resolve) => targetServer.close(() => resolve()));
+
+const listen = async (handler) => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const server = await new Promise((resolve, reject) => {
+      const candidate = handler.listen(0, '127.0.0.1', () => {
+        const address = candidate.address();
+        if (!address || typeof address === 'string') {
+          reject(new Error('Failed to bind test server.'));
+          return;
+        }
+        resolve(candidate);
+      });
+      candidate.on('error', reject);
+    });
     const address = server.address();
-    if (!address || typeof address === 'string') {
-      reject(new Error('Failed to bind test server.'));
-      return;
+    const port = typeof address === 'object' && address ? address.port : 0;
+    if (!FETCH_BLOCKED_PORTS.has(port)) {
+      return { server, baseUrl: `http://127.0.0.1:${port}` };
     }
-    resolve({ server, baseUrl: `http://127.0.0.1:${address.port}` });
-  });
-  server.on('error', reject);
-});
+    await close(server);
+  }
+  throw new Error('Failed to bind a fetch-safe test port.');
+};
 
 const postJson = async (pathName, body) => {
   const response = await fetch(`${baseUrl}${pathName}`, {
