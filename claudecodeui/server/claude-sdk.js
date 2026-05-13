@@ -363,6 +363,8 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'shouldSendPreflight',
     'shouldSendIncompleteToolUsePreflight',
     'shouldSendPostPreflightPrompt',
+    'postPreflightHasEvidence',
+    'postPreflightHasBlocker',
     'sawContentToolUse',
     'aborted',
     'hasExistingSession',
@@ -1185,6 +1187,27 @@ function shouldSendInspectionPreflightAfterIncompleteToolUse({
     || (fallbackSent === true && sawContentToolUse !== true);
 }
 
+function hasRepositoryEvidenceReference(text = '') {
+  const normalized = String(text || '');
+  if (!normalized.trim()) {
+    return false;
+  }
+
+  return /(?:^|[\s(["'`])(?:[A-Za-z]:)?(?:[\w.-]+[\\/])+[\w.-]+\.(?:c|cc|cpp|cs|css|go|h|hpp|html|java|js|jsx|json|mjs|py|rs|scss|sh|ts|tsx|vue|yaml|yml|md|toml)(?::\d+)?/im.test(normalized)
+    || /(?:^|[\s(["'`])[\w.-]+\.(?:js|jsx|ts|tsx|mjs|py|rs|go|json|md|yml|yaml|toml):\d+/im.test(normalized)
+    || /\b(?:appendSystemPrompt|createMtlCodeUserMessage|buildPromptInjectionDebugPayload|argusToolInspectionIntent|argusCodeReviewIntent)\b/.test(normalized);
+}
+
+function hasInspectionBlockerStatement(text = '') {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(?:blocked|blocker|cannot|can't|unable|failed|failure|unavailable|permission denied|enoent|timed out|insufficient)\b/i.test(normalized)
+    || /(?:无法|不能|不可用|失败|报错|错误|权限|超时|阻塞|缺少|不足|没有(?:可用|权限|输出|结果)|无法确认|不能确认)/u.test(normalized);
+}
+
 function shouldSendPostPreflightAnswerPrompt({
   options = {},
   preflightSent = false,
@@ -1200,9 +1223,17 @@ function shouldSendPostPreflightAnswerPrompt({
     return false;
   }
 
-  return isToolInspectionAcknowledgementText(assistantText)
+  if (isToolInspectionAcknowledgementText(assistantText)
     || isCodeReviewAcknowledgementText(assistantText)
-    || isInspectionContinuationPlanText(assistantText);
+    || isInspectionContinuationPlanText(assistantText)) {
+    return true;
+  }
+
+  if (hasInspectionBlockerStatement(assistantText)) {
+    return false;
+  }
+
+  return !hasRepositoryEvidenceReference(assistantText);
 }
 
 function buildInspectionSearchTerms(command = '') {
@@ -1337,21 +1368,47 @@ function formatNodePreflightFileList(files = [], truncated = false) {
   ].filter(Boolean).join('\n');
 }
 
-async function searchNodePreflightFiles(cwd, files = [], term = '') {
-  const needle = String(term || '').trim();
-  if (!needle) {
-    return '(empty search term)';
+async function collectGitPreflightFiles(cwd = process.cwd()) {
+  const section = await runReadOnlyPreflightCommand('git', ['ls-files', '-co', '--exclude-standard'], cwd);
+  if (section.exitCode !== 0 || !section.output) {
+    return null;
   }
+  const maxFiles = getPreflightMaxFiles();
+  const files = section.output
+    .split(/\r?\n/)
+    .map(line => line.trim().replace(/\\/g, '/'))
+    .filter(Boolean)
+    .filter(relativePath => !shouldSkipPreflightRelativePath(relativePath))
+    .filter(isLikelyTextPreflightFile)
+    .slice(0, maxFiles);
+  if (files.length === 0) {
+    return null;
+  }
+  return {
+    files,
+    truncated: section.output.split(/\r?\n/).filter(Boolean).length > files.length,
+    source: 'git',
+  };
+}
 
-  const lowerNeedle = needle.toLowerCase();
+async function searchNodePreflightFilesByTerms(cwd, files = [], terms = []) {
+  const normalizedTerms = terms
+    .map(term => String(term || '').trim())
+    .filter(Boolean);
+  const results = new Map(normalizedTerms.map(term => [term, []]));
   const maxMatches = getPreflightMaxMatchesPerTerm();
-  const matches = [];
+
   for (const relativePath of files) {
-    if (relativePath.toLowerCase().includes(lowerNeedle)) {
-      matches.push(`${relativePath}: path match`);
-      if (matches.length >= maxMatches) {
-        break;
+    const lowerPath = relativePath.toLowerCase();
+    for (const term of normalizedTerms) {
+      const matches = results.get(term);
+      if (matches.length < maxMatches && lowerPath.includes(term.toLowerCase())) {
+        matches.push(`${relativePath}: path match`);
       }
+    }
+
+    if ([...results.values()].every(matches => matches.length >= maxMatches)) {
+      break;
     }
 
     let content = '';
@@ -1362,42 +1419,45 @@ async function searchNodePreflightFiles(cwd, files = [], term = '') {
     }
     const lines = content.split(/\r?\n/);
     for (let index = 0; index < lines.length; index += 1) {
-      if (lines[index].toLowerCase().includes(lowerNeedle)) {
-        matches.push(`${relativePath}:${index + 1}: ${lines[index].trim().slice(0, 240)}`);
+      const lowerLine = lines[index].toLowerCase();
+      for (const term of normalizedTerms) {
+        const matches = results.get(term);
         if (matches.length >= maxMatches) {
-          break;
+          continue;
+        }
+        if (lowerLine.includes(term.toLowerCase())) {
+          matches.push(`${relativePath}:${index + 1}: ${lines[index].trim().slice(0, 240)}`);
         }
       }
-    }
-    if (matches.length >= maxMatches) {
-      break;
+      if ([...results.values()].every(matches => matches.length >= maxMatches)) {
+        break;
+      }
     }
   }
 
-  return matches.length > 0
-    ? matches.join('\n')
-    : '(no matches)';
+  return normalizedTerms.map(term => ({
+    title: `node preflight search ${term}`,
+    command: `node preflight: search ${term}`,
+    exitCode: 0,
+    output: results.get(term)?.length > 0
+      ? results.get(term).join('\n')
+      : '(no matches)',
+  }));
 }
 
 async function runNodeToolInspectionPreflight(cwd = process.cwd(), originalCommand = '') {
   const sections = [];
   try {
-    const { files, truncated } = await collectNodePreflightFiles(cwd);
+    const gitFiles = await collectGitPreflightFiles(cwd);
+    const { files, truncated } = gitFiles || await collectNodePreflightFiles(cwd);
     sections.push({
-      title: 'node preflight file list',
-      command: 'node preflight: list text files',
+      title: gitFiles ? 'git preflight file list' : 'node preflight file list',
+      command: gitFiles ? 'git ls-files -co --exclude-standard' : 'node preflight: list text files',
       exitCode: 0,
       output: formatNodePreflightFileList(files, truncated),
       outputTruncated: truncated,
     });
-    for (const term of buildInspectionSearchTerms(originalCommand)) {
-      sections.push({
-        title: `node preflight search ${term}`,
-        command: `node preflight: search ${term}`,
-        exitCode: 0,
-        output: await searchNodePreflightFiles(cwd, files, term),
-      });
-    }
+    sections.push(...await searchNodePreflightFilesByTerms(cwd, files, buildInspectionSearchTerms(originalCommand)));
   } catch (error) {
     sections.push({
       title: 'node preflight',
@@ -2527,6 +2587,12 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         assistantText: codeReviewAssistantText,
       });
       const shouldInjectPreflight = shouldSendPreflight || shouldSendIncompleteToolUsePreflight;
+      const postPreflightHasEvidence = codeReviewPreflightSent === true
+        ? hasRepositoryEvidenceReference(codeReviewAssistantText)
+        : false;
+      const postPreflightHasBlocker = codeReviewPreflightSent === true
+        ? hasInspectionBlockerStatement(codeReviewAssistantText)
+        : false;
       const shouldSendPostPreflightPrompt = shouldSendPostPreflightAnswerPrompt({
         options: currentOptions,
         preflightSent: codeReviewPreflightSent,
@@ -2549,6 +2615,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         shouldSendPreflight,
         shouldSendIncompleteToolUsePreflight,
         shouldSendPostPreflightPrompt,
+        postPreflightHasEvidence,
+        postPreflightHasBlocker,
       });
       if (shouldSendReviewFallback || shouldSendInspectionFallback) {
         codeReviewFallbackSent = true;

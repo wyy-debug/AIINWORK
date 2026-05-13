@@ -540,6 +540,32 @@ test('Argus keeps the turn alive after preflight when the assistant still promis
   }), false);
 });
 
+test('Argus keeps the turn alive after preflight when the answer has no file reference or blocker', () => {
+  assert.equal(shouldSendPostPreflightAnswerPrompt({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: true,
+    postPreflightPromptSent: false,
+    sawToolUse: false,
+    assistantText: '\u9884\u68c0\u7ed3\u679c\u663e\u793a\u63d0\u793a\u8bcd\u6ce8\u5165\u94fe\u8def\u6d89\u53ca\u8fd0\u884c\u65f6\u548c\u8bf7\u6c42\u6784\u5efa\u5c42\u3002',
+  }), true);
+
+  assert.equal(shouldSendPostPreflightAnswerPrompt({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: true,
+    postPreflightPromptSent: false,
+    sawToolUse: false,
+    assistantText: 'The injection path is in claudecodeui/server/claude-sdk.js:816 via appendSystemPrompt.',
+  }), false);
+
+  assert.equal(shouldSendPostPreflightAnswerPrompt({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: true,
+    postPreflightPromptSent: false,
+    sawToolUse: false,
+    assistantText: 'Blocked: preflight could not read the repository, so I cannot verify the implementation path.',
+  }), false);
+});
+
 test('Argus preflight context prompt carries real inspection output and stays internal', () => {
   const prompt = buildArgusInspectionPreflightPrompt({
     intent: 'tool_inspection',
