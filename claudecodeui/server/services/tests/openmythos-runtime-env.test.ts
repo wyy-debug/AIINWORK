@@ -252,7 +252,7 @@ test('Anthropic model profiles normalize gateway base URLs and disable stale Ope
   }
 });
 
-test('OpenMythos runtime settings override stale env values when read back', async () => {
+test('OpenMythos runtime stays disabled unless the runtime env explicitly enables it', async () => {
   const env = {
     MTL_CODE_OPENMYTHOS_RUNTIME: '0',
     MTL_CODE_OPENMYTHOS_LOOP_CONTROL: 'advisory',
@@ -270,11 +270,17 @@ test('OpenMythos runtime settings override stale env values when read back', asy
 
   const config = readOpenMythosRuntimeConfig(settings, env);
 
-  expect(config.enabled).toBe(true);
+  expect(config.enabled).toBe(false);
   expect('autoDispatchSubagents' in config).toBe(false);
   expect(config.loopControl).toBe('enforced');
   expect(config.minEffort).toBe('high');
   expect(config.maxEffort).toBe('xhigh');
+
+  const explicitlyEnabled = readOpenMythosRuntimeConfig(settings, {
+    ...env,
+    MTL_CODE_OPENMYTHOS_RUNTIME: '1',
+  });
+  expect(explicitlyEnabled.enabled).toBe(true);
 });
 
 test('Anthropic runtime defaults force subagents to the active model instead of stale small-model env', async () => {

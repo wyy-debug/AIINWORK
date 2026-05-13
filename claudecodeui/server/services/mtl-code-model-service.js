@@ -136,6 +136,11 @@ const readBooleanEnv = (env, key, fallback) => {
 
 const readBooleanEnvDefaultTrue = (env, key) => readBooleanEnv(env, key, true);
 
+const isExplicitlyEnabledEnv = (env, key) => {
+  const value = readStringEnv(env, key).toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(value);
+};
+
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 
 const resolveClaudeNativeMemoryEnabled = (profile = {}) => (
@@ -324,10 +329,14 @@ export function readOpenMythosRuntimeConfig(settings = {}, env = {}) {
     maxEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort)
       || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.maxEffort,
   });
-  return normalizeOpenMythosRuntimeConfig(
+  const config = normalizeOpenMythosRuntimeConfig(
     settings?.[OPENMYTHOS_RUNTIME_SETTINGS_KEY],
     envConfig,
   );
+  return {
+    ...config,
+    enabled: config.enabled && isExplicitlyEnabledEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.enabled),
+  };
 }
 
 export function applyOpenMythosRuntimeToEnv(env, config) {
