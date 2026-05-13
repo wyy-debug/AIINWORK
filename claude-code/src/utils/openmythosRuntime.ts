@@ -412,9 +412,12 @@ export function advanceOpenMythosRuntimeState(
 }
 
 export function shouldEnforceOpenMythosLoopBudget(
-  state: OpenMythosRuntimeState | undefined,
+  _state: OpenMythosRuntimeState | undefined,
 ): boolean {
-  return state?.loopControl === 'enforced'
+  // OpenMythos is advisory runtime guidance. The loop budget remains visible in
+  // reminders, but it must never become a hard maxTurns cap that can terminate
+  // an otherwise active Claude Code turn.
+  return false
 }
 
 export function isOpenMythosReadOnlyPhase(

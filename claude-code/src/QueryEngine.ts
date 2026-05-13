@@ -76,7 +76,6 @@ import {
 } from './utils/processUserInput/processUserInput.js'
 import {
   createOpenMythosRuntimeState,
-  shouldEnforceOpenMythosLoopBudget,
 } from './utils/openmythosRuntime.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
@@ -703,11 +702,7 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
-    const effectiveMaxTurns =
-      maxTurns ??
-      (shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)
-        ? openMythosRuntimeState?.card.loopBudget
-        : undefined)
+    const effectiveMaxTurns = maxTurns
 
     for await (const message of query({
       messages,

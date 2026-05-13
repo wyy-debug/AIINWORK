@@ -122,7 +122,6 @@ import {
   formatOpenMythosRuntimeReminder,
   isOpenMythosReadOnlyPhase,
   shouldHardBlockOpenMythosReadOnlyPhase,
-  shouldEnforceOpenMythosLoopBudget,
   type OpenMythosContextCacheDiagnostics,
   type OpenMythosRuntimeState,
 } from './utils/openmythosRuntime.js'
@@ -867,11 +866,7 @@ async function* queryLoop(
       canUseTool,
       openMythosRuntimeState,
     )
-    const effectiveMaxTurns =
-      maxTurns ??
-      (shouldEnforceOpenMythosLoopBudget(openMythosRuntimeState)
-        ? openMythosRuntimeState?.card.loopBudget
-        : undefined)
+    const effectiveMaxTurns = maxTurns
 
     const assistantMessages: AssistantMessage[] = []
     const toolResults: (UserMessage | AttachmentMessage)[] = []

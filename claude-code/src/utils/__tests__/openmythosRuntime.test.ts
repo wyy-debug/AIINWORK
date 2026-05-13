@@ -105,14 +105,14 @@ describe('openmythos runtime card', () => {
     expect(reminder).not.toContain('MTL_CODE_OPENMYTHOS_WORKER_PLAN')
   })
 
-  test('creates enforced runtime state with read-only early phases', () => {
+  test('keeps OpenMythos loop budget advisory so it cannot stop active tool work', () => {
     const card = buildOpenMythosRuntimeCard('Implement auth migration')
     if (!card) throw new Error('expected runtime card')
 
     const state = createOpenMythosRuntimeState(card)
 
     expect(state.loopControl).toBe('enforced')
-    expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(true)
+    expect(shouldEnforceOpenMythosLoopBudget(state)).toBe(false)
     expect(state.phase).toBe('orient')
     expect(isOpenMythosReadOnlyPhase(state)).toBe(true)
   })

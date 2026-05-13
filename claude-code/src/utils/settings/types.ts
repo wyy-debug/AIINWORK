@@ -339,7 +339,7 @@ export const SettingsSchema = lazySchema(() =>
           adaptiveEffort: z.boolean().optional().describe('Allow OpenMythos to choose effort when no explicit effort is set.'),
           taskCard: z.boolean().optional().describe('Attach the hidden frozen task card reminder.'),
           routingHints: z.boolean().optional().describe('Include skill and subagent routing hints in the task card.'),
-          loopControl: z.enum(['advisory', 'enforced']).optional().describe('Whether the loop budget is advisory text or enforced through maxTurns.'),
+          loopControl: z.enum(['advisory', 'enforced']).optional().describe('Legacy loop-control setting. Loop budget is advisory runtime text and is not enforced through maxTurns.'),
           stableReinjection: z.boolean().optional().describe('Reinject the frozen task card as a critical system reminder on continuations and subagents.'),
           phaseAdapter: z.boolean().optional().describe('Enable orient/plan/implement/verify/finalize phase guidance and early read-only guards.'),
           expertRouting: z.boolean().optional().describe('Use deterministic task signals to suggest expert routes.'),
