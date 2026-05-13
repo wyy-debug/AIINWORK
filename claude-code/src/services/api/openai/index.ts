@@ -85,6 +85,53 @@ function isOpenAIConvertibleMessage(msg: Message): msg is AssistantMessage | Use
   return msg.type === 'assistant' || msg.type === 'user'
 }
 
+const OPENAI_DEFAULT_CLI_PREFIX =
+  `You are MTL-Code, Anthropic's official CLI for Claude.`
+const OPENAI_AGENT_SDK_MTL_CODE_PRESET_PREFIX =
+  `You are MTL-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.`
+const OPENAI_AGENT_SDK_PREFIX =
+  `You are a Claude agent, built on Anthropic's Claude Agent SDK.`
+const OPENAI_CLI_PREFIXES = new Set([
+  OPENAI_DEFAULT_CLI_PREFIX,
+  OPENAI_AGENT_SDK_MTL_CODE_PRESET_PREFIX,
+  OPENAI_AGENT_SDK_PREFIX,
+])
+
+function getOpenAINativeCliPrefix(options: Options): string {
+  if (!options.isNonInteractiveSession) return OPENAI_DEFAULT_CLI_PREFIX
+  return options.hasAppendSystemPrompt
+    ? OPENAI_AGENT_SDK_MTL_CODE_PRESET_PREFIX
+    : OPENAI_AGENT_SDK_PREFIX
+}
+
+function withNativeCliSystemPromptPrefix(
+  systemPrompt: SystemPrompt,
+  options: Options,
+): SystemPrompt {
+  if (systemPrompt.some(part => OPENAI_CLI_PREFIXES.has(part))) {
+    return systemPrompt
+  }
+
+  return [
+    getOpenAINativeCliPrefix(options),
+    ...systemPrompt,
+  ].filter(Boolean) as unknown as SystemPrompt
+}
+
+function shouldPrintOpenAIToolDiagnostics(): boolean {
+  const value =
+    process.env.MTL_CODE_OPENAI_TOOL_DEBUG ?? process.env.ARGUS_DEBUG_PACKAGE
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on'
+}
+
+function logOpenAIToolDiagnostics(details: Record<string, unknown>): void {
+  const line = `[OpenAI:tools] ${JSON.stringify(details)}`
+  logForDebugging(line)
+  if (shouldPrintOpenAIToolDiagnostics()) {
+    console.error(line)
+  }
+}
+
 /**
  * Assemble the final AssistantMessage (and optional max_tokens error) from
  * accumulated stream state. Extracted to avoid duplication between the
@@ -157,6 +204,10 @@ export async function* queryModelOpenAI(
 
     // 2. Normalize messages using shared preprocessing
     const messagesForAPI = normalizeMessagesForAPI(messages, tools)
+    const finalSystemPrompt = withNativeCliSystemPromptPrefix(
+      systemPrompt,
+      options,
+    )
 
     // 3. Check if tool search is enabled (similar to Anthropic path)
     const useToolSearch = await isToolSearchEnabled(
@@ -226,25 +277,32 @@ export async function* queryModelOpenAI(
     )
     const openaiMessages = anthropicMessagesToOpenAI(
       messagesWithDeferredToolList,
-      systemPrompt,
+      finalSystemPrompt,
       { enableThinking },
     )
     const openaiTools = anthropicToolsToOpenAI(standardTools)
     const openaiToolChoice = anthropicToolChoiceToOpenAI(options.toolChoice)
 
     // 9. Log tool filtering details
-    if (useToolSearch) {
-      const includedDeferredTools = filteredTools.filter(t =>
-        deferredToolNames.has(t.name),
-      ).length
-      logForDebugging(
-        `[OpenAI] Tool search enabled: ${includedDeferredTools}/${deferredToolNames.size} deferred tools included, total tools=${openaiTools.length}`,
-      )
-    } else {
-      logForDebugging(
-        `[OpenAI] Tool search disabled, total tools=${openaiTools.length}`,
-      )
-    }
+    const includedDeferredTools = filteredTools.filter(t =>
+      deferredToolNames.has(t.name),
+    ).length
+    logOpenAIToolDiagnostics({
+      model: openaiModel,
+      toolSearchEnabled: useToolSearch,
+      rawToolCount: tools.length,
+      deferredToolCount: deferredToolNames.size,
+      includedDeferredToolCount: includedDeferredTools,
+      filteredToolCount: filteredTools.length,
+      standardToolCount: standardTools.length,
+      openaiToolCount: openaiTools.length,
+      toolChoice: openaiToolChoice ?? 'auto',
+      systemPromptParts: finalSystemPrompt.length,
+      toolNames: openaiTools
+        .slice(0, 40)
+        .map(tool => (tool as { function?: { name?: string } }).function?.name)
+        .filter(Boolean),
+    })
 
     // 10. Compute max_tokens — required by most OpenAI-compatible endpoints.
     //     Without this the server uses a tiny default, and when

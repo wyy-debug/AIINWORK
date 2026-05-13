@@ -13,7 +13,7 @@
  * feed pre-built Anthropic events directly into queryModelOpenAI and inspect
  * what it emits — without any real HTTP calls.
  */
-import { describe, expect, test, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, expect, test, mock, beforeEach } from 'bun:test'
 import type { BetaRawMessageStreamEvent } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import type {
   AssistantMessage,
@@ -156,6 +156,8 @@ async function runQueryModel(
       tools: [],
       agents: [],
       querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
       getToolPermissionContext: async () => ({
         alwaysAllow: [],
         alwaysDeny: [],
@@ -167,7 +169,7 @@ async function runQueryModel(
 
     for await (const item of queryModelOpenAI(
       [],
-      { type: 'text', text: '' } as any,
+      [] as any,
       [],
       new AbortController().signal,
       minimalOptions,
@@ -197,19 +199,39 @@ async function runQueryModel(
 // entire file, so we configure the stream per-test via a shared variable.
 let _nextEvents: BetaRawMessageStreamEvent[] = []
 let _toolSearchEnabled = false
+let _deferredToolNames = new Set<string>()
 
 /** Captured arguments from the last chat.completions.create() call */
 let _lastCreateArgs: Record<string, any> | null = null
+let _lastSystemPrompt: readonly string[] | null = null
+
+beforeEach(() => {
+  _toolSearchEnabled = false
+  _deferredToolNames = new Set<string>()
+  _lastCreateArgs = null
+  _lastSystemPrompt = null
+})
 
 mock.module('@ant/model-provider', () => ({
   resolveOpenAIModel: (m: string) => m,
   adaptOpenAIStreamToAnthropic: (_stream: any, _model: string) =>
     eventStream(_nextEvents),
-  anthropicMessagesToOpenAI: (messages: any[]) =>
-    messages.map(msg => ({
+  anthropicMessagesToOpenAI: (messages: any[], systemPrompt: readonly string[]) => {
+    _lastSystemPrompt = systemPrompt
+    const converted = messages.map(msg => ({
       role: msg.message?.role ?? 'user',
       content: msg.message?.content ?? '',
-    })),
+    }))
+    return systemPrompt.length > 0
+      ? [
+          {
+            role: 'system',
+            content: systemPrompt.filter(Boolean).join('\n\n'),
+          },
+          ...converted,
+        ]
+      : converted
+  },
   anthropicToolsToOpenAI: (tools: any[]) =>
     tools.map(tool => ({
       type: 'function',
@@ -224,9 +246,9 @@ mock.module('@ant/model-provider', () => ({
 
 mock.module('../../../../utils/envUtils.js', () => ({
   isEnvTruthy: (value: string | undefined) =>
-    value === '1' || value === 'true' || value === 'yes' || value === 'on',
+    ['1', 'true', 'yes', 'on'].includes(String(value ?? '').toLowerCase().trim()),
   isEnvDefinedFalsy: (value: string | undefined) =>
-    value === '0' || value === 'false' || value === 'no' || value === 'off',
+    ['0', 'false', 'no', 'off'].includes(String(value ?? '').toLowerCase().trim()),
 }))
 
 mock.module('../../../../services/analytics/growthbook.js', () => ({
@@ -323,8 +345,16 @@ mock.module('../../../../utils/toolSearch.js', () => ({
 }))
 
 mock.module('../../../../tools/ToolSearchTool/prompt.js', () => ({
-  isDeferredTool: () => false,
+  isDeferredTool: (tool: any) =>
+    tool.isMcp === true || _deferredToolNames.has(tool.name),
   TOOL_SEARCH_TOOL_NAME: '__tool_search__',
+}))
+
+mock.module('@mtl-code/builtin-tools/tools/ToolSearchTool/prompt.js', () => ({
+  formatDeferredToolLine: (tool: any) => tool.name,
+  isDeferredTool: (tool: any) =>
+    tool.isMcp === true || _deferredToolNames.has(tool.name),
+  TOOL_SEARCH_TOOL_NAME: 'ToolSearch',
 }))
 
 mock.module('../../../../cost-tracker.js', () => ({
@@ -445,6 +475,30 @@ describe('queryModelOpenAI — stop_reason propagation', () => {
     // Safety fallback should yield the partial content
     expect(assistantMessages).toHaveLength(1)
     expect(assistantMessages[0]!.message.stop_reason).toBeNull()
+  })
+})
+
+describe('queryModelOpenAI native CLI system prompt parity', () => {
+  test('adds the non-interactive Claude Code prefix before OpenAI requests', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'hi'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    await runQueryModel(_nextEvents)
+
+    expect(_lastSystemPrompt).not.toBeNull()
+    expect(_lastSystemPrompt!.join('\n')).toContain(
+      "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+    )
+    expect(_lastCreateArgs).not.toBeNull()
+    expect(JSON.stringify(_lastCreateArgs!.messages)).toContain(
+      "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+    )
   })
 })
 
@@ -631,6 +685,8 @@ describe('queryModelOpenAI — deferred MCP tool visibility', () => {
         tools: [],
         agents: [],
         querySource: 'main_loop',
+        isNonInteractiveSession: true,
+        hasAppendSystemPrompt: false,
         getToolPermissionContext: async () => ({
           alwaysAllow: [],
           alwaysDeny: [],
@@ -642,7 +698,7 @@ describe('queryModelOpenAI — deferred MCP tool visibility', () => {
 
       for await (const _item of queryModelOpenAI(
         [],
-        { type: 'text', text: '' } as any,
+        [] as any,
         tools as any,
         new AbortController().signal,
         options,
