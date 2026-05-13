@@ -249,6 +249,44 @@ test('Argus runtime signatures ignore resume ids for persistent process reuse', 
   assert.equal(resumedTurn, firstLaunch);
 });
 
+test('Argus runtime signatures restart when provider endpoint identity changes', () => {
+  const baseLaunch = buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--model', 'gpt-5.5'],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_MODEL: 'gpt-5.5',
+      OPENAI_BASE_URL: 'https://one.example.com/v1',
+      OPENAI_API_KEY: 'token-one',
+    },
+  });
+  const changedEndpoint = buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--model', 'gpt-5.5'],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_MODEL: 'gpt-5.5',
+      OPENAI_BASE_URL: 'https://two.example.com/v1',
+      OPENAI_API_KEY: 'token-one',
+    },
+  });
+  const changedToken = buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--model', 'gpt-5.5'],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_MODEL: 'gpt-5.5',
+      OPENAI_BASE_URL: 'https://one.example.com/v1',
+      OPENAI_API_KEY: 'token-two',
+    },
+  });
+
+  assert.notEqual(changedEndpoint, baseLaunch);
+  assert.notEqual(changedToken, baseLaunch);
+  assert.equal(baseLaunch.includes('token-one'), false);
+  assert.equal(changedToken.includes('token-two'), false);
+});
+
 test('Argus runtime changes restart as a fresh native session instead of resuming stale runtime state', () => {
   const originalOptions = {
     sessionId: 'old-native-session',

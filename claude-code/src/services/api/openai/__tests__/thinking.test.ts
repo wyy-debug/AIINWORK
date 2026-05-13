@@ -1,5 +1,9 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
-import { isOpenAIThinkingEnabled, buildOpenAIRequestBody } from '../requestBody.js'
+import {
+  isOpenAIThinkingEnabled,
+  buildOpenAIRequestBody,
+  resolveOpenAIReasoningEffort,
+} from '../requestBody.js'
 
 describe('isOpenAIThinkingEnabled', () => {
   const originalEnv = {
@@ -164,6 +168,7 @@ describe('buildOpenAIRequestBody — thinking params', () => {
     messages: [{ role: 'user', content: 'hello' }],
     tools: [] as any[],
     toolChoice: undefined as any,
+    maxTokens: 8192,
   } as any
 
   test('includes official DeepSeek API thinking format when enabled', () => {
@@ -195,6 +200,38 @@ describe('buildOpenAIRequestBody — thinking params', () => {
     const body = buildOpenAIRequestBody({ ...baseParams, enableThinking: false })
     expect(body.stream).toBe(true)
     expect(body.stream_options).toEqual({ include_usage: true })
+  })
+
+  test('uses max_completion_tokens for GPT-5 Chat Completions models', () => {
+    const body = buildOpenAIRequestBody({
+      ...baseParams,
+      model: 'gpt-5.5',
+      enableThinking: false,
+      maxTokens: 64000,
+    })
+    expect((body as any).max_completion_tokens).toBe(64000)
+    expect((body as any).max_tokens).toBeUndefined()
+  })
+
+  test('keeps max_tokens for generic OpenAI-compatible models', () => {
+    const body = buildOpenAIRequestBody({
+      ...baseParams,
+      model: 'deepseek-reasoner',
+      enableThinking: false,
+      maxTokens: 8192,
+    })
+    expect((body as any).max_tokens).toBe(8192)
+    expect((body as any).max_completion_tokens).toBeUndefined()
+  })
+
+  test('includes reasoning_effort when provided', () => {
+    const body = buildOpenAIRequestBody({
+      ...baseParams,
+      model: 'gpt-5.5',
+      enableThinking: false,
+      reasoningEffort: 'medium',
+    })
+    expect((body as any).reasoning_effort).toBe('medium')
   })
 
   test('includes temperature when thinking is off and override is set', () => {
@@ -246,5 +283,48 @@ describe('buildOpenAIRequestBody — thinking params', () => {
     const body = buildOpenAIRequestBody({ ...baseParams, enableThinking: false })
     expect(body.tools).toBeUndefined()
     expect(body.tool_choice).toBeUndefined()
+  })
+})
+
+describe('resolveOpenAIReasoningEffort', () => {
+  const originalEnv = {
+    OPENAI_REASONING_EFFORT: process.env.OPENAI_REASONING_EFFORT,
+    MTL_CODE_EFFORT_LEVEL: process.env.MTL_CODE_EFFORT_LEVEL,
+    CLAUDE_CODE_EFFORT_LEVEL: process.env.CLAUDE_CODE_EFFORT_LEVEL,
+  }
+
+  beforeEach(() => {
+    delete process.env.OPENAI_REASONING_EFFORT
+    delete process.env.MTL_CODE_EFFORT_LEVEL
+    delete process.env.CLAUDE_CODE_EFFORT_LEVEL
+  })
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key as keyof NodeJS.ProcessEnv]
+      } else {
+        process.env[key as keyof NodeJS.ProcessEnv] = value
+      }
+    }
+  })
+
+  test('defaults GPT-5 Chat Completions models to medium effort', () => {
+    expect(resolveOpenAIReasoningEffort('gpt-5.5')).toBe('medium')
+  })
+
+  test('does not set reasoning effort for generic compatible models', () => {
+    expect(resolveOpenAIReasoningEffort('deepseek-reasoner')).toBeUndefined()
+  })
+
+  test('maps max effort to high for Chat Completions compatibility', () => {
+    process.env.MTL_CODE_EFFORT_LEVEL = 'max'
+    expect(resolveOpenAIReasoningEffort('gpt-5.5')).toBe('high')
+  })
+
+  test('OPENAI_REASONING_EFFORT overrides generic effort env', () => {
+    process.env.MTL_CODE_EFFORT_LEVEL = 'high'
+    process.env.OPENAI_REASONING_EFFORT = 'low'
+    expect(resolveOpenAIReasoningEffort('gpt-5.5')).toBe('low')
   })
 })

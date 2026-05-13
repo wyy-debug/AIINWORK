@@ -50,6 +50,60 @@ export function resolveOpenAIMaxTokens(
     ?? upperLimit
 }
 
+function shouldUseMaxCompletionTokens(model: string): boolean {
+  const normalized = model.trim().toLowerCase()
+  return /^(gpt-5|o[134](?:-|$))/.test(normalized)
+}
+
+type OpenAIReasoningEffort =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+
+function isOpenAIReasoningChatModel(model: string): boolean {
+  return shouldUseMaxCompletionTokens(model)
+}
+
+function normalizeOpenAIReasoningEffort(
+  value: unknown,
+): OpenAIReasoningEffort | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const normalized = String(value).trim().toLowerCase()
+  if (normalized === 'auto' || normalized === 'unset') return undefined
+  if (normalized === 'max') return 'high'
+  if (
+    normalized === 'none' ||
+    normalized === 'minimal' ||
+    normalized === 'low' ||
+    normalized === 'medium' ||
+    normalized === 'high' ||
+    normalized === 'xhigh'
+  ) {
+    return normalized
+  }
+  return undefined
+}
+
+export function resolveOpenAIReasoningEffort(
+  model: string,
+  effortValue?: unknown,
+): OpenAIReasoningEffort | undefined {
+  const explicitOpenAI = normalizeOpenAIReasoningEffort(
+    process.env.OPENAI_REASONING_EFFORT,
+  )
+  if (explicitOpenAI) return explicitOpenAI
+  if (!isOpenAIReasoningChatModel(model)) return undefined
+
+  return normalizeOpenAIReasoningEffort(
+    process.env.MTL_CODE_EFFORT_LEVEL ??
+      process.env.CLAUDE_CODE_EFFORT_LEVEL ??
+      effortValue,
+  ) ?? 'medium'
+}
+
 /**
  * Build the request body for OpenAI chat.completions.create().
  * Extracted for testability — the thinking mode params are injected here.
@@ -68,17 +122,32 @@ export function buildOpenAIRequestBody(params: {
   toolChoice: any
   enableThinking: boolean
   maxTokens: number
+  reasoningEffort?: OpenAIReasoningEffort
   temperatureOverride?: number
 }): ChatCompletionCreateParamsStreaming & {
   thinking?: { type: string }
   enable_thinking?: boolean
   chat_template_kwargs?: { thinking: boolean }
+  reasoning_effort?: OpenAIReasoningEffort
 } {
-  const { model, messages, tools, toolChoice, enableThinking, maxTokens, temperatureOverride } = params
+  const {
+    model,
+    messages,
+    tools,
+    toolChoice,
+    enableThinking,
+    maxTokens,
+    reasoningEffort,
+    temperatureOverride,
+  } = params
+  const tokenLimit = shouldUseMaxCompletionTokens(model)
+    ? { max_completion_tokens: maxTokens }
+    : { max_tokens: maxTokens }
   return {
     model,
     messages,
-    max_tokens: maxTokens,
+    ...tokenLimit,
+    ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
     ...(tools.length > 0 && {
       tools,
       tool_choice: toolChoice ?? 'auto',

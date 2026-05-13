@@ -24,10 +24,20 @@ import {
 import { logForDebugging } from '../../../utils/debug.js'
 import { addToTotalSessionCost } from '../../../cost-tracker.js'
 import { calculateUSDCost } from '../../../utils/modelCost.js'
-import { isOpenAIThinkingEnabled, resolveOpenAIMaxTokens, buildOpenAIRequestBody } from './requestBody.js'
+import {
+  isOpenAIThinkingEnabled,
+  resolveOpenAIMaxTokens,
+  buildOpenAIRequestBody,
+  resolveOpenAIReasoningEffort,
+} from './requestBody.js'
 import { recordLLMObservation } from '../../../services/langfuse/tracing.js'
 import { convertMessagesToLangfuse, convertOutputToLangfuse, convertToolsToLangfuse } from '../../../services/langfuse/convert.js'
-export { isOpenAIThinkingEnabled, resolveOpenAIMaxTokens, buildOpenAIRequestBody }
+export {
+  isOpenAIThinkingEnabled,
+  resolveOpenAIMaxTokens,
+  buildOpenAIRequestBody,
+  resolveOpenAIReasoningEffort,
+}
 import { getModelMaxOutputTokens } from '../../../utils/context.js'
 import type { Options } from '../claude.js'
 import { randomUUID } from 'crypto'
@@ -268,6 +278,10 @@ export async function* queryModelOpenAI(
 
     // 8. Convert messages and tools to OpenAI format
     const enableThinking = isOpenAIThinkingEnabled(openaiModel)
+    const reasoningEffort = resolveOpenAIReasoningEffort(
+      openaiModel,
+      options.effortValue,
+    )
     const openAIConvertibleMessages = messagesForAPI.filter(isOpenAIConvertibleMessage)
     const messagesWithDeferredToolList = prependDeferredToolListIfNeeded(
       openAIConvertibleMessages,
@@ -283,26 +297,10 @@ export async function* queryModelOpenAI(
     const openaiTools = anthropicToolsToOpenAI(standardTools)
     const openaiToolChoice = anthropicToolChoiceToOpenAI(options.toolChoice)
 
-    // 9. Log tool filtering details
+    // 9. Prepare tool filtering details for debug logs.
     const includedDeferredTools = filteredTools.filter(t =>
       deferredToolNames.has(t.name),
     ).length
-    logOpenAIToolDiagnostics({
-      model: openaiModel,
-      toolSearchEnabled: useToolSearch,
-      rawToolCount: tools.length,
-      deferredToolCount: deferredToolNames.size,
-      includedDeferredToolCount: includedDeferredTools,
-      filteredToolCount: filteredTools.length,
-      standardToolCount: standardTools.length,
-      openaiToolCount: openaiTools.length,
-      toolChoice: openaiToolChoice ?? 'auto',
-      systemPromptParts: finalSystemPrompt.length,
-      toolNames: openaiTools
-        .slice(0, 40)
-        .map(tool => (tool as { function?: { name?: string } }).function?.name)
-        .filter(Boolean),
-    })
 
     // 10. Compute max_tokens — required by most OpenAI-compatible endpoints.
     //     Without this the server uses a tiny default, and when
@@ -332,7 +330,7 @@ export async function* queryModelOpenAI(
     })
 
     logForDebugging(
-      `[OpenAI] Calling model=${openaiModel}, messages=${openaiMessages.length}, tools=${openaiTools.length}, thinking=${enableThinking}`,
+      `[OpenAI] Calling model=${openaiModel}, messages=${openaiMessages.length}, tools=${openaiTools.length}, thinking=${enableThinking}, reasoningEffort=${reasoningEffort ?? 'none'}`,
     )
 
     // 12. Call OpenAI API with streaming
@@ -343,7 +341,28 @@ export async function* queryModelOpenAI(
       toolChoice: openaiToolChoice,
       enableThinking,
       maxTokens,
+      reasoningEffort,
       temperatureOverride: options.temperatureOverride,
+    })
+    logOpenAIToolDiagnostics({
+      model: openaiModel,
+      toolSearchEnabled: useToolSearch,
+      rawToolCount: tools.length,
+      deferredToolCount: deferredToolNames.size,
+      includedDeferredToolCount: includedDeferredTools,
+      filteredToolCount: filteredTools.length,
+      standardToolCount: standardTools.length,
+      openaiToolCount: openaiTools.length,
+      toolChoice: openaiToolChoice ?? 'auto',
+      tokenLimitParam: 'max_completion_tokens' in requestBody
+        ? 'max_completion_tokens'
+        : 'max_tokens',
+      reasoningEffort: reasoningEffort ?? null,
+      systemPromptParts: finalSystemPrompt.length,
+      toolNames: openaiTools
+        .slice(0, 40)
+        .map(tool => (tool as { function?: { name?: string } }).function?.name)
+        .filter(Boolean),
     })
     const stream = await client.chat.completions.create(
       requestBody,

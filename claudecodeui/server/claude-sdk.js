@@ -692,20 +692,40 @@ function buildMtlCodeRuntimeSignature({ cwd = '', cliArgs = [], env = {} } = {})
     'MTL_CODE_UI_BARE',
     MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled,
     'MTL_CODE_USE_OPENAI',
+    ANTHROPIC_MODEL_ENV_KEYS.authToken,
+    ANTHROPIC_MODEL_ENV_KEYS.baseUrl,
     ANTHROPIC_MODEL_ENV_KEYS.model,
     ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel,
+    OPENAI_MODEL_ENV_KEYS.apiKey,
+    OPENAI_MODEL_ENV_KEYS.baseUrl,
     OPENAI_MODEL_ENV_KEYS.model,
     OPENAI_MODEL_ENV_KEYS.defaultSonnetModel,
+    'ANTHROPIC_API_KEY',
+    'OPENAI_ORG_ID',
+    'OPENAI_PROJECT_ID',
+    'OPENAI_ENABLE_THINKING',
+    'OPENAI_REASONING_EFFORT',
+    'OPENAI_MAX_TOKENS',
+    'MTL_CODE_MAX_OUTPUT_TOKENS',
     MTL_CODE_MODEL_ENV_KEYS.maxContextTokens,
     MTL_CODE_MODEL_ENV_KEYS.uiContextWindow,
     MTL_CODE_MODEL_ENV_KEYS.effortLevel,
     MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled,
     MTL_CODE_MODEL_ENV_KEYS.coordinatorMode,
   ].filter(Boolean);
+  const sensitiveEnvKeys = new Set([
+    ANTHROPIC_MODEL_ENV_KEYS.authToken,
+    OPENAI_MODEL_ENV_KEYS.apiKey,
+    'ANTHROPIC_API_KEY',
+    'OPENAI_ORG_ID',
+    'OPENAI_PROJECT_ID',
+  ].filter(Boolean));
   const stableEnv = {};
   for (const key of stableEnvKeys) {
     if (Object.prototype.hasOwnProperty.call(env, key)) {
-      stableEnv[key] = env[key];
+      stableEnv[key] = sensitiveEnvKeys.has(key)
+        ? hashMtlCodeDiagnosticValue(env[key])
+        : env[key];
     }
   }
 
