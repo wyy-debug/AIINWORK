@@ -233,6 +233,7 @@ function ChatInterface({
   const [agentRuntimeDiagnostics, setAgentRuntimeDiagnostics] = useState<AgentRuntimeDiagnostics | null>(null);
   const [promptInjectionDebug, setPromptInjectionDebug] = useState<PromptInjectionDebugPayload | null>(null);
   const [argusDebugSettings, setArgusDebugSettings] = useState(() => getArgusDebugSettings());
+  const [claudeSettingsVersion, setClaudeSettingsVersion] = useState(0);
   const [isPromptDebugCollapsed, setIsPromptDebugCollapsed] = useState(false);
   const [agentChoiceState, setAgentChoiceState] = useState<ConversationAgentChoiceState>(
     selectedSession ? 'default' : 'pending',
@@ -261,6 +262,16 @@ function ChatInterface({
     return () => {
       window.removeEventListener(ARGUS_DEBUG_SETTINGS_CHANGED_EVENT, reloadDebugSettings);
       window.removeEventListener('storage', reloadDebugSettings);
+    };
+  }, []);
+
+  useEffect(() => {
+    const markClaudeSettingsChanged = () => setClaudeSettingsVersion((version) => version + 1);
+    window.addEventListener('claudeSettingsChanged', markClaudeSettingsChanged);
+    window.addEventListener('storage', markClaudeSettingsChanged);
+    return () => {
+      window.removeEventListener('claudeSettingsChanged', markClaudeSettingsChanged);
+      window.removeEventListener('storage', markClaudeSettingsChanged);
     };
   }, []);
 
@@ -1782,8 +1793,14 @@ function ChatInterface({
   // On WebSocket reconnect, re-fetch the current session's messages from the server
   // so missed streaming events are shown. Also reset isLoading.
   const handleWebSocketReconnect = useCallback(async () => {
+    const activeSessionId = selectedSession?.id || currentSessionId;
+    const providerVal = (selectedSession?.__provider || provider || localStorage.getItem('selected-provider') || 'claude') as LLMProvider;
+    if (activeSessionId && providerVal === 'claude') {
+      sendMessage({ type: 'check-session-status', sessionId: activeSessionId, provider: 'claude' });
+      sendMessage({ type: 'get-pending-permissions', sessionId: activeSessionId });
+    }
+
     if (!selectedProject || !selectedSession) return;
-    const providerVal = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     await sessionStore.refreshFromServer(selectedSession.id, {
       provider: (selectedSession.__provider || providerVal) as LLMProvider,
       projectName: selectedProject.name,
@@ -1793,7 +1810,7 @@ function ChatInterface({
     });
     setIsLoading(false);
     setCanAbortSession(false);
-  }, [allMessagesLoaded, selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession, visibleMessageCount]);
+  }, [allMessagesLoaded, currentSessionId, provider, selectedProject, selectedSession, sendMessage, sessionStore, setIsLoading, setCanAbortSession, visibleMessageCount]);
 
   useChatRealtimeHandlers({
     latestMessage,
@@ -1854,7 +1871,10 @@ function ChatInterface({
     }
 
     const settings = getClaudeSettings();
-    const shouldAutoAllow = settings.skipPermissions || settings.permissionMode === 'bypassPermissions';
+    const shouldAutoAllow =
+      settings.skipPermissions
+      || settings.permissionMode === 'bypassPermissions'
+      || permissionMode === 'bypassPermissions';
     if (!shouldAutoAllow) {
       return;
     }
@@ -1870,7 +1890,7 @@ function ChatInterface({
       allow: true,
       message: 'Allowed automatically by global permission settings',
     });
-  }, [handlePermissionDecision, pendingPermissionRequests, provider]);
+  }, [claudeSettingsVersion, handlePermissionDecision, pendingPermissionRequests, permissionMode, provider]);
 
   const permissionContextValue = useMemo(() => ({
     pendingPermissionRequests,

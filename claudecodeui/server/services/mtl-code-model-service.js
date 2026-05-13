@@ -23,6 +23,7 @@ export const OPENAI_MODEL_ENV_KEYS = {
   apiKey: 'OPENAI_API_KEY',
   baseUrl: 'OPENAI_BASE_URL',
   model: 'OPENAI_MODEL',
+  protocol: 'MTL_CODE_OPENAI_PROTOCOL',
   defaultHaikuModel: 'OPENAI_DEFAULT_HAIKU_MODEL',
   defaultSonnetModel: 'OPENAI_DEFAULT_SONNET_MODEL',
   defaultOpusModel: 'OPENAI_DEFAULT_OPUS_MODEL',
@@ -816,6 +817,9 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
   if (usesOpenAI) {
     runtimeEnv[OPENAI_MODEL_ENV_KEYS.baseUrl] = normalizedBaseUrl;
     runtimeEnv[OPENAI_MODEL_ENV_KEYS.model] = requestModel;
+    runtimeEnv[OPENAI_MODEL_ENV_KEYS.protocol] = protocol === 'openai-responses'
+      ? 'responses'
+      : 'chat-completions';
     applyOpenAIRuntimeModelDefaults(runtimeEnv, { model: requestModel });
   } else {
     runtimeEnv[ANTHROPIC_MODEL_ENV_KEYS.baseUrl] = normalizedBaseUrl;

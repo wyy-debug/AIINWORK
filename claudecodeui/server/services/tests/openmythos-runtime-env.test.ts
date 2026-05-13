@@ -211,6 +211,47 @@ test('OpenAI-compatible model profiles build OpenAI runtime env', async () => {
   }
 });
 
+test('OpenAI Responses model profiles select the Responses runtime protocol', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
+  const configRoot = path.join(tempRoot, '.mtl-code');
+  await fs.mkdir(configRoot, { recursive: true });
+  await fs.writeFile(path.join(configRoot, 'settings.json'), JSON.stringify({
+    env: {},
+    mtlCodeModelProfiles: [
+      {
+        id: 'wd-openai-responses',
+        name: 'WD OpenAI Responses',
+        protocol: 'openai-responses',
+        baseUrl: 'http://token.wd.com/v1/responses',
+        model: 'gpt-5.5',
+        authToken: 'test-token',
+        contextWindowTokens: 200000,
+      },
+    ],
+    activeMtlCodeModelProfileId: 'wd-openai-responses',
+  }, null, 2), 'utf8');
+
+  const previousConfigRoot = process.env.MTL_CODE_CONFIG_DIR;
+  process.env.MTL_CODE_CONFIG_DIR = configRoot;
+  try {
+    const runtime = await resolveMtlCodeModelRuntime('wd-openai-responses');
+
+    expect(runtime?.profile.protocol).toBe('openai-responses');
+    expect(runtime?.env.MTL_CODE_USE_OPENAI).toBe('1');
+    expect(runtime?.env.MTL_CODE_OPENAI_PROTOCOL).toBe('responses');
+    expect(runtime?.env.OPENAI_BASE_URL).toBe('http://token.wd.com/v1');
+    expect(runtime?.env.OPENAI_MODEL).toBe('gpt-5.5');
+    expect(runtime?.env.OPENAI_API_KEY).toBe('test-token');
+  } finally {
+    if (previousConfigRoot === undefined) {
+      delete process.env.MTL_CODE_CONFIG_DIR;
+    } else {
+      process.env.MTL_CODE_CONFIG_DIR = previousConfigRoot;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('Anthropic model profiles normalize gateway base URLs and disable stale OpenAI routing', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
   const configRoot = path.join(tempRoot, '.mtl-code');

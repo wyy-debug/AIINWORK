@@ -28,15 +28,28 @@ import {
   isOpenAIThinkingEnabled,
   resolveOpenAIMaxTokens,
   buildOpenAIRequestBody,
+  buildOpenAIResponsesRequestBody,
   resolveOpenAIReasoningEffort,
+  withOpenAIExitTool,
+  resolveOpenAIToolChoiceForRequest,
+  getOpenAIExitToolResponse,
+  OPENAI_EXIT_TOOL_NAME,
+  withOpenAIToolModeSystemReminder,
 } from './requestBody.js'
+import { adaptOpenAIResponsesStreamToAnthropic } from './responsesAdapter.js'
 import { recordLLMObservation } from '../../../services/langfuse/tracing.js'
 import { convertMessagesToLangfuse, convertOutputToLangfuse, convertToolsToLangfuse } from '../../../services/langfuse/convert.js'
 export {
   isOpenAIThinkingEnabled,
   resolveOpenAIMaxTokens,
   buildOpenAIRequestBody,
+  buildOpenAIResponsesRequestBody,
   resolveOpenAIReasoningEffort,
+  withOpenAIExitTool,
+  resolveOpenAIToolChoiceForRequest,
+  getOpenAIExitToolResponse,
+  OPENAI_EXIT_TOOL_NAME,
+  withOpenAIToolModeSystemReminder,
 }
 import { getModelMaxOutputTokens } from '../../../utils/context.js'
 import type { Options } from '../claude.js'
@@ -95,6 +108,26 @@ function isOpenAIConvertibleMessage(msg: Message): msg is AssistantMessage | Use
   return msg.type === 'assistant' || msg.type === 'user'
 }
 
+function hasNativeToolLoopActivity(messages: Message[]): boolean {
+  return messages.some(message => {
+    const content = (message as { message?: { content?: unknown } }).message
+      ?.content
+    if (!Array.isArray(content)) return false
+
+    return content.some(block => {
+      if (!block || typeof block !== 'object') return false
+      const type = (block as { type?: unknown }).type
+      return (
+        type === 'tool_use' ||
+        type === 'tool_result' ||
+        type === 'server_tool_use' ||
+        type === 'mcp_tool_use' ||
+        type === 'mcp_tool_result'
+      )
+    })
+  })
+}
+
 const OPENAI_DEFAULT_CLI_PREFIX =
   `You are MTL-Code, Anthropic's official CLI for Claude.`
 const OPENAI_AGENT_SDK_MTL_CODE_PRESET_PREFIX =
@@ -140,6 +173,23 @@ function logOpenAIToolDiagnostics(details: Record<string, unknown>): void {
   if (shouldPrintOpenAIToolDiagnostics()) {
     console.error(line)
   }
+}
+
+function logOpenAIStreamDiagnostics(details: Record<string, unknown>): void {
+  const line = `[OpenAI:stream] ${JSON.stringify(details)}`
+  logForDebugging(line)
+  if (shouldPrintOpenAIToolDiagnostics()) {
+    console.error(line)
+  }
+}
+
+function resolveOpenAIProtocol(): 'chat-completions' | 'responses' {
+  const value = String(process.env.MTL_CODE_OPENAI_PROTOCOL ?? '')
+    .trim()
+    .toLowerCase()
+  return value === 'responses' || value === 'openai-responses'
+    ? 'responses'
+    : 'chat-completions'
 }
 
 /**
@@ -294,8 +344,28 @@ export async function* queryModelOpenAI(
       finalSystemPrompt,
       { enableThinking },
     )
-    const openaiTools = anthropicToolsToOpenAI(standardTools)
-    const openaiToolChoice = anthropicToolChoiceToOpenAI(options.toolChoice)
+    const baseOpenAITools = anthropicToolsToOpenAI(standardTools)
+    const requestedOpenAIToolChoice = anthropicToolChoiceToOpenAI(options.toolChoice)
+    const nativeToolLoopActivity = hasNativeToolLoopActivity(messagesForAPI)
+    const shouldForceRequiredToolChoice =
+      baseOpenAITools.length > 0 &&
+      !nativeToolLoopActivity &&
+      (requestedOpenAIToolChoice === undefined ||
+        requestedOpenAIToolChoice === 'auto')
+    const shouldAttachExitTool =
+      shouldForceRequiredToolChoice || requestedOpenAIToolChoice === 'required'
+    const openaiTools = shouldAttachExitTool
+      ? withOpenAIExitTool(baseOpenAITools)
+      : baseOpenAITools
+    const openaiToolChoice = resolveOpenAIToolChoiceForRequest(
+      requestedOpenAIToolChoice,
+      shouldForceRequiredToolChoice ? openaiTools : [],
+    )
+    const forcedToolChoice =
+      openaiTools.length > 0 &&
+      (requestedOpenAIToolChoice === undefined ||
+        requestedOpenAIToolChoice === 'auto') &&
+      openaiToolChoice === 'required'
 
     // 9. Prepare tool filtering details for debug logs.
     const includedDeferredTools = filteredTools.filter(t =>
@@ -334,9 +404,13 @@ export async function* queryModelOpenAI(
     )
 
     // 12. Call OpenAI API with streaming
-    const requestBody = buildOpenAIRequestBody({
+    const requestMessages = openaiToolChoice === 'required'
+      ? withOpenAIToolModeSystemReminder(openaiMessages, openaiTools)
+      : openaiMessages
+    const openAIProtocol = resolveOpenAIProtocol()
+    const chatRequestBody = buildOpenAIRequestBody({
       model: openaiModel,
-      messages: openaiMessages,
+      messages: requestMessages,
       tools: openaiTools,
       toolChoice: openaiToolChoice,
       enableThinking,
@@ -345,6 +419,7 @@ export async function* queryModelOpenAI(
       temperatureOverride: options.temperatureOverride,
     })
     logOpenAIToolDiagnostics({
+      apiMode: openAIProtocol,
       model: openaiModel,
       toolSearchEnabled: useToolSearch,
       rawToolCount: tools.length,
@@ -353,26 +428,70 @@ export async function* queryModelOpenAI(
       filteredToolCount: filteredTools.length,
       standardToolCount: standardTools.length,
       openaiToolCount: openaiTools.length,
+      exitToolEnabled: openaiTools.length > baseOpenAITools.length,
+      forcedToolChoice,
       toolChoice: openaiToolChoice ?? 'auto',
-      tokenLimitParam: 'max_completion_tokens' in requestBody
+      tokenLimitParam: openAIProtocol === 'responses'
+        ? 'max_output_tokens'
+        : 'max_completion_tokens' in chatRequestBody
         ? 'max_completion_tokens'
         : 'max_tokens',
       reasoningEffort: reasoningEffort ?? null,
       systemPromptParts: finalSystemPrompt.length,
+      toolModeSystemReminder: requestMessages.length > openaiMessages.length,
+      nativeToolLoopActivity,
       toolNames: openaiTools
         .slice(0, 40)
         .map(tool => (tool as { function?: { name?: string } }).function?.name)
         .filter(Boolean),
     })
-    const stream = await client.chat.completions.create(
-      requestBody,
-      { signal },
-    )
+    const openaiStreamDiagnostics = {
+      rawFinishReasons: [] as string[],
+      rawToolCallCount: 0,
+      rawToolCallNames: [] as string[],
+      rawExitToolCallCount: 0,
+    }
+    const openaiResponsesStreamDiagnostics = {
+      rawEventTypes: [] as string[],
+      rawFunctionCallCount: 0,
+      rawFunctionCallNames: [] as string[],
+      rawExitToolCallCount: 0,
+      rawCompletedStatus: undefined as string | null | undefined,
+    }
+    const adaptedStream = openAIProtocol === 'responses'
+      ? adaptOpenAIResponsesStreamToAnthropic(
+          await client.responses.create(
+            buildOpenAIResponsesRequestBody({
+              model: openaiModel,
+              messages: requestMessages,
+              tools: openaiTools,
+              toolChoice: openaiToolChoice,
+              maxTokens,
+              reasoningEffort,
+              temperatureOverride: options.temperatureOverride,
+            }),
+            { signal },
+          ),
+          openaiModel,
+          {
+            exitToolName: OPENAI_EXIT_TOOL_NAME,
+            diagnostics: openaiResponsesStreamDiagnostics,
+          },
+        )
+      : adaptOpenAIStreamToAnthropic(
+          await client.chat.completions.create(
+            chatRequestBody,
+            { signal },
+          ),
+          openaiModel,
+          {
+            exitToolName: OPENAI_EXIT_TOOL_NAME,
+            diagnostics: openaiStreamDiagnostics,
+          },
+        )
 
     // 12. Convert OpenAI stream to Anthropic events, then process into
     //     AssistantMessage + StreamEvent (matching the Anthropic path behavior)
-    const adaptedStream = adaptOpenAIStreamToAnthropic(stream, openaiModel)
-
     // Accumulate content blocks and usage, same as the Anthropic path in claude.ts
     const contentBlocks: Record<number, any> = {}
     const collectedMessages: AssistantMessage[] = []
@@ -439,8 +558,9 @@ export async function* queryModelOpenAI(
           if (deltaUsage) {
             usage = { ...usage, ...deltaUsage }
           }
-          if ((event as any).delta?.stop_reason != null) {
-            stopReason = (event as any).delta.stop_reason
+          const delta = (event as any).delta
+          if (delta?.stop_reason != null) {
+            stopReason = delta.stop_reason
           }
           break
         }
@@ -477,6 +597,44 @@ export async function* queryModelOpenAI(
         event,
         ...(event.type === 'message_start' ? { ttftMs } : undefined),
       } as StreamEvent
+    }
+
+    if (openAIProtocol === 'responses') {
+      const requiredIgnored =
+        openaiTools.length > 0 &&
+        openaiToolChoice === 'required' &&
+        openaiResponsesStreamDiagnostics.rawFunctionCallCount === 0
+      logOpenAIStreamDiagnostics({
+        apiMode: openAIProtocol,
+        model: openaiModel,
+        forcedToolChoice,
+        toolChoice: openaiToolChoice ?? 'auto',
+        rawEventTypes: openaiResponsesStreamDiagnostics.rawEventTypes,
+        rawCompletedStatus: openaiResponsesStreamDiagnostics.rawCompletedStatus ?? null,
+        rawFunctionCallCount: openaiResponsesStreamDiagnostics.rawFunctionCallCount,
+        rawFunctionCallNames: openaiResponsesStreamDiagnostics.rawFunctionCallNames,
+        rawExitToolCallCount: openaiResponsesStreamDiagnostics.rawExitToolCallCount,
+        requiredIgnored,
+      })
+    } else {
+      const rawFinalFinishReason =
+        openaiStreamDiagnostics.rawFinishReasons.at(-1) ?? null
+      const requiredIgnored =
+        openaiTools.length > 0 &&
+        openaiToolChoice === 'required' &&
+        openaiStreamDiagnostics.rawToolCallCount === 0
+      logOpenAIStreamDiagnostics({
+        apiMode: openAIProtocol,
+        model: openaiModel,
+        forcedToolChoice,
+        toolChoice: openaiToolChoice ?? 'auto',
+        rawFinishReasons: openaiStreamDiagnostics.rawFinishReasons,
+        rawFinalFinishReason,
+        rawToolCallCount: openaiStreamDiagnostics.rawToolCallCount,
+        rawToolCallNames: openaiStreamDiagnostics.rawToolCallNames,
+        rawExitToolCallCount: openaiStreamDiagnostics.rawExitToolCallCount,
+        requiredIgnored,
+      })
     }
 
     // Record LLM observation in Langfuse (no-op if not configured)

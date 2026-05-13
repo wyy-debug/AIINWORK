@@ -2,6 +2,10 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import {
   isOpenAIThinkingEnabled,
   buildOpenAIRequestBody,
+  buildOpenAIResponsesRequestBody,
+  openAIChatMessagesToResponsesInstructions,
+  openAIChatMessagesToResponsesInput,
+  openAIChatToolsToResponsesTools,
   resolveOpenAIReasoningEffort,
 } from '../requestBody.js'
 
@@ -283,6 +287,109 @@ describe('buildOpenAIRequestBody — thinking params', () => {
     const body = buildOpenAIRequestBody({ ...baseParams, enableThinking: false })
     expect(body.tools).toBeUndefined()
     expect(body.tool_choice).toBeUndefined()
+  })
+})
+
+describe('OpenAI Responses request body helpers', () => {
+  test('converts Chat Completions tools to Responses function tools', () => {
+    const tools = openAIChatToolsToResponsesTools([
+      {
+        type: 'function',
+        function: {
+          name: 'Read',
+          description: 'Read a file',
+          parameters: { type: 'object', properties: { file_path: { type: 'string' } } },
+        },
+      } as any,
+    ])
+
+    expect(tools).toEqual([
+      {
+        type: 'function',
+        name: 'Read',
+        description: 'Read a file',
+        parameters: { type: 'object', properties: { file_path: { type: 'string' } } },
+        strict: null,
+      },
+    ])
+  })
+
+  test('converts Chat Completions messages and tool results to Responses input', () => {
+    const input = openAIChatMessagesToResponsesInput([
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'read it' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call_1',
+            function: { name: 'Read', arguments: '{"file_path":"README.md"}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'file contents' },
+    ] as any[])
+
+    expect(input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'read it' }],
+      },
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'Read',
+        arguments: '{"file_path":"README.md"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_1',
+        output: 'file contents',
+      },
+    ])
+  })
+
+  test('moves system and developer messages into Responses instructions', () => {
+    const instructions = openAIChatMessagesToResponsesInstructions([
+      { role: 'system', content: 'system prompt' },
+      { role: 'developer', content: 'developer prompt' },
+      { role: 'user', content: 'user prompt' },
+    ] as any[])
+
+    expect(instructions).toBe('system prompt\n\ndeveloper prompt')
+  })
+
+  test('builds a streaming Responses request body with required tool choice', () => {
+    const body = buildOpenAIResponsesRequestBody({
+      model: 'gpt-5.5',
+      messages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: 'inspect repo' },
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'Grep',
+            description: 'Search',
+            parameters: { type: 'object', properties: {} },
+          },
+        } as any,
+      ],
+      toolChoice: 'required',
+      maxTokens: 4096,
+      reasoningEffort: 'medium',
+    })
+
+    expect(body.stream).toBe(true)
+    expect(body.max_output_tokens).toBe(4096)
+    expect(body.tool_choice).toBe('required')
+    expect(body.tools?.[0]).toMatchObject({ type: 'function', name: 'Grep' })
+    expect(body.reasoning).toEqual({ effort: 'medium' })
+    expect(body.instructions).toBe('system prompt')
+    expect(JSON.stringify(body.input)).not.toContain('system prompt')
   })
 })
 

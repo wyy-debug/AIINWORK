@@ -2,6 +2,18 @@ import type { BetaRawMessageStreamEvent } from '@anthropic-ai/sdk/resources/beta
 import type { ChatCompletionChunk } from 'openai/resources/chat/completions/completions.mjs'
 import { randomUUID } from 'crypto'
 
+export type OpenAIStreamDiagnostics = {
+  rawFinishReasons: string[]
+  rawToolCallCount: number
+  rawToolCallNames: string[]
+  rawExitToolCallCount: number
+}
+
+export type OpenAIStreamAdapterOptions = {
+  exitToolName?: string
+  diagnostics?: OpenAIStreamDiagnostics
+}
+
 /**
  * Adapt an OpenAI streaming response into Anthropic BetaRawMessageStreamEvent.
  *
@@ -35,8 +47,11 @@ import { randomUUID } from 'crypto'
 export async function* adaptOpenAIStreamToAnthropic(
   stream: AsyncIterable<ChatCompletionChunk>,
   model: string,
+  options: OpenAIStreamAdapterOptions = {},
 ): AsyncGenerator<BetaRawMessageStreamEvent, void> {
   const messageId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+  const exitToolName = options.exitToolName
+  const diagnostics = options.diagnostics
 
   let started = false
   let currentContentIndex = -1
@@ -46,6 +61,11 @@ export async function* adaptOpenAIStreamToAnthropic(
     number,
     { contentIndex: number; id: string; name: string; arguments: string }
   >()
+  const rawToolCallIndices = new Set<number>()
+  const rawToolCallNamesByIndex = new Map<number, string>()
+  const exitToolIndices = new Set<number>()
+  const exitToolArguments = new Map<number, string>()
+  let exitToolTextEmitted = false
 
   // Track thinking block state
   let thinkingBlockOpen = false
@@ -176,6 +196,31 @@ export async function* adaptOpenAIStreamToAnthropic(
     if (delta.tool_calls) {
       for (const tc of delta.tool_calls) {
         const tcIndex = tc.index
+        const toolName = tc.function?.name
+
+        if (!rawToolCallIndices.has(tcIndex)) {
+          rawToolCallIndices.add(tcIndex)
+          if (diagnostics) diagnostics.rawToolCallCount += 1
+        }
+        if (toolName && rawToolCallNamesByIndex.get(tcIndex) !== toolName) {
+          rawToolCallNamesByIndex.set(tcIndex, toolName)
+          diagnostics?.rawToolCallNames.push(toolName)
+        }
+        if (exitToolName && toolName === exitToolName && !exitToolIndices.has(tcIndex)) {
+          exitToolIndices.add(tcIndex)
+          if (diagnostics) diagnostics.rawExitToolCallCount += 1
+        }
+
+        if (exitToolIndices.has(tcIndex)) {
+          const argFragment = tc.function?.arguments
+          if (argFragment) {
+            exitToolArguments.set(
+              tcIndex,
+              (exitToolArguments.get(tcIndex) ?? '') + argFragment,
+            )
+          }
+          continue
+        }
 
         if (!toolBlocks.has(tcIndex)) {
           // Close thinking block if open
@@ -242,6 +287,48 @@ export async function* adaptOpenAIStreamToAnthropic(
 
     // Handle finish
     if (choice?.finish_reason) {
+      diagnostics?.rawFinishReasons.push(choice.finish_reason)
+      const exitResponse =
+        toolBlocks.size === 0 && !exitToolTextEmitted
+          ? getFirstExitToolResponse(exitToolArguments)
+          : undefined
+
+      if (exitResponse) {
+        if (thinkingBlockOpen) {
+          yield {
+            type: 'content_block_stop',
+            index: currentContentIndex,
+          } as BetaRawMessageStreamEvent
+          openBlockIndices.delete(currentContentIndex)
+          thinkingBlockOpen = false
+        }
+
+        if (!textBlockOpen) {
+          currentContentIndex++
+          textBlockOpen = true
+          openBlockIndices.add(currentContentIndex)
+
+          yield {
+            type: 'content_block_start',
+            index: currentContentIndex,
+            content_block: {
+              type: 'text',
+              text: '',
+            },
+          } as BetaRawMessageStreamEvent
+        }
+
+        yield {
+          type: 'content_block_delta',
+          index: currentContentIndex,
+          delta: {
+            type: 'text_delta',
+            text: exitResponse,
+          },
+        } as BetaRawMessageStreamEvent
+        exitToolTextEmitted = true
+      }
+
       if (thinkingBlockOpen) {
         yield {
           type: 'content_block_stop',
@@ -290,6 +377,8 @@ export async function* adaptOpenAIStreamToAnthropic(
         ? 'max_tokens'
         : pendingHasToolCalls
           ? 'tool_use'
+          : exitToolTextEmitted && pendingFinishReason === 'tool_calls'
+            ? 'end_turn'
           : mapFinishReason(pendingFinishReason)
 
     yield {
@@ -310,6 +399,21 @@ export async function* adaptOpenAIStreamToAnthropic(
       type: 'message_stop',
     } as BetaRawMessageStreamEvent
   }
+}
+
+function getFirstExitToolResponse(
+  exitToolArguments: Map<number, string>,
+): string | undefined {
+  for (const value of exitToolArguments.values()) {
+    try {
+      const parsed = JSON.parse(value.trim() || '{}')
+      const response = parsed?.response
+      if (typeof response === 'string' && response.trim()) return response
+    } catch {
+      // Keep looking; malformed ExitTool arguments should not block real output.
+    }
+  }
+  return undefined
 }
 
 /**

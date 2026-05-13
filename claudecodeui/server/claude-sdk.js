@@ -364,6 +364,7 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'busy',
     'closed',
     'resumeSuppressedForRuntimeChange',
+    'autoAllowed',
   ]) {
     if (typeof details[key] === 'boolean') {
       payload[key] = details[key];
@@ -1848,17 +1849,25 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
     const configuredDecision = resolveConfiguredToolDecision(toolName, input, currentOptions, runtimeToolSettings);
     permissionRequestCount += 1;
+
+    if (configuredDecision) {
+      logMtlCodeSessionLifecycle('permission_auto_decision', {
+        turnId: currentTurnId,
+        sessionId: sid,
+        requestId,
+        toolName,
+        autoAllowed: configuredDecision.allow === true,
+      });
+      writeMtlCodeJson(child, buildPermissionControlResponse(message, configuredDecision));
+      return;
+    }
+
     logMtlCodeSessionLifecycle('permission_request', {
       turnId: currentTurnId,
       sessionId: sid,
       requestId,
       toolName,
     });
-
-    if (configuredDecision) {
-      writeMtlCodeJson(child, buildPermissionControlResponse(message, configuredDecision));
-      return;
-    }
 
     currentWriter.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: sid, provider: 'claude' }));
     emitNotification(createNotificationEvent({

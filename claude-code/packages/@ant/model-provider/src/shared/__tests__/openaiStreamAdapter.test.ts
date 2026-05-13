@@ -30,9 +30,9 @@ function makeChunk(overrides: Partial<ChatCompletionChunk> & any = {}): ChatComp
 }
 
 /** Collect all emitted Anthropic events from the stream adapter for assertion */
-async function collectEvents(chunks: ChatCompletionChunk[]) {
+async function collectEvents(chunks: ChatCompletionChunk[], options?: any) {
   const events: any[] = []
-  for await (const event of adaptOpenAIStreamToAnthropic(mockStream(chunks), 'gpt-4o')) {
+  for await (const event of adaptOpenAIStreamToAnthropic(mockStream(chunks), 'gpt-4o', options)) {
     events.push(event)
   }
   return events
@@ -150,6 +150,117 @@ describe('adaptOpenAIStreamToAnthropic', () => {
     ) as any[]
     const fullArgs = jsonDeltas.map(d => d.delta.partial_json).join('')
     expect(fullArgs).toBe('{"command":"ls"}')
+  })
+
+  test('converts ExitTool raw tool call into text without emitting tool_use', async () => {
+    const diagnostics = {
+      rawFinishReasons: [] as string[],
+      rawToolCallCount: 0,
+      rawToolCallNames: [] as string[],
+      rawExitToolCallCount: 0,
+    }
+    const events = await collectEvents([
+      makeChunk({
+        choices: [{
+          index: 0,
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_exit',
+              type: 'function',
+              function: { name: 'ExitTool', arguments: '' },
+            }],
+          },
+          finish_reason: null,
+        }],
+      }),
+      makeChunk({
+        choices: [{
+          index: 0,
+          delta: {
+            tool_calls: [{
+              index: 0,
+              function: { arguments: '{"response":"direct' },
+            }],
+          },
+          finish_reason: null,
+        }],
+      }),
+      makeChunk({
+        choices: [{
+          index: 0,
+          delta: {
+            tool_calls: [{
+              index: 0,
+              function: { arguments: ' answer"}' },
+            }],
+          },
+          finish_reason: null,
+        }],
+      }),
+      makeChunk({
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      }),
+    ], { exitToolName: 'ExitTool', diagnostics })
+
+    const blockStarts = events.filter(e => e.type === 'content_block_start') as any[]
+    expect(blockStarts.some(e => e.content_block.type === 'tool_use')).toBe(false)
+    expect(blockStarts[0].content_block.type).toBe('text')
+
+    const text = events
+      .filter(e => e.type === 'content_block_delta' && e.delta.type === 'text_delta')
+      .map(e => e.delta.text)
+      .join('')
+    expect(text).toBe('direct answer')
+
+    const msgDelta = events.find(e => e.type === 'message_delta') as any
+    expect(msgDelta.delta.stop_reason).toBe('end_turn')
+    expect(diagnostics).toEqual({
+      rawFinishReasons: ['tool_calls'],
+      rawToolCallCount: 1,
+      rawToolCallNames: ['ExitTool'],
+      rawExitToolCallCount: 1,
+    })
+  })
+
+  test('keeps real tool calls as tool_use while collecting raw diagnostics', async () => {
+    const diagnostics = {
+      rawFinishReasons: [] as string[],
+      rawToolCallCount: 0,
+      rawToolCallNames: [] as string[],
+      rawExitToolCallCount: 0,
+    }
+    const events = await collectEvents([
+      makeChunk({
+        choices: [{
+          index: 0,
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'bash', arguments: '{"cmd":"ls"}' },
+            }],
+          },
+          finish_reason: null,
+        }],
+      }),
+      makeChunk({
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      }),
+    ], { exitToolName: 'ExitTool', diagnostics })
+
+    const blockStart = events.find(e => e.type === 'content_block_start') as any
+    expect(blockStart.content_block.type).toBe('tool_use')
+    expect(blockStart.content_block.name).toBe('bash')
+    const msgDelta = events.find(e => e.type === 'message_delta') as any
+    expect(msgDelta.delta.stop_reason).toBe('tool_use')
+    expect(diagnostics).toEqual({
+      rawFinishReasons: ['tool_calls'],
+      rawToolCallCount: 1,
+      rawToolCallNames: ['bash'],
+      rawExitToolCallCount: 0,
+    })
   })
 
   test('maps finish_reason stop to end_turn', async () => {

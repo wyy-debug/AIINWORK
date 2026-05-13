@@ -189,6 +189,21 @@ test('Argus persistent session lifecycle has diagnostic logs at breakpoints', as
   }
 });
 
+test('Argus configured permission decisions use distinct lifecycle diagnostics', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+  const handlerStart = source.indexOf('const handleControlRequest = async (message) => {');
+  const handlerEnd = source.indexOf('const handleStdoutLine = async (line) => {', handlerStart);
+  const handlerBlock = source.slice(handlerStart, handlerEnd);
+  const configuredStart = handlerBlock.indexOf('if (configuredDecision) {');
+  const configuredEnd = handlerBlock.indexOf('writeMtlCodeJson(child, buildPermissionControlResponse', configuredStart);
+  const configuredBlock = handlerBlock.slice(configuredStart, configuredEnd);
+
+  assert.match(configuredBlock, /logMtlCodeSessionLifecycle\('permission_auto_decision'/);
+  assert.doesNotMatch(configuredBlock, /logMtlCodeSessionLifecycle\('permission_request'/);
+  assert.match(source, /'autoAllowed'/);
+});
+
 test('Argus pure native tool path does not inject hidden fallback or server preflight turns', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');

@@ -203,19 +203,29 @@ let _deferredToolNames = new Set<string>()
 
 /** Captured arguments from the last chat.completions.create() call */
 let _lastCreateArgs: Record<string, any> | null = null
+let _lastResponsesCreateArgs: Record<string, any> | null = null
 let _lastSystemPrompt: readonly string[] | null = null
+let _lastAdapterOptions: Record<string, any> | null = null
+let _lastResponsesAdapterOptions: Record<string, any> | null = null
+let _debugLogs: string[] = []
 
 beforeEach(() => {
   _toolSearchEnabled = false
   _deferredToolNames = new Set<string>()
   _lastCreateArgs = null
+  _lastResponsesCreateArgs = null
   _lastSystemPrompt = null
+  _lastAdapterOptions = null
+  _lastResponsesAdapterOptions = null
+  _debugLogs = []
 })
 
 mock.module('@ant/model-provider', () => ({
   resolveOpenAIModel: (m: string) => m,
-  adaptOpenAIStreamToAnthropic: (_stream: any, _model: string) =>
-    eventStream(_nextEvents),
+  adaptOpenAIStreamToAnthropic: (_stream: any, _model: string, options?: any) => {
+    _lastAdapterOptions = options ?? null
+    return eventStream(_nextEvents)
+  },
   anthropicMessagesToOpenAI: (messages: any[], systemPrompt: readonly string[]) => {
     _lastSystemPrompt = systemPrompt
     const converted = messages.map(msg => ({
@@ -274,7 +284,20 @@ mock.module('../client.js', () => ({
         },
       },
     },
+    responses: {
+      create: async (args: Record<string, any>) => {
+        _lastResponsesCreateArgs = args
+        return { [Symbol.asyncIterator]: async function* () {} }
+      },
+    },
   }),
+}))
+
+mock.module('../responsesAdapter.js', () => ({
+  adaptOpenAIResponsesStreamToAnthropic: (_stream: any, _model: string, options?: any) => {
+    _lastResponsesAdapterOptions = options ?? null
+    return eventStream(_nextEvents)
+  },
 }))
 
 mock.module('../streamAdapter.js', () => ({
@@ -388,7 +411,9 @@ mock.module('../../../../services/langfuse/convert.js', () => ({
 }))
 
 mock.module('../../../../utils/debug.js', () => ({
-  logForDebugging: () => {},
+  logForDebugging: (message: string) => {
+    _debugLogs.push(message)
+  },
   logAntError: () => {},
   isDebugMode: () => false,
   isDebugToStdErr: () => false,
@@ -475,6 +500,563 @@ describe('queryModelOpenAI — stop_reason propagation', () => {
     // Safety fallback should yield the partial content
     expect(assistantMessages).toHaveLength(1)
     expect(assistantMessages[0]!.message.stop_reason).toBeNull()
+  })
+})
+
+describe('queryModelOpenAI OpenAI tool-use forcing', () => {
+  test('adds ExitTool and forces required tool choice when OpenAI tools are available', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+
+    for await (const _item of queryModelOpenAI(
+      [],
+      [] as any,
+      tools as any,
+      new AbortController().signal,
+      options,
+    )) {
+      // Exhaust generator so request body is built.
+    }
+
+    expect(_lastCreateArgs).not.toBeNull()
+    expect(_lastCreateArgs!.tool_choice).toBe('required')
+    expect(_lastCreateArgs!.tools.map((tool: any) => tool.function.name)).toEqual([
+      'Read',
+      'ExitTool',
+    ])
+  })
+
+  test('returns to auto tool choice after the native tool loop has started', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const messages: any[] = [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_read',
+              name: 'Read',
+              input: { file_path: 'README.md' },
+            },
+          ],
+        },
+        uuid: 'assistant-uuid',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_read',
+              content: 'file contents',
+            },
+          ],
+        },
+        uuid: 'user-uuid',
+        timestamp: new Date().toISOString(),
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+
+    for await (const _item of queryModelOpenAI(
+      messages,
+      [] as any,
+      tools as any,
+      new AbortController().signal,
+      options,
+    )) {
+      // Exhaust generator so request body is built.
+    }
+
+    expect(_lastCreateArgs).not.toBeNull()
+    expect(_lastCreateArgs!.tool_choice).toBe('auto')
+    expect(_lastCreateArgs!.tools.map((tool: any) => tool.function.name)).toEqual([
+      'Read',
+    ])
+    expect(
+      _lastCreateArgs!.messages.some(
+        (message: any) =>
+          message.role === 'system' &&
+          String(message.content).includes('Tool mode is active'),
+      ),
+    ).toBe(false)
+  })
+
+  test('appends CCR-style tool mode system reminder when OpenAI tools are available', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+
+    for await (const _item of queryModelOpenAI(
+      [],
+      [] as any,
+      tools as any,
+      new AbortController().signal,
+      options,
+    )) {
+      // Exhaust generator so request body is built.
+    }
+
+    const reminder = _lastCreateArgs!.messages.find(
+      (message: any) =>
+        message.role === 'system' &&
+        String(message.content).includes('Tool mode is active'),
+    )
+    expect(reminder).toBeDefined()
+    expect(reminder.content).toContain('call ExitTool')
+  })
+
+  test('does not append tool mode system reminder when no OpenAI tools are available', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    await runQueryModel(_nextEvents)
+
+    const reminder = _lastCreateArgs!.messages.find(
+      (message: any) =>
+        message.role === 'system' &&
+        String(message.content).includes('Tool mode is active'),
+    )
+    expect(reminder).toBeUndefined()
+  })
+
+  test('passes ExitTool handling and diagnostics options into the raw stream adapter', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 8),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+
+    for await (const _item of queryModelOpenAI(
+      [],
+      [] as any,
+      tools as any,
+      new AbortController().signal,
+      options,
+    )) {
+      // Exhaust generator so adapter options are created.
+    }
+
+    expect(_lastAdapterOptions).not.toBeNull()
+    expect(_lastAdapterOptions!.exitToolName).toBe('ExitTool')
+    expect(_lastAdapterOptions!.diagnostics).toEqual({
+      rawFinishReasons: [],
+      rawToolCallCount: 0,
+      rawToolCallNames: [],
+      rawExitToolCallCount: 0,
+    })
+  })
+
+  test('logs requiredIgnored when required tool choice yields no raw tool calls', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+
+    for await (const _item of queryModelOpenAI(
+      [],
+      [] as any,
+      tools as any,
+      new AbortController().signal,
+      options,
+    )) {
+      // Exhaust generator so stream diagnostics are logged.
+    }
+
+    const streamLog = _debugLogs.find(line => line.startsWith('[OpenAI:stream] '))
+    expect(streamLog).toBeDefined()
+    const payload = JSON.parse(streamLog!.replace('[OpenAI:stream] ', ''))
+    expect(payload).toMatchObject({
+      forcedToolChoice: true,
+      toolChoice: 'required',
+      rawToolCallCount: 0,
+      rawToolCallNames: [],
+      rawExitToolCallCount: 0,
+      requiredIgnored: true,
+    })
+  })
+
+  test('uses Responses API when MTL_CODE_OPENAI_PROTOCOL=responses', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'tool_use'),
+      makeInputJsonDelta(0, '{"file_path":"README.md"}'),
+      makeContentBlockStop(0),
+      makeMessageDelta('tool_use', 12),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+    const previousProtocol = process.env.MTL_CODE_OPENAI_PROTOCOL
+    process.env.MTL_CODE_OPENAI_PROTOCOL = 'responses'
+    try {
+      for await (const _item of queryModelOpenAI(
+        [],
+        [] as any,
+        tools as any,
+        new AbortController().signal,
+        options,
+      )) {
+        // Exhaust generator so request body is built.
+      }
+    } finally {
+      if (previousProtocol === undefined) delete process.env.MTL_CODE_OPENAI_PROTOCOL
+      else process.env.MTL_CODE_OPENAI_PROTOCOL = previousProtocol
+    }
+
+    expect(_lastCreateArgs).toBeNull()
+    expect(_lastResponsesCreateArgs).not.toBeNull()
+    expect(_lastResponsesCreateArgs!.input).toEqual(expect.any(Array))
+    expect(_lastResponsesCreateArgs!.tools.map((tool: any) => tool.name)).toEqual([
+      'Read',
+      'ExitTool',
+    ])
+    expect(_lastResponsesCreateArgs!.tool_choice).toBe('required')
+    expect(_lastResponsesCreateArgs!.max_output_tokens).toBe(8192)
+    expect(_lastResponsesAdapterOptions).toMatchObject({
+      exitToolName: 'ExitTool',
+      diagnostics: {
+        rawEventTypes: [],
+        rawFunctionCallCount: 0,
+        rawFunctionCallNames: [],
+        rawExitToolCallCount: 0,
+      },
+    })
+  })
+
+  test('uses Responses auto tool choice after the native tool loop has started', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const messages: any[] = [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_read',
+              name: 'Read',
+              input: { file_path: 'README.md' },
+            },
+          ],
+        },
+        uuid: 'assistant-uuid',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_read',
+              content: 'file contents',
+            },
+          ],
+        },
+        uuid: 'user-uuid',
+        timestamp: new Date().toISOString(),
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+    const previousProtocol = process.env.MTL_CODE_OPENAI_PROTOCOL
+    process.env.MTL_CODE_OPENAI_PROTOCOL = 'responses'
+    try {
+      for await (const _item of queryModelOpenAI(
+        messages,
+        [] as any,
+        tools as any,
+        new AbortController().signal,
+        options,
+      )) {
+        // Exhaust generator so request body is built.
+      }
+    } finally {
+      if (previousProtocol === undefined) delete process.env.MTL_CODE_OPENAI_PROTOCOL
+      else process.env.MTL_CODE_OPENAI_PROTOCOL = previousProtocol
+    }
+
+    expect(_lastResponsesCreateArgs).not.toBeNull()
+    expect(_lastResponsesCreateArgs!.tool_choice).toBe('auto')
+    expect(_lastResponsesCreateArgs!.tools.map((tool: any) => tool.name)).toEqual([
+      'Read',
+    ])
+    expect(_lastResponsesCreateArgs!.instructions).not.toContain(
+      'Tool mode is active',
+    )
+  })
+
+  test('logs requiredIgnored from Responses diagnostics when required yields no function calls', async () => {
+    _nextEvents = [
+      makeMessageStart(),
+      makeContentBlockStart(0, 'text'),
+      makeTextDelta(0, 'done'),
+      makeContentBlockStop(0),
+      makeMessageDelta('end_turn', 5),
+      makeMessageStop(),
+    ]
+
+    const { queryModelOpenAI } = await import('../index.js')
+    const tools: any[] = [
+      {
+        name: 'Read',
+        description: 'Read a file',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ]
+    const options: any = {
+      model: 'gpt-5.5',
+      tools: [],
+      agents: [],
+      querySource: 'main_loop',
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      getToolPermissionContext: async () => ({
+        alwaysAllow: [],
+        alwaysDeny: [],
+        needsPermission: [],
+        mode: 'default',
+        isBypassingPermissions: false,
+      }),
+    }
+    const previousProtocol = process.env.MTL_CODE_OPENAI_PROTOCOL
+    process.env.MTL_CODE_OPENAI_PROTOCOL = 'responses'
+    try {
+      for await (const _item of queryModelOpenAI(
+        [],
+        [] as any,
+        tools as any,
+        new AbortController().signal,
+        options,
+      )) {
+        // Exhaust generator so stream diagnostics are logged.
+      }
+    } finally {
+      if (previousProtocol === undefined) delete process.env.MTL_CODE_OPENAI_PROTOCOL
+      else process.env.MTL_CODE_OPENAI_PROTOCOL = previousProtocol
+    }
+
+    const streamLog = _debugLogs.find(line => line.startsWith('[OpenAI:stream] '))
+    expect(streamLog).toBeDefined()
+    const payload = JSON.parse(streamLog!.replace('[OpenAI:stream] ', ''))
+    expect(payload).toMatchObject({
+      apiMode: 'responses',
+      forcedToolChoice: true,
+      toolChoice: 'required',
+      rawFunctionCallCount: 0,
+      rawFunctionCallNames: [],
+      rawExitToolCallCount: 0,
+      requiredIgnored: true,
+    })
   })
 })
 
