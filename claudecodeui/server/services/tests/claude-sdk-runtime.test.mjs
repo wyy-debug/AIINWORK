@@ -10,6 +10,8 @@ import {
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
   createMtlCodeSyntheticUserMessage,
+  buildMtlCodeRuntimeSignature,
+  canReuseMtlCodeSession,
   messageHasMtlCodeRepositoryInspectionToolUse,
   shouldSendInspectionPreflightAfterFallback,
   shouldStartCodeReviewFallbackRunAfterClose,
@@ -72,6 +74,66 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   assert.match(source, /await emitPromptInjectionDebug\(ws,\s*options,\s*childEnv,\s*cliArgs,\s*capturedSessionId \|\| sessionId \|\| clientSessionId \|\| null,\s*\{/);
   assert.match(source, /emitPromptInjectionDebug\(ws,\s*options,\s*childEnv,\s*cliArgs,\s*capturedSessionId \|\| sessionId \|\| clientSessionId \|\| null,\s*\{/);
   assert.match(source, /effectiveCommand:\s*finalCommand/);
+});
+
+test('Argus direct stream-json launches as a persistent replayable session', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.match(source, /'--replay-user-messages'/);
+  assert.match(source, /function buildMtlCodeRuntimeSignature/);
+  assert.match(source, /function canReuseMtlCodeSession/);
+  assert.match(source, /startTurn:/);
+  assert.match(source, /completeCurrentTurn/);
+  assert.match(source, /closeMtlCodePersistentSession/);
+  assert.doesNotMatch(source, /if \(message\.type === 'result'\)[\s\S]{0,200}closeMtlCodeInput\(child\);/);
+});
+
+test('Argus runtime signatures only reuse compatible live sessions', () => {
+  const signature = buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--model', 'sonnet', '--append-system-prompt', 'A'],
+    env: { MTL_CODE_UI_BARE: '0', ANTHROPIC_MODEL: 'sonnet' },
+  });
+
+  assert.equal(canReuseMtlCodeSession({
+    status: 'active',
+    instance: {
+      runtimeSignature: signature,
+      isClosed: () => false,
+      isBusy: () => false,
+      startTurn: () => Promise.resolve(),
+    },
+  }, signature), true);
+
+  assert.equal(canReuseMtlCodeSession({
+    status: 'active',
+    instance: {
+      runtimeSignature: signature,
+      isClosed: () => false,
+      isBusy: () => false,
+      startTurn: () => Promise.resolve(),
+    },
+  }, buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--model', 'sonnet', '--append-system-prompt', 'B'],
+    env: { MTL_CODE_UI_BARE: '0', ANTHROPIC_MODEL: 'sonnet' },
+  })), false);
+});
+
+test('Argus runtime signatures ignore resume ids for persistent process reuse', () => {
+  const firstLaunch = buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--input-format', 'stream-json', '--model', 'sonnet'],
+    env: { MTL_CODE_UI_BARE: '0', ANTHROPIC_MODEL: 'sonnet' },
+  });
+  const resumedTurn = buildMtlCodeRuntimeSignature({
+    cwd: 'E:/repo',
+    cliArgs: ['--print', '--resume', 'session-123', '--input-format', 'stream-json', '--model', 'sonnet'],
+    env: { MTL_CODE_UI_BARE: '0', ANTHROPIC_MODEL: 'sonnet' },
+  });
+
+  assert.equal(resumedTurn, firstLaunch);
 });
 
 test('Argus runtime diagnostics suppress OpenMythos runtime card when final launch is bare', async () => {
@@ -345,7 +407,7 @@ test('Argus fallback resume preserves inspection intent and marks fallback as al
   const resumeStart = source.indexOf('await queryMtlCodeDirect(codeReviewFallbackPrompt');
   const resumeBlock = source.slice(resumeStart, resumeStart + 700);
 
-  assert.match(resumeBlock, /\.\.\.options/);
+  assert.match(resumeBlock, /\.\.\.currentOptions/);
   assert.match(resumeBlock, /argusInspectionFallbackAlreadySent:\s*true/);
   assert.match(resumeBlock, /argusInspectionPreflightSent:\s*codeReviewPreflightSent/);
   assert.doesNotMatch(resumeBlock, /argusCodeReviewIntent:\s*false/);
