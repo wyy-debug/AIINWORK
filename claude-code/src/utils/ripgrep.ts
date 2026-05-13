@@ -1,5 +1,6 @@
 import type { ChildProcess, ExecFileException } from 'child_process'
 import { execFile, spawn } from 'child_process'
+import { existsSync } from 'fs'
 import memoize from 'lodash-es/memoize.js'
 import { homedir } from 'os'
 import * as path from 'path'
@@ -42,6 +43,49 @@ type RipgrepConfig = {
   argv0?: string
 }
 
+type VendoredRipgrepResolveOptions = {
+  moduleDir?: string
+  execPath?: string
+  resourcesDir?: string
+  platform?: NodeJS.Platform
+  arch?: string
+  exists?: (candidate: string) => boolean
+}
+
+export function resolveVendoredRipgrepConfig({
+  moduleDir = __dirname,
+  execPath = process.execPath,
+  resourcesDir = process.env.MTL_CODE_RESOURCES_DIR,
+  platform = process.platform,
+  arch = process.arch,
+  exists = existsSync,
+}: VendoredRipgrepResolveOptions = {}): RipgrepConfig | null {
+  const binaryName = platform === 'win32' ? 'rg.exe' : 'rg'
+  const platformDir = `${arch}-${platform}`
+  const roots = [
+    resourcesDir && path.resolve(resourcesDir, 'mtl-code', 'dist', 'vendor', 'ripgrep'),
+    resourcesDir && path.resolve(resourcesDir, 'mtl-code', 'vendor', 'ripgrep'),
+    execPath && path.resolve(path.dirname(execPath), 'dist', 'vendor', 'ripgrep'),
+    execPath && path.resolve(path.dirname(execPath), 'vendor', 'ripgrep'),
+    moduleDir && path.resolve(moduleDir, 'vendor', 'ripgrep'),
+  ].filter((candidate): candidate is string => Boolean(candidate))
+
+  const seen = new Set<string>()
+  for (const root of roots) {
+    const key = root.toLowerCase()
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    const command = path.resolve(root, platformDir, binaryName)
+    if (exists(command)) {
+      return { mode: 'builtin', command, args: [] }
+    }
+  }
+
+  return null
+}
+
 const getRipgrepConfig = memoize((): RipgrepConfig => {
   const userWantsSystemRipgrep = isEnvDefinedFalsy(
     process.env.USE_BUILTIN_RIPGREP,
@@ -67,6 +111,11 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
       args: ['--no-config'],
       argv0: 'rg',
     }
+  }
+
+  const vendoredConfig = resolveVendoredRipgrepConfig()
+  if (vendoredConfig) {
+    return vendoredConfig
   }
 
   const rgRoot = path.resolve(__dirname, 'vendor', 'ripgrep')

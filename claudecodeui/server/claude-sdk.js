@@ -60,6 +60,7 @@ const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
+const ARGUS_SESSION_LOG_PREFIX = '[ArgusSession]';
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'request_user_input', 'ExitPlanMode']);
 const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
@@ -300,6 +301,106 @@ function createRequestId() {
     return crypto.randomUUID();
   }
   return crypto.randomBytes(16).toString('hex');
+}
+
+function hashMtlCodeDiagnosticValue(value) {
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function getMtlCodeCliFlags(cliArgs = []) {
+  if (!Array.isArray(cliArgs)) {
+    return [];
+  }
+  return cliArgs
+    .filter(arg => typeof arg === 'string' && arg.startsWith('--'))
+    .filter((arg, index, list) => list.indexOf(arg) === index);
+}
+
+function buildMtlCodeSessionLogPayload(event, details = {}) {
+  const payload = {
+    event,
+    at: new Date().toISOString(),
+  };
+
+  for (const key of [
+    'turnId',
+    'sessionId',
+    'clientSessionId',
+    'capturedSessionId',
+    'reuseSessionKey',
+    'fallbackResumeSessionId',
+    'cwd',
+    'launch',
+    'pid',
+    'exitCode',
+    'signal',
+    'reason',
+    'toolName',
+    'requestId',
+    'durationMs',
+    'stderrTailCount',
+  ]) {
+    if (details[key] !== undefined && details[key] !== null && details[key] !== '') {
+      payload[key] = details[key];
+    }
+  }
+
+  for (const key of [
+    'synthetic',
+    'written',
+    'resultReceived',
+    'currentTurnActive',
+    'sawToolUse',
+    'fallbackSent',
+    'preflightSent',
+    'shouldSendReviewFallback',
+    'shouldSendInspectionFallback',
+    'shouldSendPreflight',
+    'aborted',
+    'hasExistingSession',
+    'busy',
+    'closed',
+  ]) {
+    if (typeof details[key] === 'boolean') {
+      payload[key] = details[key];
+    }
+  }
+
+  if (typeof details.command === 'string') {
+    payload.commandLength = details.command.length;
+  }
+  if (typeof details.effectiveCommand === 'string') {
+    payload.effectiveCommandLength = details.effectiveCommand.length;
+  }
+  if (typeof details.assistantText === 'string') {
+    payload.assistantTextLength = details.assistantText.length;
+  }
+  if (typeof details.runtimeSignature === 'string' && details.runtimeSignature) {
+    payload.runtimeSignatureHash = hashMtlCodeDiagnosticValue(details.runtimeSignature);
+  }
+  if (Array.isArray(details.cliArgs)) {
+    payload.cliFlags = getMtlCodeCliFlags(details.cliArgs);
+  }
+  if (details.error) {
+    payload.errorName = details.error.name || 'Error';
+    payload.errorMessage = details.error.message || String(details.error);
+  } else if (typeof details.errorMessage === 'string' && details.errorMessage) {
+    payload.errorMessage = details.errorMessage;
+  }
+
+  return payload;
+}
+
+function logMtlCodeSessionLifecycle(event, details = {}) {
+  try {
+    console.log(`${ARGUS_SESSION_LOG_PREFIX} ${JSON.stringify(buildMtlCodeSessionLogPayload(event, details))}`);
+  } catch (error) {
+    console.warn('[ArgusSession] failed to serialize lifecycle log:', error?.message || error);
+  }
 }
 
 function waitForToolApproval(requestId, options = {}) {
@@ -1574,6 +1675,11 @@ function closeMtlCodePersistentSession(instanceOrChild, reason = 'closed') {
     return false;
   }
   child._mtlCodePersistentClosing = true;
+  logMtlCodeSessionLifecycle('session_close_requested', {
+    reason,
+    pid: child.pid,
+    closed: child.killed || child.stdin?.destroyed === true,
+  });
 
   if (child.stdin && !child.stdin.destroyed && child.stdin.writable) {
     writeMtlCodeJson(child, {
@@ -1653,6 +1759,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let currentTurnResolve = null;
   let currentTurnTempImagePaths = [];
   let currentTurnTempDir = null;
+  let currentTurnId = createRequestId();
+  let currentTurnStartedAt = 0;
   let resultReceived = false;
   let codeReviewToolUseSeen = false;
   let codeReviewFallbackSent = options.argusInspectionFallbackAlreadySent === true;
@@ -1679,6 +1787,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     if (!currentTurnActive) {
       return;
     }
+    const durationMs = currentTurnStartedAt > 0 ? Date.now() - currentTurnStartedAt : undefined;
     const writer = currentWriter;
     const activeSessionId = currentOptions?.sessionId || sessionId || null;
     const completedCommand = currentCommand;
@@ -1692,6 +1801,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const resolveTurn = currentTurnResolve;
     currentTurnResolve = null;
 
+    logMtlCodeSessionLifecycle('turn_complete', {
+      turnId: currentTurnId,
+      sessionId: capturedSessionId || activeSessionId || null,
+      exitCode,
+      resultReceived,
+      durationMs,
+    });
     writer?.send?.(createNormalizedMessage({
       kind: 'complete',
       exitCode,
@@ -1714,6 +1830,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     if (!currentTurnActive) {
       return;
     }
+    const durationMs = currentTurnStartedAt > 0 ? Date.now() - currentTurnStartedAt : undefined;
     const writer = currentWriter;
     const activeSessionId = currentOptions?.sessionId || sessionId || null;
     const failedSummary = currentSessionSummary;
@@ -1726,6 +1843,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const resolveTurn = currentTurnResolve;
     currentTurnResolve = null;
 
+    logMtlCodeSessionLifecycle('turn_error', {
+      turnId: currentTurnId,
+      sessionId: capturedSessionId || activeSessionId || null,
+      durationMs,
+      error,
+      errorMessage: content,
+    });
     writer?.send?.(createNormalizedMessage({
       kind: 'error',
       content,
@@ -1760,6 +1884,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     codeReviewFallbackPrompt = '';
     codeReviewFallbackSessionId = '';
     promptDebugEffectiveCommand = nextCommand;
+    currentTurnId = createRequestId();
+    currentTurnStartedAt = Date.now();
     if (turnContext.childEnv) {
       promptDebugChildEnv = turnContext.childEnv;
     }
@@ -1773,6 +1899,11 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
   const startTurn = (nextCommand, nextOptions = {}, nextWriter = ws, turnContext = {}) => new Promise((resolve) => {
     if (currentTurnActive) {
+      logMtlCodeSessionLifecycle('turn_busy', {
+        sessionId: capturedSessionId || nextOptions?.sessionId || null,
+        clientSessionId,
+        busy: true,
+      });
       nextWriter?.send?.(createNormalizedMessage({
         kind: 'error',
         content: 'The active Argus session is still processing the previous turn.',
@@ -1788,8 +1919,20 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
 
     resetTurnState(nextCommand, nextOptions, nextWriter, turnContext);
+    logMtlCodeSessionLifecycle('turn_start', {
+      turnId: currentTurnId,
+      sessionId: capturedSessionId || nextOptions?.sessionId || null,
+      clientSessionId,
+      command: nextCommand,
+      runtimeSignature,
+      synthetic: turnContext.synthetic === true,
+    });
 
     if (!nextCommand || !String(nextCommand).trim()) {
+      logMtlCodeSessionLifecycle('turn_empty', {
+        turnId: currentTurnId,
+        sessionId: capturedSessionId || nextOptions?.sessionId || null,
+      });
       currentTurnActive = true;
       currentTurnResolve = resolve;
       void completeCurrentTurn(0);
@@ -1797,6 +1940,11 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
 
     if (childClosed || !child || child.stdin?.destroyed || !child.stdin?.writable) {
+      logMtlCodeSessionLifecycle('stdin_write_failed', {
+        turnId: currentTurnId,
+        sessionId: capturedSessionId || nextOptions?.sessionId || null,
+        closed: childClosed || child?.stdin?.destroyed === true,
+      });
       currentTurnActive = true;
       currentTurnResolve = resolve;
       void failCurrentTurn('The active Argus backend input stream is no longer writable.');
@@ -1809,6 +1957,14 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       ? createMtlCodeSyntheticUserMessage
       : createMtlCodeUserMessage;
     const written = writeMtlCodeJson(child, createMessage(nextCommand, nextOptions.clientMessageId));
+    logMtlCodeSessionLifecycle('stdin_write', {
+      turnId: currentTurnId,
+      sessionId: capturedSessionId || nextOptions?.sessionId || null,
+      clientSessionId,
+      synthetic: turnContext.synthetic === true,
+      written,
+      command: nextCommand,
+    });
     if (!written) {
       void failCurrentTurn('The active Argus backend input stream is no longer writable.');
     }
@@ -1872,6 +2028,11 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     capturedSessionId = messageSessionId;
     registerSession(capturedSessionId);
+    logMtlCodeSessionLifecycle('session_captured', {
+      turnId: currentTurnId,
+      sessionId: capturedSessionId,
+      clientSessionId,
+    });
     if (clientSessionId && clientSessionId !== capturedSessionId) {
       unregisterSession(clientSessionId);
     }
@@ -1902,6 +2063,12 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const sid = capturedSessionId || currentOptions?.sessionId || sessionId || null;
     const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
     const configuredDecision = resolveConfiguredToolDecision(toolName, input, currentOptions, runtimeToolSettings);
+    logMtlCodeSessionLifecycle('permission_request', {
+      turnId: currentTurnId,
+      sessionId: sid,
+      requestId,
+      toolName,
+    });
 
     if (configuredDecision) {
       writeMtlCodeJson(child, buildPermissionControlResponse(message, configuredDecision));
@@ -2020,6 +2187,18 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         sawToolUse: codeReviewToolUseSeen,
         assistantText: codeReviewAssistantText,
       });
+      logMtlCodeSessionLifecycle('result_received', {
+        turnId: currentTurnId,
+        sessionId: sid,
+        resultReceived,
+        sawToolUse: codeReviewToolUseSeen,
+        fallbackSent: codeReviewFallbackSent,
+        preflightSent: codeReviewPreflightSent,
+        assistantText: codeReviewAssistantText,
+        shouldSendReviewFallback,
+        shouldSendInspectionFallback,
+        shouldSendPreflight,
+      });
       if (shouldSendReviewFallback || shouldSendInspectionFallback) {
         codeReviewFallbackSent = true;
         resultReceived = false;
@@ -2029,6 +2208,12 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
           ? buildCodeReviewToolFallbackPrompt()
           : buildToolInspectionFallbackPrompt();
         codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
+        logMtlCodeSessionLifecycle('fallback_injected', {
+          turnId: currentTurnId,
+          sessionId: codeReviewFallbackSessionId || null,
+          shouldSendReviewFallback,
+          shouldSendInspectionFallback,
+        });
         await emitPromptInjectionDebug(
           currentWriter,
           currentOptions,
@@ -2067,6 +2252,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
           result: preflightResult,
         });
         codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
+        logMtlCodeSessionLifecycle('preflight_injected', {
+          turnId: currentTurnId,
+          sessionId: codeReviewFallbackSessionId || null,
+          preflightSent: true,
+          resultReceived,
+          sawToolUse: codeReviewToolUseSeen,
+        });
         await emitPromptInjectionDebug(
           currentWriter,
           currentOptions,
@@ -2132,6 +2324,15 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }, nativeSystemPrompt);
 
     if (canReuseMtlCodeSession(existingSession, runtimeSignature)) {
+      logMtlCodeSessionLifecycle('session_reuse', {
+        sessionId,
+        clientSessionId,
+        reuseSessionKey,
+        cwd,
+        runtimeSignature,
+        cliArgs,
+        effectiveCommand: finalCommand,
+      });
       await existingSession.instance.startTurn(finalCommand, options, ws, {
         tempImagePaths,
         tempDir,
@@ -2145,6 +2346,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     if (existingSession?.instance?.runtimeSignature === runtimeSignature
       && existingSession?.instance?.isBusy?.() === true) {
+      logMtlCodeSessionLifecycle('session_busy', {
+        sessionId,
+        clientSessionId,
+        reuseSessionKey,
+        busy: true,
+        runtimeSignature,
+      });
       ws.send(createNormalizedMessage({
         kind: 'error',
         content: 'The active Argus session is still processing the previous turn.',
@@ -2156,6 +2364,12 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
 
     if (existingSession?.instance?.runtimeSignature) {
+      logMtlCodeSessionLifecycle('session_runtime_changed', {
+        sessionId,
+        clientSessionId,
+        reuseSessionKey,
+        runtimeSignature,
+      });
       closeMtlCodePersistentSession(existingSession.instance, 'runtime_changed');
       removeSession(reuseSessionKey);
     }
@@ -2165,6 +2379,15 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     for (const launch of launches) {
       const args = [...launch.argsPrefix, ...cliArgs];
       console.log('[Argus] Starting backend:', launch.displayCommand);
+      logMtlCodeSessionLifecycle('spawn_attempt', {
+        sessionId,
+        clientSessionId,
+        cwd,
+        launch: launch.displayCommand,
+        runtimeSignature,
+        cliArgs,
+        effectiveCommand: finalCommand,
+      });
       let candidateChild;
       try {
         candidateChild = spawn(launch.command, args, {
@@ -2186,6 +2409,14 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       try {
         await waitForMtlCodeSpawn(candidateChild);
         child = candidateChild;
+        logMtlCodeSessionLifecycle('spawn_started', {
+          sessionId,
+          clientSessionId,
+          cwd,
+          launch: launch.displayCommand,
+          pid: child.pid,
+          runtimeSignature,
+        });
         break;
       } catch (spawnError) {
         lastSpawnError = spawnError;
@@ -2254,6 +2485,17 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
           stdoutBuffer = '';
         }
         await stdoutProcessing;
+        logMtlCodeSessionLifecycle('child_close', {
+          turnId: currentTurnId,
+          sessionId: capturedSessionId || currentOptions?.sessionId || sessionId || null,
+          clientSessionId,
+          pid: child.pid,
+          exitCode: code ?? undefined,
+          signal,
+          resultReceived,
+          currentTurnActive,
+          stderrTailCount: stderrLines.length,
+        });
 
         cleanupRegisteredSessions();
 
@@ -2850,6 +3092,7 @@ export {
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
   createMtlCodeSyntheticUserMessage,
+  buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
   closeMtlCodePersistentSession,

@@ -10,6 +10,7 @@ import {
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
   createMtlCodeSyntheticUserMessage,
+  buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
   messageHasMtlCodeRepositoryInspectionToolUse,
@@ -18,6 +19,30 @@ import {
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
 } from '../../claude-sdk.js';
+
+test('Argus session lifecycle log payload redacts prompts and hashes runtime signatures', () => {
+  const payload = buildMtlCodeSessionLogPayload('turn_start', {
+    command: '检查这个仓库里 token=secret 的实现',
+    runtimeSignature: '{"cwd":"E:/repo","env":{"ANTHROPIC_API_KEY":"secret"}}',
+    cwd: 'E:/repo',
+    sessionId: 'session-1',
+    clientSessionId: 'client-1',
+    childEnv: { ANTHROPIC_API_KEY: 'secret' },
+    cliArgs: ['--print', '--append-system-prompt', 'private prompt'],
+  });
+
+  assert.equal(payload.event, 'turn_start');
+  assert.equal(payload.commandLength, '检查这个仓库里 token=secret 的实现'.length);
+  assert.equal(payload.cwd, 'E:/repo');
+  assert.equal(payload.sessionId, 'session-1');
+  assert.equal(payload.clientSessionId, 'client-1');
+  assert.match(payload.runtimeSignatureHash, /^[a-f0-9]{12}$/);
+  assert.deepEqual(payload.cliFlags, ['--print', '--append-system-prompt']);
+  assert.equal(Object.hasOwn(payload, 'command'), false);
+  assert.equal(Object.hasOwn(payload, 'runtimeSignature'), false);
+  assert.equal(Object.hasOwn(payload, 'childEnv'), false);
+  assert.equal(Object.hasOwn(payload, 'cliArgs'), false);
+});
 
 test('Argus direct close handling treats only explicit user abort as aborted', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
@@ -87,6 +112,25 @@ test('Argus direct stream-json launches as a persistent replayable session', asy
   assert.match(source, /completeCurrentTurn/);
   assert.match(source, /closeMtlCodePersistentSession/);
   assert.doesNotMatch(source, /if \(message\.type === 'result'\)[\s\S]{0,200}closeMtlCodeInput\(child\);/);
+});
+
+test('Argus persistent session lifecycle has diagnostic logs at breakpoints', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  for (const event of [
+    'spawn_attempt',
+    'spawn_started',
+    'session_reuse',
+    'session_runtime_changed',
+    'turn_start',
+    'stdin_write',
+    'result_received',
+    'turn_complete',
+    'child_close',
+  ]) {
+    assert.match(source, new RegExp(`logMtlCodeSessionLifecycle\\('${event}'`));
+  }
 });
 
 test('Argus runtime signatures only reuse compatible live sessions', () => {
