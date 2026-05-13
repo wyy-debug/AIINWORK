@@ -84,6 +84,7 @@ export default function PromptInjectionDebugPanel({
   const promptLength = payload?.appendSystemPromptLength ?? appendSystemPrompt.length;
   const nativeSystemPromptLength = payload?.nativeSystemPromptLength ?? nativeSystemPrompt.length;
   const effectiveCommandLength = payload?.effectiveCommandLength ?? effectiveCommand.length;
+  const argusInternal = payload?.argusInternal;
   const copyValue = effectiveCommand || appendSystemPrompt;
   const hasCopyValue = copyValue.trim().length > 0;
   const summary = useMemo(() => {
@@ -161,6 +162,10 @@ export default function PromptInjectionDebugPanel({
             <DebugField label="cmd changed" value={formatBoolean(payload?.commandChanged)} />
             <DebugField label="cmd length" value={effectiveCommandLength.toLocaleString()} />
             <DebugField label="native sys" value={nativeSystemPromptLength.toLocaleString()} />
+            <DebugField label="hidden fallback" value={formatBoolean(argusInternal?.hiddenFallbackInjected)} />
+            <DebugField label="preflight" value={formatBoolean(argusInternal?.preflightInjected)} />
+            <DebugField label="preflight ok" value={formatBoolean(argusInternal?.preflightOk)} />
+            <DebugField label="preflight sections" value={(argusInternal?.preflightSectionCount ?? 0).toLocaleString()} />
           </div>
 
           <DebugTextBlock

@@ -616,7 +616,7 @@ async function captureNativeSystemPrompt(launches = [], cliArgs = [], childEnv =
   return '';
 }
 
-function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, cliArgs = [], commands = {}, nativeSystemPrompt = '') {
+function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, cliArgs = [], commands = {}, nativeSystemPrompt = '', extras = {}) {
   const appendSystemPrompt = typeof options.appendSystemPrompt === 'string'
     ? options.appendSystemPrompt
     : '';
@@ -651,10 +651,11 @@ function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, 
       hasBareFlag: cliArgs.includes('--bare'),
       hasAppendSystemPromptFlag: cliArgs.includes('--append-system-prompt'),
     },
+    argusInternal: extras.argusInternal,
   };
 }
 
-async function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env, cliArgs = [], sessionId = null, commands = {}, nativeSystemPrompt = '') {
+async function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env, cliArgs = [], sessionId = null, commands = {}, nativeSystemPrompt = '', extras = {}) {
   if (options.debugPromptInjection !== true) {
     return;
   }
@@ -664,7 +665,7 @@ async function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env
     text: 'prompt_injection_debug',
     provider: 'claude',
     sessionId,
-    promptInjection: buildPromptInjectionDebugPayload(options, childEnv, cliArgs, commands, nativeSystemPrompt),
+    promptInjection: buildPromptInjectionDebugPayload(options, childEnv, cliArgs, commands, nativeSystemPrompt, extras),
   }));
 }
 
@@ -690,12 +691,73 @@ const TOOL_INSPECTION_FALLBACK_PROMPT = [
   'If tools are unavailable, state that blocker clearly instead of pretending the inspection was performed.',
 ].join('\n');
 
+const ARGUS_INTERNAL_FALLBACK_PREFIX = '<argus-internal-fallback>';
+const ARGUS_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.ARGUS_PREFLIGHT_TIMEOUT_MS || '12000', 10);
+const ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS = parseInt(process.env.ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS || '12000', 10);
+
+function getPreflightMaxOutputChars() {
+  return Number.isFinite(ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS) && ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS > 0
+    ? ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS
+    : 12000;
+}
+
 function buildCodeReviewToolFallbackPrompt() {
   return CODE_REVIEW_TOOL_FALLBACK_PROMPT;
 }
 
 function buildToolInspectionFallbackPrompt() {
   return TOOL_INSPECTION_FALLBACK_PROMPT;
+}
+
+function ensureArgusInternalFallbackPrefix(content = '') {
+  const text = String(content || '').trimStart();
+  return text.startsWith(ARGUS_INTERNAL_FALLBACK_PREFIX)
+    ? text
+    : `${ARGUS_INTERNAL_FALLBACK_PREFIX}\n${String(content || '').trim()}`;
+}
+
+function truncatePreflightOutput(output = '', maxChars = getPreflightMaxOutputChars()) {
+  const text = String(output || '').replace(/\r\n/g, '\n').trim();
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}\n... truncated ${text.length - maxChars} chars ...`;
+}
+
+function formatPreflightSection(section = {}) {
+  const title = section.title || section.command || 'inspection';
+  const commandText = section.command ? `Command: ${section.command}\n` : '';
+  const status = typeof section.exitCode === 'number' ? `Exit code: ${section.exitCode}\n` : '';
+  const timedOut = section.timedOut ? 'Timed out: true\n' : '';
+  const truncated = section.outputTruncated ? 'Output truncated: true\n' : '';
+  const output = section.output || section.error || '(no output)';
+  return `## ${title}\n${commandText}${status}${timedOut}${truncated}\n${truncatePreflightOutput(output)}`;
+}
+
+function buildArgusInspectionPreflightPrompt({
+  intent = 'tool_inspection',
+  originalCommand = '',
+  result = {},
+} = {}) {
+  const intentLabel = intent === 'code_review' ? 'code review' : 'repository inspection';
+  const sections = Array.isArray(result.sections) && result.sections.length > 0
+    ? result.sections.map(formatPreflightSection).join('\n\n')
+    : 'No preflight command output was captured.';
+  const status = result.ok === false
+    ? 'The preflight encountered blockers. State them clearly before answering.'
+    : 'Use the inspected paths and outputs below as grounding, then answer the user directly.';
+
+  return ensureArgusInternalFallbackPrefix([
+    'Argus performed a read-only repository preflight because the previous response still did not use tools.',
+    `Intent: ${intentLabel}`,
+    originalCommand ? `Original user request: ${originalCommand}` : '',
+    result.cwd ? `Working directory: ${result.cwd}` : '',
+    status,
+    'Do not answer with only a plan, promise, or status update.',
+    'If the output is insufficient, say exactly what remains unknown.',
+    '',
+    sections,
+  ].filter(Boolean).join('\n'));
 }
 
 function extractMtlCodeAssistantText(message = {}) {
@@ -733,6 +795,69 @@ function messageHasMtlCodeToolUse(message = {}) {
   return Array.isArray(content) && content.some(part => part?.type === 'tool_use');
 }
 
+function getMtlCodeToolUses(message = {}) {
+  const tools = [];
+  if (message?.type === 'tool_use') {
+    tools.push({
+      name: message.toolName || message.name || '',
+      input: message.toolInput || message.input || {},
+    });
+  }
+
+  const content = message?.message?.content || message?.content;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (part?.type === 'tool_use') {
+        tools.push({
+          name: part.name || part.toolName || '',
+          input: part.input || part.toolInput || {},
+        });
+      }
+    }
+  }
+  return tools;
+}
+
+function getToolInputCommand(input = {}) {
+  if (typeof input === 'string') {
+    return input;
+  }
+  if (!input || typeof input !== 'object') {
+    return '';
+  }
+  return [
+    input.command,
+    input.cmd,
+    input.pattern,
+    input.path,
+    input.file_path,
+  ].filter(value => typeof value === 'string' && value.trim()).join(' ');
+}
+
+function isRepositoryInspectionBashCommand(input = {}) {
+  const command = getToolInputCommand(input).trim();
+  if (!command) {
+    return false;
+  }
+
+  return /(^|[;&|()\s])(?:git\s+(?:status|diff|show|log|ls-files|grep)|rg|grep|find|ls|dir|pwd|tree|cat|sed|nl|wc|Get-ChildItem|Select-String|Get-Content|Test-Path)\b/i.test(command);
+}
+
+function isRepositoryInspectionToolUse(tool = {}) {
+  const name = String(tool.name || '').trim();
+  if (/^(Read|Grep|Glob|LS|FileRead|View|NotebookRead)$/i.test(name)) {
+    return true;
+  }
+  if (/^(Bash|Shell)$/i.test(name)) {
+    return isRepositoryInspectionBashCommand(tool.input);
+  }
+  return false;
+}
+
+function messageHasMtlCodeRepositoryInspectionToolUse(message = {}) {
+  return getMtlCodeToolUses(message).some(isRepositoryInspectionToolUse);
+}
+
 function isCodeReviewAcknowledgementText(text = '') {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) {
@@ -747,12 +872,10 @@ function shouldSendCodeReviewToolFallback({
   options = {},
   fallbackSent = false,
   sawToolUse = false,
-  assistantText = '',
 } = {}) {
   return options?.argusCodeReviewIntent === true
     && fallbackSent !== true
-    && sawToolUse !== true
-    && isCodeReviewAcknowledgementText(assistantText);
+    && sawToolUse !== true;
 }
 
 function isToolInspectionAcknowledgementText(text = '') {
@@ -769,12 +892,182 @@ function shouldSendToolInspectionFallback({
   options = {},
   fallbackSent = false,
   sawToolUse = false,
-  assistantText = '',
 } = {}) {
   return options?.argusToolInspectionIntent === true
     && fallbackSent !== true
-    && sawToolUse !== true
-    && isToolInspectionAcknowledgementText(assistantText);
+    && sawToolUse !== true;
+}
+
+function shouldSendInspectionPreflightAfterFallback({
+  options = {},
+  fallbackSent = false,
+  preflightSent = false,
+  sawToolUse = false,
+} = {}) {
+  if (fallbackSent !== true || preflightSent === true || sawToolUse === true) {
+    return false;
+  }
+
+  return options?.argusCodeReviewIntent === true
+    || options?.argusToolInspectionIntent === true;
+}
+
+function buildInspectionSearchTerms(command = '') {
+  const terms = new Set();
+  const text = String(command || '');
+  const asciiTokens = text.match(/[A-Za-z_][A-Za-z0-9_:-]{2,}/g) || [];
+  for (const token of asciiTokens) {
+    const normalized = token.trim();
+    if (normalized.length >= 3 && normalized.length <= 80) {
+      terms.add(normalized);
+    }
+  }
+
+  if (/prompt|提示词|系统提示|注入|inject|appendSystemPrompt/i.test(text)) {
+    terms.add('appendSystemPrompt');
+    terms.add('prompt_injection_debug');
+    terms.add('buildPromptInjectionDebugPayload');
+    terms.add('createMtlCodeUserMessage');
+  }
+  if (/review|diff|变更|改动/i.test(text)) {
+    terms.add('argusCodeReviewIntent');
+    terms.add('Code review intent active');
+  }
+  if (/tool|工具|检查|仓库|代码|实现|链路/i.test(text)) {
+    terms.add('argusToolInspectionIntent');
+    terms.add('Repository inspection intent active');
+  }
+
+  if (terms.size === 0) {
+    terms.add('appendSystemPrompt');
+    terms.add('argusToolInspectionIntent');
+    terms.add('createMtlCodeUserMessage');
+  }
+
+  return Array.from(terms).slice(0, 8);
+}
+
+function buildCommandDisplay(command, args = []) {
+  return [command, ...args].join(' ');
+}
+
+function runReadOnlyPreflightCommand(command, args = [], cwd = process.cwd()) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let outputTruncated = false;
+    let child;
+    const maxOutputChars = getPreflightMaxOutputChars() * 2;
+
+    const appendLimited = (current, chunk) => {
+      if (current.length >= maxOutputChars) {
+        outputTruncated = true;
+        return current;
+      }
+      const next = current + chunk.toString();
+      if (next.length <= maxOutputChars) {
+        return next;
+      }
+      outputTruncated = true;
+      return next.slice(0, maxOutputChars);
+    };
+
+    const finish = (section) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(section);
+    };
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child?.kill?.('SIGTERM');
+    }, Number.isFinite(ARGUS_PREFLIGHT_TIMEOUT_MS) ? ARGUS_PREFLIGHT_TIMEOUT_MS : 12000);
+
+    try {
+      child = spawn(command, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      finish({
+        title: buildCommandDisplay(command, args),
+        command: buildCommandDisplay(command, args),
+        exitCode: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    child.stdout?.on('data', chunk => {
+      stdout = appendLimited(stdout, chunk);
+    });
+    child.stderr?.on('data', chunk => {
+      stderr = appendLimited(stderr, chunk);
+    });
+    child.once('error', error => {
+      finish({
+        title: buildCommandDisplay(command, args),
+        command: buildCommandDisplay(command, args),
+        exitCode: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    child.once('close', exitCode => {
+      const output = [stdout, stderr].filter(part => part.trim()).join('\n').trim();
+      finish({
+        title: buildCommandDisplay(command, args),
+        command: buildCommandDisplay(command, args),
+        exitCode,
+        timedOut,
+        outputTruncated,
+        output,
+      });
+    });
+  });
+}
+
+async function runArgusInspectionPreflight({
+  intent = 'tool_inspection',
+  cwd = process.cwd(),
+  originalCommand = '',
+} = {}) {
+  const sections = [];
+  const add = async (command, args) => {
+    const section = await runReadOnlyPreflightCommand(command, args, cwd);
+    sections.push(section);
+  };
+
+  if (intent === 'code_review') {
+    await add('git', ['status', '--short']);
+    await add('git', ['diff', '--no-ext-diff', '--stat']);
+    await add('git', ['diff', '--no-ext-diff']);
+    await add('git', ['diff', '--no-ext-diff', '--staged', '--stat']);
+    await add('git', ['diff', '--no-ext-diff', '--staged']);
+  } else {
+    await add('rg', ['--files']);
+    for (const term of buildInspectionSearchTerms(originalCommand)) {
+      await add('rg', [
+        '-n',
+        '--hidden',
+        '--glob', '!node_modules',
+        '--glob', '!dist',
+        '--glob', '!dist-server',
+        '--glob', '!vendor',
+        '--glob', '!.git',
+        term,
+        '.',
+      ]);
+    }
+  }
+
+  const ok = sections.some(section => section.output && !section.timedOut);
+  return { cwd, ok, sections };
 }
 
 function shouldStartCodeReviewFallbackRunAfterClose({
@@ -1203,6 +1496,13 @@ function createMtlCodeUserMessage(content, clientMessageId = null) {
   };
 }
 
+function createMtlCodeSyntheticUserMessage(content, clientMessageId = null) {
+  return {
+    ...createMtlCodeUserMessage(ensureArgusInternalFallbackPrefix(content), clientMessageId),
+    isSynthetic: true,
+  };
+}
+
 function writeMtlCodeJson(child, payload) {
   if (!child.stdin || child.stdin.destroyed || !child.stdin.writable) {
     return false;
@@ -1269,10 +1569,16 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let childClosed = false;
   let resultReceived = false;
   let codeReviewToolUseSeen = false;
-  let codeReviewFallbackSent = false;
+  let codeReviewFallbackSent = options.argusInspectionFallbackAlreadySent === true;
+  let codeReviewPreflightSent = options.argusInspectionPreflightSent === true;
   let codeReviewAssistantText = '';
   let codeReviewFallbackPrompt = '';
   let codeReviewFallbackSessionId = '';
+  let resolvedCwd = process.cwd();
+  let promptDebugChildEnv = process.env;
+  let promptDebugCliArgs = [];
+  let promptDebugNativeSystemPrompt = '';
+  let promptDebugEffectiveCommand = command;
   const stderrLines = [];
 
   const emitNotification = (event) => {
@@ -1424,7 +1730,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     ensureSessionRegistered(message.session_id);
 
-    if (messageHasMtlCodeToolUse(message)) {
+    if (messageHasMtlCodeRepositoryInspectionToolUse(message)) {
       codeReviewToolUseSeen = true;
     }
     const assistantText = extractMtlCodeAssistantText(message);
@@ -1475,6 +1781,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         sawToolUse: codeReviewToolUseSeen,
         assistantText: codeReviewAssistantText,
       });
+      const shouldSendPreflight = shouldSendInspectionPreflightAfterFallback({
+        options,
+        fallbackSent: codeReviewFallbackSent,
+        preflightSent: codeReviewPreflightSent,
+        sawToolUse: codeReviewToolUseSeen,
+        assistantText: codeReviewAssistantText,
+      });
       if (shouldSendReviewFallback || shouldSendInspectionFallback) {
         codeReviewFallbackSent = true;
         resultReceived = false;
@@ -1484,7 +1797,65 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
           ? buildCodeReviewToolFallbackPrompt()
           : buildToolInspectionFallbackPrompt();
         codeReviewFallbackSessionId = message.session_id || capturedSessionId || sessionId || clientSessionId || '';
-        writeMtlCodeJson(child, createMtlCodeUserMessage(codeReviewFallbackPrompt));
+        await emitPromptInjectionDebug(
+          ws,
+          options,
+          promptDebugChildEnv,
+          promptDebugCliArgs,
+          codeReviewFallbackSessionId || null,
+          {
+            originalCommand: options.debugPromptInjectionOriginalCommand || command,
+            effectiveCommand: promptDebugEffectiveCommand,
+          },
+          promptDebugNativeSystemPrompt,
+          {
+            argusInternal: {
+              hiddenFallbackInjected: true,
+              preflightInjected: false,
+            },
+          },
+        );
+        writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
+        return;
+      }
+      if (shouldSendPreflight) {
+        codeReviewPreflightSent = true;
+        resultReceived = false;
+        codeReviewAssistantText = '';
+        codeReviewToolUseSeen = false;
+        const preflightIntent = options?.argusCodeReviewIntent === true ? 'code_review' : 'tool_inspection';
+        const preflightResult = await runArgusInspectionPreflight({
+          intent: preflightIntent,
+          cwd: resolvedCwd,
+          originalCommand: command,
+        });
+        codeReviewFallbackPrompt = buildArgusInspectionPreflightPrompt({
+          intent: preflightIntent,
+          originalCommand: command,
+          result: preflightResult,
+        });
+        codeReviewFallbackSessionId = message.session_id || capturedSessionId || sessionId || clientSessionId || '';
+        await emitPromptInjectionDebug(
+          ws,
+          options,
+          promptDebugChildEnv,
+          promptDebugCliArgs,
+          codeReviewFallbackSessionId || null,
+          {
+            originalCommand: options.debugPromptInjectionOriginalCommand || command,
+            effectiveCommand: promptDebugEffectiveCommand,
+          },
+          promptDebugNativeSystemPrompt,
+          {
+            argusInternal: {
+              hiddenFallbackInjected: true,
+              preflightInjected: true,
+              preflightOk: preflightResult.ok,
+              preflightSectionCount: Array.isArray(preflightResult.sections) ? preflightResult.sections.length : 0,
+            },
+          },
+        );
+        writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
         return;
       }
       closeMtlCodeInput(child);
@@ -1494,11 +1865,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   try {
     const imageResult = await handleImages(command, options.images, options.cwd);
     const finalCommand = imageResult.modifiedCommand;
+    promptDebugEffectiveCommand = finalCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
 
     const launches = resolveMtlCodeLaunches();
     const cwd = resolveWorkingDirectory(options.cwd || options.projectPath);
+    resolvedCwd = cwd;
     const permission = evaluateRuntimePermission({
       command: 'argus-backend',
       cwd,
@@ -1510,9 +1883,12 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     }
     const childEnv = await buildMtlCodeSpawnEnv(options);
     const cliArgs = buildMtlCodeArgs(options, childEnv);
+    promptDebugChildEnv = childEnv;
+    promptDebugCliArgs = cliArgs;
     const nativeSystemPrompt = options.debugPromptInjection === true
       ? await captureNativeSystemPrompt(launches, cliArgs, childEnv, cwd)
       : '';
+    promptDebugNativeSystemPrompt = nativeSystemPrompt;
     await emitPromptInjectionDebug(ws, options, childEnv, cliArgs, capturedSessionId || sessionId || clientSessionId || null, {
       originalCommand: options.debugPromptInjectionOriginalCommand || command,
       effectiveCommand: finalCommand,
@@ -1576,17 +1952,29 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     });
 
     let stdoutBuffer = '';
+    let stdoutProcessing = Promise.resolve();
+    const queueStdoutLine = (line) => {
+      stdoutProcessing = stdoutProcessing
+        .then(() => handleStdoutLine(line))
+        .catch(error => {
+          console.warn('[Argus] Failed to process stdout line:', error?.message || error);
+        });
+      return stdoutProcessing;
+    };
     child.stdout?.on('data', (chunk) => {
       stdoutBuffer += chunk.toString();
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() || '';
       for (const line of lines) {
-        void handleStdoutLine(line);
+        queueStdoutLine(line);
       }
     });
 
     if (finalCommand && finalCommand.trim()) {
-      writeMtlCodeJson(child, createMtlCodeUserMessage(finalCommand, options.clientMessageId));
+      const createInitialMessage = options.argusSyntheticInitialMessage === true
+        ? createMtlCodeSyntheticUserMessage
+        : createMtlCodeUserMessage;
+      writeMtlCodeJson(child, createInitialMessage(finalCommand, options.clientMessageId));
     } else {
       closeMtlCodeInput(child);
     }
@@ -1600,8 +1988,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     });
 
     if (stdoutBuffer.trim()) {
-      await handleStdoutLine(stdoutBuffer);
+      queueStdoutLine(stdoutBuffer);
     }
+    await stdoutProcessing;
 
     cleanupRegisteredSessions();
     await cleanupTempFiles(tempImagePaths, tempDir);
@@ -1619,8 +2008,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         sessionId: fallbackResumeSessionId,
         resume: true,
         clientMessageId: null,
-        argusCodeReviewIntent: false,
-        argusToolInspectionIntent: false,
+        argusSyntheticInitialMessage: true,
+        argusInspectionFallbackAlreadySent: true,
+        argusInspectionPreflightSent: codeReviewPreflightSent,
       }, ws);
       return;
     }
@@ -2173,9 +2563,15 @@ export {
   reconnectSessionWriter,
   isMtlCodeUserAbort,
   buildMtlCodeCloseFailureMessage,
+  ARGUS_INTERNAL_FALLBACK_PREFIX,
+  buildArgusInspectionPreflightPrompt,
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
+  createMtlCodeSyntheticUserMessage,
+  messageHasMtlCodeRepositoryInspectionToolUse,
+  runArgusInspectionPreflight,
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
+  shouldSendInspectionPreflightAfterFallback,
   shouldStartCodeReviewFallbackRunAfterClose
 };

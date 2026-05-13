@@ -353,6 +353,12 @@ export interface PromptInjectionDebugPayload {
     hasBareFlag?: boolean;
     hasAppendSystemPromptFlag?: boolean;
   };
+  argusInternal?: {
+    hiddenFallbackInjected?: boolean;
+    preflightInjected?: boolean;
+    preflightOk?: boolean;
+    preflightSectionCount?: number;
+  };
   sessionId?: string | null;
   receivedAt?: string;
 }

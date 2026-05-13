@@ -36,6 +36,7 @@ const loadClaudeSessionMessages = getSessionMessages as unknown as (
  * Those are useful for the CLI but should not appear in the user-facing chat.
  */
 const INTERNAL_CONTENT_PREFIXES = [
+  '<argus-internal-fallback>',
   '<command-name>',
   '<command-message>',
   '<command-args>',
@@ -50,6 +51,26 @@ function isInternalContent(content: string): boolean {
   const trimmed = content.trimStart();
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
     || isTaskNotificationContent(trimmed);
+}
+
+function getUserTextContent(raw: AnyRecord): string {
+  const content = raw.message?.content;
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter((part: AnyRecord) => part?.type === 'text' && typeof part.text === 'string')
+      .map((part: AnyRecord) => part.text)
+      .join('\n');
+  }
+  return '';
+}
+
+function isSyntheticInternalUserRecord(raw: AnyRecord): boolean {
+  return raw.message?.role === 'user'
+    && raw.isSynthetic === true
+    && isInternalContent(getUserTextContent(raw));
 }
 
 function isTaskNotificationContent(content: string): boolean {
@@ -278,6 +299,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         tokensSaved: getNumber((metadata as AnyRecord).tokensSaved ?? (metadata as AnyRecord).tokens_saved),
         compactedToolIds: (metadata as AnyRecord).compactedToolIds ?? (metadata as AnyRecord).compacted_tool_ids,
       })];
+    }
+
+    if (isSyntheticInternalUserRecord(raw)) {
+      return [];
     }
 
     const compactSummary = getCompactSummaryContent(raw);

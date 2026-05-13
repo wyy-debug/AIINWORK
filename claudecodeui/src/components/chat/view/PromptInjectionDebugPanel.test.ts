@@ -27,6 +27,7 @@ test('chat sends prompt injection debug flag and renders the right-side debug pa
   expect(types).toContain('originalCommand');
   expect(types).toContain('effectiveCommand');
   expect(types).toContain('commandChanged');
+  expect(types).toContain('argusInternal');
   expect(composerState).toContain('debugPromptInjection');
   expect(composerState).toContain('getArgusDebugSettings');
   expect(composerState).toContain('buildPendingPromptInjectionDebug');
@@ -53,6 +54,8 @@ test('prompt injection debug panel renders original and effective commands', asy
   expect(panel).toContain('Command sent to Claude');
   expect(panel).toContain('Original user command');
   expect(panel).toContain('Native Claude Code system prompt');
+  expect(panel).toContain('hidden fallback');
+  expect(panel).toContain('preflight');
   expect(panel).toContain('Command changed');
   expect(panel).toContain('Command captured');
   expect(panel).toContain('copyValue');

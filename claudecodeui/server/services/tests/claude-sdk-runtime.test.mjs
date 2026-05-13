@@ -5,8 +5,13 @@ import { test } from 'vitest';
 import { fileURLToPath } from 'node:url';
 
 import {
+  ARGUS_INTERNAL_FALLBACK_PREFIX,
+  buildArgusInspectionPreflightPrompt,
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
+  createMtlCodeSyntheticUserMessage,
+  messageHasMtlCodeRepositoryInspectionToolUse,
+  shouldSendInspectionPreflightAfterFallback,
   shouldStartCodeReviewFallbackRunAfterClose,
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
@@ -54,6 +59,9 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   assert.match(source, /appendSystemPromptLength/);
   assert.match(source, /nativeSystemPrompt/);
   assert.match(source, /nativeSystemPromptLength/);
+  assert.match(source, /argusInternal/);
+  assert.match(source, /hiddenFallbackInjected/);
+  assert.match(source, /preflightInjected/);
   assert.match(source, /originalCommand/);
   assert.match(source, /effectiveCommand/);
   assert.match(source, /commandChanged/);
@@ -103,6 +111,13 @@ test('Argus review intent sends a tool-use fallback when first response only ack
 
   assert.equal(shouldSendCodeReviewToolFallback({
     options: { argusCodeReviewIntent: true },
+    fallbackSent: false,
+    sawToolUse: false,
+    assistantText: 'No issues found.',
+  }), true);
+
+  assert.equal(shouldSendCodeReviewToolFallback({
+    options: { argusCodeReviewIntent: true },
     fallbackSent: true,
     sawToolUse: false,
     assistantText: 'I will inspect the working tree.',
@@ -142,6 +157,22 @@ test('Argus tool inspection intent sends a fallback when first response only pla
   }), false);
 });
 
+test('Argus tool inspection fallback does not depend on exact acknowledgement wording', () => {
+  assert.equal(shouldSendToolInspectionFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: false,
+    sawToolUse: false,
+    assistantText: '我现在直接检查实现路径，重点看系统提示词向量、SDK 调用层、会话 provider。',
+  }), true);
+
+  assert.equal(shouldSendToolInspectionFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: false,
+    sawToolUse: false,
+    assistantText: 'The prompt injection path is in the server SDK layer.',
+  }), true);
+});
+
 test('Argus tool inspection fallback prompt requires searching and reading files', () => {
   const prompt = buildToolInspectionFallbackPrompt();
 
@@ -150,15 +181,175 @@ test('Argus tool inspection fallback prompt requires searching and reading files
   assert.match(prompt, /Do not answer with only a plan/i);
 });
 
-test('Argus fallback resume clears both review and tool-inspection intent flags', async () => {
+test('Argus inspection gates ignore non-repository tool calls', () => {
+  assert.equal(messageHasMtlCodeRepositoryInspectionToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Skill', input: { skill: 'test-driven-development' } },
+      ],
+    },
+  }), false);
+
+  assert.equal(messageHasMtlCodeRepositoryInspectionToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'TodoWrite', input: { todos: [] } },
+      ],
+    },
+  }), false);
+
+  assert.equal(messageHasMtlCodeRepositoryInspectionToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: 'claudecodeui/server/claude-sdk.js' } },
+      ],
+    },
+  }), true);
+
+  assert.equal(messageHasMtlCodeRepositoryInspectionToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'git status --short' } },
+      ],
+    },
+  }), true);
+
+  assert.equal(messageHasMtlCodeRepositoryInspectionToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } },
+      ],
+    },
+  }), false);
+});
+
+test('Argus fallback guidance is written as a synthetic internal user message', () => {
+  const message = createMtlCodeSyntheticUserMessage(buildToolInspectionFallbackPrompt());
+
+  assert.equal(message.type, 'user');
+  assert.equal(message.isSynthetic, true);
+  assert.match(message.content, new RegExp(`^${ARGUS_INTERNAL_FALLBACK_PREFIX}`));
+  assert.equal(message.message.role, 'user');
+  assert.equal(message.message.content, message.content);
+});
+
+test('Argus sends a preflight context prompt when hidden fallback also receives only an acknowledgement', () => {
+  assert.equal(shouldSendInspectionPreflightAfterFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
+    preflightSent: false,
+    sawToolUse: false,
+    assistantText: 'I will inspect the repository and read the relevant files.',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
+    preflightSent: false,
+    sawToolUse: false,
+    assistantText: '我现在直接检查实现路径，重点看系统提示词向量、SDK 调用层、会话 provider。',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
+    preflightSent: false,
+    sawToolUse: false,
+    assistantText: 'The prompt injection path is probably in the server layer.',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterFallback({
+    options: { argusCodeReviewIntent: true },
+    fallbackSent: true,
+    preflightSent: false,
+    sawToolUse: false,
+    assistantText: 'I will inspect the working tree and diffs.',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
+    preflightSent: true,
+    sawToolUse: false,
+    assistantText: 'I will inspect the repository.',
+  }), false);
+
+  assert.equal(shouldSendInspectionPreflightAfterFallback({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
+    preflightSent: false,
+    sawToolUse: true,
+    assistantText: 'I will inspect the repository.',
+  }), false);
+});
+
+test('Argus preflight context prompt carries real inspection output and stays internal', () => {
+  const prompt = buildArgusInspectionPreflightPrompt({
+    intent: 'tool_inspection',
+    originalCommand: 'inspect prompt injection path',
+    result: {
+      cwd: 'E:/repo',
+      ok: true,
+      sections: [
+        { title: 'rg prompt', command: 'rg -n "prompt" .', output: 'server/claude-sdk.js:620: appendSystemPrompt' },
+      ],
+    },
+  });
+
+  assert.match(prompt, new RegExp(`^${ARGUS_INTERNAL_FALLBACK_PREFIX}`));
+  assert.match(prompt, /Argus performed a read-only repository preflight/i);
+  assert.match(prompt, /server\/claude-sdk\.js:620/);
+  assert.match(prompt, /Do not answer with only a plan/i);
+});
+
+test('Argus review preflight uses no external diff command and reports truncated output', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+  const prompt = buildArgusInspectionPreflightPrompt({
+    result: {
+      sections: [
+        { command: 'git diff --no-ext-diff', output: 'diff output', outputTruncated: true },
+      ],
+    },
+  });
+
+  assert.match(source, /'diff',\s*'--no-ext-diff'/);
+  assert.match(prompt, /Output truncated: true/);
+});
+
+test('Argus direct stdout handling drains async fallback/preflight processing before close cleanup', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.match(source, /let stdoutProcessing = Promise\.resolve\(\)/);
+  assert.match(source, /const queueStdoutLine = \(line\) =>/);
+  assert.match(source, /queueStdoutLine\(line\)/);
+  assert.match(source, /await stdoutProcessing/);
+  assert.doesNotMatch(source, /void handleStdoutLine\(line\)/);
+});
+
+test('Argus fallback resume preserves inspection intent and marks fallback as already sent', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');
 
   const resumeStart = source.indexOf('await queryMtlCodeDirect(codeReviewFallbackPrompt');
   const resumeBlock = source.slice(resumeStart, resumeStart + 700);
 
-  assert.match(resumeBlock, /argusCodeReviewIntent:\s*false/);
-  assert.match(resumeBlock, /argusToolInspectionIntent:\s*false/);
+  assert.match(resumeBlock, /\.\.\.options/);
+  assert.match(resumeBlock, /argusInspectionFallbackAlreadySent:\s*true/);
+  assert.match(resumeBlock, /argusInspectionPreflightSent:\s*codeReviewPreflightSent/);
+  assert.doesNotMatch(resumeBlock, /argusCodeReviewIntent:\s*false/);
+  assert.doesNotMatch(resumeBlock, /argusToolInspectionIntent:\s*false/);
 });
 
 test('Argus starts a resumed fallback run when the print process exits after ack-only review', () => {
