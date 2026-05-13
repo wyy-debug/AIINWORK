@@ -11,7 +11,7 @@ test('Claude session provider hides Argus synthetic fallback user messages', () 
     uuid: 'synthetic-1',
     message: {
       role: 'user',
-      content: '<argus-internal-fallback>\nThe previous response did not inspect the repository.',
+      content: '<argus-internal-fallback>\nlegacy hidden internal marker',
     },
   }, 'session-1');
 

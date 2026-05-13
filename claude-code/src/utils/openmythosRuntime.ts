@@ -154,36 +154,6 @@ const HIGH_RISK_SIGNALS: Signal[] = [
   },
 ]
 
-const REVIEW_SIGNALS: Signal[] = [
-  {
-    pattern: /\b(code\s*(?:review|reivew)|review|reivew|audit)\b|(?:review|reivew|审查|评审)\s*(?:全部)?代码|(?:全部)?代码\s*(?:review|reivew|审查|评审)|代码审查|审查代码|评审代码/i,
-    reason: 'code review requested',
-    weight: 4,
-    route: 'Inspect git status and current diff before reporting review findings.',
-    expert: {
-      kind: 'verification',
-      label: 'Review verifier',
-      reason: 'code review requested',
-      required: false,
-    },
-  },
-]
-
-const REPOSITORY_INSPECTION_SIGNALS: Signal[] = [
-  {
-    pattern: /\b(?:inspect|check|look\s+into|find|locate|trace|investigate|search|read)\b.{0,160}\b(?:code|implementation|files?|repo(?:sitory)?|prompt|system\s*prompt|inject|appendSystemPrompt|runtime|frontend|backend|server)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u770b\u4e0b|\u770b\u4e00\u4e0b|\u67e5\u4e00\u4e0b|\u67e5\u4e0b|\u5b9a\u4f4d|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u68b3\u7406|\u6392\u67e5|\u8c03\u67e5).{0,160}(?:\u4ee3\u7801|\u4ed3\u5e93|\u5b9e\u73b0|\u6587\u4ef6|\u63d0\u793a\u8bcd|\u7cfb\u7edf\u63d0\u793a|system\s*prompt|appendSystemPrompt|prompt|inject|\u6ce8\u5165|\u94fe\u8def|\u903b\u8f91|\u51fd\u6570|\u6a21\u5757|\u670d\u52a1|\u524d\u7aef|\u540e\u7aef)/i,
-    reason: 'repository inspection requested',
-    weight: 3,
-    route: 'Search and read relevant files before answering with conclusions.',
-    expert: {
-      kind: 'local',
-      label: 'Repository inspection',
-      reason: 'repository inspection requested',
-      required: true,
-    },
-  },
-]
-
 const IMPLEMENTATION_SIGNALS: Signal[] = [
   {
     pattern: /\b(implement|build|add|fix|change|update|wire|integrate)\b/i,
@@ -318,24 +288,12 @@ export function buildOpenMythosRuntimeCard(
   const goal = truncate(normalized, 260)
   const signals = [
     ...HIGH_RISK_SIGNALS,
-    ...REVIEW_SIGNALS,
-    ...REPOSITORY_INSPECTION_SIGNALS,
     ...IMPLEMENTATION_SIGNALS,
     ...FRONTEND_SIGNALS,
   ].filter(s =>
     s.pattern.test(normalized),
   )
-  const hasReviewSignal = signals.some(
-    signal => signal.reason === 'code review requested',
-  )
-  const hasRepositoryInspectionSignal = signals.some(
-    signal => signal.reason === 'repository inspection requested',
-  )
-  if (
-    isEnvTruthy(process.env.MTL_CODE_SIMPLE) &&
-    !hasReviewSignal &&
-    !hasRepositoryInspectionSignal
-  ) return null
+  if (isEnvTruthy(process.env.MTL_CODE_SIMPLE) && signals.length === 0) return null
   const score =
     signals.reduce((sum, signal) => sum + signal.weight, 0) +
     Math.min(3, Math.floor(normalized.length / 600))
@@ -456,10 +414,9 @@ function hasHardReadOnlyOpenMythosIntent(
   card: OpenMythosRuntimeCard | undefined,
 ): boolean {
   return Boolean(
-    card?.reasons.includes('code review requested') ||
-      card?.constraints.some(constraint =>
-        constraint.startsWith('Plan mode is active:'),
-      ),
+    card?.constraints.some(constraint =>
+      constraint.startsWith('Plan mode is active:'),
+    ),
   )
 }
 

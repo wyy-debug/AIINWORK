@@ -81,7 +81,7 @@ export function buildOpenAIRequestBody(params: {
     max_tokens: maxTokens,
     ...(tools.length > 0 && {
       tools,
-      ...(toolChoice && { tool_choice: toolChoice }),
+      tool_choice: toolChoice ?? 'auto',
     }),
     stream: true,
     stream_options: { include_usage: true },

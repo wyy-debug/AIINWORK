@@ -87,6 +87,8 @@ test('Argus result diagnostics expose native stop, turn, tool, and permission st
     numTurns: 2,
     toolUseNames: ['Read', 'Grep', 'Read'],
     permissionRequestCount: 1,
+    apiProvider: 'openai-compatible',
+    requestModel: 'gpt-5.5',
     assistantText: 'private model output',
   });
 
@@ -94,6 +96,8 @@ test('Argus result diagnostics expose native stop, turn, tool, and permission st
   assert.equal(payload.numTurns, 2);
   assert.deepEqual(payload.toolUseNames, ['Read', 'Grep', 'Read']);
   assert.equal(payload.permissionRequestCount, 1);
+  assert.equal(payload.apiProvider, 'openai-compatible');
+  assert.equal(payload.requestModel, 'gpt-5.5');
   assert.equal(payload.assistantTextLength, 'private model output'.length);
   assert.equal(Object.hasOwn(payload, 'assistantText'), false);
 });

@@ -231,6 +231,17 @@ describe('buildOpenAIRequestBody — thinking params', () => {
     expect(body.tool_choice).toBe('auto')
   })
 
+  test('defaults tool_choice to auto when tools are provided', () => {
+    const body = buildOpenAIRequestBody({
+      ...baseParams,
+      tools: [{ type: 'function', function: { name: 'test' } }],
+      toolChoice: undefined,
+      enableThinking: false,
+    })
+    expect(body.tools).toHaveLength(1)
+    expect(body.tool_choice).toBe('auto')
+  })
+
   test('excludes tools when empty', () => {
     const body = buildOpenAIRequestBody({ ...baseParams, enableThinking: false })
     expect(body.tools).toBeUndefined()

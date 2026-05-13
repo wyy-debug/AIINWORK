@@ -345,6 +345,8 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'stopReason',
     'numTurns',
     'permissionRequestCount',
+    'apiProvider',
+    'requestModel',
   ]) {
     if (details[key] !== undefined && details[key] !== null && details[key] !== '') {
       payload[key] = details[key];
@@ -520,6 +522,34 @@ function isClaudeNativeMemoryEnabled(env = process.env) {
     return true;
   }
   return value !== '0' && value !== 'false' && value !== 'off';
+}
+
+function getMtlCodeApiProvider(env = process.env) {
+  if (env.MTL_CODE_USE_OPENAI === '1') {
+    return 'openai-compatible';
+  }
+  if (env.MTL_CODE_USE_GEMINI === '1') {
+    return 'gemini';
+  }
+  if (env.MTL_CODE_USE_GROK === '1') {
+    return 'grok';
+  }
+  return 'anthropic';
+}
+
+function getMtlCodeRequestModel(env = process.env) {
+  if (env.MTL_CODE_USE_OPENAI === '1') {
+    return env[OPENAI_MODEL_ENV_KEYS.model]
+      || env[OPENAI_MODEL_ENV_KEYS.defaultSonnetModel]
+      || env[OPENAI_MODEL_ENV_KEYS.defaultHaikuModel]
+      || env[OPENAI_MODEL_ENV_KEYS.defaultOpusModel]
+      || '';
+  }
+  return env[ANTHROPIC_MODEL_ENV_KEYS.model]
+    || env[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel]
+    || env[ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel]
+    || env[ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel]
+    || '';
 }
 
 function applyClaudeNativeMemoryEnv(spawnEnv) {
@@ -1910,6 +1940,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         permissionRequestCount,
         stopReason,
         numTurns: Number.isFinite(parsedNumTurns) ? parsedNumTurns : undefined,
+        apiProvider: getMtlCodeApiProvider(promptDebugChildEnv),
+        requestModel: getMtlCodeRequestModel(promptDebugChildEnv),
         assistantText: assistantTextSeen,
       });
       await completeCurrentTurn(0);
@@ -2015,6 +2047,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         launch: launch.displayCommand,
         runtimeSignature,
         cliArgs,
+        apiProvider: getMtlCodeApiProvider(childEnv),
+        requestModel: getMtlCodeRequestModel(childEnv),
         effectiveCommand: finalCommand,
       });
       let candidateChild;
@@ -2045,6 +2079,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
           launch: launch.displayCommand,
           pid: child.pid,
           runtimeSignature,
+          apiProvider: getMtlCodeApiProvider(childEnv),
+          requestModel: getMtlCodeRequestModel(childEnv),
         });
         break;
       } catch (spawnError) {

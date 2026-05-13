@@ -4,7 +4,6 @@ import {
   createOpenMythosRuntimeState,
   formatOpenMythosRuntimeReminder,
   getOpenMythosRuntimeConfig,
-  getOpenMythosPhase,
   isOpenMythosReadOnlyPhase,
   shouldHardBlockOpenMythosReadOnlyPhase,
   shouldAttachOpenMythosRuntimeCard,
@@ -64,43 +63,28 @@ describe('openmythos runtime card', () => {
     ])
   })
 
-  test('treats terse code review requests as multi-turn tool work', () => {
-    const card = buildOpenMythosRuntimeCard('review代码')
+  test('leaves code review requests without special prompt classification', () => {
+    const card = buildOpenMythosRuntimeCard('review code')
 
-    expect(card?.effort).toBe('high')
-    expect(card?.loopBudget).toBeGreaterThanOrEqual(4)
-    expect(card?.reasons).toContain('code review requested')
-    expect(card?.routes.join(' ')).toContain('Inspect git status')
-    expect(card?.phasePlan).toEqual([
-      'orient',
-      'plan',
-      'implement',
-      'verify',
-      'finalize',
-    ])
-    expect(card?.loopBudget).toBeGreaterThanOrEqual(card?.phasePlan.length ?? 0)
-    expect(getOpenMythosPhase(card!, card!.loopBudget)).toBe('finalize')
+    expect(card?.reasons).not.toContain('code review requested')
+    expect(card?.routes.join(' ')).not.toContain('Inspect git status')
   })
 
-  test('treats repository inspection prompts as multi-turn codebase work', () => {
+  test('leaves repository inspection prompts without special prompt classification', () => {
     const card = buildOpenMythosRuntimeCard(
       '\u68c0\u67e5\u4e0b\u4ee3\u7801\u4e2d\u7684\u63d0\u793a\u8bcd\u662f\u600e\u4e48\u6ce8\u5165\u7684',
     )
 
-    expect(card?.effort).not.toBe('low')
-    expect(card?.loopBudget).toBeGreaterThanOrEqual(4)
-    expect(card?.reasons).toContain('repository inspection requested')
-    expect(card?.routes.join(' ')).toContain('Search and read relevant files')
-    expect(card?.phasePlan).toContain('plan')
+    expect(card?.reasons).not.toContain('repository inspection requested')
+    expect(card?.routes.join(' ')).not.toContain('Search and read relevant files')
   })
 
-  test('keeps code review runtime card active in bare simple mode', () => {
+  test('does not attach a simple-mode runtime card just because text says review', () => {
     process.env.MTL_CODE_SIMPLE = '1'
 
-    const card = buildOpenMythosRuntimeCard('review代码')
+    const card = buildOpenMythosRuntimeCard('review code')
 
-    expect(card?.reasons).toContain('code review requested')
-    expect(card?.routes.join(' ')).toContain('Inspect git status')
+    expect(card).toBeNull()
   })
 
   test('formats reminder as advisory-only and never mentions old dispatch tools', () => {
@@ -129,9 +113,9 @@ describe('openmythos runtime card', () => {
     expect(isOpenMythosReadOnlyPhase(state)).toBe(true)
   })
 
-  test('hard-blocks read-only phases only for review and plan mode', () => {
+  test('hard-blocks read-only phases only for plan mode', () => {
     const implementationCard = buildOpenMythosRuntimeCard('Implement auth migration')
-    const reviewCard = buildOpenMythosRuntimeCard('review代码')
+    const reviewCard = buildOpenMythosRuntimeCard('review code')
     if (!implementationCard || !reviewCard) throw new Error('expected runtime cards')
 
     expect(
@@ -151,7 +135,7 @@ describe('openmythos runtime card', () => {
         createOpenMythosRuntimeState(reviewCard),
         'acceptEdits',
       ),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   test('uses advisory phase hints instead of write bans for ordinary implementation work', () => {

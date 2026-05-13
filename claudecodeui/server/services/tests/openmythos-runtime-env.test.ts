@@ -54,8 +54,8 @@ test('OpenMythos runtime settings are normalized and written to MTL_CODE_OPENMYT
   expect('MTL_CODE_OPENMYTHOS_AUTO_DISPATCH' in env).toBe(false);
 });
 
-test('OpenMythos runtime preview treats terse code review requests as multi-turn work', async () => {
-  const preview = buildOpenMythosRuntimePreview('review代码', {
+test('OpenMythos runtime preview does not special-case code review text', async () => {
+  const preview = buildOpenMythosRuntimePreview('review code', {
     enabled: true,
     adaptiveEffort: true,
     taskCard: true,
@@ -69,10 +69,10 @@ test('OpenMythos runtime preview treats terse code review requests as multi-turn
     maxEffort: 'max',
   });
 
-  expect(preview?.effort).toBe('high');
-  expect(preview?.loopBudget).toBeGreaterThanOrEqual(preview?.phasePlan.length ?? 0);
-  expect(preview?.reasons).toContain('code review requested');
-  expect(preview?.phasePlan).toEqual(['orient', 'plan', 'implement', 'verify', 'finalize']);
+  expect(preview?.effort).toBe('low');
+  expect(preview?.loopBudget).toBe(2);
+  expect(preview?.reasons).not.toContain('code review requested');
+  expect(preview?.phasePlan).toEqual(['orient', 'finalize']);
 });
 
 test('Subagent runtime settings are normalized and written to Codex-style env keys', async () => {

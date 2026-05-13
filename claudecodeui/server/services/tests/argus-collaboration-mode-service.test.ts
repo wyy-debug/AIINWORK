@@ -29,68 +29,41 @@ test('Argus collaboration mode appends Codex-style plan prompt only in plan mode
   assert.equal(command.options.codexStylePlanMode, true);
 });
 
-test('Argus expands terse Chinese code review requests into explicit workspace review work', async () => {
-  const command = applyArgusCodeReviewIntentToChatCommand({
+test('Argus leaves code review requests on the native Claude Code path', async () => {
+  const original = {
     type: 'claude-command',
-    command: 'review 代码',
+    command: 'review all code',
     options: {},
-  });
+  };
+  const command = applyArgusCodeReviewIntentToChatCommand(original);
 
-  assert.match(command.command, /Review the current workspace changes/i);
-  assert.match(command.command, /git status/i);
-  assert.match(command.command, /git diff/i);
-  assert.match(command.command, /Do not modify files/i);
-  assert.match(command.command, /Original user request: review 代码/i);
-  assert.match(command.options.appendSystemPrompt, /Code review intent active/i);
-  assert.match(command.options.appendSystemPrompt, /Do not answer with an acknowledgement/i);
-  assert.match(command.options.appendSystemPrompt, /git status --short/i);
-  assert.equal(command.options.argusCodeReviewIntent, true);
+  assert.equal(command, original);
 });
 
-test('Argus treats casual review-shortcuts as workspace code review intent', async () => {
-  for (const input of [
-    'review下全部代码',
-    '检查下当前改动',
-    'reivew\u5168\u90e8\u4ee3\u7801',
-    'reivew\u4ee3\u7801',
-    'review一下',
-    'review下',
-    '帮我review一下',
-    '好好review一下',
-    '你好好review下问题',
-    '彻底review一下 这个mmap',
-    'review一下GPUDrivenStreaming',
-    'review一下这个链路',
-    'review下这个问题',
-  ]) {
-    const command = applyArgusCodeReviewIntentToChatCommand({
-      type: 'claude-command',
-      command: input,
-      options: {},
-    });
-
-    assert.match(command.command, /Review the current workspace changes/i);
-    assert.match(command.options.appendSystemPrompt, /Code review intent active/i);
-    assert.match(command.options.appendSystemPrompt, /git status --short/i);
-    assert.equal(command.options.argusCodeReviewIntent, true);
-  }
-});
-
-test('Argus treats short continuation in a review session as workspace review intent', async () => {
-  const command = applyArgusCodeReviewIntentToChatCommand({
+test('Argus leaves typo review requests on the native Claude Code path', async () => {
+  const original = {
     type: 'claude-command',
-    command: '继续',
+    command: 'reivew code',
+    options: {},
+  };
+  const command = applyArgusCodeReviewIntentToChatCommand(original);
+
+  assert.equal(command, original);
+});
+
+test('Argus leaves short continuation messages on the native Claude Code path', async () => {
+  const original = {
+    type: 'claude-command',
+    command: 'continue',
     options: {
       sessionId: 'session-123',
       resume: true,
-      sessionSummary: 'review下',
+      sessionSummary: 'review all code',
     },
-  });
+  };
+  const command = applyArgusCodeReviewIntentToChatCommand(original);
 
-  assert.match(command.command, /Review the current workspace changes/i);
-  assert.match(command.command, /Original user request: 继续/i);
-  assert.match(command.options.appendSystemPrompt, /Code review intent active/i);
-  assert.equal(command.options.argusCodeReviewIntent, true);
+  assert.equal(command, original);
 });
 
 test('Argus leaves non-terse review discussion prompts unchanged', async () => {
@@ -104,32 +77,10 @@ test('Argus leaves non-terse review discussion prompts unchanged', async () => {
   assert.equal(command, original);
 });
 
-test('Argus leaves Chinese code investigation command text unchanged but marks it for tool inspection', async () => {
-  for (const input of [
-    '检查下代码中的提示词是怎么注入的',
-    '检查下代码里的 prompt 为什么会显示这么多',
-    '看下代码中 appendSystemPrompt 是怎么拼进去的',
-  ]) {
-    const original = {
-      type: 'claude-command',
-      command: input,
-      options: {},
-    };
-    const command = applyArgusToolInspectionIntentToChatCommand(
-      applyArgusCodeReviewIntentToChatCommand(original),
-    );
-
-    assert.equal(command.command, input);
-    assert.equal(command.options.argusCodeReviewIntent, undefined);
-    assert.equal(command.options.argusToolInspectionIntent, true);
-    assert.match(command.options.appendSystemPrompt, /Repository inspection intent active/i);
-  }
-});
-
-test('Argus leaves ordinary prompt-injection discussion as normal chat', async () => {
+test('Argus leaves repository inspection requests on the native Claude Code path', async () => {
   const original = {
     type: 'claude-command',
-    command: '讲一下提示词注入是什么',
+    command: 'check how prompt injection is wired in the code',
     options: {},
   };
   const command = applyArgusToolInspectionIntentToChatCommand(
@@ -139,8 +90,21 @@ test('Argus leaves ordinary prompt-injection discussion as normal chat', async (
   assert.equal(command, original);
 });
 
-test('Argus tool inspection survives Obsidian policy prompt injection', async () => {
-  const originalCommand = '检查下代码中的提示词是怎么注入的';
+test('Argus leaves ordinary prompt-injection discussion as normal chat', async () => {
+  const original = {
+    type: 'claude-command',
+    command: 'explain what prompt injection means',
+    options: {},
+  };
+  const command = applyArgusToolInspectionIntentToChatCommand(
+    applyArgusCodeReviewIntentToChatCommand(original),
+  );
+
+  assert.equal(command, original);
+});
+
+test('Argus native inspection path still allows Obsidian policy prompt injection', async () => {
+  const originalCommand = 'check how prompt injection is wired in the code';
   const command = applyObsidianWikiPolicyPromptToChatCommand(
     applyArgusToolInspectionIntentToChatCommand(
       applyArgusCodeReviewIntentToChatCommand({
@@ -163,13 +127,8 @@ test('Argus tool inspection survives Obsidian policy prompt injection', async ()
 
   assert.equal(command.command, originalCommand);
   assert.equal(command.options.argusCodeReviewIntent, undefined);
-  assert.equal(command.options.argusToolInspectionIntent, true);
-  assert.match(command.options.appendSystemPrompt, /Repository inspection intent active/i);
+  assert.equal(command.options.argusToolInspectionIntent, undefined);
   assert.match(command.options.appendSystemPrompt, /Obsidian Wiki Policy/i);
-  assert.ok(
-    command.options.appendSystemPrompt.indexOf('Repository inspection intent active')
-      < command.options.appendSystemPrompt.indexOf('Obsidian Wiki Policy'),
-  );
 });
 
 test('Argus collaboration mode also follows persisted toolsSettings permissionMode', async () => {

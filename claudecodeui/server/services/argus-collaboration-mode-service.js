@@ -112,53 +112,6 @@ const PLAN_MODE_DENIED_TOOLS = Object.freeze([
   'EnterPlanMode',
 ]);
 
-const TERSE_CODE_REVIEW_REQUESTS = new Set([
-  'reviewcode',
-  'codereview',
-  'reivewcode',
-  'codereivew',
-  'reivew\u4ee3\u7801',
-  'reivew\u5168\u90e8\u4ee3\u7801',
-  'review代码',
-  '代码review',
-  '代码审查',
-  '审查代码',
-  '代码评审',
-  '评审代码',
-  'review一下代码',
-  '帮我review代码',
-  '帮我审查代码',
-  '帮我评审代码',
-]);
-
-const CASUAL_CODE_REVIEW_REQUEST_PATTERN = /^(?:please|pls|\u5e2e\u6211|\u8bf7|\u9ebb\u70e6)?(?:review|reivew|code\s*(?:review|reivew)|\u5ba1\u67e5|\u8bc4\u5ba1)(?:\u4e00\u4e0b|\u4e0b|\u5168\u90e8\u4ee3\u7801|\u5168\u90e8|\u4ee3\u7801|code|\u5f53\u524d\u4ee3\u7801|\u5f53\u524d\u6539\u52a8|\u6539\u52a8|diff|changes)?$/i;
-const REVIEW_SHORTCUT_MAX_LENGTH = 180;
-const CHINESE_REVIEW_SHORTCUT_PATTERN = /(?:^|[\s,.;:!?，。；：！？])(?:\u4f60\s*)?(?:(?:\u518d\u6b21|\u518d|\u5e2e\u6211|\u8bf7|\u9ebb\u70e6|\u597d\u597d|\u5f7b\u5e95|\u4ed4\u7ec6|\u4e25\u683c)\s*)+(?:code\s*)?(?:review|reivew)\s*(?:\u4e00\u4e0b|\u4e0b)?|(?:^|[\s,.;:!?，。；：！？])(?:code\s*)?(?:review|reivew)\s*(?:\u4e00\u4e0b|\u4e0b|\u5168\u90e8\u4ee3\u7801|\u5168\u90e8|\u4ee3\u7801)/i;
-const CHINESE_NATIVE_REVIEW_PATTERN = /(?:\u5ba1\u67e5|\u8bc4\u5ba1|\u590d\u67e5)\s*(?:\u4e00\u4e0b|\u4e0b)?\s*(?:\u4ee3\u7801|\u5f53\u524d|\u8fd9\u4e2a|\u94fe\u8def|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a|diff|pr|commit|repo)?|(?:\u4ee3\u7801|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a)\s*(?:\u5ba1\u67e5|\u8bc4\u5ba1|\u590d\u67e5)|(?:\u68c0\u67e5)\s*(?:\u4e00\u4e0b|\u4e0b)?\s*(?:(?:\u5f53\u524d|\u5168\u90e8)?\u4ee3\u7801|(?:\u5f53\u524d|\u8fd9\u4e2a|\u8fd9\u4e9b)?(?:\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a)|diff|pr|commit|repo)\s*$|(?:\u4ee3\u7801|\u6539\u52a8|\u53d8\u66f4|\u5dee\u5f02|\u63d0\u4ea4|\u5de5\u4f5c\u533a)\s*\u68c0\u67e5\s*$/i;
-const ENGLISH_CODE_REVIEW_SCOPE_PATTERN = /\b(code|diff|changes?|workspace|worktree|repo(?:sitory)?|pull request|pr|commit|branch|file|module|class|function|current|staged|working tree|audit)\b/i;
-const ENGLISH_CODE_REVIEW_PATTERN = /^(?:please|pls|can you|could you)?\s*(?:do\s+a\s+)?(?:code\s*)?(?:review|reivew|audit)\b/i;
-const REVIEW_CONTINUATION_PATTERN = /^(?:continue|proceed|go\s+on|carry\s+on|resume|\u7ee7\u7eed(?:\u5427|\u4e0b|\u4e00\u4e0b)?|\u63a5\u7740(?:\u6765)?|\u7ee7\u7eed\u68c0\u67e5)$/i;
-
-const CODE_REVIEW_INTENT_PROMPT = [
-  'Code review intent active.',
-  'Do not answer with an acknowledgement, promise, or plan such as "I will inspect".',
-  'Before any user-visible review response, call the available tools to inspect the repository.',
-  'Required checks when tools are available:',
-  '- git status --short',
-  '- git diff --stat',
-  '- git diff',
-  '- git diff --staged when staged files exist',
-  'If required tool access is unavailable, report that as a blocker instead of pretending the review was performed.',
-  'Final response must report findings first, ordered by severity, with file and line references when possible.',
-].join('\n');
-
-const TOOL_INSPECTION_INTENT_PROMPT = [
-  'Repository inspection intent active.',
-  'The user is asking about current code, files, prompts, or runtime behavior in this repository.',
-  'Before answering with conclusions, use available tools to search and read the relevant files.',
-  'Do not stop after only acknowledging the request or describing a plan. If tools are unavailable, say that clearly.',
-].join('\n');
-
 function appendPrompt(existing, addition) {
   const current = typeof existing === 'string' ? existing.trim() : '';
   const next = typeof addition === 'string' ? addition.trim() : '';
@@ -169,81 +122,6 @@ function appendPrompt(existing, addition) {
     return next;
   }
   return `${current}\n\n${next}`;
-}
-
-function normalizeReviewIntentCommand(command) {
-  return typeof command === 'string'
-    ? command.trim().replace(/\s+/g, ' ')
-    : '';
-}
-
-function isTerseCodeReviewRequest(command) {
-  const normalized = normalizeReviewIntentCommand(command);
-  if (!normalized || normalized.length > REVIEW_SHORTCUT_MAX_LENGTH) {
-    return false;
-  }
-  const compact = normalized.replace(/\s+/g, '').toLowerCase();
-  return TERSE_CODE_REVIEW_REQUESTS.has(compact)
-    || CASUAL_CODE_REVIEW_REQUEST_PATTERN.test(compact)
-    || CHINESE_REVIEW_SHORTCUT_PATTERN.test(normalized)
-    || CHINESE_NATIVE_REVIEW_PATTERN.test(normalized)
-    || (ENGLISH_CODE_REVIEW_PATTERN.test(normalized) && ENGLISH_CODE_REVIEW_SCOPE_PATTERN.test(normalized));
-}
-
-const TOOL_INSPECTION_REQUEST_MAX_LENGTH = 260;
-const CHINESE_TOOL_INSPECTION_PATTERN = /(?:\u68c0\u67e5|\u67e5\u770b|\u770b\u4e0b|\u770b\u4e00\u4e0b|\u67e5\u4e00\u4e0b|\u67e5\u4e0b|\u5b9a\u4f4d|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u68b3\u7406|\u6392\u67e5|\u8c03\u67e5).{0,120}(?:\u4ee3\u7801|\u4ed3\u5e93|\u5b9e\u73b0|\u6587\u4ef6|\u63d0\u793a\u8bcd|\u7cfb\u7edf\u63d0\u793a|system\s*prompt|appendSystemPrompt|prompt|inject|\u6ce8\u5165|\u94fe\u8def|\u903b\u8f91|\u51fd\u6570|\u6a21\u5757|\u670d\u52a1|\u524d\u7aef|\u540e\u7aef)|(?:\u4ee3\u7801|\u4ed3\u5e93|\u5b9e\u73b0|\u6587\u4ef6|\u63d0\u793a\u8bcd|\u7cfb\u7edf\u63d0\u793a|system\s*prompt|appendSystemPrompt|prompt|inject|\u6ce8\u5165|\u94fe\u8def|\u903b\u8f91|\u51fd\u6570|\u6a21\u5757|\u670d\u52a1|\u524d\u7aef|\u540e\u7aef).{0,120}(?:\u600e\u4e48|\u5982\u4f55|\u5728\u54ea|\u54ea\u91cc|\u4e3a\u4ec0\u4e48|\u4e3a\u5565|\u770b\u4e0b|\u67e5\u4e0b|\u68c0\u67e5|\u5b9a\u4f4d|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u68b3\u7406|\u6392\u67e5)/i;
-const ENGLISH_TOOL_INSPECTION_PATTERN = /\b(?:inspect|check|look\s+into|find|locate|trace|investigate|search|read)\b.{0,120}\b(?:code|implementation|files?|repo(?:sitory)?|prompt|system\s*prompt|inject|appendSystemPrompt|frontend|backend|server|runtime)\b/i;
-
-function isToolInspectionRequest(command) {
-  const normalized = normalizeReviewIntentCommand(command);
-  if (!normalized || normalized.length > TOOL_INSPECTION_REQUEST_MAX_LENGTH) {
-    return false;
-  }
-  if (isTerseCodeReviewRequest(normalized)) {
-    return false;
-  }
-  return CHINESE_TOOL_INSPECTION_PATTERN.test(normalized)
-    || ENGLISH_TOOL_INSPECTION_PATTERN.test(normalized);
-}
-
-function isShortContinuationRequest(command) {
-  const normalized = normalizeReviewIntentCommand(command);
-  return Boolean(
-    normalized
-    && normalized.length <= 40
-    && REVIEW_CONTINUATION_PATTERN.test(normalized),
-  );
-}
-
-function hasReviewSessionContext(data) {
-  const options = data?.options && typeof data.options === 'object' ? data.options : {};
-  const candidates = [
-    options.sessionSummary,
-    options.sessionName,
-    options.sessionTitle,
-    data?.sessionSummary,
-  ];
-  return candidates.some(candidate => isTerseCodeReviewRequest(candidate));
-}
-
-function buildWorkspaceReviewCommand(command) {
-  const normalized = normalizeReviewIntentCommand(command);
-  return [
-    'Review the current workspace changes or requested code scope in this repository.',
-    '',
-    'Before answering, inspect the current repository state and relevant diffs.',
-    'Use the available tools to check at least:',
-    '- git status',
-    '- git diff for the current working tree',
-    '- staged diff when staged files exist',
-    '- relevant files, symbols, or call chains named in the original request',
-    '',
-    'Do not modify files. Do not only acknowledge the request.',
-    'Report findings first, ordered by severity, with file and line references when possible.',
-    'If there are no actionable findings, say that clearly and mention any remaining test or verification gaps.',
-    '',
-    `Original user request: ${normalized}`,
-  ].join('\n');
 }
 
 export function getArgusPlanModeAllowedTools() {
@@ -263,48 +141,11 @@ export function buildSubagentDispatchPrompt() {
 }
 
 export function applyArgusCodeReviewIntentToChatCommand(data) {
-  if (!data || typeof data !== 'object' || data.type !== 'claude-command') {
-    return data;
-  }
-  if (data.options?.argusCodeReviewIntent === true) {
-    return data;
-  }
-  const isReviewRequest = isTerseCodeReviewRequest(data.command)
-    || (isShortContinuationRequest(data.command) && hasReviewSessionContext(data));
-  if (!isReviewRequest) {
-    return data;
-  }
-
-  return {
-    ...data,
-    command: buildWorkspaceReviewCommand(data.command),
-    options: {
-      ...(data.options || {}),
-      appendSystemPrompt: appendPrompt(data.options?.appendSystemPrompt, CODE_REVIEW_INTENT_PROMPT),
-      argusCodeReviewIntent: true,
-    },
-  };
+  return data;
 }
 
 export function applyArgusToolInspectionIntentToChatCommand(data) {
-  if (!data || typeof data !== 'object' || data.type !== 'claude-command') {
-    return data;
-  }
-  if (data.options?.argusCodeReviewIntent === true || data.options?.argusToolInspectionIntent === true) {
-    return data;
-  }
-  if (!isToolInspectionRequest(data.command)) {
-    return data;
-  }
-
-  return {
-    ...data,
-    options: {
-      ...(data.options || {}),
-      appendSystemPrompt: appendPrompt(data.options?.appendSystemPrompt, TOOL_INSPECTION_INTENT_PROMPT),
-      argusToolInspectionIntent: true,
-    },
-  };
+  return data;
 }
 
 export function resolveArgusPermissionMode(options = {}) {
