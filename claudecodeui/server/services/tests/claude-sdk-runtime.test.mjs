@@ -9,6 +9,7 @@ import {
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
+  createMtlCodeFreshSessionOptionsForRuntimeChange,
   getMtlCodeToolUseNames,
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
@@ -151,8 +152,8 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   assert.match(source, /bareMode:\s*shouldUseBareMode\(childEnv\)/);
   assert.match(source, /hasBareFlag:\s*cliArgs\.includes\('--bare'\)/);
   assert.match(source, /hasAppendSystemPromptFlag:\s*cliArgs\.includes\('--append-system-prompt'\)/);
-  assert.match(source, /await emitPromptInjectionDebug\(ws,\s*options,\s*childEnv,\s*cliArgs,\s*capturedSessionId \|\| sessionId \|\| clientSessionId \|\| null,\s*\{/);
-  assert.match(source, /emitPromptInjectionDebug\(ws,\s*options,\s*childEnv,\s*cliArgs,\s*capturedSessionId \|\| sessionId \|\| clientSessionId \|\| null,\s*\{/);
+  assert.match(source, /const captureAndEmitPromptDebug = async \(activeOptions,\s*activeCliArgs\) =>/);
+  assert.match(source, /emitPromptInjectionDebug\(\s*ws,\s*activeOptions,\s*childEnv,\s*activeCliArgs,\s*capturedSessionId \|\| activeOptions\.sessionId \|\| clientSessionId \|\| null,/);
   assert.match(source, /effectiveCommand:\s*finalCommand/);
 });
 
@@ -246,6 +247,28 @@ test('Argus runtime signatures ignore resume ids for persistent process reuse', 
   });
 
   assert.equal(resumedTurn, firstLaunch);
+});
+
+test('Argus runtime changes restart as a fresh native session instead of resuming stale runtime state', () => {
+  const originalOptions = {
+    sessionId: 'old-native-session',
+    clientSessionId: 'old-native-session',
+    model: 'mimo-v2.5',
+    appendSystemPrompt: 'keep existing prompt context',
+  };
+
+  const restartOptions = createMtlCodeFreshSessionOptionsForRuntimeChange(originalOptions);
+  const args = buildMtlCodeArgs(restartOptions, {
+    MTL_CODE_UI_BARE: '0',
+    MTL_CODE_USE_OPENAI: '0',
+    ANTHROPIC_MODEL: 'mimo-v2.5',
+  });
+
+  assert.equal(originalOptions.sessionId, 'old-native-session');
+  assert.equal(restartOptions.sessionId, undefined);
+  assert.equal(restartOptions.clientSessionId, 'old-native-session');
+  assert.equal(args.includes('--resume'), false);
+  assert.equal(args.includes('--append-system-prompt'), true);
 });
 
 test('Argus persistent idle sessions are not reported as currently processing', () => {

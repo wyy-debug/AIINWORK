@@ -363,6 +363,7 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'hasExistingSession',
     'busy',
     'closed',
+    'resumeSuppressedForRuntimeChange',
   ]) {
     if (typeof details[key] === 'boolean') {
       payload[key] = details[key];
@@ -669,6 +670,12 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
   }
 
   return args;
+}
+
+function createMtlCodeFreshSessionOptionsForRuntimeChange(options = {}) {
+  const freshOptions = { ...options };
+  delete freshOptions.sessionId;
+  return freshOptions;
 }
 
 function buildMtlCodeRuntimeSignature({ cwd = '', cliArgs = [], env = {} } = {}) {
@@ -1967,24 +1974,38 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       throw new Error(permission.reason || 'Argus backend spawn is not allowed by runtime permissions');
     }
     const childEnv = await buildMtlCodeSpawnEnv(options);
-    const cliArgs = buildMtlCodeArgs(options, childEnv);
+    let spawnOptions = options;
+    let cliArgs = buildMtlCodeArgs(spawnOptions, childEnv);
     runtimeSignature = buildMtlCodeRuntimeSignature({ cwd, cliArgs, env: childEnv });
     promptDebugChildEnv = childEnv;
     promptDebugCliArgs = cliArgs;
-    const nativeSystemPrompt = options.debugPromptInjection === true
-      ? await captureNativeSystemPrompt(launches, cliArgs, childEnv, cwd)
-      : '';
-    promptDebugNativeSystemPrompt = nativeSystemPrompt;
     const reuseSessionKey = typeof sessionId === 'string' && sessionId.trim()
       ? sessionId.trim()
       : clientSessionId;
     const existingSession = reuseSessionKey ? getSession(reuseSessionKey) : null;
-    await emitPromptInjectionDebug(ws, options, childEnv, cliArgs, capturedSessionId || sessionId || clientSessionId || null, {
-      originalCommand: options.debugPromptInjectionOriginalCommand || command,
-      effectiveCommand: finalCommand,
-    }, nativeSystemPrompt);
+    const captureAndEmitPromptDebug = async (activeOptions, activeCliArgs) => {
+      const nativeSystemPrompt = activeOptions.debugPromptInjection === true
+        ? await captureNativeSystemPrompt(launches, activeCliArgs, childEnv, cwd)
+        : '';
+      promptDebugNativeSystemPrompt = nativeSystemPrompt;
+      promptDebugCliArgs = activeCliArgs;
+      await emitPromptInjectionDebug(
+        ws,
+        activeOptions,
+        childEnv,
+        activeCliArgs,
+        capturedSessionId || activeOptions.sessionId || clientSessionId || null,
+        {
+          originalCommand: activeOptions.debugPromptInjectionOriginalCommand || command,
+          effectiveCommand: finalCommand,
+        },
+        nativeSystemPrompt,
+      );
+      return nativeSystemPrompt;
+    };
 
     if (canReuseMtlCodeSession(existingSession, runtimeSignature)) {
+      const nativeSystemPrompt = await captureAndEmitPromptDebug(options, cliArgs);
       logMtlCodeSessionLifecycle('session_reuse', {
         sessionId,
         clientSessionId,
@@ -2030,10 +2051,19 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         clientSessionId,
         reuseSessionKey,
         runtimeSignature,
+        resumeSuppressedForRuntimeChange: true,
       });
       closeMtlCodePersistentSession(existingSession.instance, 'runtime_changed');
       removeSession(reuseSessionKey);
+      spawnOptions = createMtlCodeFreshSessionOptionsForRuntimeChange(options);
+      capturedSessionId = null;
+      sessionCreatedSent = false;
+      cliArgs = buildMtlCodeArgs(spawnOptions, childEnv);
+      runtimeSignature = buildMtlCodeRuntimeSignature({ cwd, cliArgs, env: childEnv });
+      promptDebugCliArgs = cliArgs;
     }
+
+    const nativeSystemPrompt = await captureAndEmitPromptDebug(spawnOptions, cliArgs);
 
     let lastSpawnError = null;
 
@@ -2041,7 +2071,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       const args = [...launch.argsPrefix, ...cliArgs];
       console.log('[Argus] Starting backend:', launch.displayCommand);
       logMtlCodeSessionLifecycle('spawn_attempt', {
-        sessionId,
+        sessionId: spawnOptions.sessionId,
         clientSessionId,
         cwd,
         launch: launch.displayCommand,
@@ -2050,6 +2080,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         apiProvider: getMtlCodeApiProvider(childEnv),
         requestModel: getMtlCodeRequestModel(childEnv),
         effectiveCommand: finalCommand,
+        resumeSuppressedForRuntimeChange: spawnOptions.sessionId !== sessionId,
       });
       let candidateChild;
       try {
@@ -2073,7 +2104,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         await waitForMtlCodeSpawn(candidateChild);
         child = candidateChild;
         logMtlCodeSessionLifecycle('spawn_started', {
-          sessionId,
+          sessionId: spawnOptions.sessionId,
           clientSessionId,
           cwd,
           launch: launch.displayCommand,
@@ -2099,7 +2130,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     sessionInstance = createSessionInstance(child);
 
-    if (sessionId || clientSessionId) {
+    if (spawnOptions.sessionId || clientSessionId) {
       registerSession(capturedSessionId || clientSessionId);
     }
 
@@ -2193,10 +2224,10 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         }
       });
 
-    await startTurn(finalCommand, options, ws, {
+    await startTurn(finalCommand, spawnOptions, ws, {
       tempImagePaths,
       tempDir,
-      synthetic: options.argusSyntheticInitialMessage === true,
+      synthetic: spawnOptions.argusSyntheticInitialMessage === true,
       childEnv,
       cliArgs,
       nativeSystemPrompt,
@@ -2729,6 +2760,7 @@ export {
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
+  createMtlCodeFreshSessionOptionsForRuntimeChange,
   isMtlCodeSessionProcessing,
   closeMtlCodePersistentSession,
   getMtlCodeToolUseNames,
