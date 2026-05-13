@@ -13,6 +13,7 @@ import {
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
+  isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryInspectionToolUse,
   shouldSendInspectionPreflightAfterFallback,
   shouldStartCodeReviewFallbackRunAfterClose,
@@ -178,6 +179,32 @@ test('Argus runtime signatures ignore resume ids for persistent process reuse', 
   });
 
   assert.equal(resumedTurn, firstLaunch);
+});
+
+test('Argus persistent idle sessions are not reported as currently processing', () => {
+  assert.equal(isMtlCodeSessionProcessing({
+    status: 'active',
+    instance: {
+      isBusy: () => false,
+      isClosed: () => false,
+    },
+  }), false);
+
+  assert.equal(isMtlCodeSessionProcessing({
+    status: 'active',
+    instance: {
+      isBusy: () => true,
+      isClosed: () => false,
+    },
+  }), true);
+
+  assert.equal(isMtlCodeSessionProcessing({
+    status: 'active',
+    instance: {
+      isBusy: () => true,
+      isClosed: () => true,
+    },
+  }), false);
 });
 
 test('Argus runtime diagnostics suppress OpenMythos runtime card when final launch is bare', async () => {

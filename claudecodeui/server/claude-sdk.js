@@ -1410,6 +1410,32 @@ function getAllSessions() {
   return Array.from(activeSessions.keys());
 }
 
+function isMtlCodeSessionProcessAlive(session) {
+  if (!session || session.status !== 'active') {
+    return false;
+  }
+
+  const instance = session.instance;
+  if (typeof instance?.isClosed === 'function' && instance.isClosed()) {
+    return false;
+  }
+
+  return true;
+}
+
+function isMtlCodeSessionProcessing(session) {
+  if (!isMtlCodeSessionProcessAlive(session)) {
+    return false;
+  }
+
+  const instance = session.instance;
+  if (typeof instance?.isBusy === 'function') {
+    return instance.isBusy() === true;
+  }
+
+  return true;
+}
+
 function isMtlCodeUserAbort(child) {
   return child?._mtlCodeAborted === true;
 }
@@ -3019,13 +3045,12 @@ function sendClaudeSDKTaskControl(sessionId, control = {}) {
 }
 
 /**
- * Checks if an SDK session is currently active
+ * Checks if an SDK session is currently processing a turn.
  * @param {string} sessionId - Session identifier
- * @returns {boolean} True if session is active
+ * @returns {boolean} True if the session is processing
  */
 function isClaudeSDKSessionActive(sessionId) {
-  const session = getSession(sessionId);
-  return session && session.status === 'active';
+  return isMtlCodeSessionProcessing(getSession(sessionId));
 }
 
 /**
@@ -3095,6 +3120,7 @@ export {
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
+  isMtlCodeSessionProcessing,
   closeMtlCodePersistentSession,
   messageHasMtlCodeRepositoryInspectionToolUse,
   runArgusInspectionPreflight,
