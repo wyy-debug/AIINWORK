@@ -2259,6 +2259,7 @@ function createRuntimePermissionSnapshot(data) {
     const bypassPermissions = permissionMode !== 'plan' && Boolean(
         skipPermissions || permissionMode === 'bypassPermissions'
     );
+    const modeAllowsFileEdits = permissionMode === 'acceptEdits' || bypassPermissions;
     const allowedSet = new Set(toolsSettings.allowedTools.map((tool) => tool.trim()).filter(Boolean));
     const conflicts = toolsSettings.disallowedTools
         .map((tool) => tool.trim())
@@ -2272,6 +2273,10 @@ function createRuntimePermissionSnapshot(data) {
         ? '权限已按当前设置跳过，除非 provider runtime 还有更严格的原生限制。'
         : permissionMode === 'plan'
             ? '当前为 Plan 模式，后端不会启用全权限跳过。'
+            : permissionMode === 'acceptEdits'
+                ? (matchedRules.length > 0
+                    ? 'Accept edits mode is active; file edit tools follow provider acceptEdits policy. Extra allow/deny rules were also configured; unmatched Bash/MCP/dangerous tools may still request confirmation.'
+                    : 'Accept edits mode is active; allowedTools is empty only means no extra allow rules. File edit tools follow provider acceptEdits policy; Bash/MCP/dangerous tools may still request confirmation.')
             : matchedRules.length > 0
                 ? '后端已收到允许/拒绝规则；未命中的工具仍可能触发权限申请。'
                 : '未配置允许规则，工具调用会按 provider 默认权限策略申请确认。';
@@ -2282,6 +2287,7 @@ function createRuntimePermissionSnapshot(data) {
         allowedTools: toolsSettings.allowedTools,
         disallowedTools: toolsSettings.disallowedTools,
         bypassPermissions,
+        modeAllowsFileEdits,
         sources: {
             global: {
                 allowedTools: toolsSettings.allowedTools,

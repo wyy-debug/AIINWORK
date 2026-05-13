@@ -218,6 +218,15 @@ test('Argus runtime diagnostics suppress OpenMythos runtime card when final laun
   assert.match(source, /const previewRuntimeCard = openMythosRuntimeCardActive\s*\?/);
 });
 
+test('Argus runtime permission diagnostics distinguish acceptEdits from allow rules', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../index.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.match(source, /modeAllowsFileEdits/);
+  assert.match(source, /Accept edits mode is active/);
+  assert.match(source, /allowedTools is empty only means no extra allow rules/);
+});
+
 test('Argus session runtime prompt merge preserves existing review intent prompts', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../index.js');
   const source = await fs.readFile(sourcePath, 'utf8');
