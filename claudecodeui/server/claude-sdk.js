@@ -360,6 +360,8 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'shouldSendReviewFallback',
     'shouldSendInspectionFallback',
     'shouldSendPreflight',
+    'shouldSendIncompleteToolUsePreflight',
+    'sawContentToolUse',
     'aborted',
     'hasExistingSession',
     'busy',
@@ -998,6 +1000,15 @@ function isRepositoryInspectionBashCommand(input = {}) {
   return /(^|[;&|()\s])(?:git\s+(?:status|diff|show|log|ls-files|grep)|rg|grep|find|ls|dir|pwd|tree|cat|sed|nl|wc|Get-ChildItem|Select-String|Get-Content|Test-Path)\b/i.test(command);
 }
 
+function isRepositoryContentBashCommand(input = {}) {
+  const command = getToolInputCommand(input).trim();
+  if (!command) {
+    return false;
+  }
+
+  return /(^|[;&|()\s])(?:git\s+(?:diff|show)|cat|sed|nl|Get-Content)\b/i.test(command);
+}
+
 function isRepositoryInspectionToolUse(tool = {}) {
   const name = String(tool.name || '').trim();
   if (/^(Read|Grep|Glob|LS|FileRead|View|NotebookRead)$/i.test(name)) {
@@ -1011,6 +1022,21 @@ function isRepositoryInspectionToolUse(tool = {}) {
 
 function messageHasMtlCodeRepositoryInspectionToolUse(message = {}) {
   return getMtlCodeToolUses(message).some(isRepositoryInspectionToolUse);
+}
+
+function isRepositoryContentToolUse(tool = {}) {
+  const name = String(tool.name || '').trim();
+  if (/^(Read|FileRead|View|NotebookRead)$/i.test(name)) {
+    return true;
+  }
+  if (/^(Bash|Shell)$/i.test(name)) {
+    return isRepositoryContentBashCommand(tool.input);
+  }
+  return false;
+}
+
+function messageHasMtlCodeRepositoryContentToolUse(message = {}) {
+  return getMtlCodeToolUses(message).some(isRepositoryContentToolUse);
 }
 
 function isCodeReviewAcknowledgementText(text = '') {
@@ -1079,8 +1105,10 @@ function isInspectionContinuationPlanText(text = '') {
 
 function shouldSendInspectionPreflightAfterIncompleteToolUse({
   options = {},
+  fallbackSent = false,
   preflightSent = false,
   sawToolUse = false,
+  sawContentToolUse = false,
   assistantText = '',
 } = {}) {
   if (preflightSent === true || sawToolUse !== true) {
@@ -1091,7 +1119,8 @@ function shouldSendInspectionPreflightAfterIncompleteToolUse({
     return false;
   }
 
-  return isInspectionContinuationPlanText(assistantText);
+  return isInspectionContinuationPlanText(assistantText)
+    || (fallbackSent === true && sawContentToolUse !== true);
 }
 
 function buildInspectionSearchTerms(command = '') {
@@ -1820,6 +1849,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let currentTurnStartedAt = 0;
   let resultReceived = false;
   let codeReviewToolUseSeen = false;
+  let codeReviewContentToolUseSeen = false;
   let codeReviewFallbackSent = options.argusInspectionFallbackAlreadySent === true;
   let codeReviewPreflightSent = options.argusInspectionPreflightSent === true;
   let codeReviewAssistantText = '';
@@ -1935,6 +1965,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     currentTurnTempDir = turnContext.tempDir || null;
     resultReceived = false;
     codeReviewToolUseSeen = false;
+    codeReviewContentToolUseSeen = false;
     codeReviewFallbackSent = nextOptions.argusInspectionFallbackAlreadySent === true;
     codeReviewPreflightSent = nextOptions.argusInspectionPreflightSent === true;
     codeReviewAssistantText = '';
@@ -2189,6 +2220,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     if (messageHasMtlCodeRepositoryInspectionToolUse(message)) {
       codeReviewToolUseSeen = true;
     }
+    if (messageHasMtlCodeRepositoryContentToolUse(message)) {
+      codeReviewContentToolUseSeen = true;
+    }
     const assistantText = extractMtlCodeAssistantText(message);
     if (assistantText) {
       codeReviewAssistantText = codeReviewAssistantText
@@ -2246,8 +2280,10 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       });
       const shouldSendIncompleteToolUsePreflight = shouldSendInspectionPreflightAfterIncompleteToolUse({
         options: currentOptions,
+        fallbackSent: codeReviewFallbackSent,
         preflightSent: codeReviewPreflightSent,
         sawToolUse: codeReviewToolUseSeen,
+        sawContentToolUse: codeReviewContentToolUseSeen,
         assistantText: codeReviewAssistantText,
       });
       const shouldInjectPreflight = shouldSendPreflight || shouldSendIncompleteToolUsePreflight;
@@ -2256,6 +2292,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         sessionId: sid,
         resultReceived,
         sawToolUse: codeReviewToolUseSeen,
+        sawContentToolUse: codeReviewContentToolUseSeen,
         fallbackSent: codeReviewFallbackSent,
         preflightSent: codeReviewPreflightSent,
         assistantText: codeReviewAssistantText,
@@ -2269,6 +2306,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         resultReceived = false;
         codeReviewAssistantText = '';
         codeReviewToolUseSeen = false;
+        codeReviewContentToolUseSeen = false;
         codeReviewFallbackPrompt = shouldSendReviewFallback
           ? buildCodeReviewToolFallbackPrompt()
           : buildToolInspectionFallbackPrompt();
@@ -2305,6 +2343,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         resultReceived = false;
         codeReviewAssistantText = '';
         codeReviewToolUseSeen = false;
+        codeReviewContentToolUseSeen = false;
         const preflightIntent = currentOptions?.argusCodeReviewIntent === true ? 'code_review' : 'tool_inspection';
         const preflightResult = await runArgusInspectionPreflight({
           intent: preflightIntent,
@@ -3162,6 +3201,7 @@ export {
   canReuseMtlCodeSession,
   isMtlCodeSessionProcessing,
   closeMtlCodePersistentSession,
+  messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
   runArgusInspectionPreflight,
   shouldSendCodeReviewToolFallback,

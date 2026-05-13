@@ -14,6 +14,7 @@ import {
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
   isMtlCodeSessionProcessing,
+  messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
   shouldSendInspectionPreflightAfterFallback,
   shouldSendInspectionPreflightAfterIncompleteToolUse,
@@ -367,6 +368,39 @@ test('Argus inspection gates ignore non-repository tool calls', () => {
   }), false);
 });
 
+test('Argus distinguishes repository search from substantive content inspection', () => {
+  assert.equal(messageHasMtlCodeRepositoryContentToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Grep', input: { pattern: 'appendSystemPrompt' } },
+        { type: 'tool_use', name: 'Glob', input: { pattern: '**/*prompt*.ts' } },
+      ],
+    },
+  }), false);
+
+  assert.equal(messageHasMtlCodeRepositoryContentToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: 'claudecodeui/server/claude-sdk.js' } },
+      ],
+    },
+  }), true);
+
+  assert.equal(messageHasMtlCodeRepositoryContentToolUse({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'git diff -- claudecodeui/server/claude-sdk.js' } },
+      ],
+    },
+  }), true);
+});
+
 test('Argus fallback guidance is written as a synthetic internal user message', () => {
   const message = createMtlCodeSyntheticUserMessage(buildToolInspectionFallbackPrompt());
 
@@ -444,8 +478,19 @@ test('Argus sends a preflight context prompt when tool use still ends in a conti
 
   assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
     options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
     preflightSent: false,
     sawToolUse: true,
+    sawContentToolUse: false,
+    assistantText: 'I found the prompt files and entry points in the runtime layer.',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
+    options: { argusToolInspectionIntent: true },
+    fallbackSent: true,
+    preflightSent: false,
+    sawToolUse: true,
+    sawContentToolUse: true,
     assistantText: 'The prompt injection path is implemented in claudecodeui/server/claude-sdk.js via appendSystemPrompt.',
   }), false);
 
