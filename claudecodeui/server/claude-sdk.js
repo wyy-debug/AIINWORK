@@ -889,8 +889,12 @@ function buildArgusInspectionPreflightPrompt({
   intent = 'tool_inspection',
   originalCommand = '',
   result = {},
+  reason = 'no_tool_use',
 } = {}) {
   const intentLabel = intent === 'code_review' ? 'code review' : 'repository inspection';
+  const reasonText = reason === 'partial_tool_use'
+    ? 'Argus performed a read-only repository preflight because the previous response stopped after partial tool use without answering the user.'
+    : 'Argus performed a read-only repository preflight because the previous response still did not use tools.';
   const sections = Array.isArray(result.sections) && result.sections.length > 0
     ? result.sections.map(formatPreflightSection).join('\n\n')
     : 'No preflight command output was captured.';
@@ -899,7 +903,7 @@ function buildArgusInspectionPreflightPrompt({
     : 'Use the inspected paths and outputs below as grounding, then answer the user directly.';
 
   return ensureArgusInternalFallbackPrefix([
-    'Argus performed a read-only repository preflight because the previous response still did not use tools.',
+    reasonText,
     `Intent: ${intentLabel}`,
     originalCommand ? `Original user request: ${originalCommand}` : '',
     result.cwd ? `Working directory: ${result.cwd}` : '',
@@ -1061,6 +1065,33 @@ function shouldSendInspectionPreflightAfterFallback({
 
   return options?.argusCodeReviewIntent === true
     || options?.argusToolInspectionIntent === true;
+}
+
+function isInspectionContinuationPlanText(text = '') {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /(?:\b(?:next|then|after that|from here|now)\b.{0,120}\b(?:i(?:'ll| will| am going to)|let me|we need to|need to)\b.{0,180}\b(?:read|open|inspect|check|trace|confirm|explain|answer|continue)\b|\b(?:i(?:'ll| will| am going to)|let me)\b.{0,120}\b(?:continue|read|open|inspect|check|trace|confirm)\b)/i.test(normalized)
+    || /(?:\u63a5\u4e0b\u6765|\u7136\u540e|\u4e0b\u4e00\u6b65|\u7ee7\u7eed|\u4f1a\u7ee7\u7eed|\u6211\u4f1a\u7ee7\u7eed|\u6211\u5c06\u7ee7\u7eed).{0,180}(?:\u8bfb|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68b3\u7406|\u786e\u8ba4|\u8ffd\u8e2a|\u8bf4\u660e|\u89e3\u91ca|\u56de\u7b54)/u.test(normalized);
+}
+
+function shouldSendInspectionPreflightAfterIncompleteToolUse({
+  options = {},
+  preflightSent = false,
+  sawToolUse = false,
+  assistantText = '',
+} = {}) {
+  if (preflightSent === true || sawToolUse !== true) {
+    return false;
+  }
+
+  if (options?.argusCodeReviewIntent !== true && options?.argusToolInspectionIntent !== true) {
+    return false;
+  }
+
+  return isInspectionContinuationPlanText(assistantText);
 }
 
 function buildInspectionSearchTerms(command = '') {
@@ -2213,6 +2244,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         sawToolUse: codeReviewToolUseSeen,
         assistantText: codeReviewAssistantText,
       });
+      const shouldSendIncompleteToolUsePreflight = shouldSendInspectionPreflightAfterIncompleteToolUse({
+        options: currentOptions,
+        preflightSent: codeReviewPreflightSent,
+        sawToolUse: codeReviewToolUseSeen,
+        assistantText: codeReviewAssistantText,
+      });
+      const shouldInjectPreflight = shouldSendPreflight || shouldSendIncompleteToolUsePreflight;
       logMtlCodeSessionLifecycle('result_received', {
         turnId: currentTurnId,
         sessionId: sid,
@@ -2224,6 +2262,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         shouldSendReviewFallback,
         shouldSendInspectionFallback,
         shouldSendPreflight,
+        shouldSendIncompleteToolUsePreflight,
       });
       if (shouldSendReviewFallback || shouldSendInspectionFallback) {
         codeReviewFallbackSent = true;
@@ -2261,7 +2300,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
         return;
       }
-      if (shouldSendPreflight) {
+      if (shouldInjectPreflight) {
         codeReviewPreflightSent = true;
         resultReceived = false;
         codeReviewAssistantText = '';
@@ -2276,6 +2315,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
           intent: preflightIntent,
           originalCommand: currentCommand,
           result: preflightResult,
+          reason: shouldSendIncompleteToolUsePreflight ? 'partial_tool_use' : 'no_tool_use',
         });
         codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
         logMtlCodeSessionLifecycle('preflight_injected', {
@@ -3127,5 +3167,6 @@ export {
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
   shouldSendInspectionPreflightAfterFallback,
+  shouldSendInspectionPreflightAfterIncompleteToolUse,
   shouldStartCodeReviewFallbackRunAfterClose
 };

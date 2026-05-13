@@ -16,6 +16,7 @@ import {
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryInspectionToolUse,
   shouldSendInspectionPreflightAfterFallback,
+  shouldSendInspectionPreflightAfterIncompleteToolUse,
   shouldStartCodeReviewFallbackRunAfterClose,
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
@@ -423,6 +424,36 @@ test('Argus sends a preflight context prompt when hidden fallback also receives 
     preflightSent: false,
     sawToolUse: true,
     assistantText: 'I will inspect the repository.',
+  }), false);
+});
+
+test('Argus sends a preflight context prompt when tool use still ends in a continuation plan', () => {
+  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: false,
+    sawToolUse: true,
+    assistantText: '\u6211\u5df2\u7ecf\u627e\u5230\u6838\u5fc3\u63d0\u793a\u8bcd\u6587\u4ef6\u548c\u51e0\u5904\u8fd0\u884c\u65f6\u5165\u53e3\u3002\u63a5\u4e0b\u6765\u6211\u4f1a\u8bfb\u8c03\u7528\u94fe\u76f8\u5173\u6587\u4ef6\uff0c\u786e\u8ba4\u5b9a\u4e49\u597d\u7684\u63d0\u793a\u8bcd\u6700\u7ec8\u662f\u600e\u6837\u8fdb\u5165\u8bf7\u6c42\u4e0a\u4e0b\u6587\u7684\u3002',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: false,
+    sawToolUse: true,
+    assistantText: 'I found the prompt files. Next I will read the SDK call chain and explain how they are injected.',
+  }), true);
+
+  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: false,
+    sawToolUse: true,
+    assistantText: 'The prompt injection path is implemented in claudecodeui/server/claude-sdk.js via appendSystemPrompt.',
+  }), false);
+
+  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: true,
+    sawToolUse: true,
+    assistantText: 'Next I will read the files.',
   }), false);
 });
 
