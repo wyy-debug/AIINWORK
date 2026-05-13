@@ -606,9 +606,11 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 
   if (requestedPermissionMode === 'plan') {
     args.push('--tools', ...getArgusPlanModeAllowedTools());
-  } else if (settings.allowedTools?.length > 0) {
-    args.push('--allowedTools', ...settings.allowedTools);
   }
+  // Host allowedTools are auto-approval rules handled by the stdio
+  // permission prompt. Passing them through as Claude Code --allowedTools
+  // narrows native tool guidance and can hide read/search tools from normal
+  // investigation turns.
 
   const disallowedTools = requestedPermissionMode === 'plan'
     ? mergeUniqueToolRules(settings.disallowedTools, getArgusPlanModeDeniedTools())
@@ -3552,6 +3554,7 @@ export {
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
   createMtlCodeSyntheticUserMessage,
+  buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,

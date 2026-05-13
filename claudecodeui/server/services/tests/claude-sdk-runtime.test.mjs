@@ -10,6 +10,7 @@ import {
   buildArgusInspectionPreflightPrompt,
   buildCodeReviewToolFallbackPrompt,
   buildToolInspectionFallbackPrompt,
+  buildMtlCodeArgs,
   createMtlCodeSyntheticUserMessage,
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
@@ -25,6 +26,46 @@ import {
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
 } from '../../claude-sdk.js';
+
+test('Argus host allow rules do not narrow native Claude Code tools in normal modes', () => {
+  const args = buildMtlCodeArgs({
+    permissionMode: 'default',
+    toolsSettings: {
+      allowedTools: ['spawn_agent'],
+      disallowedTools: [],
+      skipPermissions: false,
+    },
+  }, { MTL_CODE_UI_BARE: '0' });
+
+  assert.equal(args.includes('--allowedTools'), false);
+
+  const acceptEditsArgs = buildMtlCodeArgs({
+    permissionMode: 'acceptEdits',
+    toolsSettings: {
+      allowedTools: ['spawn_agent'],
+      disallowedTools: [],
+      skipPermissions: false,
+    },
+  }, { MTL_CODE_UI_BARE: '0' });
+
+  assert.equal(acceptEditsArgs.includes('--allowedTools'), false);
+  assert.equal(acceptEditsArgs.includes('--permission-mode'), true);
+  assert.equal(acceptEditsArgs[acceptEditsArgs.indexOf('--permission-mode') + 1], 'acceptEdits');
+});
+
+test('Argus plan mode still constrains the native Claude Code tool surface', () => {
+  const args = buildMtlCodeArgs({
+    permissionMode: 'plan',
+    toolsSettings: {
+      allowedTools: ['spawn_agent'],
+      disallowedTools: [],
+      skipPermissions: false,
+    },
+  }, { MTL_CODE_UI_BARE: '0' });
+
+  assert.equal(args.includes('--allowedTools'), false);
+  assert.equal(args.includes('--tools'), true);
+});
 
 test('Argus session lifecycle log payload redacts prompts and hashes runtime signatures', () => {
   const payload = buildMtlCodeSessionLogPayload('turn_start', {

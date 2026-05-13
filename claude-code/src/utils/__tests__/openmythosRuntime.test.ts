@@ -82,6 +82,18 @@ describe('openmythos runtime card', () => {
     expect(getOpenMythosPhase(card!, card!.loopBudget)).toBe('finalize')
   })
 
+  test('treats repository inspection prompts as multi-turn codebase work', () => {
+    const card = buildOpenMythosRuntimeCard(
+      '\u68c0\u67e5\u4e0b\u4ee3\u7801\u4e2d\u7684\u63d0\u793a\u8bcd\u662f\u600e\u4e48\u6ce8\u5165\u7684',
+    )
+
+    expect(card?.effort).not.toBe('low')
+    expect(card?.loopBudget).toBeGreaterThanOrEqual(4)
+    expect(card?.reasons).toContain('repository inspection requested')
+    expect(card?.routes.join(' ')).toContain('Search and read relevant files')
+    expect(card?.phasePlan).toContain('plan')
+  })
+
   test('keeps code review runtime card active in bare simple mode', () => {
     process.env.MTL_CODE_SIMPLE = '1'
 
