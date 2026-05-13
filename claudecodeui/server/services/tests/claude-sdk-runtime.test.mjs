@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'vitest';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,8 @@ import {
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
+  runArgusInspectionPreflight,
+  shouldSendPostPreflightAnswerPrompt,
   shouldSendInspectionPreflightAfterFallback,
   shouldSendInspectionPreflightAfterIncompleteToolUse,
   shouldStartCodeReviewFallbackRunAfterClose,
@@ -511,6 +514,32 @@ test('Argus sends a preflight context prompt when tool use still ends in a conti
   }), false);
 });
 
+test('Argus keeps the turn alive after preflight when the assistant still promises future inspection', () => {
+  assert.equal(shouldSendPostPreflightAnswerPrompt({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: true,
+    postPreflightPromptSent: false,
+    sawToolUse: false,
+    assistantText: '\u524d\u4e24\u6b21\u6ca1\u6709\u771f\u6b63\u8bfb\u53d6\u4ed3\u5e93\uff0c\u8fd9\u662f\u6211\u7684\u95ee\u9898\u3002Argus \u9884\u68c0\u4e5f\u5931\u8d25\u4e86\uff0c\u62a5\u4e86 spawn rg ENOENT\u3002\u6211\u6539\u7528\u5f53\u524d\u4f1a\u8bdd\u5185\u7f6e\u7684\u4ed3\u5e93\u641c\u7d22\u548c\u8bfb\u53d6\u5de5\u5177\u7ee7\u7eed\u67e5\u3002',
+  }), true);
+
+  assert.equal(shouldSendPostPreflightAnswerPrompt({
+    options: { argusToolInspectionIntent: true },
+    preflightSent: true,
+    postPreflightPromptSent: true,
+    sawToolUse: false,
+    assistantText: 'I will continue reading the files.',
+  }), false);
+
+  assert.equal(shouldSendPostPreflightAnswerPrompt({
+    options: {},
+    preflightSent: true,
+    postPreflightPromptSent: false,
+    sawToolUse: false,
+    assistantText: 'I will continue reading the files.',
+  }), false);
+});
+
 test('Argus preflight context prompt carries real inspection output and stays internal', () => {
   const prompt = buildArgusInspectionPreflightPrompt({
     intent: 'tool_inspection',
@@ -528,6 +557,39 @@ test('Argus preflight context prompt carries real inspection output and stays in
   assert.match(prompt, /Argus performed a read-only repository preflight/i);
   assert.match(prompt, /server\/claude-sdk\.js:620/);
   assert.match(prompt, /Do not answer with only a plan/i);
+});
+
+test('Argus tool inspection preflight does not depend on external rg or git', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'argus-preflight-'));
+  const previousPath = process.env.PATH;
+
+  try {
+    const targetDir = path.join(cwd, 'claudecodeui', 'server');
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(
+      path.join(targetDir, 'claude-sdk.js'),
+      'const appendSystemPrompt = true;\nfunction createMtlCodeUserMessage() {}\n',
+      'utf8',
+    );
+
+    process.env.PATH = '';
+    const result = await runArgusInspectionPreflight({
+      intent: 'tool_inspection',
+      cwd,
+      originalCommand: '\u68c0\u67e5\u4e0b\u4ee3\u7801\u4e2d\u7684\u63d0\u793a\u8bcd\u662f\u600e\u4e48\u6ce8\u5165\u7684',
+    });
+    const output = result.sections
+      .map(section => `${section.command || section.title}\n${section.output || section.error || ''}`)
+      .join('\n');
+
+    assert.equal(result.ok, true);
+    assert.match(output, /claudecodeui\/server\/claude-sdk\.js/);
+    assert.match(output, /appendSystemPrompt/);
+    assert.doesNotMatch(output, /spawn rg|ENOENT/i);
+  } finally {
+    process.env.PATH = previousPath;
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test('Argus review preflight uses no external diff command and reports truncated output', async () => {

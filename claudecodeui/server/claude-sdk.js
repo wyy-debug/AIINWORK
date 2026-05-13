@@ -357,10 +357,12 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'sawToolUse',
     'fallbackSent',
     'preflightSent',
+    'postPreflightPromptSent',
     'shouldSendReviewFallback',
     'shouldSendInspectionFallback',
     'shouldSendPreflight',
     'shouldSendIncompleteToolUsePreflight',
+    'shouldSendPostPreflightPrompt',
     'sawContentToolUse',
     'aborted',
     'hasExistingSession',
@@ -847,6 +849,54 @@ const TOOL_INSPECTION_FALLBACK_PROMPT = [
 const ARGUS_INTERNAL_FALLBACK_PREFIX = '<argus-internal-fallback>';
 const ARGUS_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.ARGUS_PREFLIGHT_TIMEOUT_MS || '12000', 10);
 const ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS = parseInt(process.env.ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS || '12000', 10);
+const ARGUS_PREFLIGHT_MAX_FILES = parseInt(process.env.ARGUS_PREFLIGHT_MAX_FILES || '5000', 10);
+const ARGUS_PREFLIGHT_MAX_FILE_BYTES = parseInt(process.env.ARGUS_PREFLIGHT_MAX_FILE_BYTES || '262144', 10);
+const ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM = parseInt(process.env.ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM || '50', 10);
+const ARGUS_PREFLIGHT_IGNORED_DIRS = new Set([
+  '.git',
+  '.next',
+  '.turbo',
+  '.vite',
+  'build',
+  'coverage',
+  'dist',
+  'dist-server',
+  'node_modules',
+  'target',
+  'vendor',
+]);
+const ARGUS_PREFLIGHT_TEXT_EXTENSIONS = new Set([
+  '.c',
+  '.cc',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.go',
+  '.h',
+  '.hpp',
+  '.html',
+  '.java',
+  '.js',
+  '.json',
+  '.jsx',
+  '.kt',
+  '.md',
+  '.mjs',
+  '.py',
+  '.rs',
+  '.scss',
+  '.sh',
+  '.sql',
+  '.svelte',
+  '.toml',
+  '.ts',
+  '.tsx',
+  '.txt',
+  '.vue',
+  '.xml',
+  '.yaml',
+  '.yml',
+]);
 
 function getPreflightMaxOutputChars() {
   return Number.isFinite(ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS) && ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS > 0
@@ -914,6 +964,18 @@ function buildArgusInspectionPreflightPrompt({
     'If the output is insufficient, say exactly what remains unknown.',
     '',
     sections,
+  ].filter(Boolean).join('\n'));
+}
+
+function buildPostPreflightAnswerPrompt({
+  originalCommand = '',
+} = {}) {
+  return ensureArgusInternalFallbackPrefix([
+    'The previous response still promised future inspection after Argus injected repository preflight context.',
+    'Do not describe another plan or future tool use.',
+    'Answer the original user request now from the available preflight context and conversation history.',
+    'If the preflight context was insufficient or had blockers, state the exact blocker and stop.',
+    originalCommand ? `Original user request: ${originalCommand}` : '',
   ].filter(Boolean).join('\n'));
 }
 
@@ -1099,8 +1161,8 @@ function isInspectionContinuationPlanText(text = '') {
     return false;
   }
 
-  return /(?:\b(?:next|then|after that|from here|now)\b.{0,120}\b(?:i(?:'ll| will| am going to)|let me|we need to|need to)\b.{0,180}\b(?:read|open|inspect|check|trace|confirm|explain|answer|continue)\b|\b(?:i(?:'ll| will| am going to)|let me)\b.{0,120}\b(?:continue|read|open|inspect|check|trace|confirm)\b)/i.test(normalized)
-    || /(?:\u63a5\u4e0b\u6765|\u7136\u540e|\u4e0b\u4e00\u6b65|\u7ee7\u7eed|\u4f1a\u7ee7\u7eed|\u6211\u4f1a\u7ee7\u7eed|\u6211\u5c06\u7ee7\u7eed).{0,180}(?:\u8bfb|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68b3\u7406|\u786e\u8ba4|\u8ffd\u8e2a|\u8bf4\u660e|\u89e3\u91ca|\u56de\u7b54)/u.test(normalized);
+  return /(?:\b(?:next|then|after that|from here|now)\b.{0,120}\b(?:i(?:'ll| will| am going to)|let me|we need to|need to)\b.{0,180}\b(?:read|open|inspect|check|trace|confirm|explain|answer|continue|search)\b|\b(?:i(?:'ll| will| am going to)|let me)\b.{0,120}\b(?:continue|read|open|inspect|check|trace|confirm|search)\b)/i.test(normalized)
+    || /(?:\u63a5\u4e0b\u6765|\u7136\u540e|\u4e0b\u4e00\u6b65|\u7ee7\u7eed|\u4f1a\u7ee7\u7eed|\u6211\u4f1a\u7ee7\u7eed|\u6211\u5c06\u7ee7\u7eed|\u6539\u7528).{0,180}(?:\u67e5|\u641c\u7d22|\u8bfb|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68b3\u7406|\u786e\u8ba4|\u8ffd\u8e2a|\u8bf4\u660e|\u89e3\u91ca|\u56de\u7b54)/u.test(normalized);
 }
 
 function shouldSendInspectionPreflightAfterIncompleteToolUse({
@@ -1121,6 +1183,26 @@ function shouldSendInspectionPreflightAfterIncompleteToolUse({
 
   return isInspectionContinuationPlanText(assistantText)
     || (fallbackSent === true && sawContentToolUse !== true);
+}
+
+function shouldSendPostPreflightAnswerPrompt({
+  options = {},
+  preflightSent = false,
+  postPreflightPromptSent = false,
+  sawToolUse = false,
+  assistantText = '',
+} = {}) {
+  if (preflightSent !== true || postPreflightPromptSent === true || sawToolUse === true) {
+    return false;
+  }
+
+  if (options?.argusCodeReviewIntent !== true && options?.argusToolInspectionIntent !== true) {
+    return false;
+  }
+
+  return isToolInspectionAcknowledgementText(assistantText)
+    || isCodeReviewAcknowledgementText(assistantText)
+    || isInspectionContinuationPlanText(assistantText);
 }
 
 function buildInspectionSearchTerms(command = '') {
@@ -1156,6 +1238,175 @@ function buildInspectionSearchTerms(command = '') {
   }
 
   return Array.from(terms).slice(0, 8);
+}
+
+function getPreflightMaxFiles() {
+  return Number.isFinite(ARGUS_PREFLIGHT_MAX_FILES) && ARGUS_PREFLIGHT_MAX_FILES > 0
+    ? ARGUS_PREFLIGHT_MAX_FILES
+    : 5000;
+}
+
+function getPreflightMaxFileBytes() {
+  return Number.isFinite(ARGUS_PREFLIGHT_MAX_FILE_BYTES) && ARGUS_PREFLIGHT_MAX_FILE_BYTES > 0
+    ? ARGUS_PREFLIGHT_MAX_FILE_BYTES
+    : 262144;
+}
+
+function getPreflightMaxMatchesPerTerm() {
+  return Number.isFinite(ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM) && ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM > 0
+    ? ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM
+    : 50;
+}
+
+function normalizePreflightRelativePath(cwd, filePath) {
+  return path.relative(cwd, filePath).split(path.sep).join('/');
+}
+
+function shouldSkipPreflightRelativePath(relativePath = '') {
+  const segments = String(relativePath || '').split(/[\\/]+/).filter(Boolean);
+  return segments.some(segment => ARGUS_PREFLIGHT_IGNORED_DIRS.has(segment));
+}
+
+function isLikelyTextPreflightFile(relativePath = '') {
+  const ext = path.extname(relativePath).toLowerCase();
+  const base = path.basename(relativePath).toLowerCase();
+  return ARGUS_PREFLIGHT_TEXT_EXTENSIONS.has(ext)
+    || /^(dockerfile|makefile|package-lock\.json|pnpm-lock\.yaml|bun\.lockb|tsconfig.*\.json|vite\.config\.[cm]?[jt]s)$/.test(base);
+}
+
+async function collectNodePreflightFiles(cwd = process.cwd()) {
+  const root = path.resolve(cwd);
+  const maxFiles = getPreflightMaxFiles();
+  const stack = [''];
+  const files = [];
+  let truncated = false;
+
+  while (stack.length > 0 && files.length < maxFiles) {
+    const relativeDir = stack.shift();
+    const absoluteDir = path.join(root, relativeDir);
+    let entries = [];
+    try {
+      entries = await fs.readdir(absoluteDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const relativePath = relativeDir ? path.join(relativeDir, entry.name) : entry.name;
+      const normalized = relativePath.split(path.sep).join('/');
+      if (shouldSkipPreflightRelativePath(normalized)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        stack.push(relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !isLikelyTextPreflightFile(normalized)) {
+        continue;
+      }
+      try {
+        const stat = await fs.stat(path.join(root, relativePath));
+        if (stat.size > getPreflightMaxFileBytes()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      files.push(normalized);
+      if (files.length >= maxFiles) {
+        truncated = true;
+        break;
+      }
+    }
+  }
+
+  if (stack.length > 0) {
+    truncated = true;
+  }
+
+  return { files, truncated };
+}
+
+function formatNodePreflightFileList(files = [], truncated = false) {
+  const shown = files.slice(0, 250);
+  return [
+    `Collected ${files.length} text-like repository files${truncated ? ' before hitting the preflight limit' : ''}.`,
+    ...shown,
+    files.length > shown.length ? `... ${files.length - shown.length} more files omitted ...` : '',
+  ].filter(Boolean).join('\n');
+}
+
+async function searchNodePreflightFiles(cwd, files = [], term = '') {
+  const needle = String(term || '').trim();
+  if (!needle) {
+    return '(empty search term)';
+  }
+
+  const lowerNeedle = needle.toLowerCase();
+  const maxMatches = getPreflightMaxMatchesPerTerm();
+  const matches = [];
+  for (const relativePath of files) {
+    if (relativePath.toLowerCase().includes(lowerNeedle)) {
+      matches.push(`${relativePath}: path match`);
+      if (matches.length >= maxMatches) {
+        break;
+      }
+    }
+
+    let content = '';
+    try {
+      content = await fs.readFile(path.join(cwd, relativePath), 'utf8');
+    } catch {
+      continue;
+    }
+    const lines = content.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index].toLowerCase().includes(lowerNeedle)) {
+        matches.push(`${relativePath}:${index + 1}: ${lines[index].trim().slice(0, 240)}`);
+        if (matches.length >= maxMatches) {
+          break;
+        }
+      }
+    }
+    if (matches.length >= maxMatches) {
+      break;
+    }
+  }
+
+  return matches.length > 0
+    ? matches.join('\n')
+    : '(no matches)';
+}
+
+async function runNodeToolInspectionPreflight(cwd = process.cwd(), originalCommand = '') {
+  const sections = [];
+  try {
+    const { files, truncated } = await collectNodePreflightFiles(cwd);
+    sections.push({
+      title: 'node preflight file list',
+      command: 'node preflight: list text files',
+      exitCode: 0,
+      output: formatNodePreflightFileList(files, truncated),
+      outputTruncated: truncated,
+    });
+    for (const term of buildInspectionSearchTerms(originalCommand)) {
+      sections.push({
+        title: `node preflight search ${term}`,
+        command: `node preflight: search ${term}`,
+        exitCode: 0,
+        output: await searchNodePreflightFiles(cwd, files, term),
+      });
+    }
+  } catch (error) {
+    sections.push({
+      title: 'node preflight',
+      command: 'node preflight',
+      exitCode: null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return sections;
 }
 
 function buildCommandDisplay(command, args = []) {
@@ -1261,23 +1512,10 @@ async function runArgusInspectionPreflight({
     await add('git', ['diff', '--no-ext-diff', '--staged', '--stat']);
     await add('git', ['diff', '--no-ext-diff', '--staged']);
   } else {
-    await add('rg', ['--files']);
-    for (const term of buildInspectionSearchTerms(originalCommand)) {
-      await add('rg', [
-        '-n',
-        '--hidden',
-        '--glob', '!node_modules',
-        '--glob', '!dist',
-        '--glob', '!dist-server',
-        '--glob', '!vendor',
-        '--glob', '!.git',
-        term,
-        '.',
-      ]);
-    }
+    sections.push(...await runNodeToolInspectionPreflight(cwd, originalCommand));
   }
 
-  const ok = sections.some(section => section.output && !section.timedOut);
+  const ok = sections.some(section => section.output && section.output !== '(no matches)' && !section.timedOut);
   return { cwd, ok, sections };
 }
 
@@ -1852,6 +2090,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let codeReviewContentToolUseSeen = false;
   let codeReviewFallbackSent = options.argusInspectionFallbackAlreadySent === true;
   let codeReviewPreflightSent = options.argusInspectionPreflightSent === true;
+  let codeReviewPostPreflightPromptSent = options.argusInspectionPostPreflightPromptSent === true;
   let codeReviewAssistantText = '';
   let codeReviewFallbackPrompt = '';
   let codeReviewFallbackSessionId = '';
@@ -1968,6 +2207,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     codeReviewContentToolUseSeen = false;
     codeReviewFallbackSent = nextOptions.argusInspectionFallbackAlreadySent === true;
     codeReviewPreflightSent = nextOptions.argusInspectionPreflightSent === true;
+    codeReviewPostPreflightPromptSent = nextOptions.argusInspectionPostPreflightPromptSent === true;
     codeReviewAssistantText = '';
     codeReviewFallbackPrompt = '';
     codeReviewFallbackSessionId = '';
@@ -2287,6 +2527,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         assistantText: codeReviewAssistantText,
       });
       const shouldInjectPreflight = shouldSendPreflight || shouldSendIncompleteToolUsePreflight;
+      const shouldSendPostPreflightPrompt = shouldSendPostPreflightAnswerPrompt({
+        options: currentOptions,
+        preflightSent: codeReviewPreflightSent,
+        postPreflightPromptSent: codeReviewPostPreflightPromptSent,
+        sawToolUse: codeReviewToolUseSeen,
+        assistantText: codeReviewAssistantText,
+      });
       logMtlCodeSessionLifecycle('result_received', {
         turnId: currentTurnId,
         sessionId: sid,
@@ -2295,11 +2542,13 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         sawContentToolUse: codeReviewContentToolUseSeen,
         fallbackSent: codeReviewFallbackSent,
         preflightSent: codeReviewPreflightSent,
+        postPreflightPromptSent: codeReviewPostPreflightPromptSent,
         assistantText: codeReviewAssistantText,
         shouldSendReviewFallback,
         shouldSendInspectionFallback,
         shouldSendPreflight,
         shouldSendIncompleteToolUsePreflight,
+        shouldSendPostPreflightPrompt,
       });
       if (shouldSendReviewFallback || shouldSendInspectionFallback) {
         codeReviewFallbackSent = true;
@@ -2381,6 +2630,44 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
               preflightInjected: true,
               preflightOk: preflightResult.ok,
               preflightSectionCount: Array.isArray(preflightResult.sections) ? preflightResult.sections.length : 0,
+            },
+          },
+        );
+        writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
+        return;
+      }
+      if (shouldSendPostPreflightPrompt) {
+        codeReviewPostPreflightPromptSent = true;
+        resultReceived = false;
+        codeReviewAssistantText = '';
+        codeReviewToolUseSeen = false;
+        codeReviewContentToolUseSeen = false;
+        codeReviewFallbackPrompt = buildPostPreflightAnswerPrompt({
+          originalCommand: currentCommand,
+        });
+        codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
+        logMtlCodeSessionLifecycle('post_preflight_prompt_injected', {
+          turnId: currentTurnId,
+          sessionId: codeReviewFallbackSessionId || null,
+          preflightSent: codeReviewPreflightSent,
+          postPreflightPromptSent: true,
+        });
+        await emitPromptInjectionDebug(
+          currentWriter,
+          currentOptions,
+          promptDebugChildEnv,
+          promptDebugCliArgs,
+          codeReviewFallbackSessionId || null,
+          {
+            originalCommand: currentOptions.debugPromptInjectionOriginalCommand || currentCommand,
+            effectiveCommand: promptDebugEffectiveCommand,
+          },
+          promptDebugNativeSystemPrompt,
+          {
+            argusInternal: {
+              hiddenFallbackInjected: true,
+              preflightInjected: true,
+              postPreflightPromptInjected: true,
             },
           },
         );
@@ -2626,6 +2913,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
             argusSyntheticInitialMessage: true,
             argusInspectionFallbackAlreadySent: true,
             argusInspectionPreflightSent: codeReviewPreflightSent,
+            argusInspectionPostPreflightPromptSent: codeReviewPostPreflightPromptSent,
           }, currentWriter);
           resolveTurn?.();
           return;
@@ -3206,6 +3494,7 @@ export {
   runArgusInspectionPreflight,
   shouldSendCodeReviewToolFallback,
   shouldSendToolInspectionFallback,
+  shouldSendPostPreflightAnswerPrompt,
   shouldSendInspectionPreflightAfterFallback,
   shouldSendInspectionPreflightAfterIncompleteToolUse,
   shouldStartCodeReviewFallbackRunAfterClose
