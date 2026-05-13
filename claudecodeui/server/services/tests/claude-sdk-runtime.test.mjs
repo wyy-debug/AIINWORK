@@ -1,30 +1,18 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { test } from 'vitest';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ARGUS_INTERNAL_FALLBACK_PREFIX,
-  buildArgusInspectionPreflightPrompt,
-  buildCodeReviewToolFallbackPrompt,
-  buildToolInspectionFallbackPrompt,
   buildMtlCodeArgs,
-  createMtlCodeSyntheticUserMessage,
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
+  getMtlCodeToolUseNames,
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
-  runArgusInspectionPreflight,
-  shouldSendPostPreflightAnswerPrompt,
-  shouldSendInspectionPreflightAfterFallback,
-  shouldSendInspectionPreflightAfterIncompleteToolUse,
-  shouldStartCodeReviewFallbackRunAfterClose,
-  shouldSendCodeReviewToolFallback,
-  shouldSendToolInspectionFallback,
 } from '../../claude-sdk.js';
 
 test('Argus host allow rules do not narrow native Claude Code tools in normal modes', () => {
@@ -91,6 +79,25 @@ test('Argus session lifecycle log payload redacts prompts and hashes runtime sig
   assert.equal(Object.hasOwn(payload, 'cliArgs'), false);
 });
 
+test('Argus result diagnostics expose native stop, turn, tool, and permission state', () => {
+  const payload = buildMtlCodeSessionLogPayload('result_received', {
+    resultReceived: true,
+    sawToolUse: true,
+    stopReason: 'end_turn',
+    numTurns: 2,
+    toolUseNames: ['Read', 'Grep', 'Read'],
+    permissionRequestCount: 1,
+    assistantText: 'private model output',
+  });
+
+  assert.equal(payload.stopReason, 'end_turn');
+  assert.equal(payload.numTurns, 2);
+  assert.deepEqual(payload.toolUseNames, ['Read', 'Grep', 'Read']);
+  assert.equal(payload.permissionRequestCount, 1);
+  assert.equal(payload.assistantTextLength, 'private model output'.length);
+  assert.equal(Object.hasOwn(payload, 'assistantText'), false);
+});
+
 test('Argus direct close handling treats only explicit user abort as aborted', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');
@@ -133,9 +140,6 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   assert.match(source, /appendSystemPromptLength/);
   assert.match(source, /nativeSystemPrompt/);
   assert.match(source, /nativeSystemPromptLength/);
-  assert.match(source, /argusInternal/);
-  assert.match(source, /hiddenFallbackInjected/);
-  assert.match(source, /preflightInjected/);
   assert.match(source, /originalCommand/);
   assert.match(source, /effectiveCommand/);
   assert.match(source, /commandChanged/);
@@ -178,6 +182,19 @@ test('Argus persistent session lifecycle has diagnostic logs at breakpoints', as
   ]) {
     assert.match(source, new RegExp(`logMtlCodeSessionLifecycle\\('${event}'`));
   }
+});
+
+test('Argus pure native tool path does not inject hidden fallback or server preflight turns', async () => {
+  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
+  const source = await fs.readFile(sourcePath, 'utf8');
+
+  assert.doesNotMatch(source, /fallback_injected/);
+  assert.doesNotMatch(source, /preflight_injected/);
+  assert.doesNotMatch(source, /post_preflight_prompt_injected/);
+  assert.doesNotMatch(source, /createMtlCodeSyntheticUserMessage/);
+  assert.doesNotMatch(source, /runArgusInspectionPreflight/);
+  assert.doesNotMatch(source, /shouldSendCodeReviewToolFallback/);
+  assert.doesNotMatch(source, /shouldSendToolInspectionFallback/);
 });
 
 test('Argus runtime signatures only reuse compatible live sessions', () => {
@@ -282,93 +299,6 @@ test('Argus session runtime prompt merge preserves existing review intent prompt
   assert.doesNotMatch(source, /options\.appendSystemPrompt = runtime\.appendSystemPrompt;/);
 });
 
-test('Argus review intent sends a tool-use fallback when first response only acknowledges work', () => {
-  assert.equal(shouldSendCodeReviewToolFallback({
-    options: { argusCodeReviewIntent: true },
-    fallbackSent: false,
-    sawToolUse: false,
-    assistantText: 'I will inspect the working tree and diffs, then report findings.',
-  }), true);
-
-  assert.equal(shouldSendCodeReviewToolFallback({
-    options: { argusCodeReviewIntent: true },
-    fallbackSent: false,
-    sawToolUse: true,
-    assistantText: 'I will inspect the working tree.',
-  }), false);
-
-  assert.equal(shouldSendCodeReviewToolFallback({
-    options: { argusCodeReviewIntent: true },
-    fallbackSent: false,
-    sawToolUse: false,
-    assistantText: 'No issues found.',
-  }), true);
-
-  assert.equal(shouldSendCodeReviewToolFallback({
-    options: { argusCodeReviewIntent: true },
-    fallbackSent: true,
-    sawToolUse: false,
-    assistantText: 'I will inspect the working tree.',
-  }), false);
-});
-
-test('Argus review fallback prompt requires repository inspection before findings', () => {
-  const prompt = buildCodeReviewToolFallbackPrompt();
-
-  assert.match(prompt, /git status --short/);
-  assert.match(prompt, /git diff --stat/);
-  assert.match(prompt, /git diff/);
-  assert.match(prompt, /Report findings first/i);
-  assert.doesNotMatch(prompt, /acknowledge/i);
-});
-
-test('Argus tool inspection intent sends a fallback when first response only plans to inspect code', () => {
-  assert.equal(shouldSendToolInspectionFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: false,
-    sawToolUse: false,
-    assistantText: '我先在仓库里定位和提示词/system prompt/inject相关的实现，然后读关键文件梳理注入链路。',
-  }), true);
-
-  assert.equal(shouldSendToolInspectionFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: false,
-    sawToolUse: true,
-    assistantText: '我先在仓库里定位相关实现。',
-  }), false);
-
-  assert.equal(shouldSendToolInspectionFallback({
-    options: { argusToolInspectionIntent: false },
-    fallbackSent: false,
-    sawToolUse: false,
-    assistantText: '我先在仓库里定位相关实现。',
-  }), false);
-});
-
-test('Argus tool inspection fallback does not depend on exact acknowledgement wording', () => {
-  assert.equal(shouldSendToolInspectionFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: false,
-    sawToolUse: false,
-    assistantText: '我现在直接检查实现路径，重点看系统提示词向量、SDK 调用层、会话 provider。',
-  }), true);
-
-  assert.equal(shouldSendToolInspectionFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: false,
-    sawToolUse: false,
-    assistantText: 'The prompt injection path is in the server SDK layer.',
-  }), true);
-});
-
-test('Argus tool inspection fallback prompt requires searching and reading files', () => {
-  const prompt = buildToolInspectionFallbackPrompt();
-
-  assert.match(prompt, /search the repository/i);
-  assert.match(prompt, /read the relevant files/i);
-  assert.match(prompt, /Do not answer with only a plan/i);
-});
-
 test('Argus inspection gates ignore non-repository tool calls', () => {
   assert.equal(messageHasMtlCodeRepositoryInspectionToolUse({
     type: 'assistant',
@@ -421,6 +351,21 @@ test('Argus inspection gates ignore non-repository tool calls', () => {
   }), false);
 });
 
+test('Argus diagnostics collect all native tool use names, not only repository tools', () => {
+  const names = getMtlCodeToolUseNames({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', name: 'Skill', input: { skill: 'test-driven-development' } },
+        { type: 'tool_use', name: 'Read', input: { file_path: 'claudecodeui/server/claude-sdk.js' } },
+      ],
+    },
+  });
+
+  assert.deepEqual(names, ['Skill', 'Read']);
+});
+
 test('Argus distinguishes repository search from substantive content inspection', () => {
   assert.equal(messageHasMtlCodeRepositoryContentToolUse({
     type: 'assistant',
@@ -454,227 +399,7 @@ test('Argus distinguishes repository search from substantive content inspection'
   }), true);
 });
 
-test('Argus fallback guidance is written as a synthetic internal user message', () => {
-  const message = createMtlCodeSyntheticUserMessage(buildToolInspectionFallbackPrompt());
-
-  assert.equal(message.type, 'user');
-  assert.equal(message.isSynthetic, true);
-  assert.match(message.content, new RegExp(`^${ARGUS_INTERNAL_FALLBACK_PREFIX}`));
-  assert.equal(message.message.role, 'user');
-  assert.equal(message.message.content, message.content);
-});
-
-test('Argus sends a preflight context prompt when hidden fallback also receives only an acknowledgement', () => {
-  assert.equal(shouldSendInspectionPreflightAfterFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: false,
-    assistantText: 'I will inspect the repository and read the relevant files.',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: false,
-    assistantText: '我现在直接检查实现路径，重点看系统提示词向量、SDK 调用层、会话 provider。',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: false,
-    assistantText: 'The prompt injection path is probably in the server layer.',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterFallback({
-    options: { argusCodeReviewIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: false,
-    assistantText: 'I will inspect the working tree and diffs.',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: true,
-    sawToolUse: false,
-    assistantText: 'I will inspect the repository.',
-  }), false);
-
-  assert.equal(shouldSendInspectionPreflightAfterFallback({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: true,
-    assistantText: 'I will inspect the repository.',
-  }), false);
-});
-
-test('Argus sends a preflight context prompt when tool use still ends in a continuation plan', () => {
-  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: false,
-    sawToolUse: true,
-    assistantText: '\u6211\u5df2\u7ecf\u627e\u5230\u6838\u5fc3\u63d0\u793a\u8bcd\u6587\u4ef6\u548c\u51e0\u5904\u8fd0\u884c\u65f6\u5165\u53e3\u3002\u63a5\u4e0b\u6765\u6211\u4f1a\u8bfb\u8c03\u7528\u94fe\u76f8\u5173\u6587\u4ef6\uff0c\u786e\u8ba4\u5b9a\u4e49\u597d\u7684\u63d0\u793a\u8bcd\u6700\u7ec8\u662f\u600e\u6837\u8fdb\u5165\u8bf7\u6c42\u4e0a\u4e0b\u6587\u7684\u3002',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: false,
-    sawToolUse: true,
-    assistantText: 'I found the prompt files. Next I will read the SDK call chain and explain how they are injected.',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: true,
-    sawContentToolUse: false,
-    assistantText: 'I found the prompt files and entry points in the runtime layer.',
-  }), true);
-
-  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
-    options: { argusToolInspectionIntent: true },
-    fallbackSent: true,
-    preflightSent: false,
-    sawToolUse: true,
-    sawContentToolUse: true,
-    assistantText: 'The prompt injection path is implemented in claudecodeui/server/claude-sdk.js via appendSystemPrompt.',
-  }), false);
-
-  assert.equal(shouldSendInspectionPreflightAfterIncompleteToolUse({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: true,
-    sawToolUse: true,
-    assistantText: 'Next I will read the files.',
-  }), false);
-});
-
-test('Argus keeps the turn alive after preflight when the assistant still promises future inspection', () => {
-  assert.equal(shouldSendPostPreflightAnswerPrompt({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: true,
-    postPreflightPromptSent: false,
-    sawToolUse: false,
-    assistantText: '\u524d\u4e24\u6b21\u6ca1\u6709\u771f\u6b63\u8bfb\u53d6\u4ed3\u5e93\uff0c\u8fd9\u662f\u6211\u7684\u95ee\u9898\u3002Argus \u9884\u68c0\u4e5f\u5931\u8d25\u4e86\uff0c\u62a5\u4e86 spawn rg ENOENT\u3002\u6211\u6539\u7528\u5f53\u524d\u4f1a\u8bdd\u5185\u7f6e\u7684\u4ed3\u5e93\u641c\u7d22\u548c\u8bfb\u53d6\u5de5\u5177\u7ee7\u7eed\u67e5\u3002',
-  }), true);
-
-  assert.equal(shouldSendPostPreflightAnswerPrompt({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: true,
-    postPreflightPromptSent: true,
-    sawToolUse: false,
-    assistantText: 'I will continue reading the files.',
-  }), false);
-
-  assert.equal(shouldSendPostPreflightAnswerPrompt({
-    options: {},
-    preflightSent: true,
-    postPreflightPromptSent: false,
-    sawToolUse: false,
-    assistantText: 'I will continue reading the files.',
-  }), false);
-});
-
-test('Argus keeps the turn alive after preflight when the answer has no file reference or blocker', () => {
-  assert.equal(shouldSendPostPreflightAnswerPrompt({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: true,
-    postPreflightPromptSent: false,
-    sawToolUse: false,
-    assistantText: '\u9884\u68c0\u7ed3\u679c\u663e\u793a\u63d0\u793a\u8bcd\u6ce8\u5165\u94fe\u8def\u6d89\u53ca\u8fd0\u884c\u65f6\u548c\u8bf7\u6c42\u6784\u5efa\u5c42\u3002',
-  }), true);
-
-  assert.equal(shouldSendPostPreflightAnswerPrompt({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: true,
-    postPreflightPromptSent: false,
-    sawToolUse: false,
-    assistantText: 'The injection path is in claudecodeui/server/claude-sdk.js:816 via appendSystemPrompt.',
-  }), false);
-
-  assert.equal(shouldSendPostPreflightAnswerPrompt({
-    options: { argusToolInspectionIntent: true },
-    preflightSent: true,
-    postPreflightPromptSent: false,
-    sawToolUse: false,
-    assistantText: 'Blocked: preflight could not read the repository, so I cannot verify the implementation path.',
-  }), false);
-});
-
-test('Argus preflight context prompt carries real inspection output and stays internal', () => {
-  const prompt = buildArgusInspectionPreflightPrompt({
-    intent: 'tool_inspection',
-    originalCommand: 'inspect prompt injection path',
-    result: {
-      cwd: 'E:/repo',
-      ok: true,
-      sections: [
-        { title: 'rg prompt', command: 'rg -n "prompt" .', output: 'server/claude-sdk.js:620: appendSystemPrompt' },
-      ],
-    },
-  });
-
-  assert.match(prompt, new RegExp(`^${ARGUS_INTERNAL_FALLBACK_PREFIX}`));
-  assert.match(prompt, /Argus performed a read-only repository preflight/i);
-  assert.match(prompt, /server\/claude-sdk\.js:620/);
-  assert.match(prompt, /Do not answer with only a plan/i);
-});
-
-test('Argus tool inspection preflight does not depend on external rg or git', async () => {
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'argus-preflight-'));
-  const previousPath = process.env.PATH;
-
-  try {
-    const targetDir = path.join(cwd, 'claudecodeui', 'server');
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(
-      path.join(targetDir, 'claude-sdk.js'),
-      'const appendSystemPrompt = true;\nfunction createMtlCodeUserMessage() {}\n',
-      'utf8',
-    );
-
-    process.env.PATH = '';
-    const result = await runArgusInspectionPreflight({
-      intent: 'tool_inspection',
-      cwd,
-      originalCommand: '\u68c0\u67e5\u4e0b\u4ee3\u7801\u4e2d\u7684\u63d0\u793a\u8bcd\u662f\u600e\u4e48\u6ce8\u5165\u7684',
-    });
-    const output = result.sections
-      .map(section => `${section.command || section.title}\n${section.output || section.error || ''}`)
-      .join('\n');
-
-    assert.equal(result.ok, true);
-    assert.match(output, /claudecodeui\/server\/claude-sdk\.js/);
-    assert.match(output, /appendSystemPrompt/);
-    assert.doesNotMatch(output, /spawn rg|ENOENT/i);
-  } finally {
-    process.env.PATH = previousPath;
-    await fs.rm(cwd, { recursive: true, force: true });
-  }
-});
-
-test('Argus review preflight uses no external diff command and reports truncated output', async () => {
-  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
-  const source = await fs.readFile(sourcePath, 'utf8');
-  const prompt = buildArgusInspectionPreflightPrompt({
-    result: {
-      sections: [
-        { command: 'git diff --no-ext-diff', output: 'diff output', outputTruncated: true },
-      ],
-    },
-  });
-
-  assert.match(source, /'diff',\s*'--no-ext-diff'/);
-  assert.match(prompt, /Output truncated: true/);
-});
-
-test('Argus direct stdout handling drains async fallback/preflight processing before close cleanup', async () => {
+test('Argus direct stdout handling drains async processing before close cleanup', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');
 
@@ -683,41 +408,4 @@ test('Argus direct stdout handling drains async fallback/preflight processing be
   assert.match(source, /queueStdoutLine\(line\)/);
   assert.match(source, /await stdoutProcessing/);
   assert.doesNotMatch(source, /void handleStdoutLine\(line\)/);
-});
-
-test('Argus fallback resume preserves inspection intent and marks fallback as already sent', async () => {
-  const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
-  const source = await fs.readFile(sourcePath, 'utf8');
-
-  const resumeStart = source.indexOf('await queryMtlCodeDirect(codeReviewFallbackPrompt');
-  const resumeBlock = source.slice(resumeStart, resumeStart + 700);
-
-  assert.match(resumeBlock, /\.\.\.currentOptions/);
-  assert.match(resumeBlock, /argusInspectionFallbackAlreadySent:\s*true/);
-  assert.match(resumeBlock, /argusInspectionPreflightSent:\s*codeReviewPreflightSent/);
-  assert.doesNotMatch(resumeBlock, /argusCodeReviewIntent:\s*false/);
-  assert.doesNotMatch(resumeBlock, /argusToolInspectionIntent:\s*false/);
-});
-
-test('Argus starts a resumed fallback run when the print process exits after ack-only review', () => {
-  assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
-    fallbackSent: true,
-    resultReceived: false,
-    aborted: false,
-    sessionId: 'session-123',
-  }), true);
-
-  assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
-    fallbackSent: true,
-    resultReceived: true,
-    aborted: false,
-    sessionId: 'session-123',
-  }), false);
-
-  assert.equal(shouldStartCodeReviewFallbackRunAfterClose({
-    fallbackSent: true,
-    resultReceived: false,
-    aborted: false,
-    sessionId: '',
-  }), false);
 });

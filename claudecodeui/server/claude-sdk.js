@@ -332,7 +332,6 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'clientSessionId',
     'capturedSessionId',
     'reuseSessionKey',
-    'fallbackResumeSessionId',
     'cwd',
     'launch',
     'pid',
@@ -343,6 +342,9 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'requestId',
     'durationMs',
     'stderrTailCount',
+    'stopReason',
+    'numTurns',
+    'permissionRequestCount',
   ]) {
     if (details[key] !== undefined && details[key] !== null && details[key] !== '') {
       payload[key] = details[key];
@@ -355,17 +357,6 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
     'resultReceived',
     'currentTurnActive',
     'sawToolUse',
-    'fallbackSent',
-    'preflightSent',
-    'postPreflightPromptSent',
-    'shouldSendReviewFallback',
-    'shouldSendInspectionFallback',
-    'shouldSendPreflight',
-    'shouldSendIncompleteToolUsePreflight',
-    'shouldSendPostPreflightPrompt',
-    'postPreflightHasEvidence',
-    'postPreflightHasBlocker',
-    'sawContentToolUse',
     'aborted',
     'hasExistingSession',
     'busy',
@@ -384,6 +375,11 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
   }
   if (typeof details.assistantText === 'string') {
     payload.assistantTextLength = details.assistantText.length;
+  }
+  if (Array.isArray(details.toolUseNames)) {
+    payload.toolUseNames = details.toolUseNames
+      .map(name => (typeof name === 'string' ? name.trim() : ''))
+      .filter(Boolean);
   }
   if (typeof details.runtimeSignature === 'string' && details.runtimeSignature) {
     payload.runtimeSignatureHash = hashMtlCodeDiagnosticValue(details.runtimeSignature);
@@ -828,161 +824,6 @@ async function emitPromptInjectionDebug(ws, options = {}, childEnv = process.env
   }));
 }
 
-const CODE_REVIEW_TOOL_FALLBACK_PROMPT = [
-  'The previous response did not inspect the repository.',
-  'Skip greetings, promises, and status updates.',
-  'Use the available tools now to inspect the review scope before any user-visible answer.',
-  'Run at least these checks when the tools are available:',
-  '- git status --short',
-  '- git diff --stat',
-  '- git diff',
-  '- git diff --staged when staged files exist',
-  'Then report findings first, ordered by severity, with file and line references when possible.',
-  'If tools are unavailable, state that blocker clearly instead of pretending the review was performed.',
-].join('\n');
-
-const TOOL_INSPECTION_FALLBACK_PROMPT = [
-  'The previous response did not inspect the repository.',
-  'Do not answer with only a plan, promise, or status update.',
-  'Use the available tools now to search the repository for relevant symbols and files.',
-  'Read the relevant files before answering.',
-  'Then explain the actual implementation path you inspected, with file references when possible.',
-  'If tools are unavailable, state that blocker clearly instead of pretending the inspection was performed.',
-].join('\n');
-
-const ARGUS_INTERNAL_FALLBACK_PREFIX = '<argus-internal-fallback>';
-const ARGUS_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.ARGUS_PREFLIGHT_TIMEOUT_MS || '12000', 10);
-const ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS = parseInt(process.env.ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS || '12000', 10);
-const ARGUS_PREFLIGHT_MAX_FILES = parseInt(process.env.ARGUS_PREFLIGHT_MAX_FILES || '5000', 10);
-const ARGUS_PREFLIGHT_MAX_FILE_BYTES = parseInt(process.env.ARGUS_PREFLIGHT_MAX_FILE_BYTES || '262144', 10);
-const ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM = parseInt(process.env.ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM || '50', 10);
-const ARGUS_PREFLIGHT_IGNORED_DIRS = new Set([
-  '.git',
-  '.next',
-  '.turbo',
-  '.vite',
-  'build',
-  'coverage',
-  'dist',
-  'dist-server',
-  'node_modules',
-  'target',
-  'vendor',
-]);
-const ARGUS_PREFLIGHT_TEXT_EXTENSIONS = new Set([
-  '.c',
-  '.cc',
-  '.cpp',
-  '.cs',
-  '.css',
-  '.go',
-  '.h',
-  '.hpp',
-  '.html',
-  '.java',
-  '.js',
-  '.json',
-  '.jsx',
-  '.kt',
-  '.md',
-  '.mjs',
-  '.py',
-  '.rs',
-  '.scss',
-  '.sh',
-  '.sql',
-  '.svelte',
-  '.toml',
-  '.ts',
-  '.tsx',
-  '.txt',
-  '.vue',
-  '.xml',
-  '.yaml',
-  '.yml',
-]);
-
-function getPreflightMaxOutputChars() {
-  return Number.isFinite(ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS) && ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS > 0
-    ? ARGUS_PREFLIGHT_MAX_OUTPUT_CHARS
-    : 12000;
-}
-
-function buildCodeReviewToolFallbackPrompt() {
-  return CODE_REVIEW_TOOL_FALLBACK_PROMPT;
-}
-
-function buildToolInspectionFallbackPrompt() {
-  return TOOL_INSPECTION_FALLBACK_PROMPT;
-}
-
-function ensureArgusInternalFallbackPrefix(content = '') {
-  const text = String(content || '').trimStart();
-  return text.startsWith(ARGUS_INTERNAL_FALLBACK_PREFIX)
-    ? text
-    : `${ARGUS_INTERNAL_FALLBACK_PREFIX}\n${String(content || '').trim()}`;
-}
-
-function truncatePreflightOutput(output = '', maxChars = getPreflightMaxOutputChars()) {
-  const text = String(output || '').replace(/\r\n/g, '\n').trim();
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return `${text.slice(0, maxChars)}\n... truncated ${text.length - maxChars} chars ...`;
-}
-
-function formatPreflightSection(section = {}) {
-  const title = section.title || section.command || 'inspection';
-  const commandText = section.command ? `Command: ${section.command}\n` : '';
-  const status = typeof section.exitCode === 'number' ? `Exit code: ${section.exitCode}\n` : '';
-  const timedOut = section.timedOut ? 'Timed out: true\n' : '';
-  const truncated = section.outputTruncated ? 'Output truncated: true\n' : '';
-  const output = section.output || section.error || '(no output)';
-  return `## ${title}\n${commandText}${status}${timedOut}${truncated}\n${truncatePreflightOutput(output)}`;
-}
-
-function buildArgusInspectionPreflightPrompt({
-  intent = 'tool_inspection',
-  originalCommand = '',
-  result = {},
-  reason = 'no_tool_use',
-} = {}) {
-  const intentLabel = intent === 'code_review' ? 'code review' : 'repository inspection';
-  const reasonText = reason === 'partial_tool_use'
-    ? 'Argus performed a read-only repository preflight because the previous response stopped after partial tool use without answering the user.'
-    : 'Argus performed a read-only repository preflight because the previous response still did not use tools.';
-  const sections = Array.isArray(result.sections) && result.sections.length > 0
-    ? result.sections.map(formatPreflightSection).join('\n\n')
-    : 'No preflight command output was captured.';
-  const status = result.ok === false
-    ? 'The preflight encountered blockers. State them clearly before answering.'
-    : 'Use the inspected paths and outputs below as grounding, then answer the user directly.';
-
-  return ensureArgusInternalFallbackPrefix([
-    reasonText,
-    `Intent: ${intentLabel}`,
-    originalCommand ? `Original user request: ${originalCommand}` : '',
-    result.cwd ? `Working directory: ${result.cwd}` : '',
-    status,
-    'Do not answer with only a plan, promise, or status update.',
-    'If the output is insufficient, say exactly what remains unknown.',
-    '',
-    sections,
-  ].filter(Boolean).join('\n'));
-}
-
-function buildPostPreflightAnswerPrompt({
-  originalCommand = '',
-} = {}) {
-  return ensureArgusInternalFallbackPrefix([
-    'The previous response still promised future inspection after Argus injected repository preflight context.',
-    'Do not describe another plan or future tool use.',
-    'Answer the original user request now from the available preflight context and conversation history.',
-    'If the preflight context was insufficient or had blockers, state the exact blocker and stop.',
-    originalCommand ? `Original user request: ${originalCommand}` : '',
-  ].filter(Boolean).join('\n'));
-}
-
 function extractMtlCodeAssistantText(message = {}) {
   const content = message?.message?.role === 'assistant'
     ? message.message.content
@@ -1039,6 +880,12 @@ function getMtlCodeToolUses(message = {}) {
     }
   }
   return tools;
+}
+
+function getMtlCodeToolUseNames(message = {}) {
+  return getMtlCodeToolUses(message)
+    .map(tool => (typeof tool.name === 'string' ? tool.name.trim() : ''))
+    .filter(Boolean);
 }
 
 function getToolInputCommand(input = {}) {
@@ -1103,495 +950,6 @@ function isRepositoryContentToolUse(tool = {}) {
 
 function messageHasMtlCodeRepositoryContentToolUse(message = {}) {
   return getMtlCodeToolUses(message).some(isRepositoryContentToolUse);
-}
-
-function isCodeReviewAcknowledgementText(text = '') {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return /\b(?:i(?:'|’)?ll|i will|let me|i can|i(?:'|’)?m going to|will)\b.{0,160}\b(?:inspect|check|review|look|analy[sz]e|diff|status|repository|working tree)\b/i.test(normalized)
-    || /(?:我会|我将|我先|我来|会先|先来|让我|准备|接下来).{0,80}(?:检查|查看|审查|评审|review|diff|状态|仓库|工作区)/i.test(normalized);
-}
-
-function shouldSendCodeReviewToolFallback({
-  options = {},
-  fallbackSent = false,
-  sawToolUse = false,
-} = {}) {
-  return options?.argusCodeReviewIntent === true
-    && fallbackSent !== true
-    && sawToolUse !== true;
-}
-
-function isToolInspectionAcknowledgementText(text = '') {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return /\b(?:i(?:'ll| will| am going to| can)|let me|i will first|i'll first)\b.{0,200}\b(?:inspect|check|look|search|read|locate|trace|find|investigate|open)\b/i.test(normalized)
-    || /(?:\u6211(?:\u4f1a|\u5c06|\u5148|\u6765)|\u6211\u5148|\u8ba9\u6211|\u5148|\u63a5\u4e0b\u6765|\u51c6\u5907|\u4f1a\u5148).{0,160}(?:\u68c0\u67e5|\u67e5\u770b|\u5b9a\u4f4d|\u641c\u7d22|\u67e5\u627e|\u8bfb\u53d6|\u8bfb|\u68b3\u7406|\u8ffd\u8e2a|\u770b\u4e0b|\u770b\u4e00\u4e0b|\u627e\u4e00\u4e0b|\u627e\u4e0b|\u8c03\u67e5)/i.test(normalized);
-}
-
-function shouldSendToolInspectionFallback({
-  options = {},
-  fallbackSent = false,
-  sawToolUse = false,
-} = {}) {
-  return options?.argusToolInspectionIntent === true
-    && fallbackSent !== true
-    && sawToolUse !== true;
-}
-
-function shouldSendInspectionPreflightAfterFallback({
-  options = {},
-  fallbackSent = false,
-  preflightSent = false,
-  sawToolUse = false,
-} = {}) {
-  if (fallbackSent !== true || preflightSent === true || sawToolUse === true) {
-    return false;
-  }
-
-  return options?.argusCodeReviewIntent === true
-    || options?.argusToolInspectionIntent === true;
-}
-
-function isInspectionContinuationPlanText(text = '') {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return /(?:\b(?:next|then|after that|from here|now)\b.{0,120}\b(?:i(?:'ll| will| am going to)|let me|we need to|need to)\b.{0,180}\b(?:read|open|inspect|check|trace|confirm|explain|answer|continue|search)\b|\b(?:i(?:'ll| will| am going to)|let me)\b.{0,120}\b(?:continue|read|open|inspect|check|trace|confirm|search)\b)/i.test(normalized)
-    || /(?:\u63a5\u4e0b\u6765|\u7136\u540e|\u4e0b\u4e00\u6b65|\u7ee7\u7eed|\u4f1a\u7ee7\u7eed|\u6211\u4f1a\u7ee7\u7eed|\u6211\u5c06\u7ee7\u7eed|\u6539\u7528).{0,180}(?:\u67e5|\u641c\u7d22|\u8bfb|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68b3\u7406|\u786e\u8ba4|\u8ffd\u8e2a|\u8bf4\u660e|\u89e3\u91ca|\u56de\u7b54)/u.test(normalized);
-}
-
-function shouldSendInspectionPreflightAfterIncompleteToolUse({
-  options = {},
-  fallbackSent = false,
-  preflightSent = false,
-  sawToolUse = false,
-  sawContentToolUse = false,
-  assistantText = '',
-} = {}) {
-  if (preflightSent === true || sawToolUse !== true) {
-    return false;
-  }
-
-  if (options?.argusCodeReviewIntent !== true && options?.argusToolInspectionIntent !== true) {
-    return false;
-  }
-
-  return isInspectionContinuationPlanText(assistantText)
-    || (fallbackSent === true && sawContentToolUse !== true);
-}
-
-function hasRepositoryEvidenceReference(text = '') {
-  const normalized = String(text || '');
-  if (!normalized.trim()) {
-    return false;
-  }
-
-  return /(?:^|[\s(["'`])(?:[A-Za-z]:)?(?:[\w.-]+[\\/])+[\w.-]+\.(?:c|cc|cpp|cs|css|go|h|hpp|html|java|js|jsx|json|mjs|py|rs|scss|sh|ts|tsx|vue|yaml|yml|md|toml)(?::\d+)?/im.test(normalized)
-    || /(?:^|[\s(["'`])[\w.-]+\.(?:js|jsx|ts|tsx|mjs|py|rs|go|json|md|yml|yaml|toml):\d+/im.test(normalized)
-    || /\b(?:appendSystemPrompt|createMtlCodeUserMessage|buildPromptInjectionDebugPayload|argusToolInspectionIntent|argusCodeReviewIntent)\b/.test(normalized);
-}
-
-function hasInspectionBlockerStatement(text = '') {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return /\b(?:blocked|blocker|cannot|can't|unable|failed|failure|unavailable|permission denied|enoent|timed out|insufficient)\b/i.test(normalized)
-    || /(?:无法|不能|不可用|失败|报错|错误|权限|超时|阻塞|缺少|不足|没有(?:可用|权限|输出|结果)|无法确认|不能确认)/u.test(normalized);
-}
-
-function shouldSendPostPreflightAnswerPrompt({
-  options = {},
-  preflightSent = false,
-  postPreflightPromptSent = false,
-  sawToolUse = false,
-  assistantText = '',
-} = {}) {
-  if (preflightSent !== true || postPreflightPromptSent === true || sawToolUse === true) {
-    return false;
-  }
-
-  if (options?.argusCodeReviewIntent !== true && options?.argusToolInspectionIntent !== true) {
-    return false;
-  }
-
-  if (isToolInspectionAcknowledgementText(assistantText)
-    || isCodeReviewAcknowledgementText(assistantText)
-    || isInspectionContinuationPlanText(assistantText)) {
-    return true;
-  }
-
-  if (hasInspectionBlockerStatement(assistantText)) {
-    return false;
-  }
-
-  return !hasRepositoryEvidenceReference(assistantText);
-}
-
-function buildInspectionSearchTerms(command = '') {
-  const terms = new Set();
-  const text = String(command || '');
-  const asciiTokens = text.match(/[A-Za-z_][A-Za-z0-9_:-]{2,}/g) || [];
-  for (const token of asciiTokens) {
-    const normalized = token.trim();
-    if (normalized.length >= 3 && normalized.length <= 80) {
-      terms.add(normalized);
-    }
-  }
-
-  if (/prompt|提示词|系统提示|注入|inject|appendSystemPrompt/i.test(text)) {
-    terms.add('appendSystemPrompt');
-    terms.add('prompt_injection_debug');
-    terms.add('buildPromptInjectionDebugPayload');
-    terms.add('createMtlCodeUserMessage');
-  }
-  if (/review|diff|变更|改动/i.test(text)) {
-    terms.add('argusCodeReviewIntent');
-    terms.add('Code review intent active');
-  }
-  if (/tool|工具|检查|仓库|代码|实现|链路/i.test(text)) {
-    terms.add('argusToolInspectionIntent');
-    terms.add('Repository inspection intent active');
-  }
-
-  if (terms.size === 0) {
-    terms.add('appendSystemPrompt');
-    terms.add('argusToolInspectionIntent');
-    terms.add('createMtlCodeUserMessage');
-  }
-
-  return Array.from(terms).slice(0, 8);
-}
-
-function getPreflightMaxFiles() {
-  return Number.isFinite(ARGUS_PREFLIGHT_MAX_FILES) && ARGUS_PREFLIGHT_MAX_FILES > 0
-    ? ARGUS_PREFLIGHT_MAX_FILES
-    : 5000;
-}
-
-function getPreflightMaxFileBytes() {
-  return Number.isFinite(ARGUS_PREFLIGHT_MAX_FILE_BYTES) && ARGUS_PREFLIGHT_MAX_FILE_BYTES > 0
-    ? ARGUS_PREFLIGHT_MAX_FILE_BYTES
-    : 262144;
-}
-
-function getPreflightMaxMatchesPerTerm() {
-  return Number.isFinite(ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM) && ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM > 0
-    ? ARGUS_PREFLIGHT_MAX_MATCHES_PER_TERM
-    : 50;
-}
-
-function normalizePreflightRelativePath(cwd, filePath) {
-  return path.relative(cwd, filePath).split(path.sep).join('/');
-}
-
-function shouldSkipPreflightRelativePath(relativePath = '') {
-  const segments = String(relativePath || '').split(/[\\/]+/).filter(Boolean);
-  return segments.some(segment => ARGUS_PREFLIGHT_IGNORED_DIRS.has(segment));
-}
-
-function isLikelyTextPreflightFile(relativePath = '') {
-  const ext = path.extname(relativePath).toLowerCase();
-  const base = path.basename(relativePath).toLowerCase();
-  return ARGUS_PREFLIGHT_TEXT_EXTENSIONS.has(ext)
-    || /^(dockerfile|makefile|package-lock\.json|pnpm-lock\.yaml|bun\.lockb|tsconfig.*\.json|vite\.config\.[cm]?[jt]s)$/.test(base);
-}
-
-async function collectNodePreflightFiles(cwd = process.cwd()) {
-  const root = path.resolve(cwd);
-  const maxFiles = getPreflightMaxFiles();
-  const stack = [''];
-  const files = [];
-  let truncated = false;
-
-  while (stack.length > 0 && files.length < maxFiles) {
-    const relativeDir = stack.shift();
-    const absoluteDir = path.join(root, relativeDir);
-    let entries = [];
-    try {
-      entries = await fs.readdir(absoluteDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const relativePath = relativeDir ? path.join(relativeDir, entry.name) : entry.name;
-      const normalized = relativePath.split(path.sep).join('/');
-      if (shouldSkipPreflightRelativePath(normalized)) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        stack.push(relativePath);
-        continue;
-      }
-      if (!entry.isFile() || !isLikelyTextPreflightFile(normalized)) {
-        continue;
-      }
-      try {
-        const stat = await fs.stat(path.join(root, relativePath));
-        if (stat.size > getPreflightMaxFileBytes()) {
-          continue;
-        }
-      } catch {
-        continue;
-      }
-      files.push(normalized);
-      if (files.length >= maxFiles) {
-        truncated = true;
-        break;
-      }
-    }
-  }
-
-  if (stack.length > 0) {
-    truncated = true;
-  }
-
-  return { files, truncated };
-}
-
-function formatNodePreflightFileList(files = [], truncated = false) {
-  const shown = files.slice(0, 250);
-  return [
-    `Collected ${files.length} text-like repository files${truncated ? ' before hitting the preflight limit' : ''}.`,
-    ...shown,
-    files.length > shown.length ? `... ${files.length - shown.length} more files omitted ...` : '',
-  ].filter(Boolean).join('\n');
-}
-
-async function collectGitPreflightFiles(cwd = process.cwd()) {
-  const section = await runReadOnlyPreflightCommand('git', ['ls-files', '-co', '--exclude-standard'], cwd);
-  if (section.exitCode !== 0 || !section.output) {
-    return null;
-  }
-  const maxFiles = getPreflightMaxFiles();
-  const files = section.output
-    .split(/\r?\n/)
-    .map(line => line.trim().replace(/\\/g, '/'))
-    .filter(Boolean)
-    .filter(relativePath => !shouldSkipPreflightRelativePath(relativePath))
-    .filter(isLikelyTextPreflightFile)
-    .slice(0, maxFiles);
-  if (files.length === 0) {
-    return null;
-  }
-  return {
-    files,
-    truncated: section.output.split(/\r?\n/).filter(Boolean).length > files.length,
-    source: 'git',
-  };
-}
-
-async function searchNodePreflightFilesByTerms(cwd, files = [], terms = []) {
-  const normalizedTerms = terms
-    .map(term => String(term || '').trim())
-    .filter(Boolean);
-  const results = new Map(normalizedTerms.map(term => [term, []]));
-  const maxMatches = getPreflightMaxMatchesPerTerm();
-
-  for (const relativePath of files) {
-    const lowerPath = relativePath.toLowerCase();
-    for (const term of normalizedTerms) {
-      const matches = results.get(term);
-      if (matches.length < maxMatches && lowerPath.includes(term.toLowerCase())) {
-        matches.push(`${relativePath}: path match`);
-      }
-    }
-
-    if ([...results.values()].every(matches => matches.length >= maxMatches)) {
-      break;
-    }
-
-    let content = '';
-    try {
-      content = await fs.readFile(path.join(cwd, relativePath), 'utf8');
-    } catch {
-      continue;
-    }
-    const lines = content.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const lowerLine = lines[index].toLowerCase();
-      for (const term of normalizedTerms) {
-        const matches = results.get(term);
-        if (matches.length >= maxMatches) {
-          continue;
-        }
-        if (lowerLine.includes(term.toLowerCase())) {
-          matches.push(`${relativePath}:${index + 1}: ${lines[index].trim().slice(0, 240)}`);
-        }
-      }
-      if ([...results.values()].every(matches => matches.length >= maxMatches)) {
-        break;
-      }
-    }
-  }
-
-  return normalizedTerms.map(term => ({
-    title: `node preflight search ${term}`,
-    command: `node preflight: search ${term}`,
-    exitCode: 0,
-    output: results.get(term)?.length > 0
-      ? results.get(term).join('\n')
-      : '(no matches)',
-  }));
-}
-
-async function runNodeToolInspectionPreflight(cwd = process.cwd(), originalCommand = '') {
-  const sections = [];
-  try {
-    const gitFiles = await collectGitPreflightFiles(cwd);
-    const { files, truncated } = gitFiles || await collectNodePreflightFiles(cwd);
-    sections.push({
-      title: gitFiles ? 'git preflight file list' : 'node preflight file list',
-      command: gitFiles ? 'git ls-files -co --exclude-standard' : 'node preflight: list text files',
-      exitCode: 0,
-      output: formatNodePreflightFileList(files, truncated),
-      outputTruncated: truncated,
-    });
-    sections.push(...await searchNodePreflightFilesByTerms(cwd, files, buildInspectionSearchTerms(originalCommand)));
-  } catch (error) {
-    sections.push({
-      title: 'node preflight',
-      command: 'node preflight',
-      exitCode: null,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  return sections;
-}
-
-function buildCommandDisplay(command, args = []) {
-  return [command, ...args].join(' ');
-}
-
-function runReadOnlyPreflightCommand(command, args = [], cwd = process.cwd()) {
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timedOut = false;
-    let outputTruncated = false;
-    let child;
-    const maxOutputChars = getPreflightMaxOutputChars() * 2;
-
-    const appendLimited = (current, chunk) => {
-      if (current.length >= maxOutputChars) {
-        outputTruncated = true;
-        return current;
-      }
-      const next = current + chunk.toString();
-      if (next.length <= maxOutputChars) {
-        return next;
-      }
-      outputTruncated = true;
-      return next.slice(0, maxOutputChars);
-    };
-
-    const finish = (section) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve(section);
-    };
-
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child?.kill?.('SIGTERM');
-    }, Number.isFinite(ARGUS_PREFLIGHT_TIMEOUT_MS) ? ARGUS_PREFLIGHT_TIMEOUT_MS : 12000);
-
-    try {
-      child = spawn(command, args, {
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      });
-    } catch (error) {
-      finish({
-        title: buildCommandDisplay(command, args),
-        command: buildCommandDisplay(command, args),
-        exitCode: null,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-
-    child.stdout?.on('data', chunk => {
-      stdout = appendLimited(stdout, chunk);
-    });
-    child.stderr?.on('data', chunk => {
-      stderr = appendLimited(stderr, chunk);
-    });
-    child.once('error', error => {
-      finish({
-        title: buildCommandDisplay(command, args),
-        command: buildCommandDisplay(command, args),
-        exitCode: null,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    child.once('close', exitCode => {
-      const output = [stdout, stderr].filter(part => part.trim()).join('\n').trim();
-      finish({
-        title: buildCommandDisplay(command, args),
-        command: buildCommandDisplay(command, args),
-        exitCode,
-        timedOut,
-        outputTruncated,
-        output,
-      });
-    });
-  });
-}
-
-async function runArgusInspectionPreflight({
-  intent = 'tool_inspection',
-  cwd = process.cwd(),
-  originalCommand = '',
-} = {}) {
-  const sections = [];
-  const add = async (command, args) => {
-    const section = await runReadOnlyPreflightCommand(command, args, cwd);
-    sections.push(section);
-  };
-
-  if (intent === 'code_review') {
-    await add('git', ['status', '--short']);
-    await add('git', ['diff', '--no-ext-diff', '--stat']);
-    await add('git', ['diff', '--no-ext-diff']);
-    await add('git', ['diff', '--no-ext-diff', '--staged', '--stat']);
-    await add('git', ['diff', '--no-ext-diff', '--staged']);
-  } else {
-    sections.push(...await runNodeToolInspectionPreflight(cwd, originalCommand));
-  }
-
-  const ok = sections.some(section => section.output && section.output !== '(no matches)' && !section.timedOut);
-  return { cwd, ok, sections };
-}
-
-function shouldStartCodeReviewFallbackRunAfterClose({
-  fallbackSent = false,
-  resultReceived = false,
-  aborted = false,
-  sessionId = '',
-} = {}) {
-  return fallbackSent === true
-    && resultReceived !== true
-    && aborted !== true
-    && typeof sessionId === 'string'
-    && sessionId.trim().length > 0;
 }
 
 function getMtlCodeConfigDir() {
@@ -2033,13 +1391,6 @@ function createMtlCodeUserMessage(content, clientMessageId = null) {
   };
 }
 
-function createMtlCodeSyntheticUserMessage(content, clientMessageId = null) {
-  return {
-    ...createMtlCodeUserMessage(ensureArgusInternalFallbackPrefix(content), clientMessageId),
-    isSynthetic: true,
-  };
-}
-
 function writeMtlCodeJson(child, payload) {
   if (!child.stdin || child.stdin.destroyed || !child.stdin.writable) {
     return false;
@@ -2148,15 +1499,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   let currentTurnId = createRequestId();
   let currentTurnStartedAt = 0;
   let resultReceived = false;
-  let codeReviewToolUseSeen = false;
-  let codeReviewContentToolUseSeen = false;
-  let codeReviewFallbackSent = options.argusInspectionFallbackAlreadySent === true;
-  let codeReviewPreflightSent = options.argusInspectionPreflightSent === true;
-  let codeReviewPostPreflightPromptSent = options.argusInspectionPostPreflightPromptSent === true;
-  let codeReviewAssistantText = '';
-  let codeReviewFallbackPrompt = '';
-  let codeReviewFallbackSessionId = '';
-  let resolvedCwd = process.cwd();
+  let nativeToolUseNames = [];
+  let permissionRequestCount = 0;
+  let assistantTextSeen = '';
   let promptDebugChildEnv = process.env;
   let promptDebugCliArgs = [];
   let promptDebugNativeSystemPrompt = '';
@@ -2265,14 +1610,9 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       : [];
     currentTurnTempDir = turnContext.tempDir || null;
     resultReceived = false;
-    codeReviewToolUseSeen = false;
-    codeReviewContentToolUseSeen = false;
-    codeReviewFallbackSent = nextOptions.argusInspectionFallbackAlreadySent === true;
-    codeReviewPreflightSent = nextOptions.argusInspectionPreflightSent === true;
-    codeReviewPostPreflightPromptSent = nextOptions.argusInspectionPostPreflightPromptSent === true;
-    codeReviewAssistantText = '';
-    codeReviewFallbackPrompt = '';
-    codeReviewFallbackSessionId = '';
+    nativeToolUseNames = [];
+    permissionRequestCount = 0;
+    assistantTextSeen = '';
     promptDebugEffectiveCommand = nextCommand;
     currentTurnId = createRequestId();
     currentTurnStartedAt = Date.now();
@@ -2343,10 +1683,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     currentTurnActive = true;
     currentTurnResolve = resolve;
-    const createMessage = turnContext.synthetic === true
-      ? createMtlCodeSyntheticUserMessage
-      : createMtlCodeUserMessage;
-    const written = writeMtlCodeJson(child, createMessage(nextCommand, nextOptions.clientMessageId));
+    const written = writeMtlCodeJson(child, createMtlCodeUserMessage(nextCommand, nextOptions.clientMessageId));
     logMtlCodeSessionLifecycle('stdin_write', {
       turnId: currentTurnId,
       sessionId: capturedSessionId || nextOptions?.sessionId || null,
@@ -2453,6 +1790,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     const sid = capturedSessionId || currentOptions?.sessionId || sessionId || null;
     const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
     const configuredDecision = resolveConfiguredToolDecision(toolName, input, currentOptions, runtimeToolSettings);
+    permissionRequestCount += 1;
     logMtlCodeSessionLifecycle('permission_request', {
       turnId: currentTurnId,
       sessionId: sid,
@@ -2519,16 +1857,14 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     ensureSessionRegistered(message.session_id);
 
-    if (messageHasMtlCodeRepositoryInspectionToolUse(message)) {
-      codeReviewToolUseSeen = true;
-    }
-    if (messageHasMtlCodeRepositoryContentToolUse(message)) {
-      codeReviewContentToolUseSeen = true;
+    const messageToolUseNames = getMtlCodeToolUseNames(message);
+    if (messageToolUseNames.length > 0) {
+      nativeToolUseNames.push(...messageToolUseNames);
     }
     const assistantText = extractMtlCodeAssistantText(message);
     if (assistantText) {
-      codeReviewAssistantText = codeReviewAssistantText
-        ? `${codeReviewAssistantText}\n${assistantText}`
+      assistantTextSeen = assistantTextSeen
+        ? `${assistantTextSeen}\n${assistantText}`
         : assistantText;
     }
 
@@ -2561,189 +1897,21 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         provider: 'claude',
         contextBudget,
       });
-      const shouldSendReviewFallback = shouldSendCodeReviewToolFallback({
-        options: currentOptions,
-        fallbackSent: codeReviewFallbackSent,
-        sawToolUse: codeReviewToolUseSeen,
-        assistantText: codeReviewAssistantText,
-      });
-      const shouldSendInspectionFallback = shouldSendToolInspectionFallback({
-        options: currentOptions,
-        fallbackSent: codeReviewFallbackSent,
-        sawToolUse: codeReviewToolUseSeen,
-        assistantText: codeReviewAssistantText,
-      });
-      const shouldSendPreflight = shouldSendInspectionPreflightAfterFallback({
-        options: currentOptions,
-        fallbackSent: codeReviewFallbackSent,
-        preflightSent: codeReviewPreflightSent,
-        sawToolUse: codeReviewToolUseSeen,
-        assistantText: codeReviewAssistantText,
-      });
-      const shouldSendIncompleteToolUsePreflight = shouldSendInspectionPreflightAfterIncompleteToolUse({
-        options: currentOptions,
-        fallbackSent: codeReviewFallbackSent,
-        preflightSent: codeReviewPreflightSent,
-        sawToolUse: codeReviewToolUseSeen,
-        sawContentToolUse: codeReviewContentToolUseSeen,
-        assistantText: codeReviewAssistantText,
-      });
-      const shouldInjectPreflight = shouldSendPreflight || shouldSendIncompleteToolUsePreflight;
-      const postPreflightHasEvidence = codeReviewPreflightSent === true
-        ? hasRepositoryEvidenceReference(codeReviewAssistantText)
-        : false;
-      const postPreflightHasBlocker = codeReviewPreflightSent === true
-        ? hasInspectionBlockerStatement(codeReviewAssistantText)
-        : false;
-      const shouldSendPostPreflightPrompt = shouldSendPostPreflightAnswerPrompt({
-        options: currentOptions,
-        preflightSent: codeReviewPreflightSent,
-        postPreflightPromptSent: codeReviewPostPreflightPromptSent,
-        sawToolUse: codeReviewToolUseSeen,
-        assistantText: codeReviewAssistantText,
-      });
+      const stopReason = typeof message.stop_reason === 'string'
+        ? message.stop_reason
+        : (typeof message.stopReason === 'string' ? message.stopReason : '');
+      const parsedNumTurns = Number(message.num_turns ?? message.numTurns);
       logMtlCodeSessionLifecycle('result_received', {
         turnId: currentTurnId,
         sessionId: sid,
         resultReceived,
-        sawToolUse: codeReviewToolUseSeen,
-        sawContentToolUse: codeReviewContentToolUseSeen,
-        fallbackSent: codeReviewFallbackSent,
-        preflightSent: codeReviewPreflightSent,
-        postPreflightPromptSent: codeReviewPostPreflightPromptSent,
-        assistantText: codeReviewAssistantText,
-        shouldSendReviewFallback,
-        shouldSendInspectionFallback,
-        shouldSendPreflight,
-        shouldSendIncompleteToolUsePreflight,
-        shouldSendPostPreflightPrompt,
-        postPreflightHasEvidence,
-        postPreflightHasBlocker,
+        sawToolUse: nativeToolUseNames.length > 0,
+        toolUseNames: nativeToolUseNames,
+        permissionRequestCount,
+        stopReason,
+        numTurns: Number.isFinite(parsedNumTurns) ? parsedNumTurns : undefined,
+        assistantText: assistantTextSeen,
       });
-      if (shouldSendReviewFallback || shouldSendInspectionFallback) {
-        codeReviewFallbackSent = true;
-        resultReceived = false;
-        codeReviewAssistantText = '';
-        codeReviewToolUseSeen = false;
-        codeReviewContentToolUseSeen = false;
-        codeReviewFallbackPrompt = shouldSendReviewFallback
-          ? buildCodeReviewToolFallbackPrompt()
-          : buildToolInspectionFallbackPrompt();
-        codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
-        logMtlCodeSessionLifecycle('fallback_injected', {
-          turnId: currentTurnId,
-          sessionId: codeReviewFallbackSessionId || null,
-          shouldSendReviewFallback,
-          shouldSendInspectionFallback,
-        });
-        await emitPromptInjectionDebug(
-          currentWriter,
-          currentOptions,
-          promptDebugChildEnv,
-          promptDebugCliArgs,
-          codeReviewFallbackSessionId || null,
-          {
-            originalCommand: currentOptions.debugPromptInjectionOriginalCommand || currentCommand,
-            effectiveCommand: promptDebugEffectiveCommand,
-          },
-          promptDebugNativeSystemPrompt,
-          {
-            argusInternal: {
-              hiddenFallbackInjected: true,
-              preflightInjected: false,
-            },
-          },
-        );
-        writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
-        return;
-      }
-      if (shouldInjectPreflight) {
-        codeReviewPreflightSent = true;
-        resultReceived = false;
-        codeReviewAssistantText = '';
-        codeReviewToolUseSeen = false;
-        codeReviewContentToolUseSeen = false;
-        const preflightIntent = currentOptions?.argusCodeReviewIntent === true ? 'code_review' : 'tool_inspection';
-        const preflightResult = await runArgusInspectionPreflight({
-          intent: preflightIntent,
-          cwd: resolvedCwd,
-          originalCommand: currentCommand,
-        });
-        codeReviewFallbackPrompt = buildArgusInspectionPreflightPrompt({
-          intent: preflightIntent,
-          originalCommand: currentCommand,
-          result: preflightResult,
-          reason: shouldSendIncompleteToolUsePreflight ? 'partial_tool_use' : 'no_tool_use',
-        });
-        codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
-        logMtlCodeSessionLifecycle('preflight_injected', {
-          turnId: currentTurnId,
-          sessionId: codeReviewFallbackSessionId || null,
-          preflightSent: true,
-          resultReceived,
-          sawToolUse: codeReviewToolUseSeen,
-        });
-        await emitPromptInjectionDebug(
-          currentWriter,
-          currentOptions,
-          promptDebugChildEnv,
-          promptDebugCliArgs,
-          codeReviewFallbackSessionId || null,
-          {
-            originalCommand: currentOptions.debugPromptInjectionOriginalCommand || currentCommand,
-            effectiveCommand: promptDebugEffectiveCommand,
-          },
-          promptDebugNativeSystemPrompt,
-          {
-            argusInternal: {
-              hiddenFallbackInjected: true,
-              preflightInjected: true,
-              preflightOk: preflightResult.ok,
-              preflightSectionCount: Array.isArray(preflightResult.sections) ? preflightResult.sections.length : 0,
-            },
-          },
-        );
-        writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
-        return;
-      }
-      if (shouldSendPostPreflightPrompt) {
-        codeReviewPostPreflightPromptSent = true;
-        resultReceived = false;
-        codeReviewAssistantText = '';
-        codeReviewToolUseSeen = false;
-        codeReviewContentToolUseSeen = false;
-        codeReviewFallbackPrompt = buildPostPreflightAnswerPrompt({
-          originalCommand: currentCommand,
-        });
-        codeReviewFallbackSessionId = message.session_id || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
-        logMtlCodeSessionLifecycle('post_preflight_prompt_injected', {
-          turnId: currentTurnId,
-          sessionId: codeReviewFallbackSessionId || null,
-          preflightSent: codeReviewPreflightSent,
-          postPreflightPromptSent: true,
-        });
-        await emitPromptInjectionDebug(
-          currentWriter,
-          currentOptions,
-          promptDebugChildEnv,
-          promptDebugCliArgs,
-          codeReviewFallbackSessionId || null,
-          {
-            originalCommand: currentOptions.debugPromptInjectionOriginalCommand || currentCommand,
-            effectiveCommand: promptDebugEffectiveCommand,
-          },
-          promptDebugNativeSystemPrompt,
-          {
-            argusInternal: {
-              hiddenFallbackInjected: true,
-              preflightInjected: true,
-              postPreflightPromptInjected: true,
-            },
-          },
-        );
-        writeMtlCodeJson(child, createMtlCodeSyntheticUserMessage(codeReviewFallbackPrompt));
-        return;
-      }
       await completeCurrentTurn(0);
     }
   };
@@ -2757,7 +1925,6 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
     const launches = resolveMtlCodeLaunches();
     const cwd = resolveWorkingDirectory(options.cwd || options.projectPath);
-    resolvedCwd = cwd;
     const permission = evaluateRuntimePermission({
       command: 'argus-backend',
       cwd,
@@ -2962,33 +2129,6 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         cleanupRegisteredSessions();
 
         const aborted = isMtlCodeUserAbort(child);
-        const fallbackResumeSessionId = codeReviewFallbackSessionId || capturedSessionId || currentOptions?.sessionId || sessionId || clientSessionId || '';
-        if (currentTurnActive && shouldStartCodeReviewFallbackRunAfterClose({
-          fallbackSent: codeReviewFallbackSent,
-          resultReceived,
-          aborted,
-          sessionId: fallbackResumeSessionId,
-        })) {
-          const resolveTurn = currentTurnResolve;
-          currentTurnActive = false;
-          currentTurnResolve = null;
-          await cleanupTempFiles(currentTurnTempImagePaths, currentTurnTempDir);
-          currentTurnTempImagePaths = [];
-          currentTurnTempDir = null;
-          await queryMtlCodeDirect(codeReviewFallbackPrompt || buildCodeReviewToolFallbackPrompt(), {
-            ...currentOptions,
-            sessionId: fallbackResumeSessionId,
-            resume: true,
-            clientMessageId: null,
-            argusSyntheticInitialMessage: true,
-            argusInspectionFallbackAlreadySent: true,
-            argusInspectionPreflightSent: codeReviewPreflightSent,
-            argusInspectionPostPreflightPromptSent: codeReviewPostPreflightPromptSent,
-          }, currentWriter);
-          resolveTurn?.();
-          return;
-        }
-
         const failedWithoutResult = !aborted && currentTurnActive && !resultReceived && (Boolean(signal) || Boolean(code && code !== 0));
         if (failedWithoutResult) {
           const message = buildMtlCodeCloseFailureMessage({ code, signal, stderrLines });
@@ -3549,24 +2689,13 @@ export {
   reconnectSessionWriter,
   isMtlCodeUserAbort,
   buildMtlCodeCloseFailureMessage,
-  ARGUS_INTERNAL_FALLBACK_PREFIX,
-  buildArgusInspectionPreflightPrompt,
-  buildCodeReviewToolFallbackPrompt,
-  buildToolInspectionFallbackPrompt,
-  createMtlCodeSyntheticUserMessage,
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
   isMtlCodeSessionProcessing,
   closeMtlCodePersistentSession,
+  getMtlCodeToolUseNames,
   messageHasMtlCodeRepositoryContentToolUse,
-  messageHasMtlCodeRepositoryInspectionToolUse,
-  runArgusInspectionPreflight,
-  shouldSendCodeReviewToolFallback,
-  shouldSendToolInspectionFallback,
-  shouldSendPostPreflightAnswerPrompt,
-  shouldSendInspectionPreflightAfterFallback,
-  shouldSendInspectionPreflightAfterIncompleteToolUse,
-  shouldStartCodeReviewFallbackRunAfterClose
+  messageHasMtlCodeRepositoryInspectionToolUse
 };
