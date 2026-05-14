@@ -179,6 +179,8 @@ export interface SubagentActivitySummary {
 }
 
 export interface ChatMessage {
+  id?: string;
+  sessionId?: string;
   type: string;
   content?: string;
   timestamp: string | number | Date;

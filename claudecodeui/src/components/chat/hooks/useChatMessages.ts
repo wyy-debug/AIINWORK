@@ -475,6 +475,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           }
           converted.push({
             id: msg.id,
+            sessionId: msg.sessionId,
             type: 'user',
             content: unescapeWithMathProtection(decodeHtmlEntities(content)),
             timestamp: msg.timestamp,
@@ -491,6 +492,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           if (proposedPlan.text.trim()) {
             converted.push({
               id: msg.id,
+              sessionId: msg.sessionId,
               type: 'assistant',
               content: proposedPlan.text,
               timestamp: msg.timestamp,
@@ -500,6 +502,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           proposedPlan.plans.forEach((plan, index) => {
             converted.push({
               id: `${msg.id}-proposed-plan-${index}`,
+              sessionId: msg.sessionId,
               type: 'assistant',
               content: '',
               timestamp: msg.timestamp,
@@ -591,6 +594,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
         converted.push({
           id: msg.id,
+          sessionId: msg.sessionId,
           type: 'assistant',
           content: '',
           timestamp: msg.timestamp,
@@ -637,6 +641,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (msg.content?.trim()) {
           converted.push({
             id: msg.id,
+            sessionId: msg.sessionId,
             type: 'assistant',
             content: unescapeWithMathProtection(msg.content),
             timestamp: msg.timestamp,
@@ -648,6 +653,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       case 'error':
         converted.push({
           id: msg.id,
+          sessionId: msg.sessionId,
           type: 'error',
           content: msg.content || 'Unknown error',
           timestamp: msg.timestamp,
@@ -657,6 +663,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       case 'interactive_prompt':
         converted.push({
           id: msg.id,
+          sessionId: msg.sessionId,
           type: 'assistant',
           content: msg.content || '',
           timestamp: msg.timestamp,
@@ -670,6 +677,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         }
         converted.push({
           id: msg.id,
+          sessionId: msg.sessionId,
           type: 'assistant',
           content: msg.summary || 'Background task update',
           timestamp: msg.timestamp,
@@ -681,6 +689,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       case 'context_compaction':
         converted.push({
           id: msg.id,
+          sessionId: msg.sessionId,
           type: 'system',
           content: msg.content || 'Conversation compacted',
           timestamp: msg.timestamp,
@@ -698,6 +707,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (msg.content) {
           converted.push({
             id: msg.id,
+            sessionId: msg.sessionId,
             type: 'assistant',
             content: msg.content,
             timestamp: msg.timestamp,

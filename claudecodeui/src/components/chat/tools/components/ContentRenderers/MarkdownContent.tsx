@@ -4,6 +4,8 @@ import { Markdown } from '../../../view/subcomponents/Markdown';
 interface MarkdownContentProps {
   content: string;
   className?: string;
+  onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  projectName?: string;
 }
 
 /**
@@ -12,10 +14,16 @@ interface MarkdownContentProps {
  */
 export const MarkdownContent: React.FC<MarkdownContentProps> = ({
   content,
-  className = 'mt-1 prose prose-sm max-w-none dark:prose-invert'
+  className = 'mt-1 prose prose-sm max-w-none dark:prose-invert',
+  onFileOpen,
+  projectName,
 }) => {
   return (
-    <Markdown className={className}>
+    <Markdown
+      className={className}
+      onFileOpen={onFileOpen}
+      projectName={projectName}
+    >
       {content}
     </Markdown>
   );

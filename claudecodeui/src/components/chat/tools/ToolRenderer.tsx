@@ -28,6 +28,8 @@ interface ToolRendererProps {
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   rawToolInput?: string;
+  provider?: string;
+  sourceSessionId?: string | null;
   isSubagentContainer?: boolean;
   subagentState?: ChatMessage['subagentState'];
   onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
@@ -81,6 +83,8 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   autoExpandTools = false,
   showRawParameters = false,
   rawToolInput,
+  provider,
+  sourceSessionId,
   isSubagentContainer,
   subagentState,
   onControlSubagent
@@ -172,6 +176,10 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         rawContent={rawToolInput}
         toolName={toolName}
         toolId={toolId}
+        provider={provider}
+        sourceSessionId={sourceSessionId}
+        onFileOpen={onFileOpen}
+        projectName={selectedProject?.name}
       />
     );
   }
@@ -207,7 +215,13 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         break;
 
       case 'markdown':
-        contentComponent = <MarkdownContent content={contentProps.content || ''} />;
+        contentComponent = (
+          <MarkdownContent
+            content={contentProps.content || ''}
+            onFileOpen={onFileOpen}
+            projectName={selectedProject?.name}
+          />
+        );
         break;
 
       case 'file-list':

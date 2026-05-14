@@ -78,3 +78,22 @@ test('Cursor history uses the shared paginated loading paths instead of local ea
   expect(loadAllBlock).toContain('sessionStore.fetchFromServer');
   expect(loadAllBlock).not.toContain("sessionProvider === 'cursor'");
 });
+
+test('plan cards propagate their source session id to programmatic submits', async () => {
+  const messageSource = (await readFile(join(hooksDir, '..', 'view', 'subcomponents', 'MessageComponent.tsx'), 'utf8')).replace(/\r\n/g, '\n');
+  const rendererSource = (await readFile(join(hooksDir, '..', 'tools', 'ToolRenderer.tsx'), 'utf8')).replace(/\r\n/g, '\n');
+
+  expect(messageSource).toContain('messageSourceSessionId');
+  expect(messageSource).toContain('sourceSessionId={messageSourceSessionId}');
+  expect(rendererSource).toContain('sourceSessionId?: string | null');
+  expect(rendererSource).toContain('sourceSessionId={sourceSessionId}');
+});
+
+test('plan cards receive provider context for assistant-specific copy', async () => {
+  const messageSource = (await readFile(join(hooksDir, '..', 'view', 'subcomponents', 'MessageComponent.tsx'), 'utf8')).replace(/\r\n/g, '\n');
+  const rendererSource = (await readFile(join(hooksDir, '..', 'tools', 'ToolRenderer.tsx'), 'utf8')).replace(/\r\n/g, '\n');
+
+  expect(messageSource).toContain('provider={provider}');
+  expect(rendererSource).toContain('provider?: string');
+  expect(rendererSource).toContain('provider={provider}');
+});

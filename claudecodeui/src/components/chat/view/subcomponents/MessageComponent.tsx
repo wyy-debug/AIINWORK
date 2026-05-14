@@ -458,6 +458,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
   const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
+  const messageSourceSessionId = typeof message.sessionId === 'string' && message.sessionId.trim()
+    ? message.sessionId
+    : sessionId || null;
 
   if (shouldHideThinkingMessage) {
     return null;
@@ -624,7 +627,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               <>
                 <div className="flex flex-col">
                   <div className="flex flex-col">
-                    <Markdown className="prose prose-sm max-w-none dark:prose-invert">
+                    <Markdown
+                      className="prose prose-sm max-w-none dark:prose-invert"
+                      onFileOpen={onFileOpen}
+                      projectName={selectedProject?.name}
+                    >
                       {String(message.displayText || '')}
                     </Markdown>
                   </div>
@@ -643,6 +650,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     autoExpandTools={autoExpandTools}
                     showRawParameters={showRawParameters}
                     rawToolInput={typeof message.toolInput === 'string' ? message.toolInput : undefined}
+                    provider={String(provider || '')}
+                    sourceSessionId={messageSourceSessionId}
                     isSubagentContainer={message.isSubagentContainer}
                     subagentState={message.subagentState}
                     onControlSubagent={onControlSubagent}
@@ -664,7 +673,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                         <span className="text-xs font-medium text-red-700 dark:text-red-300">{t('messageTypes.error')}</span>
                       </div>
                       <div className="relative text-sm text-red-900 dark:text-red-100">
-                        <Markdown className="prose prose-sm prose-red max-w-none dark:prose-invert">
+                        <Markdown
+                          className="prose prose-sm prose-red max-w-none dark:prose-invert"
+                          onFileOpen={onFileOpen}
+                          projectName={selectedProject?.name}
+                        >
                           {String(message.toolResult.content || '')}
                         </Markdown>
                         {permissionSuggestion && (
@@ -822,7 +835,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               <Reasoning defaultOpen={false}>
                 <ReasoningTrigger />
                 <ReasoningContent>
-                  <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
+                  <Markdown
+                    className="prose prose-sm prose-gray max-w-none dark:prose-invert"
+                    onFileOpen={onFileOpen}
+                    projectName={selectedProject?.name}
+                  >
                     {message.content}
                   </Markdown>
                   <div className="mt-3 flex items-center text-[11px]">
@@ -879,7 +896,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
-                    <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
+                    <Markdown
+                      className="prose prose-sm prose-gray max-w-none dark:prose-invert"
+                      onFileOpen={onFileOpen}
+                      projectName={selectedProject?.name}
+                    >
                       {content}
                     </Markdown>
                   ) : (

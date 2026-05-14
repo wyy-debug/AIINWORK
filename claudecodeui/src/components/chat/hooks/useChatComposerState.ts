@@ -71,6 +71,7 @@ type ProgrammaticChatSubmit = {
   permissionMode?: PermissionMode | string;
   subagentDispatch?: boolean;
   approvedSubagentPlan?: string;
+  sourceSessionId?: string;
 };
 
 interface UseChatComposerStateArgs {
@@ -139,6 +140,11 @@ const createFakeSubmitEvent = () => {
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
+
+const toConcreteSessionId = (sessionId: string | null | undefined) => {
+  const normalized = typeof sessionId === 'string' ? sessionId.trim() : '';
+  return normalized && !isTemporarySessionId(normalized) ? normalized : null;
+};
 
 const createClientUserMessageId = () =>
   `client_user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -344,6 +350,7 @@ export function useChatComposerState({
   >(null);
   const oneShotPermissionModeRef = useRef<PermissionMode | string | null>(null);
   const oneShotSubagentDispatchRef = useRef(false);
+  const oneShotSourceSessionIdRef = useRef<string | null>(null);
   const approvedSubagentDispatchPlanRef = useRef('');
   const inputValueRef = useRef(input);
   const launchDialogApprovalRef = useRef<LaunchDialogApproval | null>(null);
@@ -980,7 +987,15 @@ export function useChatComposerState({
 
       const storedCursorSessionId =
         provider === 'cursor' ? sessionStorage.getItem('cursorSessionId') : null;
-      const effectiveSessionId = currentSessionId || selectedSession?.id || storedCursorSessionId;
+      const concreteProgrammaticSessionId = toConcreteSessionId(oneShotSourceSessionIdRef.current);
+      const fallbackConcreteSessionId = toConcreteSessionId(currentSessionId)
+        || toConcreteSessionId(selectedSession?.id)
+        || (provider === 'cursor' ? toConcreteSessionId(storedCursorSessionId) : null);
+      if (oneShotSourceSessionIdRef.current && !concreteProgrammaticSessionId && !fallbackConcreteSessionId) {
+        submitLockRef.current = false;
+        return;
+      }
+      const effectiveSessionId = concreteProgrammaticSessionId || fallbackConcreteSessionId || currentSessionId || selectedSession?.id || storedCursorSessionId;
       const backendSessionId =
         effectiveSessionId && !isTemporarySessionId(effectiveSessionId) ? effectiveSessionId : null;
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
@@ -1266,6 +1281,7 @@ export function useChatComposerState({
       setSubagentDispatchRequested(false);
       oneShotPermissionModeRef.current = null;
       oneShotSubagentDispatchRef.current = false;
+      oneShotSourceSessionIdRef.current = null;
       approvedSubagentDispatchPlanRef.current = '';
 
       if (textareaRef.current) {
@@ -1333,6 +1349,7 @@ export function useChatComposerState({
     inputValueRef.current = text;
     oneShotPermissionModeRef.current = detail.permissionMode || null;
     oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
+    oneShotSourceSessionIdRef.current = detail.sourceSessionId || null;
     approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
       ? detail.approvedSubagentPlan.trim()
       : '';
@@ -1377,6 +1394,7 @@ export function useChatComposerState({
         permissionMode?: PermissionMode | string;
         subagentDispatch?: boolean;
         approvedSubagentPlan?: string;
+        sourceSessionId?: string;
       }>).detail || {};
       const text = typeof detail.text === 'string' ? detail.text.trim() : '';
       if (!text) {
@@ -1388,6 +1406,7 @@ export function useChatComposerState({
         permissionMode: detail.permissionMode,
         subagentDispatch: detail.subagentDispatch,
         approvedSubagentPlan: detail.approvedSubagentPlan,
+        sourceSessionId: detail.sourceSessionId,
       };
       if (detail.subagentDispatch === true && isLoadingRef.current) {
         const pendingSubmit = pendingSubmitChatInputRef.current;
@@ -1395,6 +1414,7 @@ export function useChatComposerState({
           !pendingSubmit
           || pendingSubmit.text !== programmaticSubmit.text
           || pendingSubmit.approvedSubagentPlan !== programmaticSubmit.approvedSubagentPlan
+          || pendingSubmit.sourceSessionId !== programmaticSubmit.sourceSessionId
         ) {
           pendingSubmitChatInputRef.current = programmaticSubmit;
           setInput(text);

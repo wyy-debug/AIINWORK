@@ -23,4 +23,15 @@ describe('useChatComposerState subagent dispatch approval', () => {
     expect(source).toContain('submitProgrammaticChatInput');
     expect(source).not.toContain('pendingSubagentDispatchPlan');
   });
+
+  it('resumes the source session when proposed plan actions submit programmatically', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(currentDir, 'useChatComposerState.ts'), 'utf8');
+
+    expect(source).toContain('sourceSessionId?: string');
+    expect(source).toContain('oneShotSourceSessionIdRef');
+    expect(source).toContain('const concreteProgrammaticSessionId');
+    expect(source).toContain('concreteProgrammaticSessionId || fallbackConcreteSessionId');
+    expect(source).toContain('oneShotSourceSessionIdRef.current = null');
+  });
 });

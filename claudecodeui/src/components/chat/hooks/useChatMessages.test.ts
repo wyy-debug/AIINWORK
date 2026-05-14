@@ -38,6 +38,7 @@ describe('normalizedToChatMessages subagent handling', () => {
     expect(messages[0]?.content).toBe('I inspected the app.');
     expect(messages[1]?.isToolUse).toBe(true);
     expect(messages[1]?.toolName).toBe('proposed_plan');
+    expect(messages[1]?.sessionId).toBe('session-1');
     expect(JSON.parse(String(messages[1]?.toolInput))).toEqual({ plan: '# Plan\n\n- Add button' });
   });
 
