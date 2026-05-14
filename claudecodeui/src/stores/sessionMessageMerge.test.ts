@@ -19,6 +19,18 @@ function userMessage(id: string, content: string, timestamp: string): Normalized
   };
 }
 
+function assistantMessage(id: string, content: string, timestamp: string): NormalizedMessage {
+  return {
+    id,
+    sessionId: 'session-1',
+    timestamp,
+    provider: 'claude',
+    kind: 'text',
+    role: 'assistant',
+    content,
+  };
+}
+
 function statusMessage(id: string, timestamp = '2026-05-06T10:00:00.000Z'): NormalizedMessage {
   return {
     id,
@@ -99,5 +111,46 @@ describe('session message merge helpers', () => {
       .toEqual(['local_2']);
     expect(computeMergedMessages(server, realtime).map((message) => message.id))
       .toEqual(['server_1', 'local_2']);
+  });
+  it('replaces an optimistic user message even when earlier non-control messages exist', () => {
+    const previousAssistant = assistantMessage('assistant_1', 'Done', '2026-05-06T09:59:00.000Z');
+    const optimistic = userMessage('local_1', 'continue', '2026-05-06T10:00:00.000Z');
+    const echo = userMessage('server_1', 'continue', '2026-05-06T10:00:02.000Z');
+
+    const realtime = appendRealtimeMessage([previousAssistant, optimistic], echo);
+
+    expect(realtime.map((message) => message.id)).toEqual(['assistant_1', 'server_1']);
+  });
+
+  it('covers finalized local assistant replies once the server snapshot contains the same reply', () => {
+    const server = [assistantMessage('server_assistant_1', 'Final answer', '2026-05-06T10:00:05.000Z')];
+    const realtime = [assistantMessage('text_local_1', 'Final answer', '2026-05-06T10:00:06.000Z')];
+
+    expect(computeMergedMessages(server, realtime).map((message) => message.id))
+      .toEqual(['server_assistant_1']);
+    expect(retainRealtimeAfterServerRefresh(server, realtime)).toEqual([]);
+  });
+
+  it('keeps uncovered realtime messages in chronological order instead of appending them at the end', () => {
+    const server = [
+      userMessage('server_1', 'First', '2026-05-06T10:00:00.000Z'),
+      assistantMessage('server_2', 'Third', '2026-05-06T10:00:03.000Z'),
+    ];
+    const realtime = [
+      userMessage('local_2', 'Second', '2026-05-06T10:00:02.000Z'),
+    ];
+
+    const merged = computeMergedMessages(server, realtime);
+
+    expect(merged.map((message) => message.id)).toEqual(['server_1', 'local_2', 'server_2']);
+  });
+
+  it('deduplicates repeated realtime assistant text events with different ids', () => {
+    const first = assistantMessage('assistant_rt_1', 'Investigating the config path.', '2026-05-06T10:00:00.000Z');
+    const duplicate = assistantMessage('assistant_rt_2', 'Investigating the config path.', '2026-05-06T10:00:01.000Z');
+
+    const realtime = appendRealtimeMessage([first], duplicate);
+
+    expect(realtime.map((message) => message.id)).toEqual(['assistant_rt_2']);
   });
 });

@@ -55,6 +55,10 @@ function normalizeSection(value: unknown, fallbackTotal = 0): ContextBudgetSecti
   };
 }
 
+export function hasAccurateCurrentContextBudget(budget: ContextBudget | null | undefined): boolean {
+  return budget?.window.source !== undefined && budget.window.source !== 'legacy';
+}
+
 export function normalizeContextBudget(value: unknown): ContextBudget | null {
   const envelope = isRecord(value) && isRecord(value.contextBudget)
     ? value.contextBudget
@@ -89,7 +93,7 @@ export function normalizeContextBudget(value: unknown): ContextBudget | null {
   }
 
   const breakdown = normalizeBreakdown(value.breakdown);
-  const current = {
+  const cumulative = {
     used,
     total,
     percent: Math.round((used / total) * 10_000) / 100,
@@ -97,8 +101,13 @@ export function normalizeContextBudget(value: unknown): ContextBudget | null {
   };
 
   return {
-    current,
-    cumulative: current,
+    current: {
+      used: 0,
+      total,
+      percent: 0,
+      breakdown: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    },
+    cumulative,
     window: {
       tokens: total,
       model: null,
@@ -127,11 +136,17 @@ export function formatFullTokenCount(value: unknown): string {
 export function formatContextBudgetTooltip(budget: ContextBudget): string {
   const current = budget.current.breakdown;
   const cumulative = budget.cumulative.breakdown;
+  const hasCurrent = hasAccurateCurrentContextBudget(budget);
+
   return [
-    `当前上下文: ${formatFullTokenCount(budget.current.used)} / ${formatFullTokenCount(budget.current.total)} (${budget.current.percent.toFixed(2)}%)`,
-    `  input ${formatFullTokenCount(current.input)} | cache read ${formatFullTokenCount(current.cacheRead)} | cache create ${formatFullTokenCount(current.cacheCreation)}`,
-    `累计消耗: ${formatFullTokenCount(budget.cumulative.used)} tokens`,
+    hasCurrent
+      ? `Current context: ${formatFullTokenCount(budget.current.used)} / ${formatFullTokenCount(budget.current.total)} (${budget.current.percent.toFixed(2)}%)`
+      : 'Current context: unavailable (this provider only returned cumulative usage)',
+    hasCurrent
+      ? `  input ${formatFullTokenCount(current.input)} | cache read ${formatFullTokenCount(current.cacheRead)} | cache create ${formatFullTokenCount(current.cacheCreation)}`
+      : `  window ${formatFullTokenCount(budget.window.tokens)} tokens`,
+    `Cumulative usage: ${formatFullTokenCount(budget.cumulative.used)} tokens`,
     `  input ${formatFullTokenCount(cumulative.input)} | output ${formatFullTokenCount(cumulative.output)} | cache read ${formatFullTokenCount(cumulative.cacheRead)} | cache create ${formatFullTokenCount(cumulative.cacheCreation)}`,
-    `窗口: ${formatTokenCount(budget.window.tokens)} | 模型: ${budget.window.model || '未知'} | 来源: ${budget.window.source}`,
+    `Window: ${formatTokenCount(budget.window.tokens)} | Model: ${budget.window.model || 'unknown'} | Source: ${budget.window.source}`,
   ].join('\n');
 }

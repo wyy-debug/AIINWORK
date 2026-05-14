@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseInlineFileReference } from './markdownFileReferences';
+import {
+  formatInlineFileReferenceLabel,
+  parseInlineFileReference,
+  selectDefaultFileOpenTool,
+} from './markdownFileReferences';
 
 describe('parseInlineFileReference', () => {
   it('detects project-relative file references with line and column', () => {
@@ -31,5 +35,55 @@ describe('parseInlineFileReference', () => {
     expect(parseInlineFileReference('getSystemPrompt()')).toBeNull();
     expect(parseInlineFileReference('systemPrompt')).toBeNull();
     expect(parseInlineFileReference('cache_control')).toBeNull();
+  });
+
+  it('does not treat localhost URLs as file references', () => {
+    expect(parseInlineFileReference('http://127.0.0.1:5173')).toBeNull();
+    expect(parseInlineFileReference('https://localhost:3000/app')).toBeNull();
+  });
+
+  it('repairs Windows paths when backslash-t was decoded as a tab character', () => {
+    expect(parseInlineFileReference('D:\\SOC\trunk\\src\\MainContent.tsx:42')).toEqual({
+      path: 'D:\\SOC\\trunk\\src\\MainContent.tsx',
+      line: 42,
+      column: null,
+    });
+  });
+});
+
+describe('formatInlineFileReferenceLabel', () => {
+  it('renders file references as compact basename labels with location suffixes', () => {
+    expect(formatInlineFileReferenceLabel({
+      path: 'claude-code/packages/builtin-tools/src/tools/FileReadTool/prompt.ts',
+      line: 27,
+      column: null,
+    })).toBe('prompt.ts:27');
+
+    expect(formatInlineFileReferenceLabel({
+      path: 'src/components/main-content/view/MainContent.tsx',
+      line: null,
+      column: null,
+    })).toBe('MainContent.tsx');
+
+    expect(formatInlineFileReferenceLabel({
+      path: 'claudecodeui/server/services/argus-collaboration-mode-service.js',
+      line: 3,
+      column: null,
+    })).toBe('argus-collaboration-mode-service.js:3');
+  });
+});
+
+describe('selectDefaultFileOpenTool', () => {
+  it('selects the first available editor in launcher order', () => {
+    expect(selectDefaultFileOpenTool([
+      { id: 'vscode', kind: 'editor', available: false },
+      { id: 'visualstudio', kind: 'editor', available: false },
+      { id: 'cursor', kind: 'editor', available: true },
+      { id: 'explorer', kind: 'system', available: true },
+    ])).toBe('cursor');
+  });
+
+  it('falls back to VS Code when diagnostics are missing', () => {
+    expect(selectDefaultFileOpenTool()).toBe('vscode');
   });
 });

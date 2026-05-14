@@ -18,9 +18,12 @@ test('chat markdown file references are clickable and expose local context actio
   expect(markdownSource).toContain('InlineFileReference');
   expect(markdownSource).toContain('onContextMenu');
   expect(markdownSource).toContain('api.openLocalToolFile');
+  expect(markdownSource).toContain('api.localTools');
   expect(markdownSource).toContain('api.openLocalPath');
   expect(markdownSource).toContain('copyTextToClipboard');
-  expect(markdownSource).toContain('onFileOpen?.(reference.path);');
+  expect(markdownSource).toContain('openInDefaultLocalEditor');
+  expect(markdownSource).toContain('FileReferenceIcon');
+  expect(markdownSource).toContain('formatInlineFileReferenceLabel');
   expect(markdownSource).toContain('openInVSCode');
   expect(markdownSource).toContain('copyPath');
   expect(markdownSource).toContain('revealInExplorer');

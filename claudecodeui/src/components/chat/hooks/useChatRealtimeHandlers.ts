@@ -118,6 +118,12 @@ export function useChatRealtimeHandlers({
   const sessionStreamBuffersRef = useRef(new Map<string, string>());
   const sessionStreamTimersRef = useRef(new Map<string, number>());
   const temporarySessionAliasesRef = useRef(new Map<string, string>());
+  const getPersistedStreamingContent = useCallback((sessionId: string) => {
+    const slot = sessionStore.getSessionSlot(sessionId);
+    if (!slot) return '';
+    const streamMessage = slot.realtimeMessages.find((message) => message.id === `__streaming_${sessionId}`);
+    return typeof streamMessage?.content === 'string' ? streamMessage.content : '';
+  }, [sessionStore]);
 
   const scheduleProjectsRefresh = useCallback((delay = 400) => {
     if (projectRefreshTimerRef.current) {
@@ -234,17 +240,23 @@ export function useChatRealtimeHandlers({
       sessionStreamTimersRef.current.delete(sessionId);
     };
 
+    const getAccumulatedSessionStream = (sessionId: string) => (
+      sessionStreamBuffersRef.current.get(sessionId) ?? getPersistedStreamingContent(sessionId)
+    );
+
     const flushSessionStream = (sessionId: string) => {
-      const accumulated = sessionStreamBuffersRef.current.get(sessionId) || '';
+      const accumulated = getAccumulatedSessionStream(sessionId);
       if (accumulated) {
+        sessionStreamBuffersRef.current.set(sessionId, accumulated);
         sessionStore.updateStreaming(sessionId, accumulated, messageProvider);
       }
     };
 
     const finalizeSessionStream = (sessionId: string) => {
       clearSessionStreamTimer(sessionId);
-      const accumulated = sessionStreamBuffersRef.current.get(sessionId) || '';
+      const accumulated = getAccumulatedSessionStream(sessionId);
       if (accumulated) {
+        sessionStreamBuffersRef.current.set(sessionId, accumulated);
         sessionStore.updateStreaming(sessionId, accumulated, messageProvider);
         sessionStore.finalizeStreaming(sessionId);
       }
@@ -305,7 +317,7 @@ export function useChatRealtimeHandlers({
         accumulatedStreamRef.current += text;
         return;
       }
-      const accumulated = `${sessionStreamBuffersRef.current.get(sid) || ''}${text}`;
+      const accumulated = `${getAccumulatedSessionStream(sid)}${text}`;
       sessionStreamBuffersRef.current.set(sid, accumulated);
       if (sid === activeViewSessionId) {
         streamBufferRef.current += text;
@@ -525,5 +537,6 @@ export function useChatRealtimeHandlers({
     onWebSocketReconnect,
     scheduleProjectsRefresh,
     sessionStore,
+    getPersistedStreamingContent,
   ]);
 }

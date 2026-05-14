@@ -1,5 +1,6 @@
 import type { AgentAppBinding } from '../../../types/agent';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { SessionStore } from '../../../stores/useSessionStore';
 
 export type Provider = LLMProvider;
 
@@ -441,4 +442,5 @@ export interface ChatInterfaceProps {
   externalMessageUpdate?: number;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
+  sessionStore: SessionStore;
 }

@@ -87,6 +87,14 @@ function normalizeToolTimestamp(value: unknown): Date {
   return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
+function getContextCompactionReminderText(compactType: unknown): string {
+  const normalized = typeof compactType === 'string' ? compactType.trim().toLowerCase() : '';
+  if (normalized === 'micro') {
+    return '上下文已压缩，工具输出已收敛到摘要中。';
+  }
+  return '上下文已压缩，后续回复将基于压缩后的摘要继续。';
+}
+
 function toToolResult(value: NormalizedMessage | ToolResult | null | undefined): ToolResult | null {
   if (!value) return null;
   const record = value as Record<string, unknown>;
@@ -329,6 +337,33 @@ function nearestUserMessageId(messages: NormalizedMessage[], beforeIndex: number
     }
   }
   return '';
+}
+
+function normalizedMessageTextForDuplicateCollapse(message: ChatMessage | null | undefined): string | null {
+  if (!message || message.type !== 'assistant' || message.isToolUse || message.isThinking || message.isStreaming) {
+    return null;
+  }
+  const content = typeof message.content === 'string' ? message.content.replace(/\r\n/g, '\n').trim() : '';
+  return content || null;
+}
+
+function shouldCollapseAdjacentAssistantDuplicate(
+  previousMessage: ChatMessage | undefined,
+  nextMessage: ChatMessage,
+): boolean {
+  const previousContent = normalizedMessageTextForDuplicateCollapse(previousMessage);
+  const nextContent = normalizedMessageTextForDuplicateCollapse(nextMessage);
+  if (!previousContent || !nextContent || previousContent !== nextContent) {
+    return false;
+  }
+
+  const previousTime = new Date(previousMessage?.timestamp || '').getTime();
+  const nextTime = new Date(nextMessage.timestamp || '').getTime();
+  if (!Number.isFinite(previousTime) || !Number.isFinite(nextTime)) {
+    return false;
+  }
+
+  return Math.abs(nextTime - previousTime) <= 5_000;
 }
 
 /**
@@ -688,6 +723,15 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
       case 'context_compaction':
         converted.push({
+          id: `${msg.id}-notice`,
+          sessionId: msg.sessionId,
+          type: 'assistant',
+          content: getContextCompactionReminderText(msg.compactType),
+          timestamp: msg.timestamp,
+          isTaskNotification: true,
+          taskStatus: 'completed',
+        });
+        converted.push({
           id: msg.id,
           sessionId: msg.sessionId,
           type: 'system',
@@ -736,5 +780,5 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     }
   }
 
-  return converted;
+  return converted.filter((message, index) => !shouldCollapseAdjacentAssistantDuplicate(converted[index - 1], message));
 }

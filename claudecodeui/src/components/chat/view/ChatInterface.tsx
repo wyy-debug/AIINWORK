@@ -17,7 +17,6 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
-import { useSessionStore } from '../../../stores/useSessionStore';
 import { getClaudeSettings } from '../utils/chatStorage';
 import {
   ARGUS_DEBUG_SETTINGS_CHANGED_EVENT,
@@ -70,7 +69,12 @@ type DraftSessionGoal = {
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
-const INTERACTIVE_PERMISSION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+const INTERACTIVE_PERMISSION_TOOLS = new Set([
+  'AskUserQuestion',
+  'request_user_input',
+  'ExitPlanMode',
+  'exit_plan_mode',
+]);
 const MAX_RUNTIME_DIAGNOSTICS_CACHE_SIZE = 100;
 const MAX_PROMPT_INJECTION_DEBUG_CACHE_SIZE = 100;
 const SUBAGENT_UI_HARD_DISABLED = true;
@@ -182,11 +186,10 @@ function ChatInterface({
   sendByCtrlEnter,
   externalMessageUpdate,
   onShowAllTasks,
+  sessionStore,
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
-
-  const sessionStore = useSessionStore();
   const streamBufferRef = useRef('');
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamRef = useRef('');
@@ -617,6 +620,44 @@ function ChatInterface({
     () => (SUBAGENT_UI_HARD_DISABLED ? null : summarizeSubagentActivity(chatMessages)),
     [chatMessages],
   );
+
+  const syncPermissionDecisionToSessionStore = useCallback((
+    requestIds: string[],
+    decision: { allow?: boolean; updatedInput?: unknown },
+  ) => {
+    if (!decision?.allow || !decision.updatedInput) {
+      return;
+    }
+
+    for (const requestId of requestIds) {
+      const request = pendingPermissionRequests.find((entry) => entry.requestId === requestId);
+      if (!request) {
+        continue;
+      }
+
+      const context = request.context && typeof request.context === 'object'
+        ? request.context as Record<string, unknown>
+        : {};
+      const toolId = typeof context.tool_use_id === 'string'
+        ? context.tool_use_id
+        : typeof context.toolUseId === 'string'
+          ? context.toolUseId
+          : typeof context.toolUseID === 'string'
+            ? context.toolUseID
+            : '';
+      const sessionId = request.sessionId || currentSessionId || selectedSession?.id || '';
+      if (!sessionId) {
+        continue;
+      }
+
+      sessionStore.updateToolUseInput(sessionId, {
+        toolId,
+        toolName: request.toolName,
+        originalInput: request.input,
+        updatedInput: decision.updatedInput,
+      });
+    }
+  }, [currentSessionId, pendingPermissionRequests, selectedSession?.id, sessionStore]);
 
   const handleStopSubagents = useCallback((taskIds?: string[]) => {
     if (!subagentActivity) {
@@ -1705,7 +1746,9 @@ function ChatInterface({
     setCanAbortSession,
     setClaudeStatus,
     setIsUserScrolledUp,
+    pendingPermissionRequests,
     setPendingPermissionRequests,
+    onPermissionDecisionApplied: syncPermissionDecisionToSessionStore,
     setPromptInjectionDebug: setCachedPromptInjectionDebug,
   });
 
@@ -2039,6 +2082,7 @@ function ChatInterface({
           onControlSubagent={handleControlSubagent}
           onReuseSubagentObjective={handleReuseSubagentObjective}
           tokenBudget={tokenBudget}
+          messages={chatMessages}
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}
           slashCommandsCount={slashCommandsCount}

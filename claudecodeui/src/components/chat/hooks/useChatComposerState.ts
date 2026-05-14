@@ -41,6 +41,7 @@ import {
   buildSubagentDispatchPlanRequest,
   shouldRequestSubagentDispatchPlan,
 } from '../utils/subagentDispatchPlan';
+import { findAutoAnswerableRequestUserInput } from '../utils/requestUserInput';
 import {
   buildSubagentRuntimeSnapshot,
   getSubagentRuntimeDispatchPlanId,
@@ -68,6 +69,7 @@ type LaunchDialogApproval = {
 
 type ProgrammaticChatSubmit = {
   text: string;
+  displayText?: string;
   permissionMode?: PermissionMode | string;
   subagentDispatch?: boolean;
   approvedSubagentPlan?: string;
@@ -116,7 +118,12 @@ interface UseChatComposerStateArgs {
   setCanAbortSession: (canAbort: boolean) => void;
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
+  pendingPermissionRequests: PendingPermissionRequest[];
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  onPermissionDecisionApplied?: (
+    requestIds: string[],
+    decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
+  ) => void;
   setPromptInjectionDebug?: Dispatch<SetStateAction<PromptInjectionDebugPayload | null>>;
 }
 
@@ -322,7 +329,9 @@ export function useChatComposerState({
   setCanAbortSession,
   setClaudeStatus,
   setIsUserScrolledUp,
+  pendingPermissionRequests,
   setPendingPermissionRequests,
+  onPermissionDecisionApplied,
   setPromptInjectionDebug,
 }: UseChatComposerStateArgs) {
   const [input, setInput] = useState(() => {
@@ -350,12 +359,36 @@ export function useChatComposerState({
   >(null);
   const oneShotPermissionModeRef = useRef<PermissionMode | string | null>(null);
   const oneShotSubagentDispatchRef = useRef(false);
+  const oneShotDisplayTextRef = useRef<string | null>(null);
   const oneShotSourceSessionIdRef = useRef<string | null>(null);
   const approvedSubagentDispatchPlanRef = useRef('');
   const inputValueRef = useRef(input);
   const launchDialogApprovalRef = useRef<LaunchDialogApproval | null>(null);
   const pendingSubmitChatInputRef = useRef<ProgrammaticChatSubmit | null>(null);
   const isLoadingRef = useRef(isLoading);
+  const abortStatusCheckTimersRef = useRef<number[]>([]);
+
+  const submitProgrammaticChatInput = useCallback((detail: ProgrammaticChatSubmit) => {
+    const text = typeof detail.text === 'string' ? detail.text.trim() : '';
+    if (!text) {
+      return;
+    }
+
+    setInput(text);
+    inputValueRef.current = text;
+    oneShotDisplayTextRef.current = typeof detail.displayText === 'string' && detail.displayText.trim()
+      ? detail.displayText.trim()
+      : null;
+    oneShotPermissionModeRef.current = detail.permissionMode || null;
+    oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
+    oneShotSourceSessionIdRef.current = detail.sourceSessionId || null;
+    approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
+      ? detail.approvedSubagentPlan.trim()
+      : '';
+    window.setTimeout(() => {
+      void handleSubmitRef.current?.(createFakeSubmitEvent());
+    }, 0);
+  }, []);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -481,7 +514,7 @@ export function useChatComposerState({
     [onFileOpen, onShowSettings, addMessage, clearMessages, rewindMessages],
   );
 
-  const handleCustomCommand = useCallback(async (result: CommandExecutionResult) => {
+  const handleCustomCommand = useCallback(async (result: CommandExecutionResult, rawInput?: string) => {
     const { content, hasBashCommands } = result;
 
     if (hasBashCommands) {
@@ -499,16 +532,11 @@ export function useChatComposerState({
     }
 
     const commandContent = content || '';
-    setInput(commandContent);
-    inputValueRef.current = commandContent;
-
-    // Defer submit to next tick so the command text is reflected in UI before dispatching.
-    setTimeout(() => {
-      if (handleSubmitRef.current) {
-        handleSubmitRef.current(createFakeSubmitEvent());
-      }
-    }, 0);
-  }, [addMessage]);
+    submitProgrammaticChatInput({
+      text: commandContent,
+      displayText: typeof rawInput === 'string' ? rawInput.trim() : '',
+    });
+  }, [addMessage, submitProgrammaticChatInput]);
 
   const executeCommand = useCallback(
     async (command: SlashCommand, rawInput?: string) => {
@@ -561,7 +589,7 @@ export function useChatComposerState({
           setInput('');
           inputValueRef.current = '';
         } else if (result.type === 'custom') {
-          await handleCustomCommand(result);
+          await handleCustomCommand(result, effectiveInput);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
@@ -843,6 +871,31 @@ export function useChatComposerState({
       }
       submitLockRef.current = true;
 
+      const autoAnsweredRequest = (
+        provider === 'claude'
+        && !hasAttachments
+        && trimmedInput
+      )
+        ? findAutoAnswerableRequestUserInput(pendingPermissionRequests, trimmedInput)
+        : null;
+
+      if (autoAnsweredRequest) {
+        handlePermissionDecision(autoAnsweredRequest.request.requestId, {
+          allow: true,
+          updatedInput: autoAnsweredRequest.updatedInput,
+        });
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.focus();
+        }
+        submitLockRef.current = false;
+        return;
+      }
+
       const agentInvocation = resolveAgentInvocation(currentInput, agents, selectedAgentId);
       const activeAgent = agentInvocation.agent;
       const activeAgentAppBindings = activeAgent
@@ -1001,11 +1054,13 @@ export function useChatComposerState({
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
       const clientMessageId = createClientUserMessageId();
       const explicitWikiContext = buildExplicitWikiContext(currentInput, recentMessages);
+      const displayUserText = oneShotDisplayTextRef.current;
+      oneShotDisplayTextRef.current = null;
 
       const userMessage: ChatMessage = {
         id: clientMessageId,
         type: 'user',
-        content: currentInput.trim() ? currentInput : messageContent,
+        content: displayUserText || (currentInput.trim() ? currentInput : messageContent),
         images: uploadedImages as any,
         files: uploadedFiles,
         timestamp: new Date(),
@@ -1034,9 +1089,7 @@ export function useChatComposerState({
         setCurrentSessionId(sessionToActivate);
       }
       onSessionActive?.(sessionToActivate);
-      if (backendSessionId) {
-        onSessionProcessing?.(backendSessionId);
-      }
+      onSessionProcessing?.(sessionToActivate);
 
       const getToolsSettings = () => {
         if (provider === 'claude') {
@@ -1281,6 +1334,7 @@ export function useChatComposerState({
       setSubagentDispatchRequested(false);
       oneShotPermissionModeRef.current = null;
       oneShotSubagentDispatchRef.current = false;
+      oneShotDisplayTextRef.current = null;
       oneShotSourceSessionIdRef.current = null;
       approvedSubagentDispatchPlanRef.current = '';
 
@@ -1339,23 +1393,13 @@ export function useChatComposerState({
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
 
-  const submitProgrammaticChatInput = useCallback((detail: ProgrammaticChatSubmit) => {
-    const text = typeof detail.text === 'string' ? detail.text.trim() : '';
-    if (!text) {
-      return;
-    }
-
-    setInput(text);
-    inputValueRef.current = text;
-    oneShotPermissionModeRef.current = detail.permissionMode || null;
-    oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
-    oneShotSourceSessionIdRef.current = detail.sourceSessionId || null;
-    approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
-      ? detail.approvedSubagentPlan.trim()
-      : '';
-    window.setTimeout(() => {
-      void handleSubmitRef.current?.(createFakeSubmitEvent());
-    }, 0);
+  useEffect(() => {
+    return () => {
+      for (const timer of abortStatusCheckTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      abortStatusCheckTimersRef.current = [];
+    };
   }, []);
 
   useEffect(() => {
@@ -1391,6 +1435,7 @@ export function useChatComposerState({
     const handleSubmitChatInput = (event: Event) => {
       const detail = (event as CustomEvent<{
         text?: string;
+        displayText?: string;
         permissionMode?: PermissionMode | string;
         subagentDispatch?: boolean;
         approvedSubagentPlan?: string;
@@ -1403,6 +1448,7 @@ export function useChatComposerState({
 
       const programmaticSubmit: ProgrammaticChatSubmit = {
         text,
+        displayText: typeof detail.displayText === 'string' ? detail.displayText.trim() : '',
         permissionMode: detail.permissionMode,
         subagentDispatch: detail.subagentDispatch,
         approvedSubagentPlan: detail.approvedSubagentPlan,
@@ -1413,6 +1459,7 @@ export function useChatComposerState({
         if (
           !pendingSubmit
           || pendingSubmit.text !== programmaticSubmit.text
+          || pendingSubmit.displayText !== programmaticSubmit.displayText
           || pendingSubmit.approvedSubagentPlan !== programmaticSubmit.approvedSubagentPlan
           || pendingSubmit.sourceSessionId !== programmaticSubmit.sourceSessionId
         ) {
@@ -1608,6 +1655,20 @@ export function useChatComposerState({
       sessionId: targetSessionId,
       provider,
     });
+
+    const verifyStatus = (delay: number) => window.setTimeout(() => {
+      sendMessage({
+        type: 'check-session-status',
+        sessionId: targetSessionId,
+        provider,
+      });
+    }, delay);
+
+    abortStatusCheckTimersRef.current = [
+      ...abortStatusCheckTimersRef.current,
+      verifyStatus(300),
+      verifyStatus(1200),
+    ];
   }, [canAbortSession, currentSessionId, pendingViewSessionRef, provider, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
@@ -1642,6 +1703,8 @@ export function useChatComposerState({
         });
       });
 
+      onPermissionDecisionApplied?.(validIds, decision);
+
       setPendingPermissionRequests((previous) => {
         const next = previous.filter((request) => !validIds.includes(request.requestId));
         if (next.length === 0) {
@@ -1650,7 +1713,7 @@ export function useChatComposerState({
         return next;
       });
     },
-    [sendMessage, setClaudeStatus, setPendingPermissionRequests],
+    [onPermissionDecisionApplied, sendMessage, setClaudeStatus, setPendingPermissionRequests],
   );
 
   const [isInputFocused, setIsInputFocused] = useState(false);

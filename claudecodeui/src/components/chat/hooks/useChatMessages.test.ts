@@ -391,4 +391,55 @@ describe('normalizedToChatMessages subagent handling', () => {
       ],
     });
   });
+
+  it('adds a visible reminder event before a context compaction card', () => {
+    const messages = [
+      message({
+        id: 'compact-1',
+        kind: 'context_compaction',
+        compactType: 'summary',
+        content: 'Conversation compacted',
+        compactSummary: 'Summarized state',
+        tokensSaved: 12_345,
+      }),
+    ];
+
+    const converted = normalizedToChatMessages(messages);
+
+    expect(converted).toHaveLength(2);
+    expect(converted[0]).toMatchObject({
+      id: 'compact-1-notice',
+      type: 'assistant',
+      isTaskNotification: true,
+      content: '上下文已压缩，后续回复将基于压缩后的摘要继续。',
+    });
+    expect(converted[1]).toMatchObject({
+      id: 'compact-1',
+      isContextCompaction: true,
+      compactSummary: 'Summarized state',
+    });
+  });
+
+  it('collapses adjacent duplicate assistant text messages with the same content', () => {
+    const converted = normalizedToChatMessages([
+      message({
+        id: 'assistant-1',
+        role: 'assistant',
+        timestamp: '2026-05-05T00:00:00.000Z',
+        content: 'I am checking the startup path now.',
+      }),
+      message({
+        id: 'assistant-2',
+        role: 'assistant',
+        timestamp: '2026-05-05T00:00:01.000Z',
+        content: 'I am checking the startup path now.',
+      }),
+    ]);
+
+    expect(converted).toHaveLength(1);
+    expect(converted[0]).toMatchObject({
+      id: 'assistant-1',
+      content: 'I am checking the startup path now.',
+    });
+  });
 });

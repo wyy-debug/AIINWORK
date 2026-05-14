@@ -17,6 +17,18 @@ test('background stream deltas are accumulated instead of appended as standalone
   expect(streamDeltaBlock).not.toContain('sessionStore.appendRealtime(sid, msg as NormalizedMessage)');
 });
 
+test('stream delta accumulation resumes from the persisted streaming message after a remount', async () => {
+  const source = (await readFile(join(hooksDir, 'useChatRealtimeHandlers.ts'), 'utf8')).replace(/\r\n/g, '\n');
+  const streamDeltaStart = source.indexOf("if (msg.kind === 'stream_delta')");
+  const streamDeltaEnd = source.indexOf("if (msg.kind === 'stream_end')", streamDeltaStart);
+  const streamDeltaBlock = source.slice(streamDeltaStart, streamDeltaEnd);
+
+  expect(source).toContain('const getPersistedStreamingContent = useCallback((sessionId: string) => {');
+  expect(source).toContain('sessionStore.getSessionSlot(sessionId)');
+  expect(source).toContain("message.id === `__streaming_${sessionId}`");
+  expect(streamDeltaBlock).toContain('const accumulated = `${getAccumulatedSessionStream(sid)}${text}`');
+});
+
 test('session message loading ignores stale responses after switching sessions', async () => {
   const source = (await readFile(join(hooksDir, 'useChatSessionState.ts'), 'utf8')).replace(/\r\n/g, '\n');
   const effectStart = source.indexOf('// Main session loading effect - store-based');

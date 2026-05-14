@@ -2,6 +2,8 @@ import type { NormalizedMessage } from './useSessionStore';
 
 const MAX_REALTIME_MESSAGES = 500;
 const USER_ECHO_DEDUPE_WINDOW_MS = 5_000;
+const ASSISTANT_ECHO_DEDUPE_WINDOW_MS = 15_000;
+const ASSISTANT_DUPLICATE_WINDOW_MS = 5_000;
 
 function normalizeUserContent(content: unknown): string | null {
   if (typeof content !== 'string') return null;
@@ -18,18 +20,22 @@ function isUserTextMessage(message: NormalizedMessage): boolean {
   return message.kind === 'text' && message.role === 'user' && Boolean(normalizeUserContent(message.content));
 }
 
+function isAssistantTextMessage(message: NormalizedMessage): boolean {
+  return message.kind === 'text' && message.role === 'assistant' && Boolean(normalizeUserContent(message.content));
+}
+
 function isOptimisticUserMessage(message: NormalizedMessage): boolean {
   return isUserTextMessage(message)
     && (message.id.startsWith('client_user_') || message.id.startsWith('local_'));
 }
 
-function isControlMessage(message: NormalizedMessage): boolean {
-  return message.kind === 'session_created'
-    || message.kind === 'status'
-    || message.kind === 'complete'
-    || message.kind === 'permission_request'
-    || message.kind === 'permission_cancelled'
-    || message.kind === 'stream_end';
+function isOptimisticAssistantMessage(message: NormalizedMessage): boolean {
+  return isAssistantTextMessage(message)
+    && (
+      message.id.startsWith('text_')
+      || message.id.startsWith('local_')
+      || message.id.startsWith('client_assistant_')
+    );
 }
 
 function isLaterServerEcho(serverMessage: NormalizedMessage, optimisticMessage: NormalizedMessage): boolean {
@@ -45,24 +51,76 @@ function isLaterServerEcho(serverMessage: NormalizedMessage, optimisticMessage: 
   return serverTimestamp - optimisticTimestamp <= USER_ECHO_DEDUPE_WINDOW_MS;
 }
 
+function isAssistantServerEcho(serverMessage: NormalizedMessage, optimisticMessage: NormalizedMessage): boolean {
+  const serverContent = normalizeUserContent(serverMessage.content);
+  const optimisticContent = normalizeUserContent(optimisticMessage.content);
+  if (!serverContent || !optimisticContent || serverContent !== optimisticContent) return false;
+
+  const serverTimestamp = timestampMs(serverMessage);
+  const optimisticTimestamp = timestampMs(optimisticMessage);
+  if (serverTimestamp === null || optimisticTimestamp === null) return false;
+
+  return Math.abs(serverTimestamp - optimisticTimestamp) <= ASSISTANT_ECHO_DEDUPE_WINDOW_MS;
+}
+
+function isAssistantRealtimeDuplicate(
+  existingMessage: NormalizedMessage,
+  incomingMessage: NormalizedMessage,
+): boolean {
+  if (!isAssistantTextMessage(existingMessage) || !isAssistantTextMessage(incomingMessage)) {
+    return false;
+  }
+
+  const existingContent = normalizeUserContent(existingMessage.content);
+  const incomingContent = normalizeUserContent(incomingMessage.content);
+  if (!existingContent || !incomingContent || existingContent !== incomingContent) {
+    return false;
+  }
+
+  const existingTimestamp = timestampMs(existingMessage);
+  const incomingTimestamp = timestampMs(incomingMessage);
+  if (existingTimestamp === null || incomingTimestamp === null) {
+    return false;
+  }
+
+  return Math.abs(incomingTimestamp - existingTimestamp) <= ASSISTANT_DUPLICATE_WINDOW_MS;
+}
+
+function isCoveredByServerEcho(serverMessage: NormalizedMessage, realtimeMessage: NormalizedMessage): boolean {
+  if (isOptimisticUserMessage(realtimeMessage) && isUserTextMessage(serverMessage)) {
+    return isLaterServerEcho(serverMessage, realtimeMessage);
+  }
+
+  if (isAssistantTextMessage(realtimeMessage) && isAssistantTextMessage(serverMessage)) {
+    return isAssistantServerEcho(serverMessage, realtimeMessage);
+  }
+
+  return false;
+}
+
 function findOptimisticUserEchoIndex(
   messages: NormalizedMessage[],
   incoming: NormalizedMessage,
 ): number {
-  if (!isUserTextMessage(incoming) || isOptimisticUserMessage(incoming)) return -1;
+  if (isAssistantTextMessage(incoming)) {
+    for (let index = 0; index < messages.length; index += 1) {
+      if (isAssistantRealtimeDuplicate(messages[index], incoming)) {
+        return index;
+      }
+    }
+  }
+
+  if (
+    (!isUserTextMessage(incoming) || isOptimisticUserMessage(incoming))
+    && (!isAssistantTextMessage(incoming) || isOptimisticAssistantMessage(incoming))
+  ) {
+    return -1;
+  }
 
   for (let index = 0; index < messages.length; index += 1) {
     const existing = messages[index];
-    if (
-      isOptimisticUserMessage(existing)
-      && isUserTextMessage(existing)
-      && isLaterServerEcho(incoming, existing)
-    ) {
+    if (isCoveredByServerEcho(incoming, existing)) {
       return index;
-    }
-
-    if (!isControlMessage(existing)) {
-      return -1;
     }
   }
 
@@ -83,12 +141,10 @@ function getCoveredRealtimeIndexes(
   });
 
   for (const serverMessage of serverMessages) {
-    if (!isUserTextMessage(serverMessage) || isOptimisticUserMessage(serverMessage)) continue;
-
     for (let index = 0; index < realtimeMessages.length; index += 1) {
       if (covered.has(index)) continue;
       const realtimeMessage = realtimeMessages[index];
-      if (isOptimisticUserMessage(realtimeMessage) && isLaterServerEcho(serverMessage, realtimeMessage)) {
+      if (isCoveredByServerEcho(serverMessage, realtimeMessage)) {
         covered.add(index);
         break;
       }
@@ -96,6 +152,34 @@ function getCoveredRealtimeIndexes(
   }
 
   return covered;
+}
+
+function mergeRealtimeIntoServerTimeline(
+  serverMessages: NormalizedMessage[],
+  realtimeMessages: NormalizedMessage[],
+): NormalizedMessage[] {
+  const merged = [...serverMessages];
+
+  for (const realtimeMessage of realtimeMessages) {
+    const realtimeTime = timestampMs(realtimeMessage);
+    if (realtimeTime === null || merged.length === 0) {
+      merged.push(realtimeMessage);
+      continue;
+    }
+
+    let insertionIndex = merged.length;
+    for (let index = 0; index < merged.length; index += 1) {
+      const candidateTime = timestampMs(merged[index]);
+      if (candidateTime !== null && candidateTime > realtimeTime) {
+        insertionIndex = Math.max(1, index);
+        break;
+      }
+    }
+
+    merged.splice(insertionIndex, 0, realtimeMessage);
+  }
+
+  return merged;
 }
 
 export function appendRealtimeMessage(
@@ -130,7 +214,7 @@ export function computeMergedMessages(
   const covered = getCoveredRealtimeIndexes(serverMessages, realtimeMessages);
   const extra = realtimeMessages.filter((_, index) => !covered.has(index));
 
-  return extra.length === 0 ? serverMessages : [...serverMessages, ...extra];
+  return extra.length === 0 ? serverMessages : mergeRealtimeIntoServerTimeline(serverMessages, extra);
 }
 
 export function retainRealtimeAfterServerRefresh(

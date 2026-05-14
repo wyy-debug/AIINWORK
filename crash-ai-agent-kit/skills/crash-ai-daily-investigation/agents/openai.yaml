@@ -1,3 +1,0 @@
-display_name: "CrashAI Daily Investigation"
-short_description: "Call CrashSight MCP, then output only current filed issues and missing-unfiled issues by platform."
-default_prompt: "For date, date range, or exact time range, call crash-ai-crashsight.generate_crash_ai_report. Use CRASH_AI_AGENT_CONTEXT_JSON directly from the same tool response. Output only two sections: 目前存在问题 and 遗漏未开单问题：. Group by android, pc, and iOS. Rows with redmineRefs go under 目前存在问题 and must include 修复人：, 版本：, and CrashSight：. Rows without redmineRefs go under 遗漏未开单问题： and must include 原因：未提取到 Redmine, 版本：, and CrashSight：. If owner is unavailable, write 修复人未验证. Do not output fact tables, summaries, recent-close sections, omission checks, or any extra sections."

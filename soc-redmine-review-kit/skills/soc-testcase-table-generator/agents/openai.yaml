@@ -1,3 +1,0 @@
-display_name: SOC 测试用例表
-short_description: 生成 SOC 中文测试表格。
-default_prompt: 使用此 Skill 生成与评审风险关联的中文 Markdown 功能测试和单元测试用例表；只在当前聊天窗口输出完整报告，不要写文件。

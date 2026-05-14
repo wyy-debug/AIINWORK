@@ -13,6 +13,11 @@ type ClaudeStatusProps = {
   onAbort?: () => void;
   isLoading: boolean;
   provider?: string;
+  todoItems?: Array<{
+    id?: string;
+    content: string;
+    status: 'completed' | 'in_progress' | 'pending';
+  }>;
 };
 
 const ACTION_KEYS = [
@@ -51,6 +56,7 @@ export default function ClaudeStatus({
   onAbort,
   isLoading,
   provider = 'claude',
+  todoItems = [],
 }: ClaudeStatusProps) {
   const { t } = useTranslation('chat');
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -85,13 +91,30 @@ export default function ClaudeStatus({
     : rawStatusText;
 
   const providerLabel = t(PROVIDER_LABEL_KEYS[provider] || 'claudeStatus.providers.assistant', { defaultValue: 'Assistant' });
-  const stopLabel = t('claudeStatus.controls.stop', { defaultValue: '停止' });
+  const stopLabel = t('claudeStatus.controls.stop', { defaultValue: 'Stop' });
+  const visibleTodoItems = todoItems.slice(0, 4);
+  const hasTodoItems = visibleTodoItems.length > 0;
+  const genericLoadingState = isLoading && Boolean(STATUS_ACTION_KEY_BY_TEXT[normalizedStatusText]);
+  const showCompactProcessingLamp = hasTodoItems && genericLoadingState;
+
+  const renderTodoIndicator = (itemStatus: 'completed' | 'in_progress' | 'pending') => {
+    if (itemStatus === 'completed') {
+      return <span className="h-2 w-2 rounded-full bg-emerald-500" />;
+    }
+    if (itemStatus === 'in_progress') {
+      return (
+        <span className="relative flex h-2 w-2 items-center justify-center">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400/70" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
+        </span>
+      );
+    }
+    return <span className="h-2 w-2 rounded-full border border-muted-foreground/40 bg-transparent" />;
+  };
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 mb-3 w-full duration-500">
-      <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 overflow-hidden rounded-full border border-border/50 bg-slate-100 px-3 py-1.5 shadow-sm backdrop-blur-md dark:bg-slate-900">
-
-        {/* Left Side: Identity & Status */}
+      <div className="mx-auto flex max-w-4xl items-center gap-3 overflow-hidden rounded-full border border-border/50 bg-slate-100 px-3 py-1.5 shadow-sm backdrop-blur-md dark:bg-slate-900">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/10">
             <SessionProviderLogo provider={provider} className="h-3.5 w-3.5" />
@@ -105,16 +128,52 @@ export default function ClaudeStatus({
               {providerLabel}
             </span>
             <div className="flex items-center gap-1.5">
-              <span className={cn("h-1.5 w-1.5 rounded-full", isLoading ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
-              <p className="truncate text-xs font-medium text-foreground">
-                {statusText}<span className="inline-block w-4 text-primary">{isLoading ? dots : ''}</span>
-              </p>
+              <span className={cn('relative flex h-2.5 w-2.5 items-center justify-center rounded-full', isLoading ? 'bg-emerald-500/20' : 'bg-amber-500/20')}>
+                {isLoading && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />}
+                <span className={cn('relative h-1.5 w-1.5 rounded-full', isLoading ? 'bg-emerald-500' : 'bg-amber-500')} />
+              </span>
+              {!showCompactProcessingLamp && (
+                <p className="truncate text-xs font-medium text-foreground">
+                  {statusText}
+                  <span className="inline-block w-4 text-primary">{isLoading ? dots : ''}</span>
+                </p>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Right Side: Metrics & Actions */}
-        <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          {hasTodoItems ? (
+            <div className="flex min-w-0 items-center gap-2 overflow-hidden rounded-full border border-border/50 bg-background/70 px-3 py-1">
+              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+                Todo
+              </span>
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {visibleTodoItems.map((item, index) => (
+                  <span
+                    key={item.id ?? `${item.content}-${index}`}
+                    className={cn(
+                      'inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] leading-none',
+                      item.status === 'completed'
+                        ? 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                        : item.status === 'in_progress'
+                          ? 'border-sky-200/80 bg-sky-50/80 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300'
+                          : 'border-border/60 bg-muted/60 text-muted-foreground',
+                    )}
+                    title={item.content}
+                  >
+                    {renderTodoIndicator(item.status)}
+                    <span className="truncate">{item.content}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="hidden sm:block" />
+          )}
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
           {isLoading && status?.can_interrupt !== false && onAbort && (
             <>
               <div className="hidden items-center rounded-md bg-muted/50 px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground sm:flex">

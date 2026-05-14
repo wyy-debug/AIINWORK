@@ -1,6 +1,7 @@
 import {
   formatContextBudgetTooltip,
   formatTokenCount,
+  hasAccurateCurrentContextBudget,
   type ContextBudget,
 } from '../../utils/contextBudget';
 
@@ -9,12 +10,15 @@ type TokenUsagePieProps = {
 };
 
 export default function TokenUsagePie({ budget }: TokenUsagePieProps) {
-  const used = budget?.current.used ?? 0;
-  const total = budget?.current.total ?? 0;
+  const total = budget?.window.tokens ?? budget?.current.total ?? 0;
+  const hasCurrent = hasAccurateCurrentContextBudget(budget);
+  const used = hasCurrent ? (budget?.current.used ?? 0) : 0;
 
-  if (used == null || total == null || total <= 0) return null;
+  if (total <= 0) return null;
 
-  const percentage = Math.min(100, budget?.current.percent ?? (used / total) * 100);
+  const percentage = hasCurrent
+    ? Math.min(100, budget?.current.percent ?? (used / total) * 100)
+    : 0;
   const radius = 10;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (percentage / 100) * circumference;
@@ -42,24 +46,26 @@ export default function TokenUsagePie({ budget }: TokenUsagePieProps) {
           className="text-gray-300 dark:text-gray-600"
         />
         {/* Progress circle */}
-        <circle
-          cx="12"
-          cy="12"
-          r={radius}
-          fill="none"
-          stroke={getColor()}
-          strokeWidth="2"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-        />
+        {hasCurrent && (
+          <circle
+            cx="12"
+            cy="12"
+            r={radius}
+            fill="none"
+            stroke={getColor()}
+            strokeWidth="2"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+          />
+        )}
       </svg>
-      <span className="font-medium">{percentage.toFixed(1)}%</span>
+      <span className="font-medium">{hasCurrent ? `${percentage.toFixed(1)}%` : '--'}</span>
       {budget && (
-        <span className="hidden max-w-[150px] truncate text-muted-foreground md:inline">
-          当前 {formatTokenCount(budget.current.used)} / {formatTokenCount(budget.window.tokens)}
+        <span className="hidden max-w-[170px] truncate text-muted-foreground md:inline">
+          Current {hasCurrent ? formatTokenCount(budget.current.used) : '--'} / {formatTokenCount(budget.window.tokens)}
           <span className="mx-1">·</span>
-          累计 {formatTokenCount(budget.cumulative.used)}
+          Cumulative {formatTokenCount(budget.cumulative.used)}
         </span>
       )}
     </div>

@@ -19,7 +19,13 @@ import { Code2, Copy, ExternalLink, FolderOpen, type LucideIcon } from 'lucide-r
 import { cn } from '../../../../lib/utils';
 import { api } from '../../../../utils/api';
 import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
-import { parseInlineFileReference, type InlineFileReference as ParsedInlineFileReference } from '../../utils/markdownFileReferences';
+import {
+  formatInlineFileReferenceLabel,
+  parseInlineFileReference,
+  selectDefaultFileOpenTool,
+  type InlineFileReference as ParsedInlineFileReference,
+  type LocalFileOpenToolStatus,
+} from '../../utils/markdownFileReferences';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 
 type MarkdownProps = {
@@ -73,6 +79,42 @@ const openLocalToolFile = api.openLocalToolFile as (payload: {
   column?: number | null;
 }) => Promise<Response>;
 
+let defaultFileOpenToolPromise: Promise<string> | null = null;
+
+async function getDefaultFileOpenTool() {
+  if (!defaultFileOpenToolPromise) {
+    defaultFileOpenToolPromise = api.localTools()
+      .then(async (response: Response) => {
+        if (!response.ok) {
+          return selectDefaultFileOpenTool();
+        }
+        const data = await response.json().catch(() => ({}));
+        return selectDefaultFileOpenTool(Array.isArray(data?.tools) ? data.tools as LocalFileOpenToolStatus[] : []);
+      })
+      .catch(() => selectDefaultFileOpenTool());
+  }
+
+  return defaultFileOpenToolPromise;
+}
+
+function getInlineFileExtension(filePath: string) {
+  const basename = filePath.split(/[\\/]/).pop() || filePath;
+  const match = basename.match(/\.([A-Za-z0-9]+)$/);
+  return (match?.[1] || 'file').slice(0, 2).toUpperCase();
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function reportInlineFileOpenError(error: unknown) {
+  const message = getErrorMessage(error, 'Failed to open file');
+  console.error('Inline file action failed:', error);
+  if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+    window.alert(message);
+  }
+}
+
 function calculateInlineFileMenuPosition(clientX: number, clientY: number) {
   const safeX =
     clientX + INLINE_FILE_CONTEXT_MENU_WIDTH > window.innerWidth
@@ -89,6 +131,17 @@ function calculateInlineFileMenuPosition(clientX: number, clientY: number) {
   };
 }
 
+function FileReferenceIcon({ filePath }: { filePath: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-[3px] bg-blue-600 px-[2px] font-sans text-[7px] font-bold leading-none text-white shadow-sm dark:bg-blue-500"
+    >
+      {getInlineFileExtension(filePath)}
+    </span>
+  );
+}
+
 function InlineFileReference({
   label,
   reference,
@@ -99,14 +152,15 @@ function InlineFileReference({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const displayLabel = formatInlineFileReferenceLabel(reference);
 
-  const openInWorkspace = useCallback(() => {
+  const openInApp = useCallback(() => {
     onFileOpen?.(reference.path);
   }, [onFileOpen, reference.path]);
 
-  const openInVSCode = useCallback(async () => {
+  const openWithLocalTool = useCallback(async (tool: string) => {
     const response = await openLocalToolFile({
-      tool: 'vscode',
+      tool,
       filePath: reference.path,
       projectName: projectName || '',
       line: reference.line,
@@ -118,6 +172,20 @@ function InlineFileReference({
       throw new Error(errorData?.error || `Failed to open file: ${response.status}`);
     }
   }, [projectName, reference.column, reference.line, reference.path]);
+
+  const openInDefaultLocalEditor = useCallback(async () => {
+    try {
+      await openWithLocalTool(await getDefaultFileOpenTool());
+    } catch (error) {
+      if (onFileOpen) {
+        openInApp();
+        return;
+      }
+      throw error;
+    }
+  }, [onFileOpen, openInApp, openWithLocalTool]);
+
+  const openInVSCode = useCallback(() => openWithLocalTool('vscode'), [openWithLocalTool]);
 
   const revealInExplorer = useCallback(async () => {
     const response = await api.openLocalPath({
@@ -139,10 +207,19 @@ function InlineFileReference({
     (action: () => void | Promise<unknown>) => {
       closeContextMenu();
       void Promise.resolve(action()).catch((error) => {
-        console.error('Inline file action failed:', error);
+        reportInlineFileOpenError(error);
       });
     },
     [closeContextMenu],
+  );
+
+  const runInlineFileAction = useCallback(
+    (action: () => void | Promise<unknown>) => {
+      void Promise.resolve(action()).catch((error) => {
+        reportInlineFileOpenError(error);
+      });
+    },
+    [],
   );
 
   const openContextMenuAtCursor = useCallback((event: ReactMouseEvent<HTMLElement>) => {
@@ -158,7 +235,7 @@ function InlineFileReference({
         key: 'open',
         label: INLINE_FILE_MENU_LABELS.open,
         icon: Code2,
-        onSelect: openInWorkspace,
+        onSelect: openInDefaultLocalEditor,
       },
       {
         key: 'openInVSCode',
@@ -180,7 +257,7 @@ function InlineFileReference({
         onSelect: revealInExplorer,
       },
     ],
-    [openInVSCode, openInWorkspace, reference.path, revealInExplorer],
+    [openInDefaultLocalEditor, openInVSCode, reference.path, revealInExplorer],
   );
 
   useEffect(() => {
@@ -208,7 +285,6 @@ function InlineFileReference({
     };
   }, [closeContextMenu, isMenuOpen]);
 
-  const hasWorkspaceOpen = Boolean(onFileOpen);
   const title = reference.line
     ? `${reference.path}:${reference.line}${reference.column ? `:${reference.column}` : ''}`
     : reference.path;
@@ -218,14 +294,15 @@ function InlineFileReference({
       <button
         type="button"
         title={title}
-        onClick={hasWorkspaceOpen ? openInWorkspace : openInVSCode}
+        onClick={() => runInlineFileAction(openInDefaultLocalEditor)}
         onContextMenu={openContextMenuAtCursor}
         className={cn(
-          'inline-flex max-w-full cursor-pointer items-center rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 align-baseline font-mono text-[0.9em] text-gray-900 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-100 dark:hover:border-blue-800 dark:hover:bg-blue-950/40 dark:hover:text-blue-300',
+          'inline-flex max-w-[220px] cursor-pointer items-center gap-1 align-baseline font-sans text-[0.95em] font-semibold text-blue-600 transition-colors hover:text-blue-700 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 dark:text-blue-400 dark:hover:text-blue-300 sm:max-w-[280px]',
           className,
         )}
       >
-        <span className="truncate">{label}</span>
+        <FileReferenceIcon filePath={reference.path} />
+        <span className="truncate">{displayLabel || label}</span>
       </button>
 
       {isMenuOpen && (

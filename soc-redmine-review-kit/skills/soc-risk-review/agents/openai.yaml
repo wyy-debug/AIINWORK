@@ -1,3 +1,0 @@
-display_name: SOC 风险评审
-short_description: 评审 SOC 代码风险。
-default_prompt: 使用此 Skill 根据 SOC Redmine 变更评审回归风险和实现风险，评审结论必须使用中文。

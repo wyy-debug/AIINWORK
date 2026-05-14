@@ -1,69 +1,40 @@
 import { useCallback, useState } from 'react';
 
+import {
+  createEmptySessionProtectionState,
+  markSessionAsActiveState,
+  markSessionAsInactiveState,
+  markSessionAsNotProcessingState,
+  markSessionAsProcessingState,
+  replaceTemporarySessionState,
+} from './sessionProtection';
+
 export function useSessionProtection() {
-  const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
-  const [processingSessions, setProcessingSessions] = useState<Set<string>>(new Set());
+  const [state, setState] = useState(createEmptySessionProtectionState);
 
   const markSessionAsActive = useCallback((sessionId?: string | null) => {
-    if (!sessionId) {
-      return;
-    }
-
-    setActiveSessions((prev) => new Set([...prev, sessionId]));
+    setState((prev) => markSessionAsActiveState(prev, sessionId));
   }, []);
 
   const markSessionAsInactive = useCallback((sessionId?: string | null) => {
-    if (!sessionId) {
-      return;
-    }
-
-    setActiveSessions((prev) => {
-      const next = new Set(prev);
-      next.delete(sessionId);
-      return next;
-    });
+    setState((prev) => markSessionAsInactiveState(prev, sessionId));
   }, []);
 
   const markSessionAsProcessing = useCallback((sessionId?: string | null) => {
-    if (!sessionId) {
-      return;
-    }
-
-    setProcessingSessions((prev) => new Set([...prev, sessionId]));
+    setState((prev) => markSessionAsProcessingState(prev, sessionId));
   }, []);
 
   const markSessionAsNotProcessing = useCallback((sessionId?: string | null) => {
-    if (!sessionId) {
-      return;
-    }
-
-    setProcessingSessions((prev) => {
-      const next = new Set(prev);
-      next.delete(sessionId);
-      return next;
-    });
+    setState((prev) => markSessionAsNotProcessingState(prev, sessionId));
   }, []);
 
   const replaceTemporarySession = useCallback((realSessionId?: string | null) => {
-    if (!realSessionId) {
-      return;
-    }
-
-    setActiveSessions((prev) => {
-      const next = new Set<string>();
-      for (const sessionId of prev) {
-        if (!sessionId.startsWith('new-session-')) {
-          next.add(sessionId);
-        }
-      }
-      next.add(realSessionId);
-      return next;
-    });
+    setState((prev) => replaceTemporarySessionState(prev, realSessionId));
   }, []);
 
   return {
-    activeSessions,
-    processingSessions,
+    activeSessions: state.activeSessions,
+    processingSessions: state.processingSessions,
     markSessionAsActive,
     markSessionAsInactive,
     markSessionAsProcessing,

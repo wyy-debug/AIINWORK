@@ -16,6 +16,11 @@ import {
   computeMergedMessages,
   retainRealtimeAfterServerRefresh,
 } from './sessionMessageMerge';
+import {
+  applyToolInputOverrides,
+  buildToolInputOverrideKey,
+  updateToolInputInMessages,
+} from './sessionToolUpdates';
 
 // NormalizedMessage mirrors server/adapters/types.js.
 
@@ -108,6 +113,12 @@ export interface SessionSlot {
   offset: number;
   tokenUsage: unknown;
   contextBudget: unknown;
+  toolInputOverrides: Map<string, {
+    toolId?: string | null;
+    toolName?: string | null;
+    originalInput?: unknown;
+    updatedInput: unknown;
+  }>;
 }
 
 const EMPTY: NormalizedMessage[] = [];
@@ -128,6 +139,7 @@ function createEmptySlot(): SessionSlot {
     offset: 0,
     tokenUsage: null,
     contextBudget: null,
+    toolInputOverrides: new Map(),
   };
 }
 
@@ -281,7 +293,7 @@ export function useSessionStore() {
       const requestOffset = opts.offset ?? 0;
       const nextOffset = readNextOffset(data, requestOffset, messages.length);
 
-      slot.serverMessages = messages;
+      slot.serverMessages = applyToolInputOverrides(messages, slot.toolInputOverrides.values());
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = nextOffset;
@@ -343,7 +355,10 @@ export function useSessionStore() {
       const nextOffset = readNextOffset(data, previousOffset, olderMessages.length);
 
       // Prepend older messages (they're earlier in the conversation)
-      slot.serverMessages = prependUniqueMessages(olderMessages, slot.serverMessages);
+      slot.serverMessages = applyToolInputOverrides(
+        prependUniqueMessages(olderMessages, slot.serverMessages),
+        slot.toolInputOverrides.values(),
+      );
       slot.total = data.total ?? slot.total;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = Math.max(previousOffset, nextOffset);
@@ -412,6 +427,13 @@ export function useSessionStore() {
     if (!toSlot.contextBudget && fromSlot.contextBudget) {
       toSlot.contextBudget = fromSlot.contextBudget;
     }
+    fromSlot.toolInputOverrides.forEach((value, key) => {
+      if (!toSlot.toolInputOverrides.has(key)) {
+        toSlot.toolInputOverrides.set(key, value);
+      }
+    });
+    toSlot.serverMessages = applyToolInputOverrides(toSlot.serverMessages, toSlot.toolInputOverrides.values());
+    toSlot.realtimeMessages = applyToolInputOverrides(toSlot.realtimeMessages, toSlot.toolInputOverrides.values());
 
     recomputeMergedIfNeeded(toSlot);
     store.delete(fromSessionId);
@@ -459,7 +481,7 @@ export function useSessionStore() {
       const nextOffset = opts.limit !== null && opts.limit !== undefined
         ? readNextOffset(data, requestOffset, messages.length)
         : messages.length;
-      slot.serverMessages = messages;
+      slot.serverMessages = applyToolInputOverrides(messages, slot.toolInputOverrides.values());
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = nextOffset;
@@ -559,6 +581,57 @@ export function useSessionStore() {
     }
   }, [notify]);
 
+  const updateToolUseInput = useCallback((
+    sessionId: string,
+    {
+      toolId,
+      toolName,
+      originalInput,
+      updatedInput,
+    }: {
+      toolId?: string | null;
+      toolName?: string | null;
+      originalInput?: unknown;
+      updatedInput: unknown;
+    },
+  ) => {
+    const slot = storeRef.current.get(sessionId);
+    if (!slot) return false;
+
+    const nextServerMessages = updateToolInputInMessages(slot.serverMessages, {
+      toolId,
+      toolName,
+      originalInput,
+      updatedInput,
+    });
+    const nextRealtimeMessages = updateToolInputInMessages(slot.realtimeMessages, {
+      toolId,
+      toolName,
+      originalInput,
+      updatedInput,
+    });
+
+    if (nextServerMessages === slot.serverMessages && nextRealtimeMessages === slot.realtimeMessages) {
+      return false;
+    }
+
+    slot.toolInputOverrides.set(buildToolInputOverrideKey({
+      toolId,
+      toolName,
+      originalInput,
+    }), {
+      toolId,
+      toolName,
+      originalInput,
+      updatedInput,
+    });
+    slot.serverMessages = nextServerMessages;
+    slot.realtimeMessages = nextRealtimeMessages;
+    recomputeMergedIfNeeded(slot);
+    notify(sessionId);
+    return true;
+  }, [notify]);
+
   /**
    * Get merged messages for a session (for rendering).
    */
@@ -588,13 +661,14 @@ export function useSessionStore() {
     updateStreaming,
     finalizeStreaming,
     clearRealtime,
+    updateToolUseInput,
     getMessages,
     getSessionSlot,
   }), [
     getSlot, has, fetchFromServer, fetchMore,
     appendRealtime, appendRealtimeBatch, replaceSessionId, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
-    clearRealtime, getMessages, getSessionSlot,
+    clearRealtime, updateToolUseInput, getMessages, getSessionSlot,
   ]);
 }
 

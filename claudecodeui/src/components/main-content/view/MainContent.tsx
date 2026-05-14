@@ -12,6 +12,7 @@ import GlobalCommandMenu from '../../command-menu/view/GlobalCommandMenu';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
+import { useSessionStore } from '../../../stores/useSessionStore';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
@@ -56,6 +57,7 @@ function MainContent({
 }: MainContentProps) {
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
+  const sessionStore = useSessionStore();
 
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
 
@@ -181,6 +183,7 @@ function MainContent({
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
                 onShowAllTasks={null}
+                sessionStore={sessionStore}
               />
             </ErrorBoundary>
           </div>

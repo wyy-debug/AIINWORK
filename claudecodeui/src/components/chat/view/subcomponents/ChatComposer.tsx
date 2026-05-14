@@ -54,6 +54,7 @@ import { cn } from '../../../../lib/utils';
 import type { AgentAppBinding, AgentConfig, InstalledSkill, RepositorySkillItem } from '../../../../types/agent';
 import type {
   AgentRuntimeDiagnostics,
+  ChatMessage,
   PendingPermissionRequest,
   PermissionMode,
   Provider,
@@ -95,6 +96,89 @@ type SessionGoal = {
   tokenBudget: number | null;
   tokensUsed: number;
   timeUsedSeconds: number;
+};
+
+type StatusTodoItem = {
+  id?: string;
+  content: string;
+  status: 'completed' | 'in_progress' | 'pending';
+};
+
+const normalizeStatusTodoItem = (value: unknown): StatusTodoItem | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const content = typeof record.content === 'string' ? record.content.trim() : '';
+  if (!content) {
+    return null;
+  }
+  const rawStatus = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+  return {
+    id: typeof record.id === 'string' ? record.id : undefined,
+    content,
+    status: rawStatus === 'completed' || rawStatus === 'in_progress' ? rawStatus : 'pending',
+  };
+};
+
+const extractTodoItems = (value: unknown): StatusTodoItem[] => {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeStatusTodoItem(item)).filter((item): item is StatusTodoItem => Boolean(item));
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('[')) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed)
+        ? parsed.map((item) => normalizeStatusTodoItem(item)).filter((item): item is StatusTodoItem => Boolean(item))
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.todos)) {
+      return record.todos
+        .map((item) => normalizeStatusTodoItem(item))
+        .filter((item): item is StatusTodoItem => Boolean(item));
+    }
+    if (record.content) {
+      return extractTodoItems(record.content);
+    }
+  }
+
+  return [];
+};
+
+const getStatusTodoItems = (messages: ChatMessage[]): StatusTodoItem[] => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message?.isToolUse || !['TodoWrite', 'TodoRead'].includes(String(message.toolName || ''))) {
+      continue;
+    }
+
+    const fromInput = extractTodoItems(message.toolInput);
+    if (fromInput.length > 0) {
+      return fromInput;
+    }
+
+    const fromResult = extractTodoItems(message.toolResult);
+    if (fromResult.length > 0) {
+      return fromResult;
+    }
+  }
+
+  return [];
 };
 
 interface ChatComposerProps {
@@ -140,6 +224,7 @@ interface ChatComposerProps {
   onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
   onReuseSubagentObjective?: (text: string) => void;
   tokenBudget: Record<string, unknown> | null;
+  messages: ChatMessage[];
   permissionMode: PermissionMode | string;
   onPermissionModeChange: (mode: PermissionMode) => void;
   slashCommandsCount: number;
@@ -235,6 +320,7 @@ export default function ChatComposer({
   onControlSubagent,
   onReuseSubagentObjective,
   tokenBudget,
+  messages,
   slashCommandsCount,
   onToggleCommandMenu,
   hasInput,
@@ -332,6 +418,7 @@ export default function ChatComposer({
 
   // Hide the thinking/status bar while any permission request is pending
   const hasPendingPermissions = pendingPermissionRequests.length > 0;
+  const statusTodoItems = useMemo(() => getStatusTodoItems(messages), [messages]);
   const selectedSkillKeys = useMemo(
     () => new Set(selectedSkillNames.map((name) => name.toLowerCase())),
     [selectedSkillNames],
@@ -707,6 +794,7 @@ export default function ChatComposer({
           isLoading={isLoading}
           onAbort={onAbortSession}
           provider={provider}
+          todoItems={statusTodoItems}
         />
       )}
 
