@@ -8,6 +8,15 @@ import {
 import { readObjectRecord } from '../shared/utils.js';
 
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
+export const CONTEXT_BUDGET_WINDOW_SOURCES = {
+  ACTIVE_PROFILE: 'active_profile',
+  CUMULATIVE_ONLY: 'cumulative_only',
+  ENV: 'env',
+  FALLBACK: 'fallback',
+  MODEL_USAGE: 'model_usage',
+  RUNTIME_OPTION: 'runtime_option',
+  SESSION_PROFILE: 'session_profile',
+};
 
 const TOKEN_KEYS = {
   input: ['inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens'],
@@ -124,7 +133,7 @@ async function resolveActiveProfileWindow(env) {
       tokens: activeProfile.contextWindowTokens,
       model: activeProfile.model || null,
       modelProfileId: activeProfile.id || null,
-      source: 'active_profile',
+      source: CONTEXT_BUDGET_WINDOW_SOURCES.ACTIVE_PROFILE,
     };
   } catch (error) {
     console.warn('[ContextBudget] Failed to resolve active model profile:', error?.message || error);
@@ -145,7 +154,7 @@ export async function resolveContextWindow({
       tokens: usageWindow,
       model,
       modelProfileId: modelProfileId || null,
-      source: 'model_usage',
+      source: CONTEXT_BUDGET_WINDOW_SOURCES.MODEL_USAGE,
     };
   }
 
@@ -157,7 +166,7 @@ export async function resolveContextWindow({
           tokens: runtime.contextWindowTokens,
           model: runtime.profile?.model || model || null,
           modelProfileId,
-          source: 'session_profile',
+          source: CONTEXT_BUDGET_WINDOW_SOURCES.SESSION_PROFILE,
         };
       }
     } catch (error) {
@@ -171,7 +180,7 @@ export async function resolveContextWindow({
       tokens: optionWindow,
       model,
       modelProfileId: modelProfileId || null,
-      source: 'runtime_option',
+      source: CONTEXT_BUDGET_WINDOW_SOURCES.RUNTIME_OPTION,
     };
   }
 
@@ -190,7 +199,7 @@ export async function resolveContextWindow({
       tokens: envWindow,
       model,
       modelProfileId: modelProfileId || null,
-      source: 'env',
+      source: CONTEXT_BUDGET_WINDOW_SOURCES.ENV,
     };
   }
 
@@ -198,7 +207,7 @@ export async function resolveContextWindow({
     tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     model,
     modelProfileId: modelProfileId || null,
-    source: 'fallback',
+      source: CONTEXT_BUDGET_WINDOW_SOURCES.FALLBACK,
   };
 }
 
@@ -343,14 +352,24 @@ export async function buildContextBudgetFromFlatUsage({
   total,
   model = null,
   modelProfileId = null,
+  contextWindowTokens = null,
+  env = process.env,
   windowSource = 'provided',
 } = {}) {
-  const window = {
-    tokens: readPositiveInteger(total) || DEFAULT_CONTEXT_WINDOW_TOKENS,
-    model,
-    modelProfileId,
-    source: windowSource,
-  };
+  const explicitTotal = readPositiveInteger(total);
+  const window = explicitTotal
+    ? {
+        tokens: explicitTotal,
+        model,
+        modelProfileId,
+        source: windowSource,
+      }
+    : await resolveContextWindow({
+        model,
+        modelProfileId,
+        contextWindowTokens,
+        env,
+      });
   return createContextBudget({
     currentBreakdown: currentBreakdown || cumulativeBreakdown || { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
     cumulativeBreakdown: cumulativeBreakdown || currentBreakdown || { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },

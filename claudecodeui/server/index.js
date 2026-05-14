@@ -88,6 +88,7 @@ import { swarmEventBus } from './services/swarm-broadcast-service.js';
 import {
     buildContextBudgetFromFlatUsage,
     buildContextBudgetFromJsonlLines,
+    CONTEXT_BUDGET_WINDOW_SOURCES,
     toContextBudgetResponse,
 } from './services/context-budget-service.js';
 import {
@@ -3908,7 +3909,11 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
             }
             const lines = fileContent.trim().split('\n');
             let totalTokens = 0;
-            let contextWindow = 200000; // Default for Codex/OpenAI
+            let contextWindow = null;
+            const sessionModelProfileId = sessionAgentBindingsDb
+                .getBinding(safeSessionId, 'codex')
+                ?.configuration
+                ?.modelProfileId || null;
 
             // Find the latest token_count event with info (scan from end)
             for (let i = lines.length - 1; i >= 0; i--) {
@@ -3933,10 +3938,12 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
             }
 
             const contextBudget = await buildContextBudgetFromFlatUsage({
-                currentBreakdown: { input: totalTokens, output: 0, cacheRead: 0, cacheCreation: 0 },
+                currentBreakdown: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
                 cumulativeBreakdown: { input: totalTokens, output: 0, cacheRead: 0, cacheCreation: 0 },
                 total: contextWindow,
-                windowSource: 'codex_token_count',
+                modelProfileId: sessionModelProfileId,
+                env: process.env,
+                windowSource: CONTEXT_BUDGET_WINDOW_SOURCES.CUMULATIVE_ONLY,
             });
             return res.json(toContextBudgetResponse(contextBudget));
         }

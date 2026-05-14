@@ -56,7 +56,9 @@ function normalizeSection(value: unknown, fallbackTotal = 0): ContextBudgetSecti
 }
 
 export function hasAccurateCurrentContextBudget(budget: ContextBudget | null | undefined): boolean {
-  return budget?.window.source !== undefined && budget.window.source !== 'legacy';
+  return budget?.window.source !== undefined
+    && budget.window.source !== 'legacy'
+    && budget.window.source !== 'cumulative_only';
 }
 
 export function normalizeContextBudget(value: unknown): ContextBudget | null {

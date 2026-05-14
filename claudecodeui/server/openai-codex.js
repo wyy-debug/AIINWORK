@@ -17,6 +17,11 @@ import { Codex } from '@openai/codex-sdk';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import {
+  buildContextBudgetFromFlatUsage,
+  toLegacyTokenBudget,
+  CONTEXT_BUDGET_WINDOW_SOURCES,
+} from './services/context-budget-service.js';
 import { createNormalizedMessage } from './shared/utils.js';
 import { hubUsageDb } from './database/db.js';
 
@@ -320,7 +325,23 @@ export async function queryCodex(command, options = {}, ws) {
       // Extract and send token usage if available (normalized to match Claude format)
       if (event.type === 'turn.completed' && event.usage) {
         const totalTokens = (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0);
-        sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: { used: totalTokens, total: 200000 }, sessionId: currentSessionId, provider: 'codex' }));
+        const contextBudget = await buildContextBudgetFromFlatUsage({
+          currentBreakdown: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+          cumulativeBreakdown: { input: totalTokens, output: 0, cacheRead: 0, cacheCreation: 0 },
+          model: options.model || null,
+          modelProfileId: options.modelProfileId || null,
+          contextWindowTokens: options.contextWindowTokens,
+          env: process.env,
+          windowSource: CONTEXT_BUDGET_WINDOW_SOURCES.CUMULATIVE_ONLY,
+        });
+        sendMessage(ws, createNormalizedMessage({
+          kind: 'status',
+          text: 'token_budget',
+          contextBudget,
+          tokenBudget: toLegacyTokenBudget(contextBudget),
+          sessionId: currentSessionId,
+          provider: 'codex',
+        }));
         recordCodexHubUsage({
           usage: event.usage,
           ws,
