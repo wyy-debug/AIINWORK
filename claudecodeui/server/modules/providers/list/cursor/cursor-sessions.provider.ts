@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
-import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
+import { createNormalizedMessage, generateMessageId, paginateNewestHistory, readObjectRecord } from '@/shared/utils.js';
 
 const PROVIDER = 'cursor';
 
@@ -225,34 +225,7 @@ export class CursorSessionsProvider implements IProviderSessions {
     try {
       const blobs = await this.loadCursorBlobs(sessionId, projectPath);
       const allNormalized = this.normalizeCursorBlobs(blobs, sessionId);
-      const total = allNormalized.length;
-
-      if (limit !== null) {
-        const start = offset;
-        const page = limit === 0
-          ? []
-          : allNormalized.slice(start, start + limit);
-        const hasMore = limit === 0
-          ? start < total
-          : start + limit < total;
-        return {
-          messages: page,
-          total,
-          hasMore,
-          nextOffset: start + page.length,
-          offset,
-          limit,
-        };
-      }
-
-      return {
-        messages: allNormalized,
-        total,
-        hasMore: false,
-        nextOffset: total,
-        offset: 0,
-        limit: null,
-      };
+      return paginateNewestHistory(allNormalized, limit, offset);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[CursorProvider] Failed to load session ${sessionId}:`, message);

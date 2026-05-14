@@ -53,6 +53,13 @@ describe('chatMultiAgentCollaboration', () => {
       }),
       subagent({
         toolId: 'tool-quality',
+        subagentState: {
+          taskId: 'task-quality',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+        },
         toolInput: {
           agent_type: 'Explore',
           task_name: 'review_tests_and_quality',
@@ -64,7 +71,7 @@ describe('chatMultiAgentCollaboration', () => {
     expect(view?.orchestrator.title).toBe('主Agent / Orchestrator');
     expect(view?.orchestrator.timeline.map((item) => item.kind)).toEqual(['user_request', 'dispatch_plan', 'dispatch_started', 'summary']);
     expect(view?.dialogs).toHaveLength(3);
-    expect(view?.dispatchPlanId).toBe('multi-agent:explore:review_backend_server|explore:review_frontend_components|explore:review_tests_and_quality');
+    expect(view?.dispatchPlanId).toBe('multi-agent:task:task-backend|task:task-frontend|task:task-quality');
     expect(view?.dialogs[0]).toMatchObject({
       title: 'Explore / review_backend_server',
       dialogId: 'tool-backend',
@@ -80,17 +87,15 @@ describe('chatMultiAgentCollaboration', () => {
     });
   });
 
-  it('deduplicates retry variants that only differ by task-name punctuation', () => {
+  it('deduplicates retry variants by normalized text only when stable identities are unavailable', () => {
     const view = buildChatMultiAgentCollaborationView([
       subagent({
-        toolId: 'tool-backend-hyphen',
         toolInput: {
           agent_type: 'Explore',
           task_name: 'backend-review',
           message: '审查后端服务。',
         },
         subagentState: {
-          taskId: 'task-old',
           childTools: [],
           currentToolIndex: -1,
           isComplete: true,
@@ -99,18 +104,16 @@ describe('chatMultiAgentCollaboration', () => {
         },
       }),
       subagent({
-        toolId: 'tool-backend-underscore',
         toolInput: {
           agent_type: 'Explore',
           task_name: 'backend_review',
           message: '审查后端服务。',
         },
         subagentState: {
-          taskId: 'task-new',
           childTools: [{ toolId: 'bash-1', toolName: 'Bash', toolInput: {}, timestamp: new Date(1) }],
           currentToolIndex: 0,
-          isComplete: false,
-          runtimeStatus: 'RUNNING',
+          isComplete: true,
+          runtimeStatus: 'DONE',
           lastToolSummary: '新派送结果。',
         },
       }),
@@ -126,9 +129,108 @@ describe('chatMultiAgentCollaboration', () => {
 
     expect(view?.dialogs.map((dialog) => dialog.taskName)).toEqual(['backend_review', 'frontend-review']);
     expect(view?.dialogs[0]).toMatchObject({
-      taskId: 'task-new',
+      taskId: '',
       resultText: '新派送结果。',
       toolSummary: '1 tools',
+    });
+  });
+
+  it('keeps same-name subagent dialogs separate when they have stable task identities', () => {
+    const view = buildChatMultiAgentCollaborationView([
+      subagent({
+        toolId: 'tool-search-1',
+        toolInput: {
+          agent_type: 'Explore',
+          task_name: 'review_backend_server',
+          message: 'Review backend API routes.',
+        },
+        subagentState: {
+          taskId: 'task-search-1',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+        },
+      }),
+      subagent({
+        toolId: 'tool-search-2',
+        toolInput: {
+          agent_type: 'Explore',
+          task_name: 'review_backend_server',
+          message: 'Review backend persistence layer.',
+        },
+        subagentState: {
+          taskId: 'task-search-2',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+        },
+      }),
+    ]);
+
+    expect(view?.dialogs).toHaveLength(2);
+    expect(view?.dialogs.map((dialog) => dialog.dialogId)).toEqual(['tool-search-1', 'tool-search-2']);
+    expect(view?.dialogs.map((dialog) => dialog.taskId)).toEqual(['task-search-1', 'task-search-2']);
+  });
+
+  it('keeps terminal subagent status instead of stale running snapshots for the same task', () => {
+    const view = buildChatMultiAgentCollaborationView([
+      subagent({
+        toolId: 'tool-backend-running',
+        toolInput: {
+          agent_type: 'Explore',
+          task_name: 'review_backend_server',
+          message: 'Review backend server.',
+        },
+        subagentState: {
+          taskId: 'task-backend',
+          childTools: [{ toolId: 'bash-1', toolName: 'Bash', toolInput: {}, timestamp: new Date(1) }],
+          currentToolIndex: 0,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+          lastToolSummary: 'Still scanning files.',
+        },
+      }),
+      subagent({
+        toolId: 'tool-backend-done',
+        toolInput: {
+          agent_type: 'Explore',
+          task_name: 'review_backend_server',
+          message: 'Review backend server.',
+        },
+        subagentState: {
+          taskId: 'task-backend',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: true,
+          runtimeStatus: 'DONE',
+          resultSummary: 'Backend review complete.',
+        },
+      }),
+      subagent({
+        toolId: 'tool-frontend',
+        toolInput: {
+          agent_type: 'Explore',
+          task_name: 'review_frontend_components',
+          message: 'Review frontend components.',
+        },
+        subagentState: {
+          taskId: 'task-frontend',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+        },
+      }),
+    ]);
+
+    expect(view?.dialogs).toHaveLength(2);
+    expect(view?.dialogs[0]).toMatchObject({
+      dialogId: 'tool-backend-done',
+      taskId: 'task-backend',
+      status: 'DONE',
+      resultText: 'Backend review complete.',
     });
   });
 
@@ -147,6 +249,13 @@ describe('chatMultiAgentCollaboration', () => {
       }),
       subagent({
         toolId: 'tool-frontend',
+        subagentState: {
+          taskId: 'task-frontend',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+        },
         toolInput: {
           agent_type: 'Explore',
           task_name: 'frontend-review',
@@ -191,6 +300,13 @@ describe('chatMultiAgentCollaboration', () => {
       }),
       subagent({
         toolId: 'tool-frontend',
+        subagentState: {
+          taskId: 'task-frontend',
+          childTools: [],
+          currentToolIndex: -1,
+          isComplete: false,
+          runtimeStatus: 'RUNNING',
+        },
         toolInput: {
           agent_type: 'Explore',
           task_name: 'frontend-review',

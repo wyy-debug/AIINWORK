@@ -53,3 +53,28 @@ test('pending Claude permissions are reconsidered when global permission setting
   expect(autoAllowBlock).toContain("permissionMode === 'bypassPermissions'");
   expect(autoAllowBlock).toContain('claudeSettingsVersion');
 });
+
+test('Cursor history uses the shared paginated loading paths instead of local early exits', async () => {
+  const source = (await readFile(join(hooksDir, 'useChatSessionState.ts'), 'utf8')).replace(/\r\n/g, '\n');
+
+  const loadOlderStart = source.indexOf('const loadOlderMessages = useCallback');
+  const loadOlderEnd = source.indexOf('const handleScroll = useCallback', loadOlderStart);
+  const loadOlderBlock = source.slice(loadOlderStart, loadOlderEnd);
+
+  expect(loadOlderBlock).toContain('sessionStore.fetchMore');
+  expect(loadOlderBlock).not.toContain("sessionProvider === 'cursor'");
+
+  const searchStart = source.indexOf('// Scroll to search target');
+  const searchEnd = source.indexOf('// Token usage fetch for Claude', searchStart);
+  const searchBlock = source.slice(searchStart, searchEnd);
+
+  expect(searchBlock).toContain('sessionStore.fetchFromServer');
+  expect(searchBlock).not.toContain("sessionProvider !== 'cursor'");
+
+  const loadAllStart = source.indexOf('const loadAllMessages = useCallback');
+  const loadAllEnd = source.indexOf('const loadEarlierMessages = useCallback', loadAllStart);
+  const loadAllBlock = source.slice(loadAllStart, loadAllEnd);
+
+  expect(loadAllBlock).toContain('sessionStore.fetchFromServer');
+  expect(loadAllBlock).not.toContain("sessionProvider === 'cursor'");
+});

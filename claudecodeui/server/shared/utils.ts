@@ -80,6 +80,46 @@ export function createNormalizedMessage(fields: NormalizedMessageInput): Normali
   };
 }
 
+export function paginateNewestHistory<T>(
+  items: T[],
+  limit: number | null = null,
+  offset = 0,
+): {
+  messages: T[];
+  total: number;
+  hasMore: boolean;
+  nextOffset: number;
+  offset: number;
+  limit: number | null;
+} {
+  const total = items.length;
+  if (limit === null) {
+    return {
+      messages: items,
+      total,
+      hasMore: false,
+      nextOffset: total,
+      offset: 0,
+      limit: null,
+    };
+  }
+
+  const safeOffset = Math.max(0, offset);
+  const pageLimit = Math.max(0, limit);
+  const endIndex = Math.max(0, total - safeOffset);
+  const startIndex = Math.max(0, endIndex - pageLimit);
+  const messages = pageLimit === 0 ? [] : items.slice(startIndex, endIndex);
+
+  return {
+    messages,
+    total,
+    hasMore: pageLimit === 0 ? safeOffset < total : startIndex > 0,
+    nextOffset: safeOffset + messages.length,
+    offset: safeOffset,
+    limit: pageLimit,
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 
 // ------------------------ The following are mainly for provider MCP runtimes ------------------------

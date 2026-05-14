@@ -2,7 +2,7 @@ import sessionManager from '@/sessionManager.js';
 import { getGeminiCliSessionMessages } from '@/projects.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
-import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
+import { createNormalizedMessage, generateMessageId, paginateNewestHistory, readObjectRecord } from '@/shared/utils.js';
 
 const PROVIDER = 'gemini';
 
@@ -210,19 +210,6 @@ export class GeminiSessionsProvider implements IProviderSessions {
       }
     }
 
-    const start = Math.max(0, offset);
-    const pageLimit = limit === null ? null : Math.max(0, limit);
-    const messages = pageLimit === null
-      ? normalized.slice(start)
-      : normalized.slice(start, start + pageLimit);
-
-    return {
-      messages,
-      total: normalized.length,
-      hasMore: pageLimit === null ? false : start + pageLimit < normalized.length,
-      nextOffset: start + messages.length,
-      offset: start,
-      limit: pageLimit,
-    };
+    return paginateNewestHistory(normalized, limit, offset);
   }
 }

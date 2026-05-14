@@ -77,6 +77,7 @@ function eventStatus(message: ChatMessage): string {
   const event = latestTerminalEvent(message);
   if (!event) return '';
   if (event.type === 'cancelled') return 'CANCELLED';
+  if (event.type === 'failed') return 'FAILED';
   return 'BLOCKED';
 }
 
@@ -89,10 +90,38 @@ function canonicalTaskPart(value: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
+function latestSubagentEvent(message: ChatMessage) {
+  const events = message.subagentState?.subagentEvents || [];
+  return [...events].sort((left, right) => right.timestamp - left.timestamp)[0];
+}
+
+function identityPart(prefix: string, value: unknown): string {
+  const text = stringifyValue(value);
+  return text ? `${prefix}:${text}` : '';
+}
+
 function subagentIdentity(message: ChatMessage, index: number): string {
   const input = parseObject(message.toolInput);
   const state = message.subagentState;
   const record = state?.registryRecord;
+  const latestEvent = latestSubagentEvent(message);
+  const stableIdentity = [
+    identityPart('task', state?.taskId),
+    identityPart('task', record?.taskId),
+    identityPart('task', latestEvent?.taskId),
+    identityPart('dialog', latestEvent?.dialogInstanceId),
+    identityPart('agent', record?.agentId),
+    identityPart('session', record?.sessionId),
+    identityPart('thread', latestEvent?.threadId),
+    identityPart('parent-tool', record?.parentToolUseId),
+    identityPart('tool', message.toolId),
+    identityPart('tool', message.toolCallId),
+  ].find(Boolean);
+
+  if (stableIdentity) {
+    return stableIdentity;
+  }
+
   const agentType = canonicalTaskPart(
     stringifyValue(input.agent_type)
     || stringifyValue(record?.agentType)
@@ -112,14 +141,15 @@ function statusRank(message: ChatMessage): number {
   const state = message.subagentState;
   const record = state?.registryRecord;
   const status = statusLabel(
-    stringifyValue(state?.runtimeStatus)
+    eventStatus(message)
+    || stringifyValue(state?.runtimeStatus)
     || stringifyValue(record?.runtimeStatus)
     || stringifyValue(record?.status),
   );
-  if (status === 'RUNNING') return 5;
+  if (status === 'DONE' || status === 'COMPLETED') return 5;
+  if (status === 'FAILED' || status === 'CANCELLED') return 4;
   if (status === 'NEED_PARENT_INPUT' || status === 'BLOCKED') return 4;
-  if (status === 'DONE' || status === 'COMPLETED') return 3;
-  if (status === 'FAILED' || status === 'CANCELLED') return 2;
+  if (status === 'RUNNING') return 3;
   return 1;
 }
 
@@ -127,10 +157,12 @@ function messageInfoScore(message: ChatMessage): number {
   const state = message.subagentState;
   const record = state?.registryRecord;
   return [
-    statusRank(message) * 100,
+    statusRank(message) * 1000,
     state?.taskId ? 30 : 0,
     record?.taskId ? 20 : 0,
-    state?.resultSummary || state?.lastToolSummary || record?.lastToolSummary || record?.resultSummary ? 15 : 0,
+    state?.resultSummary || record?.resultSummary ? 30 : 0,
+    state?.lastToolSummary || record?.lastToolSummary ? 15 : 0,
+    state?.isComplete ? 10 : 0,
     (state?.childTools?.length || 0) * 2,
     message.toolResult ? 1 : 0,
   ].reduce((sum, value) => sum + value, 0);

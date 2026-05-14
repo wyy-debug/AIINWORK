@@ -321,7 +321,6 @@ export function useChatSessionState({
       if (!hasMoreMessages || !selectedSession || !selectedProject) return false;
 
       const sessionProvider = selectedSession.__provider || 'claude';
-      if (sessionProvider === 'cursor') return false;
 
       isLoadingMoreRef.current = true;
       setIsLoadingMoreMessages(true);
@@ -695,29 +694,27 @@ export function useChatSessionState({
     const scrollToTarget = async () => {
       if (!allMessagesLoadedRef.current && selectedSession && selectedProject) {
         const sessionProvider = selectedSession.__provider || 'claude';
-        if (sessionProvider !== 'cursor') {
-          try {
-            // Load all messages into the store for search navigation
-            const slot = await sessionStore.fetchFromServer(selectedSession.id, {
-              provider: sessionProvider as LLMProvider,
-              projectName: selectedProject.name,
-              projectPath: selectedProject.fullPath || selectedProject.path || '',
-              limit: null,
-              offset: 0,
-            });
-            if (slot) {
-              setHasMoreMessages(false);
-              setTotalMessages(slot.total);
-              setLoadedMessageCount(slot.total);
-              messagesOffsetRef.current = slot.total;
-              setVisibleMessageCount(Infinity);
-              setAllMessagesLoaded(true);
-              allMessagesLoadedRef.current = true;
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-          } catch {
-            // Fall through and scroll in current messages
+        try {
+          // Load all messages into the store for search navigation
+          const slot = await sessionStore.fetchFromServer(selectedSession.id, {
+            provider: sessionProvider as LLMProvider,
+            projectName: selectedProject.name,
+            projectPath: selectedProject.fullPath || selectedProject.path || '',
+            limit: null,
+            offset: 0,
+          });
+          if (slot) {
+            setHasMoreMessages(false);
+            setTotalMessages(slot.total);
+            setLoadedMessageCount(slot.total);
+            messagesOffsetRef.current = slot.total;
+            setVisibleMessageCount(Infinity);
+            setAllMessagesLoaded(true);
+            allMessagesLoadedRef.current = true;
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
+        } catch {
+          // Fall through and scroll in current messages
         }
       }
       setVisibleMessageCount(Infinity);
@@ -964,16 +961,6 @@ export function useChatSessionState({
     if (!selectedSession || !selectedProject) return;
     if (isLoadingAllMessages) return;
     const sessionProvider = selectedSession.__provider || 'claude';
-    if (sessionProvider === 'cursor') {
-      setVisibleMessageCount(Infinity);
-      setLoadedMessageCount((previous) => Math.max(previous, chatMessages.length));
-      setAllMessagesLoaded(true);
-      allMessagesLoadedRef.current = true;
-      setLoadAllJustFinished(true);
-      if (loadAllFinishedTimerRef.current) clearTimeout(loadAllFinishedTimerRef.current);
-      loadAllFinishedTimerRef.current = setTimeout(() => { setLoadAllJustFinished(false); setShowLoadAllOverlay(false); }, 1000);
-      return;
-    }
 
     const requestSessionId = selectedSession.id;
     allMessagesLoadedRef.current = true;
