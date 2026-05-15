@@ -1,4 +1,8 @@
 import { appConfigDb } from '../database/db.js';
+import {
+  listObsidianVaults as defaultListObsidianVaults,
+  readObsidianBridgePluginData as defaultReadObsidianBridgePluginData,
+} from './obsidian-bridge-installer-service.js';
 
 const CONFIG_KEY = 'obsidian_bridge';
 const DEFAULT_PORT = '27177';
@@ -470,6 +474,76 @@ const getConfiguredBridge = ({ requireEnabled = false, vaultId = '', payload = n
   };
 };
 
+const chooseReachableVault = (vaults = [], config = {}) => {
+  const reachable = (Array.isArray(vaults) ? vaults : [])
+    .filter((vault) => vault?.bridgeReachable === true && vault.bridgeEndpoint && vault.tokenConfigured);
+  if (reachable.length === 0) {
+    return null;
+  }
+
+  const activeVault = activeVaultFromConfig(config);
+  return reachable.find((vault) => readString(vault.name).toLowerCase() === readString(activeVault.name || config.vaultName).toLowerCase())
+    || reachable.find((vault) => readString(vault.bridgeEndpoint) === readString(activeVault.endpoint || config.endpoint))
+    || reachable.find((vault) => vault.open === true)
+    || reachable[0];
+};
+
+export const repairObsidianBridgeConfigFromReachableVaults = async ({
+  fetchImpl = globalThis.fetch,
+  listVaults = defaultListObsidianVaults,
+  readPluginData = defaultReadObsidianBridgePluginData,
+  statusTimeoutMs = 1500,
+} = {}) => {
+  const current = readObsidianBridgeConfig({ includeToken: true });
+  if (!current.enabled) {
+    return null;
+  }
+
+  const reachableVaults = await listVaults({
+    fetchImpl,
+    statusTimeoutMs,
+  }).catch(() => []);
+  const selectedVault = chooseReachableVault(reachableVaults, current);
+  if (!selectedVault?.path) {
+    return null;
+  }
+
+  const bridgeData = await readPluginData(selectedVault.path).catch(() => ({}));
+  const endpoint = readString(bridgeData.endpoint || selectedVault.bridgeEndpoint);
+  const token = readString(bridgeData.token);
+  if (!endpoint || !token) {
+    return null;
+  }
+
+  const activeVault = activeVaultFromConfig(current);
+  const vaultId = activeVault.vaultId || current.activeVaultId || DEFAULT_VAULT_ID;
+  const nextVault = {
+    ...activeVault,
+    vaultId,
+    name: readString(selectedVault.statusVaultName || selectedVault.name || activeVault.name),
+    endpoint,
+    token,
+    readableFolders: Array.isArray(bridgeData.readableFolders) && bridgeData.readableFolders.length > 0
+      ? bridgeData.readableFolders
+      : selectedVault.readableFolders || activeVault.readableFolders,
+    writeBaseFolder: readString(bridgeData.baseFolder || selectedVault.baseFolder || activeVault.writeBaseFolder) || 'Argus',
+    pluginVersion: readString(selectedVault.statusPluginVersion || selectedVault.pluginVersion || activeVault.pluginVersion),
+    lastConnection: new Date().toISOString(),
+    lastError: '',
+  };
+  saveObsidianBridgeConfig({
+    ...current,
+    enabled: true,
+    activeVaultId: vaultId,
+    vaults: [
+      ...(current.vaults || []).filter((vault) => vault.vaultId !== vaultId),
+      nextVault,
+    ],
+    lastError: '',
+  });
+  return getConfiguredBridge({ requireEnabled: true, vaultId });
+};
+
 const readResponseJson = async (response) => {
   try {
     return await response.json();
@@ -478,7 +552,12 @@ const readResponseJson = async (response) => {
   }
 };
 
-const callBridge = async (path, options = {}, config, fetchImpl) => {
+const callBridge = async (path, options = {}, config, fetchImpl, {
+  allowRepair = true,
+  repairBridgeConfig = repairObsidianBridgeConfigFromReachableVaults,
+  vaultId = '',
+  payload = null,
+} = {}) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   timeout.unref?.();
@@ -509,6 +588,27 @@ const callBridge = async (path, options = {}, config, fetchImpl) => {
     const message = error?.name === 'AbortError'
       ? 'Obsidian bridge request timed out.'
       : `Unable to reach Obsidian bridge: ${error?.message || 'unknown error'}`;
+    if (allowRepair && typeof repairBridgeConfig === 'function') {
+      const repairedConfig = await repairBridgeConfig({
+        fetchImpl,
+        statusTimeoutMs: Math.min(config.timeoutMs || 5000, 1500),
+      }).catch(() => null);
+      if (repairedConfig?.endpoint && repairedConfig.endpoint !== config.endpoint && repairedConfig.token) {
+        const nextConfig = payload || vaultId
+          ? getConfiguredBridge({
+            requireEnabled: true,
+            vaultId: vaultId || repairedConfig.activeVaultId,
+            payload,
+          })
+          : repairedConfig;
+        return callBridge(path, options, nextConfig, fetchImpl, {
+          allowRepair: false,
+          repairBridgeConfig,
+          vaultId,
+          payload,
+        });
+      }
+    }
     throw new ObsidianBridgeError(message, {
       code: 'OBSIDIAN_BRIDGE_UNREACHABLE',
       statusCode: 502,
@@ -520,6 +620,7 @@ const callBridge = async (path, options = {}, config, fetchImpl) => {
 
 export const sendObsidianDocument = async (payload, {
   fetchImpl = globalThis.fetch,
+  repairBridgeConfig = repairObsidianBridgeConfigFromReachableVaults,
 } = {}) => {
   if (typeof fetchImpl !== 'function') {
     throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
@@ -536,7 +637,11 @@ export const sendObsidianDocument = async (payload, {
   return callBridge('/argus/v1/documents', {
     method: 'POST',
     body: JSON.stringify(document),
-  }, config, fetchImpl);
+  }, config, fetchImpl, {
+    repairBridgeConfig,
+    vaultId: payload.vaultId,
+    payload,
+  });
 };
 
 export const sendObsidianWikiIngest = async (payload, {

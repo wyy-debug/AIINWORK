@@ -233,6 +233,110 @@ describe('obsidian bridge service', () => {
     expect(service.readObsidianBridgeConfig().lastConnection).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it('repairs a stale configured endpoint from reachable Obsidian vault discovery', async () => {
+    service.saveObsidianBridgeConfig({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:27177',
+      token: 'old-token',
+      vaultName: 'self',
+      readableVaultFolders: ['Argus/Wiki'],
+    });
+    const listVaults = vi.fn(async () => [
+      {
+        name: 'self',
+        path: 'C:/Users/yckui/Documents/note/self',
+        open: true,
+        bridgeEndpoint: 'http://127.0.0.1:27178',
+        bridgeReachable: true,
+        tokenConfigured: true,
+        readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+        baseFolder: 'Argus',
+        statusPluginVersion: '0.1.3',
+      },
+    ]);
+    const readPluginData = vi.fn(async () => ({
+      endpoint: 'http://127.0.0.1:27178',
+      token: 'new-token',
+      readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+      baseFolder: 'Argus',
+    }));
+
+    const repaired = await service.repairObsidianBridgeConfigFromReachableVaults({
+      fetchImpl: vi.fn(),
+      listVaults,
+      readPluginData,
+    });
+
+    expect(repaired).toMatchObject({
+      endpoint: 'http://127.0.0.1:27178',
+      vaultName: 'self',
+    });
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      endpoint: 'http://127.0.0.1:27178',
+      vaultName: 'self',
+      pluginVersion: '0.1.3',
+      readableVaultFolders: ['Argus/Wiki', 'Argus/AIMemory', 'Argus/_Indexes'],
+      tokenConfigured: true,
+    });
+    expect(service.readObsidianBridgeConfig()).not.toHaveProperty('token');
+    expect(service.readObsidianBridgeConfig({ includeToken: true }).vaults[0]).toMatchObject({
+      token: 'new-token',
+    });
+  });
+
+  it('retries document writes after repairing a stale bridge endpoint', async () => {
+    service.saveObsidianBridgeConfig({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:27177',
+      token: 'old-token',
+      vaultName: 'self',
+    });
+    const repairBridgeConfig = vi.fn(async () => {
+      service.saveObsidianBridgeConfig({
+        enabled: true,
+        activeVaultId: 'default',
+        vaults: [{
+          vaultId: 'default',
+          name: 'self',
+          endpoint: 'http://127.0.0.1:27178',
+          token: 'new-token',
+          readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+          writeBaseFolder: 'Argus',
+        }],
+      });
+      return service.readObsidianBridgeConfig({ includeToken: true });
+    });
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).includes('27177')) {
+        throw new Error('fetch failed');
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          path: 'Argus/AIMemory/Feedback/concise.md',
+        }),
+      };
+    });
+
+    await expect(service.sendObsidianDocument({
+      title: 'concise',
+      content: 'The user prefers concise answers.',
+      mode: 'ai-memory',
+      projectName: 'Feedback',
+    }, { fetchImpl, repairBridgeConfig })).resolves.toMatchObject({
+      success: true,
+      path: 'Argus/AIMemory/Feedback/concise.md',
+    });
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      'http://127.0.0.1:27177/argus/v1/documents',
+      'http://127.0.0.1:27178/argus/v1/documents',
+    ]);
+    expect(fetchImpl.mock.calls[1][1].headers.Authorization).toBe('Bearer new-token');
+  });
+
   it('forwards search and context requests to the plugin read APIs', async () => {
     service.saveObsidianBridgeConfig({
       enabled: true,
