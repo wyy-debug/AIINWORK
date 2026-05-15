@@ -42,11 +42,11 @@ describe('Obsidian native auto-memory sync service', () => {
       '',
     ].join('\n'), 'utf8');
 
-    const ingestKnowledgeSourceToWiki = vi.fn(async () => ({
-      wikiPath: 'Argus/AIMemory/Feedback/concise-responses.md',
+    const sendObsidianDocument = vi.fn(async () => ({
+      path: 'Argus/AIMemory/AIINWORK/concise-responses.md',
     }));
     const sync = service.createObsidianNativeMemorySyncService({
-      ingestKnowledgeSourceToWiki,
+      sendObsidianDocument,
       readObsidianBridgeConfig: () => ({
         enabled: true,
         aiMemoryReadbackEnabled: true,
@@ -70,16 +70,17 @@ describe('Obsidian native auto-memory sync service', () => {
       skippedCount: 1,
       failedCount: 0,
     });
-    expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledTimes(1);
-    expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
-      source: 'native-auto-memory',
-      sourceId: expect.stringContaining('native-auto-memory:'),
+    expect(sendObsidianDocument).toHaveBeenCalledTimes(1);
+    expect(sendObsidianDocument).toHaveBeenCalledWith(expect.objectContaining({
       mode: 'ai-memory',
-      modes: ['ai-memory'],
-      projectName: 'Feedback',
+      baseFolder: 'Argus',
+      projectName: 'AIINWORK',
       kind: 'feedback',
+      argusId: expect.stringContaining('native-auto-memory:'),
       content: expect.stringContaining('Keep final answers concise.'),
       metadata: expect.objectContaining({
+        source: 'native-auto-memory',
+        sourceId: expect.stringContaining('native-auto-memory:'),
         memoryType: 'feedback',
         memoryScope: 'global',
         nativeMemoryRelativePath: 'feedback_style.md',
@@ -104,11 +105,11 @@ describe('Obsidian native auto-memory sync service', () => {
       '',
     ].join('\n'), 'utf8');
 
-    const ingestKnowledgeSourceToWiki = vi.fn()
+    const sendObsidianDocument = vi.fn()
       .mockRejectedValueOnce(new Error('fetch failed'))
-      .mockResolvedValue({ wikiPath: 'Argus/AIMemory/App/rollout-context.md' });
+      .mockResolvedValue({ path: 'Argus/AIMemory/App/rollout-context.md' });
     const sync = service.createObsidianNativeMemorySyncService({
-      ingestKnowledgeSourceToWiki,
+      sendObsidianDocument,
       readObsidianBridgeConfig: () => ({
         enabled: true,
         aiMemoryReadbackEnabled: true,
@@ -141,6 +142,6 @@ describe('Obsidian native auto-memory sync service', () => {
     expect(first).toMatchObject({ success: false, enabled: true, failedCount: 1 });
     expect(second).toMatchObject({ success: true, enabled: true, syncedCount: 1 });
     expect(third).toMatchObject({ success: true, enabled: true, syncedCount: 0, skippedCount: 1 });
-    expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledTimes(2);
+    expect(sendObsidianDocument).toHaveBeenCalledTimes(2);
   });
 });

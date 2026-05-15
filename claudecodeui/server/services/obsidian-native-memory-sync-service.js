@@ -5,12 +5,10 @@ import path from 'node:path';
 
 import { appConfigDb } from '../database/db.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
-import { readObsidianBridgeConfig as defaultReadObsidianBridgeConfig } from './obsidian-bridge-service.js';
-
-const defaultIngestKnowledgeSourceToWiki = async (...args) => {
-  const module = await import('./obsidian-wiki-service.js');
-  return module.ingestKnowledgeSourceToWiki(...args);
-};
+import {
+  readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
+  sendObsidianDocument as defaultSendObsidianDocument,
+} from './obsidian-bridge-service.js';
 
 const STATE_KEY = 'obsidian_native_memory_sync_state';
 const SOURCE = 'native-auto-memory';
@@ -67,8 +65,7 @@ const isSyncEnabledForConfig = (config = {}) => (
 );
 
 const nativeMemoryDestinationProject = (type = '', projectName = '', projectPath = '') => {
-  if (type === 'user') return 'User';
-  if (type === 'feedback') return 'Feedback';
+  void type;
   return readString(projectName) || path.basename(readString(projectPath)) || 'General';
 };
 
@@ -121,7 +118,7 @@ const readMemoryTopic = async ({ filePath = '', relativePath = '' } = {}) => {
 };
 
 export const createObsidianNativeMemorySyncService = ({
-  ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
+  sendObsidianDocument = defaultSendObsidianDocument,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   stateStore = appConfigDb,
   logger = console,
@@ -250,15 +247,16 @@ export const createObsidianNativeMemorySyncService = ({
       const sourceId = `${SOURCE}:${projectKey}:${relativePath}`;
       const memoryProjectName = nativeMemoryDestinationProject(topic.type, cleanProjectName, projectPath);
       const payload = {
-        source: SOURCE,
-        sourceId,
         title: topic.title,
         content: topic.content,
         mode: 'ai-memory',
-        modes: ['ai-memory'],
+        baseFolder: 'Argus',
         projectName: memoryProjectName,
         sessionId: readString(sessionId),
         kind: topic.type,
+        argusId: sourceId,
+        confidence: 1,
+        tags: ['argus', 'ai-memory', `memory-${topic.type}`],
         metadata: {
           ...topic.metadata,
           source: SOURCE,
@@ -279,8 +277,8 @@ export const createObsidianNativeMemorySyncService = ({
       };
 
       try {
-        const result = await ingestKnowledgeSourceToWiki(payload);
-        const obsidianPath = readString(result?.wikiPath || result?.path || result?.obsidianPath);
+        const result = await sendObsidianDocument(payload);
+        const obsidianPath = readString(result?.path || result?.wikiPath || result?.obsidianPath);
         state[stateKey] = {
           contentHash,
           obsidianPath,

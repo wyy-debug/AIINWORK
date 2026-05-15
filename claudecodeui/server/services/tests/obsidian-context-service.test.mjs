@@ -5,8 +5,16 @@ describe('obsidian context service', () => {
     const service = await import('../obsidian-context-service.js');
     const buildObsidianContext = vi.fn(async () => ({
       success: true,
-      context: 'Path: Argus/AIMemory/App/Prefs.md\nTitle: Prefs\nUse concise answers.',
-      results: [{ path: 'Argus/AIMemory/App/Prefs.md' }],
+      context: '',
+      results: [],
+    }));
+    const queryObsidianNotes = vi.fn(async () => ({
+      success: true,
+      results: [{
+        path: 'Argus/AIMemory/App/Prefs.md',
+        title: 'Prefs',
+        snippet: 'Use concise answers.',
+      }],
     }));
 
     const result = await service.applyObsidianContextToChatCommand({
@@ -18,6 +26,7 @@ describe('obsidian context service', () => {
       },
     }, {
       buildObsidianContext,
+      queryObsidianNotes,
       refineWikiReadbackContext: vi.fn(async ({ context }) => ({
         refined: false,
         context,
@@ -25,6 +34,7 @@ describe('obsidian context service', () => {
       })),
       readObsidianBridgeConfig: () => ({
         enabled: true,
+        wikiReadbackEnabled: false,
         aiMemoryReadbackEnabled: true,
         aiMemoryMaxResults: 3,
         aiMemoryProjectScopeEnabled: true,
@@ -40,16 +50,11 @@ describe('obsidian context service', () => {
       used: true,
       resultCount: 1,
     });
-    expect(buildObsidianContext).toHaveBeenCalledWith({
-      query: 'Summarize today.',
+    expect(buildObsidianContext).not.toHaveBeenCalled();
+    expect(queryObsidianNotes).toHaveBeenCalledWith({
+      query: '',
       projectName: 'App',
-      folders: [
-        'Argus/Wiki/App',
-        'Argus/AIMemory/App',
-        'Argus/AIMemory/User',
-        'Argus/AIMemory/Feedback',
-        'Argus/_Indexes',
-      ],
+      folders: ['Argus/AIMemory/App'],
       limit: 3,
     });
   });
@@ -76,6 +81,7 @@ describe('obsidian context service', () => {
       readObsidianBridgeConfig: () => ({
         enabled: true,
         wikiReadbackEnabled: true,
+        aiMemoryReadbackEnabled: false,
         wikiReadbackMaxResults: 8,
         aiMemoryProjectScopeEnabled: true,
         readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
@@ -94,21 +100,26 @@ describe('obsidian context service', () => {
       projectName: 'App',
       folders: [
         'Argus/Wiki/App',
-        'Argus/AIMemory/App',
-        'Argus/AIMemory/User',
-        'Argus/AIMemory/Feedback',
         'Argus/_Indexes',
       ],
       limit: 8,
     });
   });
 
-  it('searches project Wiki, project AIMemory, and global user feedback memory together', async () => {
+  it('searches project Wiki and reads project AIMemory deterministically', async () => {
     const service = await import('../obsidian-context-service.js');
     const buildObsidianContext = vi.fn(async () => ({
       success: true,
-      context: 'Path: Argus/AIMemory/User/Style.md\nTitle: Style\nThe user prefers concise Chinese answers.',
-      results: [{ path: 'Argus/AIMemory/User/Style.md', title: 'Style' }],
+      context: 'Path: Argus/Wiki/SOC trunk/Index.md\nTitle: Index\nProject wiki note.',
+      results: [{ path: 'Argus/Wiki/SOC trunk/Index.md', title: 'Index' }],
+    }));
+    const queryObsidianNotes = vi.fn(async () => ({
+      success: true,
+      results: [{
+        path: 'Argus/AIMemory/SOC trunk/Style.md',
+        title: 'Style',
+        snippet: 'The user prefers concise Chinese answers.',
+      }],
     }));
 
     await service.applyObsidianContextToChatCommand({
@@ -117,6 +128,7 @@ describe('obsidian context service', () => {
       options: { projectName: 'SOC trunk' },
     }, {
       buildObsidianContext,
+      queryObsidianNotes,
       refineWikiReadbackContext: vi.fn(async ({ context }) => ({
         refined: false,
         context,
@@ -137,12 +149,15 @@ describe('obsidian context service', () => {
       projectName: 'SOC trunk',
       folders: [
         'Argus/Wiki/SOC trunk',
-        'Argus/AIMemory/SOC trunk',
-        'Argus/AIMemory/User',
-        'Argus/AIMemory/Feedback',
         'Argus/_Indexes',
       ],
       limit: 6,
+    });
+    expect(queryObsidianNotes).toHaveBeenCalledWith({
+      query: '',
+      projectName: 'SOC trunk',
+      folders: ['Argus/AIMemory/SOC trunk'],
+      limit: 8,
     });
   });
 
@@ -160,7 +175,8 @@ describe('obsidian context service', () => {
       }),
       readObsidianBridgeConfig: () => ({
         enabled: true,
-        aiMemoryReadbackEnabled: true,
+        wikiReadbackEnabled: true,
+        aiMemoryReadbackEnabled: false,
         aiMemoryMaxResults: 5,
         aiMemoryProjectScopeEnabled: true,
         readableVaultFolders: ['Argus/Projects'],
@@ -206,7 +222,7 @@ describe('obsidian context service', () => {
       })),
       readObsidianBridgeConfig: () => ({
         enabled: true,
-        aiMemoryReadbackEnabled: true,
+        aiMemoryReadbackEnabled: false,
         activeNoteReadbackEnabled: true,
         aiMemoryMaxResults: 3,
         aiMemoryProjectScopeEnabled: true,
@@ -254,6 +270,7 @@ describe('obsidian context service', () => {
       readObsidianBridgeConfig: () => ({
         enabled: true,
         wikiReadbackEnabled: true,
+        aiMemoryReadbackEnabled: false,
         wikiReadbackMaxResults: 8,
         wikiReadbackRefineEnabled: true,
         aiMemoryProjectScopeEnabled: true,
@@ -286,19 +303,8 @@ describe('obsidian context service', () => {
 
   it('filters archived AIMemory entries from injected readback context', async () => {
     const service = await import('../obsidian-context-service.js');
-    const buildObsidianContext = vi.fn(async () => ({
+    const queryObsidianNotes = vi.fn(async () => ({
       success: true,
-      context: [
-        'Path: Argus/AIMemory/App/Active.md',
-        'Title: Active',
-        'Use concise answers.',
-        '',
-        '---',
-        '',
-        'Path: Argus/AIMemory/App/Archived.md',
-        'Title: Archived',
-        'Old memory that should not be injected.',
-      ].join('\n'),
       results: [
         {
           path: 'Argus/AIMemory/App/Active.md',
@@ -320,9 +326,10 @@ describe('obsidian context service', () => {
       command: 'Continue.',
       options: { projectName: 'App' },
     }, {
-      buildObsidianContext,
+      queryObsidianNotes,
       readObsidianBridgeConfig: () => ({
         enabled: true,
+        wikiReadbackEnabled: false,
         aiMemoryReadbackEnabled: true,
         aiMemoryMaxResults: 5,
         aiMemoryProjectScopeEnabled: true,

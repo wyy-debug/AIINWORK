@@ -3,6 +3,7 @@ import path from 'path';
 import {
   buildObsidianContext as defaultBuildObsidianContext,
   getActiveObsidianNote as defaultGetActiveObsidianNote,
+  queryObsidianNotes as defaultQueryObsidianNotes,
   readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
 } from './obsidian-bridge-service.js';
 import { refineWikiReadbackContext as defaultRefineWikiReadbackContext } from './small-model-service.js';
@@ -38,11 +39,7 @@ const buildProjectScopedFolders = (projectName = '', {
     folders.push(`Argus/Wiki/${projectSegment}`);
   }
   if (includeAiMemory) {
-    folders.push(
-      `Argus/AIMemory/${projectSegment}`,
-      'Argus/AIMemory/User',
-      'Argus/AIMemory/Feedback',
-    );
+    folders.push(`Argus/AIMemory/${projectSegment}`);
   }
   if (includeRaw) {
     folders.push(`Argus/Raw/${projectSegment}`);
@@ -101,6 +98,27 @@ const buildContextFromResults = (results = []) => results.map((result) => [
   result.snippet || '',
 ].filter(Boolean).join('\n')).join('\n\n---\n\n');
 
+const mergeContextResults = (...groups) => {
+  const seen = new Set();
+  const merged = [];
+  for (const group of groups) {
+    for (const result of Array.isArray(group) ? group : []) {
+      const pathKey = readString(result?.path).replace(/\\/g, '/').toLowerCase();
+      if (!pathKey || seen.has(pathKey)) {
+        continue;
+      }
+      seen.add(pathKey);
+      merged.push(result);
+    }
+  }
+  return merged;
+};
+
+const buildAiMemoryReadbackFolders = (projectName = '') => {
+  const projectSegment = sanitizeVaultSegment(projectName, 'General');
+  return [`Argus/AIMemory/${projectSegment}`];
+};
+
 const isWikiReadbackFolder = (folder = '', { includeRaw = false } = {}) => {
   const value = readString(folder).replace(/\\/g, '/').replace(/\/+$/g, '');
   return value === 'Argus/_Indexes'
@@ -122,6 +140,7 @@ const filterWikiReadbackFolders = (folders = [], options = {}) => {
 export const applyObsidianContextToChatCommand = async (data = {}, {
   buildObsidianContext = defaultBuildObsidianContext,
   getActiveObsidianNote = defaultGetActiveObsidianNote,
+  queryObsidianNotes = defaultQueryObsidianNotes,
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   refineWikiReadbackContext = defaultRefineWikiReadbackContext,
 } = {}) => {
@@ -136,24 +155,26 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   }
 
   const projectName = resolveProjectName(data);
-  const scopedFolders = buildProjectScopedFolders(projectName, {
+  const wikiScopedFolders = buildProjectScopedFolders(projectName, {
     includeWiki: wikiReadbackEnabled,
-    includeAiMemory: aiMemoryReadbackEnabled,
+    includeAiMemory: false,
     includeRaw: wikiReadbackEnabled && config.wikiReadbackIncludeRaw,
   });
+  const aiMemoryFolders = aiMemoryReadbackEnabled ? buildAiMemoryReadbackFolders(projectName) : [];
   const useProjectScope = config.wikiReadbackProjectScopeEnabled !== false
     || config.aiMemoryProjectScopeEnabled !== false;
-  const folders = useProjectScope
-    ? scopedFolders
+  const wikiFolders = useProjectScope
+    ? wikiScopedFolders
     : filterWikiReadbackFolders(config.readableVaultFolders, {
       includeRaw: Boolean(wikiReadbackEnabled && config.wikiReadbackIncludeRaw),
-    });
-  const readbackFolders = folders.length > 0 ? folders : scopedFolders;
-  const limit = Number.isFinite(Number(config.wikiReadbackMaxResults))
+    }).filter((folder) => !readString(folder).replace(/\\/g, '/').startsWith('Argus/AIMemory'));
+  const readbackFolders = wikiFolders.length > 0 ? wikiFolders : wikiScopedFolders;
+  const wikiLimit = Number.isFinite(Number(config.wikiReadbackMaxResults))
     ? Number(config.wikiReadbackMaxResults)
-    : Number.isFinite(Number(config.aiMemoryMaxResults))
-      ? Number(config.aiMemoryMaxResults)
-      : 8;
+    : 8;
+  const aiMemoryLimit = Number.isFinite(Number(config.aiMemoryMaxResults))
+    ? Number(config.aiMemoryMaxResults)
+    : 8;
 
   try {
     const activeNoteResult = config.activeNoteReadbackEnabled
@@ -163,32 +184,67 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       }).catch(() => null)
       : null;
     const activeNote = activeNoteResult?.note || null;
-    const result = await buildObsidianContext({
-      query: command.slice(0, 2000),
-      projectName,
-      folders: readbackFolders,
-      limit,
-    });
-    const rawResults = Array.isArray(result?.results) ? result.results : [];
-    const filteredResults = rawResults.filter((entry) => !isArchivedMemoryResult(entry));
-    const archivedResultCount = rawResults.length - filteredResults.length;
-    const baseContext = archivedResultCount > 0
-      ? buildContextFromResults(filteredResults)
-      : readString(result?.context);
-    const refinement = config.wikiReadbackRefineEnabled === false
-      ? { refined: false, context: baseContext, sources: [] }
+    let aiMemoryReadbackError = '';
+    let aiMemoryResult = null;
+    if (aiMemoryReadbackEnabled && aiMemoryFolders.length > 0) {
+      try {
+        console.log('[Obsidian Context] ai_memory_readback_start', JSON.stringify({
+          projectName,
+          folders: aiMemoryFolders,
+          limit: aiMemoryLimit,
+          endpoint: 'query',
+        }));
+        aiMemoryResult = await queryObsidianNotes({
+          query: '',
+          projectName,
+          folders: aiMemoryFolders,
+          limit: aiMemoryLimit,
+        });
+        console.log('[Obsidian Context] ai_memory_readback_complete', JSON.stringify({
+          projectName,
+          folders: aiMemoryFolders,
+          resultCount: Array.isArray(aiMemoryResult?.results) ? aiMemoryResult.results.length : 0,
+          endpoint: 'query',
+        }));
+      } catch (error) {
+        aiMemoryReadbackError = error?.message || 'Failed to read Obsidian AIMemory.';
+        console.warn('[Obsidian Context] Skipping AIMemory readback:', aiMemoryReadbackError);
+      }
+    }
+    const rawAiMemoryResults = Array.isArray(aiMemoryResult?.results) ? aiMemoryResult.results : [];
+    const filteredAiMemoryResults = rawAiMemoryResults.filter((entry) => !isArchivedMemoryResult(entry));
+    const aiMemoryContext = buildContextFromResults(filteredAiMemoryResults);
+    const wikiResult = wikiReadbackEnabled && readbackFolders.length > 0
+      ? await buildObsidianContext({
+        query: command.slice(0, 2000),
+        projectName,
+        folders: readbackFolders,
+        limit: wikiLimit,
+      })
+      : null;
+    const rawWikiResults = Array.isArray(wikiResult?.results) ? wikiResult.results : [];
+    const filteredWikiResults = rawWikiResults.filter((entry) => !isArchivedMemoryResult(entry));
+    const archivedResultCount = (rawAiMemoryResults.length - filteredAiMemoryResults.length)
+      + (rawWikiResults.length - filteredWikiResults.length);
+    const wikiBaseContext = rawWikiResults.length !== filteredWikiResults.length
+      ? buildContextFromResults(filteredWikiResults)
+      : readString(wikiResult?.context);
+    const refinement = !wikiReadbackEnabled || !wikiBaseContext || config.wikiReadbackRefineEnabled === false
+      ? { refined: false, context: wikiBaseContext, sources: [] }
       : await refineWikiReadbackContext({
         query: command.slice(0, 2000),
         projectName,
-        context: baseContext,
+        context: wikiBaseContext,
         activeNote,
-        results: filteredResults,
+        results: filteredWikiResults,
       });
-    const context = readString(refinement?.context) || baseContext;
+    const wikiContext = readString(refinement?.context) || wikiBaseContext;
+    const context = [aiMemoryContext, wikiContext].filter(Boolean).join('\n\n---\n\n');
+    const filteredResults = mergeContextResults(filteredAiMemoryResults, filteredWikiResults);
     const activeBlock = buildActiveNoteBlock(activeNote);
     const sources = refinement?.refined
       ? [
-        ...buildSources({ activeNote, results: [] }),
+        ...buildSources({ activeNote, results: filteredAiMemoryResults }),
         ...(Array.isArray(refinement.sources) ? refinement.sources : []),
       ]
       : buildSources({
@@ -205,6 +261,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
             resultCount: filteredResults.length,
             archivedResultCount,
             source: 'wiki',
+            aiMemoryReadbackError,
             sources,
           },
         },
@@ -229,6 +286,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
             reranked: Boolean(refinement?.reranked || refinement?.refined),
             rerankModel: refinement?.rerankModel || refinement?.model || '',
             tokenBudgetUsed: Number(refinement?.tokenBudgetUsed) || 0,
+            aiMemoryReadbackError,
             sources,
           },
         },
@@ -251,6 +309,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           reranked: Boolean(refinement?.reranked || refinement?.refined),
           rerankModel: refinement?.rerankModel || refinement?.model || '',
           tokenBudgetUsed: Number(refinement?.tokenBudgetUsed) || 0,
+          aiMemoryReadbackError,
           sources,
         },
       },
