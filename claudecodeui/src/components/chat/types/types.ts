@@ -195,6 +195,7 @@ export interface ChatMessage {
   compactType?: 'full' | 'micro' | 'summary' | string;
   compactTrigger?: string;
   compactSummary?: string;
+  compactSummaryAvailable?: boolean;
   preTokens?: number;
   tokensSaved?: number;
   compactedToolIds?: unknown;

@@ -28,10 +28,9 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   lastConnection: '',
   lastError: '',
   pluginVersion: '',
-  aiMemoryReadbackEnabled: true,
+  aiMemoryReadbackEnabled: false,
   aiMemoryMaxResults: 8,
   aiMemoryProjectScopeEnabled: true,
-  nativeAutoMemorySyncEnabled: true,
   activeVaultId: DEFAULT_VAULT_ID,
   activeNoteReadbackEnabled: false,
   dailyNoteFolder: 'Daily',
@@ -39,7 +38,7 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   mcpEnabled: false,
   wikiPrimaryEnabled: true,
   wikiCompilerEnabled: true,
-  wikiReadbackEnabled: true,
+  wikiReadbackEnabled: false,
   wikiReadbackIncludeRaw: false,
   wikiReadbackMaxResults: 8,
   wikiRawFolder: 'Argus/Raw',
@@ -273,16 +272,15 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     pluginVersion: (activeVault.pluginVersion || readString(source.pluginVersion)).slice(0, 80),
     wikiPrimaryEnabled: source.wikiPrimaryEnabled !== false,
     wikiReadbackEnabled: Object.prototype.hasOwnProperty.call(source, 'wikiReadbackEnabled')
-      ? source.wikiReadbackEnabled !== false
-      : source.aiMemoryReadbackEnabled !== false,
+      ? source.wikiReadbackEnabled === true
+      : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiReadbackEnabled,
     wikiReadbackIncludeRaw: source.wikiReadbackIncludeRaw === true,
     wikiReadbackMaxResults: normalizeMaxResults(source.wikiReadbackMaxResults ?? source.aiMemoryMaxResults),
     aiMemoryReadbackEnabled: Object.prototype.hasOwnProperty.call(source, 'aiMemoryReadbackEnabled')
-      ? source.aiMemoryReadbackEnabled !== false
-      : source.wikiReadbackEnabled !== false,
+      ? source.aiMemoryReadbackEnabled === true
+      : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.aiMemoryReadbackEnabled,
     aiMemoryMaxResults: normalizeMaxResults(source.aiMemoryMaxResults ?? source.wikiReadbackMaxResults),
     aiMemoryProjectScopeEnabled: source.aiMemoryProjectScopeEnabled !== false,
-    nativeAutoMemorySyncEnabled: source.nativeAutoMemorySyncEnabled !== false,
     activeVaultId,
     activeNoteReadbackEnabled: source.activeNoteReadbackEnabled === true,
     dailyNoteFolder: normalizeVaultFolder(source.dailyNoteFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.dailyNoteFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.dailyNoteFolder,

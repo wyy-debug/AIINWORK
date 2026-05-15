@@ -17,10 +17,6 @@ const slug = (value = '') => normalizeText(value)
   .replace(/^-+|-+$/g, '')
   .slice(0, 80) || 'wiki';
 
-const appendBlock = (existing = '', block = '') => (
-  [readString(existing), readString(block)].filter(Boolean).join('\n\n')
-);
-
 const resolveProjectName = (data = {}) => {
   const options = data.options && typeof data.options === 'object' ? data.options : {};
   return readString(options.projectName)
@@ -281,19 +277,13 @@ export const applyExplicitWikiIntentToChatCommand = async (data = {}, {
 export const applyExplicitMemoryIntentToChatCommand = applyExplicitWikiIntentToChatCommand;
 
 export const buildObsidianWikiPolicyPrompt = () => [
-  '# Obsidian Wiki Policy',
+  '# Obsidian Template Policy',
   '',
-  'Obsidian is the primary AI memory store and project Wiki readback source. Local MEMORY.md is only an offline fallback when the bridge cannot write.',
+  'Obsidian runtime integration is template-only. It may sync project instruction files such as MTL.md and CLAUDE.md, but it is not the AI memory store or autonomous Wiki readback pipeline.',
   '',
-  'Use Wiki and AI memory context only when it is relevant to the current user request. Treat it as historical material, not proof of current repository, file, flag, API, or runtime state.',
+  'Claude Code native memory owns autonomous memory extraction, MEMORY.md/topic.md writes, and recall.',
   '',
-  'Current code, files, settings, and external facts can drift. Verify current state with tools before recommending an action that depends on freshness.',
-  '',
-  'Automatic memory extraction is handled by the host after assistant turns. Do not claim that Obsidian saved a memory unless an Obsidian result, candidate, or fallback status is explicitly provided by the host.',
-  '',
-  'Explicit requests to save to Obsidian, write to Wiki, or persist to the knowledge base are handled by the host as auditable Obsidian candidates.',
-  '',
-  '/init and project guidance templates are not memory writes.',
+  '/init and project guidance templates are template sync, not memory writes.',
 ].join('\n');
 
 export const buildObsidianMemoryPolicyPrompt = buildObsidianWikiPolicyPrompt;
@@ -301,37 +291,8 @@ export const buildObsidianMemoryPolicyPrompt = buildObsidianWikiPolicyPrompt;
 export const applyObsidianWikiPolicyPromptToChatCommand = (data = {}, {
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
 } = {}) => {
-  const command = typeof data.command === 'string' ? data.command : '';
-  if (!command.trim()) {
-    return data;
-  }
-
-  const config = readObsidianBridgeConfig({ includeToken: false });
-  if (!config.enabled) {
-    return data;
-  }
-
-  const prompt = buildObsidianWikiPolicyPrompt();
-  if (data.type === 'claude-command') {
-    const appendSystemPrompt = appendBlock(data.options?.appendSystemPrompt, prompt);
-    return {
-      ...data,
-      options: {
-        ...(data.options || {}),
-        appendSystemPrompt,
-        obsidianWikiPolicy: { injected: true },
-      },
-    };
-  }
-
-  return {
-    ...data,
-    command: [prompt, '', command].join('\n'),
-    options: {
-      ...(data.options || {}),
-      obsidianWikiPolicy: { injected: true },
-    },
-  };
+  void readObsidianBridgeConfig;
+  return data;
 };
 
 export const applyObsidianMemoryPolicyPromptToChatCommand = applyObsidianWikiPolicyPromptToChatCommand;

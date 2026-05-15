@@ -23,27 +23,21 @@ import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustom
 import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
-import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
-import {
-    applyExplicitWikiIntentToChatCommand,
-    applyObsidianWikiPolicyPromptToChatCommand,
-} from './services/obsidian-memory-policy-service.js';
 import {
     createObsidianAutoCaptureOrchestrator,
     createObsidianAutoCaptureStatusMessage,
 } from './services/obsidian-auto-capture-orchestrator.js';
-import { captureObsidianAutoMemory } from './services/obsidian-auto-memory-service.js';
-import {
-    isNativeAutoMemorySyncEnabled,
-    syncNativeMemoryFiles,
-} from './services/obsidian-native-memory-sync-service.js';
 import {
     syncObsidianInstructionFile,
     syncObsidianProjectInstructionFiles,
     ensureObsidianProjectInstructionFile,
 } from './services/obsidian-instruction-sync-service.js';
-import { runObsidianAutoCaptureBackfill } from './services/obsidian-auto-capture-backfill-service.js';
-import { readObsidianBridgeConfig } from './services/obsidian-bridge-service.js';
+import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
+import {
+    isNativeAutoMemorySyncEnabled,
+    resolveNativeMemoryStagingDir,
+    syncNativeMemoryFiles,
+} from './services/obsidian-native-memory-sync-service.js';
 import { ingestUploadedFilesToObsidian } from './services/obsidian-wiki-service.js';
 import {
     getProjects,
@@ -2123,11 +2117,9 @@ class WebSocketWriter {
         this.isWebSocketWriter = true;  // Marker for transport detection
         this.pendingAutoCaptureContext = null;
         this.autoCapture = createObsidianAutoCaptureOrchestrator({
-            autoCaptureTurnMemory: captureObsidianAutoMemory,
             syncInstructionFile: syncObsidianInstructionFile,
             syncProjectInstructionFiles: syncObsidianProjectInstructionFiles,
             syncNativeMemoryFiles,
-            isNativeAutoMemorySyncEnabled,
             broadcast: (event) => this.send(createObsidianAutoCaptureStatusMessage(event)),
         });
     }
@@ -2574,9 +2566,42 @@ function emitObsidianWikiResult(writer, data) {
 }
 
 async function applyObsidianKnowledgeRuntimeToChatCommand(data) {
-    const wikiData = await applyExplicitWikiIntentToChatCommand(data);
-    const contextData = await applyObsidianContextToChatCommand(wikiData);
-    return applyObsidianWikiPolicyPromptToChatCommand(contextData);
+    const withContext = await applyObsidianContextToChatCommand(data);
+    const options = withContext?.options && typeof withContext.options === 'object'
+        ? withContext.options
+        : {};
+    const projectPath = typeof options.projectPath === 'string' && options.projectPath.trim()
+        ? options.projectPath.trim()
+        : typeof options.cwd === 'string' && options.cwd.trim()
+            ? options.cwd.trim()
+            : '';
+    const projectName = typeof options.projectName === 'string' && options.projectName.trim()
+        ? options.projectName.trim()
+        : typeof withContext?.projectName === 'string' && withContext.projectName.trim()
+            ? withContext.projectName.trim()
+            : projectPath
+                ? path.basename(projectPath)
+                : '';
+    const nativeSyncEnabled = withContext?.type === 'claude-command'
+        && isNativeAutoMemorySyncEnabled();
+
+    if (!nativeSyncEnabled) {
+        return withContext;
+    }
+
+    return {
+        ...withContext,
+        options: {
+            ...options,
+            obsidianNativeMemorySync: {
+                enabled: true,
+                memoryDir: resolveNativeMemoryStagingDir({ projectPath, projectName }),
+                projectName,
+                projectPath,
+                primaryReadback: withContext?.options?.obsidianContext?.used === true,
+            },
+        },
+    };
 }
 
 function normalizeUploadedChatFiles(files) {
@@ -4195,25 +4220,6 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
-function scheduleObsidianAutoCaptureBackfill() {
-    const timer = setTimeout(() => {
-        try {
-            const config = readObsidianBridgeConfig();
-            if (!config.enabled || !config.autoExportKnowledgeArtifacts) {
-                return;
-            }
-            runObsidianAutoCaptureBackfill({ getProjects }).catch((error) => {
-                console.error('[Obsidian] Auto-capture backfill failed:', error?.message || error);
-            });
-        } catch (error) {
-            console.error('[Obsidian] Failed to schedule auto-capture backfill:', error?.message || error);
-        }
-    }, 3000);
-    if (typeof timer.unref === 'function') {
-        timer.unref();
-    }
-}
-
 // Initialize database and start server
 async function startServer() {
     try {
@@ -4260,7 +4266,6 @@ async function startServer() {
                 console.error('[Plugins] Error during startup:', err.message);
             });
 
-            scheduleObsidianAutoCaptureBackfill();
         });
 
         // Clean up plugin processes on shutdown

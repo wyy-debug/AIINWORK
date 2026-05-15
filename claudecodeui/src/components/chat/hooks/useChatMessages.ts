@@ -740,7 +740,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           isContextCompaction: true,
           compactType: msg.compactType,
           compactTrigger: msg.compactTrigger,
-          compactSummary: msg.compactSummary || msg.summary,
+          compactSummaryAvailable: Boolean(msg.compactSummaryAvailable || msg.compactSummary || msg.summary),
           preTokens: msg.preTokens,
           tokensSaved: msg.tokensSaved,
           compactedToolIds: msg.compactedToolIds,

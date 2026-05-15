@@ -2,6 +2,7 @@ import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
+  FetchCompactionSummaryResult,
   LLMProvider,
   NormalizedMessage,
 } from '@/shared/types.js';
@@ -41,5 +42,20 @@ export const sessionsService = {
     options?: FetchHistoryOptions,
   ): Promise<FetchHistoryResult> {
     return providerRegistry.resolveProvider(providerName).sessions.fetchHistory(sessionId, options);
+  },
+
+  /**
+   * Lazily loads a large compaction summary when the UI explicitly asks for it.
+   */
+  fetchCompactionSummary(
+    providerName: string,
+    sessionId: string,
+    options?: FetchHistoryOptions,
+  ): Promise<FetchCompactionSummaryResult> {
+    const sessions = providerRegistry.resolveProvider(providerName).sessions;
+    if (typeof sessions.fetchCompactionSummary !== 'function') {
+      return Promise.resolve({ summary: null, found: false });
+    }
+    return sessions.fetchCompactionSummary(sessionId, options);
   },
 };

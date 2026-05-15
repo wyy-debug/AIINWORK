@@ -132,6 +132,12 @@ function isCompactBoundaryRecord(raw: AnyRecord): boolean {
     && (raw.subtype === 'compact_boundary' || raw.subtype === 'microcompact_boundary');
 }
 
+function getStableCompactRecordId(raw: AnyRecord, sessionId: string, index: number): string {
+  return typeof raw.uuid === 'string' && raw.uuid
+    ? raw.uuid
+    : `claude_compaction_${sessionId}_${index}`;
+}
+
 function getCompactSummaryContent(raw: AnyRecord | undefined): string | null {
   if (!raw || raw.message?.role !== 'user' || typeof raw.message?.content !== 'string') {
     return null;
@@ -315,7 +321,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         kind: 'context_compaction',
         compactType: 'summary',
         content: 'Compaction summary',
-        compactSummary,
+        compactSummaryAvailable: true,
       })];
     }
 
@@ -571,11 +577,17 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       const raw = rawMessages[index];
       if (isCompactBoundaryRecord(raw)) {
         const events = this.normalizeMessage(raw, sessionId);
+        const compactId = getStableCompactRecordId(raw, sessionId, offset + index);
         const compactSummary = getCompactSummaryContent(rawMessages[index + 1]);
+        for (const event of events) {
+          if (event.kind === 'context_compaction') {
+            event.id = compactId;
+          }
+        }
         if (compactSummary) {
           for (const event of events) {
             if (event.kind === 'context_compaction') {
-              event.compactSummary = compactSummary;
+              event.compactSummaryAvailable = true;
             }
           }
           index++;
@@ -584,7 +596,16 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         continue;
       }
 
-      normalized.push(...this.normalizeMessage(raw, sessionId));
+      const events = this.normalizeMessage(raw, sessionId);
+      if (getCompactSummaryContent(raw)) {
+        const compactId = getStableCompactRecordId(raw, sessionId, offset + index);
+        for (const event of events) {
+          if (event.kind === 'context_compaction') {
+            event.id = compactId;
+          }
+        }
+      }
+      normalized.push(...events);
     }
 
     for (const msg of normalized) {
@@ -615,5 +636,51 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       limit,
       tokenUsage: Array.isArray(result) ? undefined : result.tokenUsage,
     };
+  }
+
+  async fetchCompactionSummary(
+    sessionId: string,
+    options: FetchHistoryOptions & { messageId?: string } = {},
+  ): Promise<{ summary: string | null; found: boolean }> {
+    const { projectName, messageId = '' } = options;
+    if (!projectName || !messageId) {
+      return { summary: null, found: false };
+    }
+
+    let result: ClaudeHistoryResult;
+    try {
+      const modelProfileId = sessionAgentBindingsDb
+        .getBinding(sessionId, PROVIDER)
+        ?.configuration
+        ?.modelProfileId || null;
+      result = await loadClaudeSessionMessages(projectName, sessionId, null, 0, { modelProfileId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[ClaudeProvider] Failed to load compaction summary ${sessionId}:`, message);
+      return { summary: null, found: false };
+    }
+
+    const rawMessages = Array.isArray(result) ? result : (result.messages || []);
+    for (let index = 0; index < rawMessages.length; index += 1) {
+      const raw = rawMessages[index];
+      const summary = getCompactSummaryContent(raw);
+      if (!isCompactBoundaryRecord(raw) && !summary) {
+        continue;
+      }
+
+      const compactId = getStableCompactRecordId(raw, sessionId, index);
+      if (compactId !== messageId) {
+        continue;
+      }
+
+      if (isCompactBoundaryRecord(raw)) {
+        const nextSummary = getCompactSummaryContent(rawMessages[index + 1]);
+        return { summary: nextSummary, found: Boolean(nextSummary) };
+      }
+
+      return { summary, found: Boolean(summary) };
+    }
+
+    return { summary: null, found: false };
   }
 }

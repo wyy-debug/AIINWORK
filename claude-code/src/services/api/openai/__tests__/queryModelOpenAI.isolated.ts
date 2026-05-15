@@ -366,6 +366,9 @@ mock.module('../../../../utils/messages.js', () => ({
       content: [{ type: 'text', text: opts.content }],
       apiError: opts.apiError,
     },
+    isApiErrorMessage: true,
+    apiError: opts.apiError,
+    errorDetails: opts.errorDetails,
     uuid: 'error-uuid',
     timestamp: new Date().toISOString(),
   }),
@@ -518,6 +521,22 @@ describe('queryModelOpenAI — stop_reason propagation', () => {
 })
 
 describe('queryModelOpenAI OpenAI create retry', () => {
+  test('normalizes context-window create failures into prompt-too-long messages', async () => {
+    _chatCreateErrors = [
+      new Error(
+        'Your input exceeds the context window of this model. Please adjust your input and try again.',
+      ),
+    ]
+
+    const { assistantMessages } = await runQueryModel([])
+
+    expect(assistantMessages).toHaveLength(1)
+    expect((assistantMessages[0]!.message.content as any[])[0]?.text).toBe(
+      'Prompt is too long',
+    )
+    expect(assistantMessages[0]!.errorDetails).toContain('context window')
+  })
+
   test('retries transient Responses API create failures before showing an API error', async () => {
     _responsesCreateErrors = [
       Object.assign(new Error('openai_error'), {

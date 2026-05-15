@@ -474,7 +474,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
         data-message-timestamp={message.timestamp || undefined}
         className="chat-message system px-3 sm:px-0"
       >
-        <ContextCompactionCard message={message} formattedTime={formattedTime} />
+        <ContextCompactionCard
+          message={message}
+          formattedTime={formattedTime}
+          provider={String(provider || 'claude')}
+          projectName={selectedProject?.name || selectedProject?.displayName || ''}
+          projectPath={selectedProject?.fullPath || selectedProject?.path || ''}
+        />
       </div>
     );
   }

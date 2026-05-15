@@ -50,7 +50,6 @@ import { truncateEntrypointContent } from '../memdir/memdir.js'
 import {
   getAutoMemEntrypoint,
   isAutoMemoryEnabled,
-  isObsidianNativeMemorySyncEnabled,
 } from '../memdir/paths.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
@@ -1163,15 +1162,19 @@ export function getLargeMemoryFiles(files: MemoryFileInfo[]): MemoryFileInfo[] {
 export function filterInjectedMemoryFiles(
   files: MemoryFileInfo[],
 ): MemoryFileInfo[] {
-  if (isObsidianNativeMemorySyncEnabled()) {
-    return files.filter(f => f.type !== 'AutoMem' && f.type !== 'TeamMem')
+  let filtered = files
+  if (
+    isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY) &&
+    isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC)
+  ) {
+    filtered = filtered.filter(f => f.type !== 'AutoMem')
   }
   const skipMemoryIndex = getFeatureValue_CACHED_MAY_BE_STALE(
     'tengu_moth_copse',
     false,
   )
-  if (!skipMemoryIndex) return files
-  return files.filter(f => f.type !== 'AutoMem' && f.type !== 'TeamMem')
+  if (!skipMemoryIndex) return filtered
+  return filtered.filter(f => f.type !== 'AutoMem' && f.type !== 'TeamMem')
 }
 
 export const getClaudeMds = (

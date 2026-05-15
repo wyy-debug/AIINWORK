@@ -1,12 +1,17 @@
+import { useState } from 'react';
 import { Archive, ChevronDown, Scissors } from 'lucide-react';
 
 import type { ChatMessage } from '../../types/types';
+import { apiFetch } from '../../../../utils/api';
 
 import { Markdown } from './Markdown';
 
 type ContextCompactionCardProps = {
   message: ChatMessage;
   formattedTime: string;
+  provider?: string;
+  projectName?: string;
+  projectPath?: string;
 };
 
 const formatNumber = (value: unknown): string | null => {
@@ -35,11 +40,22 @@ const formatTrigger = (trigger: unknown): string | null => {
   return trigger.trim();
 };
 
-export default function ContextCompactionCard({ message, formattedTime }: ContextCompactionCardProps) {
+export default function ContextCompactionCard({
+  message,
+  formattedTime,
+  provider = 'claude',
+  projectName = '',
+  projectPath = '',
+}: ContextCompactionCardProps) {
   const compactType = typeof message.compactType === 'string' ? message.compactType : 'full';
   const isMicro = compactType === 'micro';
   const isSummaryOnly = compactType === 'summary';
-  const summary = typeof message.compactSummary === 'string' ? message.compactSummary.trim() : '';
+  const initialSummary = typeof message.compactSummary === 'string' ? message.compactSummary.trim() : '';
+  const summaryAvailable = Boolean(message.compactSummaryAvailable || initialSummary);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summary, setSummary] = useState(initialSummary);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
   const preTokens = formatNumber(message.preTokens);
   const tokensSaved = formatNumber(message.tokensSaved);
   const compactedToolCount = getToolCount(message.compactedToolIds);
@@ -47,7 +63,7 @@ export default function ContextCompactionCard({ message, formattedTime }: Contex
   const title = isMicro
     ? '工具输出已压缩'
     : isSummaryOnly
-      ? '压缩摘要已载入'
+      ? '压缩摘要已加载'
       : '对话已压缩';
   const Icon = isMicro ? Scissors : Archive;
   const stats = [
@@ -57,6 +73,42 @@ export default function ContextCompactionCard({ message, formattedTime }: Contex
     compactedToolCount !== null ? `${compactedToolCount} 个工具结果` : null,
     formattedTime,
   ].filter(Boolean);
+
+  const loadSummary = async () => {
+    if (summary || summaryLoading || !message.sessionId || !message.id) {
+      return;
+    }
+    setSummaryLoading(true);
+    setSummaryError('');
+    try {
+      const params = new URLSearchParams({
+        provider,
+        messageId: message.id,
+      });
+      if (projectName) params.set('projectName', projectName);
+      if (projectPath) params.set('projectPath', projectPath);
+
+      const response = await apiFetch(`/api/sessions/${encodeURIComponent(message.sessionId)}/compaction-summary?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      setSummary(typeof data?.summary === 'string' ? data.summary : '');
+    } catch (error) {
+      setSummaryError(error instanceof Error ? error.message : 'Failed to load summary.');
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const toggleSummary = () => {
+    const nextOpen = !summaryOpen;
+    setSummaryOpen(nextOpen);
+    if (nextOpen) {
+      void loadSummary();
+    }
+  };
 
   return (
     <div className="my-2 flex w-full justify-center">
@@ -81,18 +133,32 @@ export default function ContextCompactionCard({ message, formattedTime }: Contex
           </div>
         )}
 
-        {summary && (
-          <details className="group mx-auto mt-2 overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-medium text-foreground hover:bg-muted/60">
+        {summaryAvailable && (
+          <div className="mx-auto mt-2 overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2 text-xs font-medium text-foreground hover:bg-muted/60"
+              onClick={toggleSummary}
+            >
               <span>查看压缩摘要</span>
-              <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-            </summary>
-            <div className="max-h-96 overflow-y-auto border-t border-border bg-muted/20 px-3 py-3">
-              <Markdown className="prose prose-sm max-w-none dark:prose-invert">
-                {summary}
-              </Markdown>
-            </div>
-          </details>
+              <ChevronDown className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${summaryOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {summaryOpen && (
+              <div className="max-h-96 overflow-y-auto border-t border-border bg-muted/20 px-3 py-3">
+                {summaryLoading && (
+                  <div className="text-xs text-muted-foreground">正在加载压缩摘要...</div>
+                )}
+                {summaryError && !summaryLoading && (
+                  <div className="text-xs text-destructive">摘要加载失败：{summaryError}</div>
+                )}
+                {summary && !summaryLoading && !summaryError && (
+                  <Markdown className="prose prose-sm max-w-none dark:prose-invert">
+                    {summary}
+                  </Markdown>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

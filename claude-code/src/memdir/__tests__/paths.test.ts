@@ -63,7 +63,7 @@ describe('isAutoMemoryEnabled', () => {
     expect(isAutoMemoryEnabled()).toBe(false)
   })
 
-  test('keeps native auto-memory enabled when Obsidian sync is taking over writes', () => {
+  test('keeps native auto-memory enabled when Obsidian primary is only taking over sync and readback', () => {
     process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'
     process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC = '1'
 

@@ -1,6 +1,7 @@
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
+  FetchCompactionSummaryResult,
   LLMProvider,
   McpScope,
   NormalizedMessage,
@@ -51,4 +52,5 @@ export interface IProviderMcp {
 export interface IProviderSessions {
   normalizeMessage(raw: unknown, sessionId: string | null): NormalizedMessage[];
   fetchHistory(sessionId: string, options?: FetchHistoryOptions): Promise<FetchHistoryResult>;
+  fetchCompactionSummary?(sessionId: string, options?: FetchHistoryOptions): Promise<FetchCompactionSummaryResult>;
 }

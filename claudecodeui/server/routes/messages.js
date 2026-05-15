@@ -58,4 +58,47 @@ router.get('/:sessionId/messages', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/sessions/:sessionId/compaction-summary
+ *
+ * Query params:
+ *   provider    - currently 'claude'
+ *   projectName - Claude project folder name
+ *   projectPath - provider-specific workspace path when needed
+ *   messageId   - context_compaction message id
+ */
+router.get('/:sessionId/compaction-summary', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const provider = String(req.query.provider || 'claude').trim().toLowerCase();
+    const projectName = req.query.projectName || '';
+    const projectPath = req.query.projectPath || '';
+    const messageId = req.query.messageId || '';
+
+    const availableProviders = sessionsService.listProviderIds();
+    if (!availableProviders.includes(provider)) {
+      const available = availableProviders.join(', ');
+      return res.status(400).json({ error: `Unknown provider: ${provider}. Available: ${available}` });
+    }
+    if (!String(messageId || '').trim()) {
+      return res.status(400).json({ error: 'messageId is required' });
+    }
+
+    const result = await sessionsService.fetchCompactionSummary(provider, sessionId, {
+      projectName,
+      projectPath,
+      messageId: String(messageId),
+    });
+
+    if (!result.found) {
+      return res.status(404).json({ error: 'Compaction summary not found' });
+    }
+
+    return res.json(result);
+  } catch (error) {
+    console.error('Error fetching compaction summary:', error);
+    return res.status(500).json({ error: 'Failed to fetch compaction summary' });
+  }
+});
+
 export default router;

@@ -37,7 +37,7 @@ describe('Obsidian native auto-memory sync service', () => {
       '---',
       '',
       'Rule: Keep final answers concise.',
-      'Why: The user dislikes流水账.',
+      'Why: The user dislikes long changelog-style responses.',
       'How to apply: Summarize only the important result.',
       '',
     ].join('\n'), 'utf8');

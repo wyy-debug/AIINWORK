@@ -400,6 +400,7 @@ describe('normalizedToChatMessages subagent handling', () => {
         compactType: 'summary',
         content: 'Conversation compacted',
         compactSummary: 'Summarized state',
+        compactSummaryAvailable: true,
         tokensSaved: 12_345,
       }),
     ];
@@ -416,8 +417,9 @@ describe('normalizedToChatMessages subagent handling', () => {
     expect(converted[1]).toMatchObject({
       id: 'compact-1',
       isContextCompaction: true,
-      compactSummary: 'Summarized state',
+      compactSummaryAvailable: true,
     });
+    expect(converted[1].compactSummary).toBeUndefined();
   });
 
   it('collapses adjacent duplicate assistant text messages with the same content', () => {

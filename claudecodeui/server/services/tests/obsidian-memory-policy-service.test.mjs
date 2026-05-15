@@ -155,31 +155,29 @@ describe('obsidian wiki policy service', () => {
     });
   });
 
-  it('injects wiki policy through appendSystemPrompt for Claude and command prefix for other providers', async () => {
+  it('leaves chat prompts unchanged because Obsidian runtime is template-only', async () => {
     const service = await import('../obsidian-memory-policy-service.js');
 
-    const claude = service.applyObsidianWikiPolicyPromptToChatCommand({
+    const input = {
       type: 'claude-command',
       command: 'Continue.',
       options: { appendSystemPrompt: 'Existing prompt.' },
-    }, {
+    };
+    const claude = service.applyObsidianWikiPolicyPromptToChatCommand(input, {
       readObsidianBridgeConfig: () => ({ enabled: true }),
     });
-    expect(claude.command).toBe('Continue.');
-    expect(claude.options.appendSystemPrompt).toContain('Existing prompt.');
-    expect(claude.options.appendSystemPrompt).toContain('Obsidian Wiki Policy');
-    expect(claude.options.appendSystemPrompt).toContain('Obsidian is the primary AI memory store');
-    expect(claude.options.appendSystemPrompt).not.toContain('not the Claude native personal memory store');
-    expect(claude.options.appendSystemPrompt).not.toContain('only long-term memory store');
+    expect(claude).toBe(input);
 
-    const codex = service.applyObsidianWikiPolicyPromptToChatCommand({
+    const codexInput = {
       type: 'codex-command',
       command: 'Continue.',
       options: {},
-    }, {
+    };
+    const codex = service.applyObsidianWikiPolicyPromptToChatCommand(codexInput, {
       readObsidianBridgeConfig: () => ({ enabled: true }),
     });
-    expect(codex.command).toContain('Obsidian Wiki Policy');
-    expect(codex.command).toContain('Continue.');
+    expect(codex).toBe(codexInput);
+    expect(service.buildObsidianWikiPolicyPrompt()).toContain('Obsidian runtime integration is template-only');
+    expect(service.buildObsidianWikiPolicyPrompt()).toContain('Claude Code native memory owns autonomous memory extraction');
   });
 });

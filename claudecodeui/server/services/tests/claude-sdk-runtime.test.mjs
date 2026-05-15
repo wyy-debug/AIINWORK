@@ -123,27 +123,25 @@ test('Argus coordinator dispatch enables native subagent tools for the spawned r
   assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.subagentsEnabled\] = '1'/);
 });
 
-test('Claude native memory disables bare mode and clears auto-memory blockers', async () => {
+test('Claude native memory stays enabled while Obsidian sync takes over storage and primary readback', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');
 
   assert.match(source, /function isClaudeNativeMemoryEnabled/);
   assert.match(source, /function applyClaudeNativeMemoryEnv/);
+  assert.match(source, /function applyObsidianNativeMemorySyncEnv/);
   assert.match(source, /spawnEnv\.MTL_CODE_UI_BARE = '0'/);
   assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.autoMemoryExtractionEnabled\] = '1'/);
   assert.match(source, /delete spawnEnv\.MTL_CODE_SIMPLE/);
   assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY/);
   assert.match(source, /delete spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.autoMemoryExtractionEnabled\]/);
   assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY = '1'/);
-  assert.match(source, /function isObsidianPrimaryMemoryEnabled/);
-  assert.match(source, /readObsidianBridgeConfig\(\{ includeToken: false \}\)/);
-  assert.match(source, /function applyObsidianPrimaryMemoryEnv/);
-  assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
+  assert.doesNotMatch(source, /function applyObsidianTemplateOnlyMemoryEnv/);
   assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC = '1'/);
-  assert.match(source, /spawnEnv\.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE = resolveNativeMemoryStagingDir/);
+  assert.match(source, /spawnEnv\.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE = memoryDir/);
+  assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
   assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY/);
   assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION/);
-  assert.doesNotMatch(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.claudeNativeMemoryEnabled\] = '0'[\s\S]{0,300}spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
 });
 
 test('Argus emits prompt injection debug payload from final spawn env and CLI args', async () => {

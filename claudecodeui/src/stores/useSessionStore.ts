@@ -71,6 +71,7 @@ export interface NormalizedMessage {
   compactType?: 'full' | 'micro' | 'summary' | string;
   compactTrigger?: string;
   compactSummary?: string;
+  compactSummaryAvailable?: boolean;
   compactMetadata?: unknown;
   microcompactMetadata?: unknown;
   preTokens?: number;

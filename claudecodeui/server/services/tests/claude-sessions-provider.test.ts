@@ -31,3 +31,21 @@ test('Claude session provider hides persisted Argus internal fallback prefixes',
 
   assert.deepEqual(messages, []);
 });
+
+test('Claude session provider marks compact summaries as lazy-loadable without embedding summary content', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'compact-summary-1',
+    isCompactSummary: true,
+    message: {
+      role: 'user',
+      content: 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nLarge compacted summary body.',
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'context_compaction');
+  assert.equal(messages[0].compactSummary, undefined);
+  assert.equal(messages[0].compactSummaryAvailable, true);
+});

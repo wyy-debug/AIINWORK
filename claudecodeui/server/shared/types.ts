@@ -94,6 +94,7 @@ export type NormalizedMessage = {
   compactType?: 'full' | 'micro' | 'summary' | string;
   compactTrigger?: string;
   compactSummary?: string;
+  compactSummaryAvailable?: boolean;
   compactMetadata?: unknown;
   microcompactMetadata?: unknown;
   preTokens?: number;
@@ -124,6 +125,8 @@ export type FetchHistoryOptions = {
   limit?: number | null;
   /** Pagination offset from the newest messages. */
   offset?: number;
+  /** Context compaction message id for lazy summary lookup. */
+  messageId?: string;
 };
 
 /**
@@ -138,6 +141,11 @@ export type FetchHistoryResult = {
   offset: number;
   limit: number | null;
   tokenUsage?: unknown;
+};
+
+export type FetchCompactionSummaryResult = {
+  summary: string | null;
+  found: boolean;
 };
 
 // ---------------------------------------------------------------------------------------------

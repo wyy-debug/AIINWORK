@@ -53,6 +53,10 @@ export {
 }
 import { getModelMaxOutputTokens } from '../../../utils/context.js'
 import type { Options } from '../claude.js'
+import {
+  isPromptTooLongErrorText,
+  PROMPT_TOO_LONG_ERROR_MESSAGE,
+} from '../promptTooLong.js'
 import { randomUUID } from 'crypto'
 import {
   createAssistantAPIErrorMessage,
@@ -839,10 +843,16 @@ export async function* queryModelOpenAI(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     logForDebugging(`[OpenAI] Error: ${errorMessage}`, { level: 'error' })
+    const promptTooLong = isPromptTooLongErrorText(errorMessage)
     yield createAssistantAPIErrorMessage({
-      content: `API Error: ${errorMessage}`,
-      apiError: 'api_error',
-      error: (error instanceof Error ? error : new Error(String(error))) as unknown as SDKAssistantMessageError,
+      content: promptTooLong
+        ? PROMPT_TOO_LONG_ERROR_MESSAGE
+        : `API Error: ${errorMessage}`,
+      apiError: promptTooLong ? 'prompt_too_long' : 'api_error',
+      error: promptTooLong
+        ? ('invalid_request' as unknown as SDKAssistantMessageError)
+        : ((error instanceof Error ? error : new Error(String(error))) as unknown as SDKAssistantMessageError),
+      ...(promptTooLong ? { errorDetails: errorMessage } : {}),
     })
   }
 }
