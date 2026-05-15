@@ -76,8 +76,17 @@ const summarizeObsidianResult = (result = {}) => {
 export const createObsidianInstructionSyncService = ({
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
+  logger = console,
 } = {}) => {
   const syncedInstructionHashes = new Map();
+
+  const logInfo = (event, details = {}) => {
+    logger?.info?.(`[Obsidian Wiki] ${event} ${JSON.stringify(details)}`);
+  };
+
+  const logWarn = (event, details = {}) => {
+    logger?.warn?.(`[Obsidian Wiki] ${event} ${JSON.stringify(details)}`);
+  };
 
   const syncInstructionFile = async ({
     filePath = '',
@@ -91,22 +100,38 @@ export const createObsidianInstructionSyncService = ({
   } = {}) => {
     const config = readObsidianBridgeConfig({ includeToken: false });
     if (!config.enabled) {
+      logInfo('instruction_sync_skipped', { reason: 'disabled', filePath, projectPath, trigger });
       return { success: true, captured: false, reason: 'disabled' };
     }
 
     const absoluteFilePath = resolveFilePath({ filePath, projectPath });
     if (!absoluteFilePath) {
+      logInfo('instruction_sync_skipped', { reason: 'missing_file_path', projectPath, trigger });
       return { success: true, captured: false, reason: 'missing_file_path' };
     }
 
     const relativePath = relativeInstructionPath({ absoluteFilePath, projectPath });
     if (!isSupportedProjectInstructionPath(relativePath)) {
+      logInfo('instruction_sync_skipped', {
+        reason: 'unsupported_instruction_path',
+        filePath: absoluteFilePath,
+        relativePath,
+        projectPath,
+        trigger,
+      });
       return { success: true, captured: false, reason: 'unsupported_instruction_path' };
     }
 
     const content = await fs.readFile(absoluteFilePath, 'utf8');
     const cleanContent = content.slice(0, MAX_INSTRUCTION_CONTENT_CHARS);
     if (!readString(cleanContent)) {
+      logInfo('instruction_sync_skipped', {
+        reason: 'empty_instruction_file',
+        filePath: absoluteFilePath,
+        relativePath,
+        projectPath,
+        trigger,
+      });
       return { success: true, captured: false, reason: 'empty_instruction_file' };
     }
 
@@ -115,6 +140,14 @@ export const createObsidianInstructionSyncService = ({
     const contentHash = hashText([sourceId, cleanContent].join('\n'));
     const syncKey = `${cleanProjectName}:${relativePath}`;
     if (skipIfUnchanged && syncedInstructionHashes.get(syncKey) === contentHash) {
+      logInfo('instruction_sync_skipped', {
+        reason: 'unchanged_instruction_file',
+        filePath: absoluteFilePath,
+        relativePath,
+        projectName: cleanProjectName,
+        contentHash,
+        trigger,
+      });
       return {
         success: true,
         captured: false,
@@ -124,6 +157,16 @@ export const createObsidianInstructionSyncService = ({
       };
     }
 
+    logInfo('instruction_sync_start', {
+      filePath: absoluteFilePath,
+      relativePath,
+      projectName: cleanProjectName,
+      sessionId: readString(sessionId),
+      provider: readString(provider),
+      toolName: readString(toolName),
+      contentHash,
+      trigger,
+    });
     const result = await ingestKnowledgeSourceToWiki({
       source: INSTRUCTION_SOURCE,
       sourceId,
@@ -156,6 +199,17 @@ export const createObsidianInstructionSyncService = ({
     if (obsidianBridge.destination === 'obsidian' && readString(obsidianBridge.path || obsidianBridge.wikiPath)) {
       syncedInstructionHashes.set(syncKey, contentHash);
     }
+    logInfo('instruction_sync_complete', {
+      filePath: absoluteFilePath,
+      relativePath,
+      projectName: cleanProjectName,
+      destination: obsidianBridge.destination || '',
+      path: readString(obsidianBridge.path || obsidianBridge.wikiPath),
+      fallbackPath: readString(obsidianBridge.fallbackPath),
+      error: readString(obsidianBridge.error),
+      contentHash,
+      trigger,
+    });
 
     return {
       success: true,
@@ -178,8 +232,18 @@ export const createObsidianInstructionSyncService = ({
   } = {}) => {
     const cleanProjectPath = readString(projectPath);
     if (!cleanProjectPath) {
+      logInfo('instruction_scan_skipped', { reason: 'missing_project_path', projectName, sessionId, trigger });
       return { success: true, captured: false, reason: 'missing_project_path', results: [] };
     }
+
+    logInfo('instruction_scan_start', {
+      projectPath: cleanProjectPath,
+      projectName: readString(projectName),
+      sessionId: readString(sessionId),
+      provider: readString(provider),
+      trigger,
+      candidates: PROJECT_INSTRUCTION_CANDIDATES,
+    });
 
     const results = [];
     for (const relativePath of PROJECT_INSTRUCTION_CANDIDATES) {
@@ -187,20 +251,51 @@ export const createObsidianInstructionSyncService = ({
       try {
         await fs.access(filePath);
       } catch {
+        logInfo('instruction_scan_candidate_missing', {
+          projectPath: cleanProjectPath,
+          relativePath,
+          filePath,
+          trigger,
+        });
         continue;
       }
 
-      results.push(await syncInstructionFile({
-        filePath,
-        projectPath: cleanProjectPath,
-        projectName,
-        sessionId,
-        provider,
-        toolName: 'ProjectInstructionScan',
-        trigger,
-        skipIfUnchanged: true,
-      }));
+      try {
+        results.push(await syncInstructionFile({
+          filePath,
+          projectPath: cleanProjectPath,
+          projectName,
+          sessionId,
+          provider,
+          toolName: 'ProjectInstructionScan',
+          trigger,
+          skipIfUnchanged: true,
+        }));
+      } catch (error) {
+        const failure = {
+          success: false,
+          captured: false,
+          reason: 'instruction_file_sync_error',
+          error: error?.message || String(error || 'Instruction file sync failed.'),
+          filePath,
+          relativePath,
+        };
+        logWarn('instruction_scan_candidate_failed', failure);
+        results.push(failure);
+      }
     }
+
+    logInfo('instruction_scan_complete', {
+      projectPath: cleanProjectPath,
+      projectName: readString(projectName),
+      sessionId: readString(sessionId),
+      trigger,
+      candidates: PROJECT_INSTRUCTION_CANDIDATES.length,
+      found: results.length,
+      captured: results.filter((result) => result?.captured).length,
+      skipped: results.filter((result) => result && !result.captured).length,
+      reasons: results.map((result) => result?.reason).filter(Boolean),
+    });
 
     return {
       success: true,
