@@ -11,6 +11,10 @@ const defaultIngestKnowledgeSourceToWiki = async (...args) => {
 
 const INSTRUCTION_SOURCE = 'project-instructions';
 const PROJECT_INSTRUCTION_FILE = 'MTL.md';
+const PROJECT_INSTRUCTION_CANDIDATES = [
+  PROJECT_INSTRUCTION_FILE,
+  `.mtl-code/${PROJECT_INSTRUCTION_FILE}`,
+];
 const MAX_INSTRUCTION_CONTENT_CHARS = 120000;
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -73,6 +77,8 @@ export const createObsidianInstructionSyncService = ({
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
 } = {}) => {
+  const syncedInstructionHashes = new Map();
+
   const syncInstructionFile = async ({
     filePath = '',
     projectPath = '',
@@ -80,6 +86,8 @@ export const createObsidianInstructionSyncService = ({
     sessionId = '',
     provider = '',
     toolName = '',
+    trigger = '',
+    skipIfUnchanged = false,
   } = {}) => {
     const config = readObsidianBridgeConfig({ includeToken: false });
     if (!config.enabled) {
@@ -104,6 +112,18 @@ export const createObsidianInstructionSyncService = ({
 
     const cleanProjectName = resolveProjectName({ projectName, projectPath });
     const sourceId = `${INSTRUCTION_SOURCE}:${cleanProjectName}:${relativePath}`;
+    const contentHash = hashText([sourceId, cleanContent].join('\n'));
+    const syncKey = `${cleanProjectName}:${relativePath}`;
+    if (skipIfUnchanged && syncedInstructionHashes.get(syncKey) === contentHash) {
+      return {
+        success: true,
+        captured: false,
+        reason: 'unchanged_instruction_file',
+        mode: 'project-knowledge',
+        kind: 'project-instructions',
+      };
+    }
+
     const result = await ingestKnowledgeSourceToWiki({
       source: INSTRUCTION_SOURCE,
       sourceId,
@@ -120,7 +140,7 @@ export const createObsidianInstructionSyncService = ({
       metadata: {
         source: INSTRUCTION_SOURCE,
         sourceId,
-        contentHash: hashText([sourceId, cleanContent].join('\n')),
+        contentHash,
         instructionFile: true,
         instructionFileName: path.basename(relativePath),
         instructionFilePath: absoluteFilePath,
@@ -129,8 +149,13 @@ export const createObsidianInstructionSyncService = ({
         obsidianModes: ['project-knowledge'],
         provider: readString(provider),
         toolName: readString(toolName),
+        trigger: readString(trigger),
       },
     });
+    const obsidianBridge = summarizeObsidianResult(result);
+    if (obsidianBridge.destination === 'obsidian' && readString(obsidianBridge.path || obsidianBridge.wikiPath)) {
+      syncedInstructionHashes.set(syncKey, contentHash);
+    }
 
     return {
       success: true,
@@ -139,17 +164,62 @@ export const createObsidianInstructionSyncService = ({
       reason: 'instruction_file_synced',
       mode: 'project-knowledge',
       kind: 'project-instructions',
-      obsidianBridge: summarizeObsidianResult(result),
+      obsidianBridge,
       result,
+    };
+  };
+
+  const syncProjectInstructionFiles = async ({
+    projectPath = '',
+    projectName = '',
+    sessionId = '',
+    provider = '',
+    trigger = 'project_instruction_scan',
+  } = {}) => {
+    const cleanProjectPath = readString(projectPath);
+    if (!cleanProjectPath) {
+      return { success: true, captured: false, reason: 'missing_project_path', results: [] };
+    }
+
+    const results = [];
+    for (const relativePath of PROJECT_INSTRUCTION_CANDIDATES) {
+      const filePath = path.join(cleanProjectPath, relativePath);
+      try {
+        await fs.access(filePath);
+      } catch {
+        continue;
+      }
+
+      results.push(await syncInstructionFile({
+        filePath,
+        projectPath: cleanProjectPath,
+        projectName,
+        sessionId,
+        provider,
+        toolName: 'ProjectInstructionScan',
+        trigger,
+        skipIfUnchanged: true,
+      }));
+    }
+
+    return {
+      success: true,
+      captured: results.some((result) => result?.captured),
+      reason: 'project_instruction_scan',
+      results,
     };
   };
 
   return {
     syncInstructionFile,
+    syncProjectInstructionFiles,
   };
 };
 
 export const obsidianInstructionSyncService = createObsidianInstructionSyncService();
 export const syncObsidianInstructionFile = (...args) => (
   obsidianInstructionSyncService.syncInstructionFile(...args)
+);
+export const syncObsidianProjectInstructionFiles = (...args) => (
+  obsidianInstructionSyncService.syncProjectInstructionFiles(...args)
 );

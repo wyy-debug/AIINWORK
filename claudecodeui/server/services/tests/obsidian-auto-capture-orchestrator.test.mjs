@@ -254,6 +254,64 @@ describe('Obsidian auto-capture orchestrator', () => {
     }));
   });
 
+  it('scans project instruction files when a turn completes even without Write tool events', async () => {
+    const broadcast = vi.fn();
+    const autoCaptureChatKnowledge = vi.fn();
+    const syncProjectInstructionFiles = vi.fn(async () => ({
+      success: true,
+      captured: true,
+      reason: 'project_instruction_scan',
+      results: [{
+        success: true,
+        captured: true,
+        status: 'captured',
+        reason: 'instruction_file_synced',
+        mode: 'project-knowledge',
+        obsidianBridge: {
+          destination: 'obsidian',
+          path: 'Argus/Wiki/App/mtl-md.md',
+        },
+      }],
+    }));
+    const orchestrator = createObsidianAutoCaptureOrchestrator({
+      autoCaptureChatKnowledge,
+      syncProjectInstructionFiles,
+      broadcast,
+    });
+    orchestrator.setContext({
+      provider: 'claude',
+      sessionId: 'session-mtl-scan',
+      projectName: 'App',
+      projectPath: 'E:\\repo',
+      userPrompt: '/init',
+    });
+
+    await orchestrator.observeMessage({
+      kind: 'complete',
+      provider: 'claude',
+      sessionId: 'session-mtl-scan',
+      id: 'complete-mtl-scan',
+    });
+
+    expect(syncProjectInstructionFiles).toHaveBeenCalledWith(expect.objectContaining({
+      projectPath: 'E:\\repo',
+      projectName: 'App',
+      sessionId: 'session-mtl-scan',
+      provider: 'claude',
+      trigger: 'turn_complete_scan',
+    }));
+    expect(autoCaptureChatKnowledge).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'obsidian_auto_capture_result',
+      source: 'instruction-file',
+      captured: true,
+      status: 'synced',
+      mode: 'project-knowledge',
+      reason: 'instruction_file_synced',
+      obsidianPath: 'Argus/Wiki/App/mtl-md.md',
+    }));
+  });
+
   it('drops pending assistant content when the turn is aborted or failed', async () => {
     const autoCaptureChatKnowledge = vi.fn();
     const orchestrator = createObsidianAutoCaptureOrchestrator({

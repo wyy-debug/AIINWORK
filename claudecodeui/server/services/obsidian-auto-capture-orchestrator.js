@@ -140,10 +140,19 @@ const buildInstructionCaptureBroadcast = (payload = {}, result = {}) => {
 };
 
 const readToolInput = (message = {}) => (
-  message.toolInput
-  || message.input
-  || message.tool_input
-  || {}
+  (() => {
+    const input = message.toolInput
+      || message.input
+      || message.tool_input
+      || {};
+    if (typeof input !== 'string') return input;
+    try {
+      const parsed = JSON.parse(input);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  })()
 );
 
 const readToolFilePath = (message = {}) => {
@@ -163,6 +172,7 @@ export const createObsidianAutoCaptureOrchestrator = ({
   autoCaptureChatKnowledge = defaultAutoCaptureChatKnowledge,
   autoCaptureTurnMemory = null,
   syncInstructionFile = null,
+  syncProjectInstructionFiles = null,
   broadcast = () => undefined,
 } = {}) => {
   const contexts = new Map();
@@ -331,6 +341,58 @@ export const createObsidianAutoCaptureOrchestrator = ({
         sourceId: `instruction:${sessionId}:${pending.filePath}`,
       }, result));
       console.warn('[Obsidian Wiki] Instruction file sync failed:', result.error);
+      return result;
+    }
+  };
+
+  const broadcastInstructionResults = (message = {}, result = null, sourceIdPrefix = 'instruction') => {
+    const provider = readString(message.provider) || 'claude';
+    const sessionId = readString(message.sessionId);
+    const results = Array.isArray(result?.results) ? result.results : [result];
+    for (const item of results) {
+      if (!item?.captured && item?.reason !== 'disabled' && item?.reason !== 'empty_instruction_file') {
+        continue;
+      }
+      broadcast(buildInstructionCaptureBroadcast({
+        provider,
+        sessionId,
+        messageId: readString(message.id) || `${sourceIdPrefix}-${Date.now()}`,
+        sourceId: `${sourceIdPrefix}:${sessionId || 'no-session'}`,
+      }, item || {}));
+    }
+  };
+
+  const syncProjectInstructionSnapshot = async (message = {}) => {
+    if (typeof syncProjectInstructionFiles !== 'function') return null;
+    const context = resolveContext(message);
+    const provider = readString(message.provider || context.provider) || 'claude';
+    const sessionId = readString(message.sessionId || context.sessionId);
+    if (!sessionId || !readString(context.projectPath)) return null;
+
+    try {
+      const result = await syncProjectInstructionFiles({
+        projectPath: context.projectPath,
+        projectName: context.projectName,
+        sessionId,
+        provider,
+        trigger: 'turn_complete_scan',
+      });
+      broadcastInstructionResults({ ...message, provider, sessionId }, result, 'instruction-scan');
+      return result;
+    } catch (error) {
+      const result = {
+        success: false,
+        captured: false,
+        reason: 'instruction_file_scan_error',
+        error: error?.message || String(error || 'Instruction file scan failed.'),
+      };
+      broadcast(buildInstructionCaptureBroadcast({
+        provider,
+        sessionId,
+        messageId: readString(message.id) || `instruction-scan-${Date.now()}`,
+        sourceId: `instruction-scan:${sessionId || 'no-session'}`,
+      }, result));
+      console.warn('[Obsidian Wiki] Instruction file scan failed:', result.error);
       return result;
     }
   };
@@ -520,7 +582,10 @@ export const createObsidianAutoCaptureOrchestrator = ({
         clearTurnBuffer(provider, sessionId);
         return null;
       }
-      return captureTurn(message);
+      const capturePromise = captureTurn(message);
+      const instructionScan = await syncProjectInstructionSnapshot(message);
+      const captureResult = await capturePromise;
+      return captureResult || instructionScan;
     }
 
     return null;
