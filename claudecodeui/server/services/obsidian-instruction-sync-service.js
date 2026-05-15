@@ -11,9 +11,12 @@ const defaultIngestKnowledgeSourceToWiki = async (...args) => {
 
 const INSTRUCTION_SOURCE = 'project-instructions';
 const PROJECT_INSTRUCTION_FILE = 'MTL.md';
+const LEGACY_CLAUDE_INSTRUCTION_FILE = 'CLAUDE.md';
 const PROJECT_INSTRUCTION_CANDIDATES = [
   PROJECT_INSTRUCTION_FILE,
+  LEGACY_CLAUDE_INSTRUCTION_FILE,
   `.mtl-code/${PROJECT_INSTRUCTION_FILE}`,
+  `.claude/${LEGACY_CLAUDE_INSTRUCTION_FILE}`,
 ];
 const MAX_INSTRUCTION_CONTENT_CHARS = 120000;
 
@@ -53,8 +56,31 @@ const relativeInstructionPath = ({ absoluteFilePath = '', projectPath = '' } = {
 
 const isSupportedProjectInstructionPath = (relativePath = '') => {
   const normalized = normalizeSlashes(relativePath);
-  return normalized === PROJECT_INSTRUCTION_FILE
-    || normalized === `.mtl-code/${PROJECT_INSTRUCTION_FILE}`;
+  return PROJECT_INSTRUCTION_CANDIDATES.includes(normalized);
+};
+
+const topicKeyForInstructionPath = (relativePath = '') => (
+  normalizeSlashes(relativePath)
+    .toLowerCase()
+    .replace(/\.md$/i, '-md')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'project-instructions'
+);
+
+const buildGeneratedInstructionContent = ({ projectName = '' } = {}) => {
+  const cleanProjectName = readString(projectName) || 'this repository';
+  return [
+    '# MTL.md',
+    '',
+    `This file provides guidance to Argus when working in ${cleanProjectName}.`,
+    '',
+    '## Project Notes',
+    '',
+    '- Keep this file concise. Add only non-obvious commands, conventions, setup requirements, and workflow constraints.',
+    '- Verify stale guidance against the repository before relying on it.',
+    '',
+  ].join('\n');
 };
 
 const summarizeObsidianResult = (result = {}) => {
@@ -86,6 +112,103 @@ export const createObsidianInstructionSyncService = ({
 
   const logWarn = (event, details = {}) => {
     logger?.warn?.(`[Obsidian Wiki] ${event} ${JSON.stringify(details)}`);
+  };
+
+  const findProjectInstructionFiles = async (projectPath = '') => {
+    const cleanProjectPath = readString(projectPath);
+    if (!cleanProjectPath) return [];
+
+    const files = [];
+    for (const relativePath of PROJECT_INSTRUCTION_CANDIDATES) {
+      const filePath = path.join(cleanProjectPath, relativePath);
+      try {
+        await fs.access(filePath);
+        files.push({ relativePath, filePath });
+      } catch {
+        // Missing candidates are logged by the scan path, not this helper.
+      }
+    }
+    return files;
+  };
+
+  const ensureProjectInstructionFile = async ({
+    projectPath = '',
+    projectName = '',
+    provider = '',
+    trigger = 'preflight_project_conversation',
+  } = {}) => {
+    const cleanProjectPath = readString(projectPath);
+    if (!cleanProjectPath) {
+      logInfo('instruction_preflight_skipped', { reason: 'missing_project_path', projectName, provider, trigger });
+      return { success: true, created: false, reason: 'missing_project_path' };
+    }
+
+    const existing = await findProjectInstructionFiles(cleanProjectPath);
+    if (existing.length > 0) {
+      const first = existing[0];
+      logInfo('instruction_preflight_exists', {
+        projectPath: cleanProjectPath,
+        projectName: readString(projectName),
+        provider: readString(provider),
+        trigger,
+        relativePath: first.relativePath,
+        filePath: first.filePath,
+        count: existing.length,
+      });
+      return {
+        success: true,
+        created: false,
+        reason: 'instruction_file_exists',
+        relativePath: first.relativePath,
+        filePath: first.filePath,
+        files: existing,
+      };
+    }
+
+    const generatedProjectName = resolveProjectName({ projectName, projectPath: cleanProjectPath });
+    const generatedPath = path.join(cleanProjectPath, PROJECT_INSTRUCTION_FILE);
+    try {
+      await fs.writeFile(
+        generatedPath,
+        buildGeneratedInstructionContent({ projectName: generatedProjectName }),
+        { encoding: 'utf8', flag: 'wx' },
+      );
+      logInfo('instruction_file_generated', {
+        projectPath: cleanProjectPath,
+        filePath: generatedPath,
+        relativePath: PROJECT_INSTRUCTION_FILE,
+        projectName: generatedProjectName,
+        provider: readString(provider),
+        trigger,
+      });
+      return {
+        success: true,
+        created: true,
+        reason: 'instruction_file_created',
+        relativePath: PROJECT_INSTRUCTION_FILE,
+        filePath: generatedPath,
+      };
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        return {
+          success: true,
+          created: false,
+          reason: 'instruction_file_exists',
+          relativePath: PROJECT_INSTRUCTION_FILE,
+          filePath: generatedPath,
+        };
+      }
+      const failure = {
+        success: false,
+        created: false,
+        reason: 'instruction_file_generate_error',
+        error: error?.message || String(error || 'Instruction file generation failed.'),
+        relativePath: PROJECT_INSTRUCTION_FILE,
+        filePath: generatedPath,
+      };
+      logWarn('instruction_file_generate_failed', failure);
+      return failure;
+    }
   };
 
   const syncInstructionFile = async ({
@@ -139,6 +262,7 @@ export const createObsidianInstructionSyncService = ({
     const sourceId = `${INSTRUCTION_SOURCE}:${cleanProjectName}:${relativePath}`;
     const contentHash = hashText([sourceId, cleanContent].join('\n'));
     const syncKey = `${cleanProjectName}:${relativePath}`;
+    const topicKey = topicKeyForInstructionPath(relativePath);
     if (skipIfUnchanged && syncedInstructionHashes.get(syncKey) === contentHash) {
       logInfo('instruction_sync_skipped', {
         reason: 'unchanged_instruction_file',
@@ -177,7 +301,7 @@ export const createObsidianInstructionSyncService = ({
       content: cleanContent,
       kind: 'project-instructions',
       modes: ['project-knowledge'],
-      topicKey: 'mtl-md',
+      topicKey,
       summaryType: 'project-instructions',
       forceRecompile: true,
       metadata: {
@@ -188,8 +312,10 @@ export const createObsidianInstructionSyncService = ({
         instructionFileName: path.basename(relativePath),
         instructionFilePath: absoluteFilePath,
         relativePath,
+        topicKey,
         obsidianMode: 'project-knowledge',
         obsidianModes: ['project-knowledge'],
+        generatedInstructionFile: trigger === 'auto_create_project_instruction',
         provider: readString(provider),
         toolName: readString(toolName),
         trigger: readString(trigger),
@@ -246,11 +372,11 @@ export const createObsidianInstructionSyncService = ({
     });
 
     const results = [];
+    const existingInstructionFiles = await findProjectInstructionFiles(cleanProjectPath);
+    const existingInstructionFilePaths = new Set(existingInstructionFiles.map((file) => file.relativePath));
     for (const relativePath of PROJECT_INSTRUCTION_CANDIDATES) {
       const filePath = path.join(cleanProjectPath, relativePath);
-      try {
-        await fs.access(filePath);
-      } catch {
+      if (!existingInstructionFilePaths.has(relativePath)) {
         logInfo('instruction_scan_candidate_missing', {
           projectPath: cleanProjectPath,
           relativePath,
@@ -285,6 +411,38 @@ export const createObsidianInstructionSyncService = ({
       }
     }
 
+    let generated = false;
+    if (existingInstructionFiles.length === 0) {
+      const ensureResult = await ensureProjectInstructionFile({
+        projectPath: cleanProjectPath,
+        projectName,
+        provider,
+        trigger: 'auto_create_project_instruction',
+      });
+      generated = ensureResult.created === true;
+      if (ensureResult.success && ensureResult.filePath) {
+        results.push(await syncInstructionFile({
+          filePath: ensureResult.filePath,
+          projectPath: cleanProjectPath,
+          projectName,
+          sessionId,
+          provider,
+          toolName: 'ProjectInstructionAutoCreate',
+          trigger: 'auto_create_project_instruction',
+          skipIfUnchanged: false,
+        }));
+      } else {
+        results.push({
+          success: false,
+          captured: false,
+          reason: ensureResult.reason || 'instruction_file_generate_error',
+          error: ensureResult.error || '',
+          filePath: ensureResult.filePath || '',
+          relativePath: ensureResult.relativePath || PROJECT_INSTRUCTION_FILE,
+        });
+      }
+    }
+
     logInfo('instruction_scan_complete', {
       projectPath: cleanProjectPath,
       projectName: readString(projectName),
@@ -294,6 +452,7 @@ export const createObsidianInstructionSyncService = ({
       found: results.length,
       captured: results.filter((result) => result?.captured).length,
       skipped: results.filter((result) => result && !result.captured).length,
+      generated,
       reasons: results.map((result) => result?.reason).filter(Boolean),
     });
 
@@ -301,11 +460,13 @@ export const createObsidianInstructionSyncService = ({
       success: true,
       captured: results.some((result) => result?.captured),
       reason: 'project_instruction_scan',
+      generated,
       results,
     };
   };
 
   return {
+    ensureProjectInstructionFile,
     syncInstructionFile,
     syncProjectInstructionFiles,
   };
@@ -317,4 +478,7 @@ export const syncObsidianInstructionFile = (...args) => (
 );
 export const syncObsidianProjectInstructionFiles = (...args) => (
   obsidianInstructionSyncService.syncProjectInstructionFiles(...args)
+);
+export const ensureObsidianProjectInstructionFile = (...args) => (
+  obsidianInstructionSyncService.ensureProjectInstructionFile(...args)
 );

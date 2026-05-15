@@ -36,6 +36,7 @@ import { captureObsidianAutoMemory } from './services/obsidian-auto-memory-servi
 import {
     syncObsidianInstructionFile,
     syncObsidianProjectInstructionFiles,
+    ensureObsidianProjectInstructionFile,
 } from './services/obsidian-instruction-sync-service.js';
 import { runObsidianAutoCaptureBackfill } from './services/obsidian-auto-capture-backfill-service.js';
 import { readObsidianBridgeConfig } from './services/obsidian-bridge-service.js';
@@ -2240,6 +2241,48 @@ async function waitForWriterAutoCaptureBarrier(writer, data, provider) {
     });
 }
 
+async function prepareProjectInstructionFilesBeforeChat(data, provider = 'claude') {
+    if (provider !== 'claude') return null;
+
+    const projectPath = typeof data?.options?.projectPath === 'string' && data.options.projectPath.trim()
+        ? data.options.projectPath.trim()
+        : typeof data?.options?.cwd === 'string' && data.options.cwd.trim()
+            ? data.options.cwd.trim()
+            : '';
+    if (!projectPath) return null;
+
+    const projectName = typeof data?.options?.projectName === 'string' && data.options.projectName.trim()
+        ? data.options.projectName.trim()
+        : typeof data?.projectName === 'string' && data.projectName.trim()
+            ? data.projectName.trim()
+            : path.basename(projectPath);
+
+    try {
+        const ensureResult = await ensureObsidianProjectInstructionFile({
+            projectPath,
+            projectName,
+            provider,
+            trigger: 'preflight_project_conversation',
+        });
+        const syncResult = await syncObsidianProjectInstructionFiles({
+            projectPath,
+            projectName,
+            provider,
+            sessionId: getConcreteCommandSessionId(data) || data?.sessionId || data?.options?.sessionId || '',
+            trigger: 'preflight_project_conversation',
+        });
+        return { ensureResult, syncResult };
+    } catch (error) {
+        console.warn('[Obsidian Wiki] instruction_preflight_failed', JSON.stringify({
+            projectPath,
+            projectName,
+            provider,
+            error: error?.message || String(error || 'Project instruction preflight failed.'),
+        }));
+        return null;
+    }
+}
+
 const ARGUS_DEFAULT_PERMISSION_MODE = 'acceptEdits';
 const ARGUS_STALE_EXACT_TOOL_DENIES = new Set(['Bash', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write']);
 
@@ -2975,6 +3018,7 @@ function handleChatConnection(ws, request) {
                 const commandWithIntent = applyArgusToolInspectionIntentToChatCommand(
                     applyArgusCodeReviewIntentToChatCommand(data),
                 );
+                await prepareProjectInstructionFilesBeforeChat(commandWithIntent, 'claude');
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithIntent)),
                 ));

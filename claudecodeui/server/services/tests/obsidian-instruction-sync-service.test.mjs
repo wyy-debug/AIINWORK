@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -150,6 +150,153 @@ describe('Obsidian instruction sync service', () => {
         reason: 'unchanged_instruction_file',
       });
       expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('syncs Claude-compatible instruction files into Obsidian project Wiki', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'argus-claude-md-sync-'));
+    await writeFile(join(projectPath, 'CLAUDE.md'), '# CLAUDE.md\n\nUse PowerShell examples on Windows.\n', 'utf8');
+    await mkdir(join(projectPath, '.claude'), { recursive: true });
+    await writeFile(join(projectPath, '.claude', 'CLAUDE.md'), '# Nested CLAUDE.md\n\nPrefer focused patches.\n', 'utf8');
+
+    const ingestKnowledgeSourceToWiki = vi.fn(async ({ metadata }) => ({
+      success: true,
+      destination: 'obsidian',
+      wikiPath: `Argus/Wiki/App/${metadata.topicKey}.md`,
+    }));
+    const service = createObsidianInstructionSyncService({
+      ingestKnowledgeSourceToWiki,
+      readObsidianBridgeConfig: () => ({ enabled: true }),
+    });
+
+    try {
+      const result = await service.syncProjectInstructionFiles({
+        projectPath,
+        projectName: 'App',
+        sessionId: 'session-claude',
+        provider: 'claude',
+        trigger: 'turn_complete_scan',
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        captured: true,
+        reason: 'project_instruction_scan',
+      });
+      expect(result.results).toHaveLength(2);
+      expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledTimes(2);
+      expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
+        sourceId: expect.stringContaining('CLAUDE.md'),
+        title: 'App CLAUDE.md',
+        content: expect.stringContaining('Use PowerShell examples on Windows.'),
+        topicKey: 'claude-md',
+        metadata: expect.objectContaining({
+          instructionFileName: 'CLAUDE.md',
+          relativePath: 'CLAUDE.md',
+          topicKey: 'claude-md',
+        }),
+      }));
+      expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
+        sourceId: expect.stringContaining('.claude/CLAUDE.md'),
+        content: expect.stringContaining('Prefer focused patches.'),
+        topicKey: 'claude-claude-md',
+        metadata: expect.objectContaining({
+          instructionFileName: 'CLAUDE.md',
+          relativePath: '.claude/CLAUDE.md',
+          topicKey: 'claude-claude-md',
+        }),
+      }));
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a project MTL.md before syncing when no instruction files exist', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'argus-mtl-autocreate-'));
+
+    const ingestKnowledgeSourceToWiki = vi.fn(async () => ({
+      success: true,
+      destination: 'obsidian',
+      wikiPath: 'Argus/Wiki/App/mtl-md.md',
+    }));
+    const service = createObsidianInstructionSyncService({
+      ingestKnowledgeSourceToWiki,
+      readObsidianBridgeConfig: () => ({ enabled: true }),
+    });
+
+    try {
+      const result = await service.syncProjectInstructionFiles({
+        projectPath,
+        projectName: 'App',
+        sessionId: 'session-create',
+        provider: 'claude',
+        trigger: 'turn_complete_scan',
+      });
+
+      const createdFile = join(projectPath, 'MTL.md');
+      await expect(stat(createdFile)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      await expect(readFile(createdFile, 'utf8')).resolves.toContain('# MTL.md');
+      expect(result).toMatchObject({
+        success: true,
+        captured: true,
+        reason: 'project_instruction_scan',
+        generated: true,
+      });
+      expect(result.results[0]).toMatchObject({
+        captured: true,
+        reason: 'instruction_file_synced',
+      });
+      expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledTimes(1);
+      expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'App MTL.md',
+        content: expect.stringContaining('This file provides guidance to Argus'),
+        metadata: expect.objectContaining({
+          generatedInstructionFile: true,
+          relativePath: 'MTL.md',
+        }),
+      }));
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('ensures a project MTL.md exists before a project conversation starts', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'argus-mtl-preflight-'));
+    const service = createObsidianInstructionSyncService({
+      ingestKnowledgeSourceToWiki: vi.fn(),
+      readObsidianBridgeConfig: () => ({ enabled: true }),
+    });
+
+    try {
+      const result = await service.ensureProjectInstructionFile({
+        projectPath,
+        projectName: 'App',
+        provider: 'claude',
+        trigger: 'preflight_project_conversation',
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        created: true,
+        reason: 'instruction_file_created',
+        relativePath: 'MTL.md',
+      });
+      await expect(readFile(join(projectPath, 'MTL.md'), 'utf8')).resolves.toContain('# MTL.md');
+
+      const second = await service.ensureProjectInstructionFile({
+        projectPath,
+        projectName: 'App',
+        provider: 'claude',
+        trigger: 'preflight_project_conversation',
+      });
+      expect(second).toMatchObject({
+        success: true,
+        created: false,
+        reason: 'instruction_file_exists',
+        relativePath: 'MTL.md',
+      });
     } finally {
       await rm(projectPath, { recursive: true, force: true });
     }
