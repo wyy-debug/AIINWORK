@@ -188,6 +188,72 @@ describe('Obsidian auto-capture orchestrator', () => {
     });
   });
 
+  it('syncs project MTL.md after a successful native Write tool result', async () => {
+    const broadcast = vi.fn();
+    const autoCaptureChatKnowledge = vi.fn();
+    const syncInstructionFile = vi.fn(async () => ({
+      success: true,
+      captured: true,
+      status: 'captured',
+      reason: 'instruction_file_synced',
+      mode: 'project-knowledge',
+      obsidianBridge: {
+        destination: 'obsidian',
+        path: 'Argus/Wiki/App/mtl-md.md',
+      },
+    }));
+    const orchestrator = createObsidianAutoCaptureOrchestrator({
+      autoCaptureChatKnowledge,
+      syncInstructionFile,
+      broadcast,
+    });
+    orchestrator.setContext({
+      provider: 'claude',
+      sessionId: 'session-mtl',
+      projectName: 'App',
+      projectPath: 'E:\\repo',
+      userPrompt: '/init',
+    });
+
+    await orchestrator.observeMessage({
+      kind: 'tool_use',
+      provider: 'claude',
+      sessionId: 'session-mtl',
+      toolId: 'tool-write-mtl',
+      toolName: 'Write',
+      toolInput: {
+        file_path: 'E:\\repo\\MTL.md',
+      },
+    });
+    await orchestrator.observeMessage({
+      kind: 'tool_result',
+      provider: 'claude',
+      sessionId: 'session-mtl',
+      toolId: 'tool-write-mtl',
+      isError: false,
+      content: 'created MTL.md',
+    });
+
+    expect(syncInstructionFile).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'E:\\repo\\MTL.md',
+      projectPath: 'E:\\repo',
+      projectName: 'App',
+      sessionId: 'session-mtl',
+      provider: 'claude',
+      toolName: 'Write',
+    }));
+    expect(autoCaptureChatKnowledge).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'obsidian_auto_capture_result',
+      source: 'instruction-file',
+      captured: true,
+      status: 'synced',
+      mode: 'project-knowledge',
+      reason: 'instruction_file_synced',
+      obsidianPath: 'Argus/Wiki/App/mtl-md.md',
+    }));
+  });
+
   it('drops pending assistant content when the turn is aborted or failed', async () => {
     const autoCaptureChatKnowledge = vi.fn();
     const orchestrator = createObsidianAutoCaptureOrchestrator({

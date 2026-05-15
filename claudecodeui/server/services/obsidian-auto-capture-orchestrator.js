@@ -77,6 +77,10 @@ const memoryPathFromResult = (result = {}) => {
   return '';
 };
 
+const instructionPathFromResult = (result = {}) => (
+  readString(result.obsidianBridge?.path || result.obsidianBridge?.wikiPath || result.wikiPath || result.path)
+);
+
 const shouldBroadcastKnowledgeResult = (result = {}, memoryResult = null) => {
   if (result.captured) return true;
   if (!memoryResult?.captured) return true;
@@ -120,9 +124,45 @@ const buildMemoryCaptureBroadcast = (payload = {}, result = {}) => {
   });
 };
 
+const buildInstructionCaptureBroadcast = (payload = {}, result = {}) => {
+  const obsidianPath = instructionPathFromResult(result);
+  return buildCaptureBroadcast(payload, {
+    ...result,
+    mode: 'project-knowledge',
+    routingMode: 'project-knowledge',
+    routingModes: ['project-knowledge'],
+  }, {
+    source: 'instruction-file',
+    instructionFileResult: true,
+    obsidianPath,
+    obsidianPaths: obsidianPath ? { projectKnowledge: obsidianPath } : {},
+  });
+};
+
+const readToolInput = (message = {}) => (
+  message.toolInput
+  || message.input
+  || message.tool_input
+  || {}
+);
+
+const readToolFilePath = (message = {}) => {
+  const input = readToolInput(message);
+  return readString(
+    input.file_path
+    || input.filePath
+    || input.path
+  );
+};
+
+const isInstructionWriteTool = (toolName = '') => (
+  /^(Write|Edit|MultiEdit)$/i.test(readString(toolName))
+);
+
 export const createObsidianAutoCaptureOrchestrator = ({
   autoCaptureChatKnowledge = defaultAutoCaptureChatKnowledge,
   autoCaptureTurnMemory = null,
+  syncInstructionFile = null,
   broadcast = () => undefined,
 } = {}) => {
   const contexts = new Map();
@@ -130,6 +170,7 @@ export const createObsidianAutoCaptureOrchestrator = ({
   const turnBuffers = new Map();
   const turnSequences = new Map();
   const pendingCaptures = new Map();
+  const pendingInstructionWrites = new Map();
 
   const setContext = (context = {}) => {
     const provider = readString(context.provider) || 'claude';
@@ -219,6 +260,79 @@ export const createObsidianAutoCaptureOrchestrator = ({
 
   const clearTurnBuffer = (provider, sessionId) => {
     turnBuffers.delete(keyFor(provider, sessionId));
+  };
+
+  const trackInstructionToolUse = (message = {}) => {
+    if (typeof syncInstructionFile !== 'function') return null;
+    const toolName = readString(message.toolName || message.name);
+    const toolId = readString(message.toolId || message.id);
+    const filePath = readToolFilePath(message);
+    if (!toolId || !filePath || !isInstructionWriteTool(toolName)) return null;
+
+    const context = resolveContext(message);
+    const provider = readString(message.provider || context.provider) || 'claude';
+    const sessionId = readString(message.sessionId || context.sessionId);
+    if (!sessionId) return null;
+
+    pendingInstructionWrites.set(`${keyFor(provider, sessionId)}:${toolId}`, {
+      filePath,
+      toolName,
+      projectName: context.projectName,
+      projectPath: context.projectPath,
+      sessionId,
+      provider,
+      messageKey: readString(message.id),
+      timestamp: message.timestamp || new Date().toISOString(),
+    });
+    return null;
+  };
+
+  const syncInstructionToolResult = async (message = {}) => {
+    if (typeof syncInstructionFile !== 'function') return null;
+    const provider = readString(message.provider) || 'claude';
+    const sessionId = readString(message.sessionId);
+    const toolId = readString(message.toolId || message.id);
+    if (!sessionId || !toolId) return null;
+
+    const key = `${keyFor(provider, sessionId)}:${toolId}`;
+    const pending = pendingInstructionWrites.get(key);
+    if (!pending) return null;
+    pendingInstructionWrites.delete(key);
+
+    if (message.isError === true || message.error === true) {
+      return null;
+    }
+
+    try {
+      const result = await syncInstructionFile({
+        ...pending,
+        toolResult: message.content,
+      });
+      if (result?.captured || result?.reason === 'disabled' || result?.reason === 'empty_instruction_file') {
+        broadcast(buildInstructionCaptureBroadcast({
+          provider,
+          sessionId,
+          messageId: pending.messageKey || toolId,
+          sourceId: `instruction:${sessionId}:${pending.filePath}`,
+        }, result || {}));
+      }
+      return result;
+    } catch (error) {
+      const result = {
+        success: false,
+        captured: false,
+        reason: 'instruction_file_sync_error',
+        error: error?.message || String(error || 'Instruction file sync failed.'),
+      };
+      broadcast(buildInstructionCaptureBroadcast({
+        provider,
+        sessionId,
+        messageId: pending.messageKey || toolId,
+        sourceId: `instruction:${sessionId}:${pending.filePath}`,
+      }, result));
+      console.warn('[Obsidian Wiki] Instruction file sync failed:', result.error);
+      return result;
+    }
   };
 
   const isFailedCompletion = (message = {}) => (
@@ -379,6 +493,14 @@ export const createObsidianAutoCaptureOrchestrator = ({
       const buffer = turnBuffers.get(keyFor(provider, sessionId));
       flushStreamContent(buffer);
       return null;
+    }
+
+    if (kind === 'tool_use') {
+      return trackInstructionToolUse(message);
+    }
+
+    if (kind === 'tool_result') {
+      return syncInstructionToolResult(message);
     }
 
     if (kind === 'context_compaction') {
