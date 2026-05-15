@@ -192,6 +192,172 @@ function resolveOpenAIProtocol(): 'chat-completions' | 'responses' {
     : 'chat-completions'
 }
 
+const DEFAULT_OPENAI_CREATE_MAX_RETRIES = 3
+const DEFAULT_OPENAI_RETRY_BASE_MS = 500
+
+function parseBoundedNonNegativeInteger(
+  value: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  if (value == null || value.trim() === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(0, Math.min(max, Math.floor(parsed)))
+}
+
+function resolveOpenAICreateMaxRetries(): number {
+  return parseBoundedNonNegativeInteger(
+    process.env.MTL_CODE_OPENAI_MAX_RETRIES ??
+      process.env.MTL_CODE_MAX_RETRIES,
+    DEFAULT_OPENAI_CREATE_MAX_RETRIES,
+    10,
+  )
+}
+
+function resolveOpenAIRetryBaseMs(): number {
+  return parseBoundedNonNegativeInteger(
+    process.env.MTL_CODE_OPENAI_RETRY_BASE_MS,
+    DEFAULT_OPENAI_RETRY_BASE_MS,
+    30_000,
+  )
+}
+
+function getOpenAIErrorStatus(error: unknown): number | undefined {
+  const value =
+    (error as { status?: unknown })?.status ??
+    (error as { response?: { status?: unknown } })?.response?.status
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function getOpenAIErrorStringField(error: unknown, key: 'code' | 'type'): string {
+  const direct = (error as Record<string, unknown>)?.[key]
+  const nested = (error as { error?: Record<string, unknown> })?.error?.[key]
+  return String(direct ?? nested ?? '').toLowerCase()
+}
+
+function getOpenAIErrorHeader(error: unknown, name: string): string | undefined {
+  const headers = (error as { headers?: unknown; response?: { headers?: unknown } })?.headers ??
+    (error as { response?: { headers?: unknown } })?.response?.headers
+  if (!headers) return undefined
+
+  if (typeof (headers as { get?: unknown }).get === 'function') {
+    const value = (headers as { get: (key: string) => unknown }).get(name)
+    return value == null ? undefined : String(value)
+  }
+
+  const lowerName = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (key.toLowerCase() === lowerName) {
+      return value == null ? undefined : String(value)
+    }
+  }
+  return undefined
+}
+
+function getOpenAIRetryDelayMs(error: unknown, retryNumber: number): number {
+  const retryAfter = getOpenAIErrorHeader(error, 'retry-after')
+  if (retryAfter) {
+    const seconds = Number(retryAfter)
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, 30_000)
+    }
+    const retryAt = Date.parse(retryAfter)
+    if (Number.isFinite(retryAt)) {
+      return Math.min(Math.max(0, retryAt - Date.now()), 30_000)
+    }
+  }
+
+  const base = resolveOpenAIRetryBaseMs()
+  return Math.min(base * Math.max(1, 2 ** (retryNumber - 1)), 30_000)
+}
+
+function isRetryableOpenAICreateError(error: unknown): boolean {
+  const status = getOpenAIErrorStatus(error)
+  if (status === 408 || status === 409 || status === 429) return true
+  if (status != null && status >= 500) return true
+
+  const code = getOpenAIErrorStringField(error, 'code')
+  const type = getOpenAIErrorStringField(error, 'type')
+  const name = error instanceof Error ? error.name.toLowerCase() : ''
+  const message = error instanceof Error
+    ? error.message.toLowerCase()
+    : String(error).toLowerCase()
+  const combined = `${code} ${type} ${name} ${message}`
+
+  return [
+    'econnreset',
+    'econnrefused',
+    'etimedout',
+    'epipe',
+    'fetch failed',
+    'network',
+    'timeout',
+    'temporarily unavailable',
+  ].some(marker => combined.includes(marker))
+}
+
+async function waitForOpenAIRetry(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (delayMs <= 0) return
+  if (signal.aborted) throw new Error('OpenAI request aborted')
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    const onAbort = () => {
+      clearTimeout(timeout)
+      reject(new Error('OpenAI request aborted'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function createOpenAIStreamWithRetry<T>(
+  createStream: () => Promise<T>,
+  params: {
+    apiMode: 'chat-completions' | 'responses'
+    model: string
+    signal: AbortSignal
+  },
+): Promise<T> {
+  const maxRetries = resolveOpenAICreateMaxRetries()
+  let retryNumber = 0
+
+  while (true) {
+    try {
+      return await createStream()
+    } catch (error) {
+      const shouldRetry =
+        !params.signal.aborted &&
+        retryNumber < maxRetries &&
+        isRetryableOpenAICreateError(error)
+      if (!shouldRetry) throw error
+
+      retryNumber++
+      const delayMs = getOpenAIRetryDelayMs(error, retryNumber)
+      logForDebugging(
+        `[OpenAI] Retrying ${params.apiMode} stream create after transient error ` +
+          JSON.stringify({
+            attempt: retryNumber + 1,
+            maxAttempts: maxRetries + 1,
+            model: params.model,
+            status: getOpenAIErrorStatus(error) ?? null,
+            code: getOpenAIErrorStringField(error, 'code') || null,
+            type: getOpenAIErrorStringField(error, 'type') || null,
+            delayMs,
+          }),
+      )
+      await waitForOpenAIRetry(delayMs, params.signal)
+    }
+  }
+}
+
 /**
  * Assemble the final AssistantMessage (and optional max_tokens error) from
  * accumulated stream state. Extracted to avoid duplication between the
@@ -460,17 +626,20 @@ export async function* queryModelOpenAI(
     }
     const adaptedStream = openAIProtocol === 'responses'
       ? adaptOpenAIResponsesStreamToAnthropic(
-          await client.responses.create(
-            buildOpenAIResponsesRequestBody({
-              model: openaiModel,
-              messages: requestMessages,
-              tools: openaiTools,
-              toolChoice: openaiToolChoice,
-              maxTokens,
-              reasoningEffort,
-              temperatureOverride: options.temperatureOverride,
-            }),
-            { signal },
+          await createOpenAIStreamWithRetry(
+            () => client.responses.create(
+              buildOpenAIResponsesRequestBody({
+                model: openaiModel,
+                messages: requestMessages,
+                tools: openaiTools,
+                toolChoice: openaiToolChoice,
+                maxTokens,
+                reasoningEffort,
+                temperatureOverride: options.temperatureOverride,
+              }),
+              { signal },
+            ),
+            { apiMode: 'responses', model: openaiModel, signal },
           ),
           openaiModel,
           {
@@ -479,9 +648,12 @@ export async function* queryModelOpenAI(
           },
         )
       : adaptOpenAIStreamToAnthropic(
-          await client.chat.completions.create(
-            chatRequestBody,
-            { signal },
+          await createOpenAIStreamWithRetry(
+            () => client.chat.completions.create(
+              chatRequestBody,
+              { signal },
+            ),
+            { apiMode: 'chat-completions', model: openaiModel, signal },
           ),
           openaiModel,
           {

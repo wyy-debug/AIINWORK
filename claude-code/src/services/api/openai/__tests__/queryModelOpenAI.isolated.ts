@@ -208,6 +208,10 @@ let _lastSystemPrompt: readonly string[] | null = null
 let _lastAdapterOptions: Record<string, any> | null = null
 let _lastResponsesAdapterOptions: Record<string, any> | null = null
 let _debugLogs: string[] = []
+let _chatCreateErrors: unknown[] = []
+let _responsesCreateErrors: unknown[] = []
+let _chatCreateCallCount = 0
+let _responsesCreateCallCount = 0
 
 beforeEach(() => {
   _toolSearchEnabled = false
@@ -218,6 +222,10 @@ beforeEach(() => {
   _lastAdapterOptions = null
   _lastResponsesAdapterOptions = null
   _debugLogs = []
+  _chatCreateErrors = []
+  _responsesCreateErrors = []
+  _chatCreateCallCount = 0
+  _responsesCreateCallCount = 0
 })
 
 mock.module('@ant/model-provider', () => ({
@@ -279,14 +287,20 @@ mock.module('../client.js', () => ({
     chat: {
       completions: {
         create: async (args: Record<string, any>) => {
+          _chatCreateCallCount++
           _lastCreateArgs = args
+          const error = _chatCreateErrors.shift()
+          if (error) throw error
           return { [Symbol.asyncIterator]: async function* () {} }
         },
       },
     },
     responses: {
       create: async (args: Record<string, any>) => {
+        _responsesCreateCallCount++
         _lastResponsesCreateArgs = args
+        const error = _responsesCreateErrors.shift()
+        if (error) throw error
         return { [Symbol.asyncIterator]: async function* () {} }
       },
     },
@@ -500,6 +514,39 @@ describe('queryModelOpenAI — stop_reason propagation', () => {
     // Safety fallback should yield the partial content
     expect(assistantMessages).toHaveLength(1)
     expect(assistantMessages[0]!.message.stop_reason).toBeNull()
+  })
+})
+
+describe('queryModelOpenAI OpenAI create retry', () => {
+  test('retries transient Responses API create failures before showing an API error', async () => {
+    _responsesCreateErrors = [
+      Object.assign(new Error('openai_error'), {
+        status: 500,
+        code: 'bad_response_status_code',
+        type: 'bad_response_status_code',
+      }),
+    ]
+
+    const { assistantMessages } = await runQueryModel(
+      [
+        makeMessageStart(),
+        makeContentBlockStart(0, 'text'),
+        makeTextDelta(0, 'ok'),
+        makeContentBlockStop(0),
+        makeMessageDelta('end_turn', 3),
+        makeMessageStop(),
+      ],
+      {
+        MTL_CODE_OPENAI_PROTOCOL: 'responses',
+        MTL_CODE_OPENAI_MAX_RETRIES: '1',
+        MTL_CODE_OPENAI_RETRY_BASE_MS: '0',
+      },
+    )
+
+    expect(_responsesCreateCallCount).toBe(2)
+    expect(assistantMessages).toHaveLength(1)
+    expect((assistantMessages[0]!.message.content as any[])[0]?.text).toBe('ok')
+    expect((assistantMessages[0]!.message as any).apiError).toBeUndefined()
   })
 })
 
