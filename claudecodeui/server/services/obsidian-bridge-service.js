@@ -310,7 +310,7 @@ const toPublicConfig = (config) => {
 
 const readStoredConfig = () => {
   try {
-    const raw = configStore.get(CONFIG_KEY);
+    const raw = readStoredConfigRaw();
     if (!raw) {
       return DEFAULT_OBSIDIAN_BRIDGE_CONFIG;
     }
@@ -320,6 +320,14 @@ const readStoredConfig = () => {
       throw error;
     }
     return DEFAULT_OBSIDIAN_BRIDGE_CONFIG;
+  }
+};
+
+const readStoredConfigRaw = () => {
+  try {
+    return configStore.get(CONFIG_KEY) || '';
+  } catch {
+    return '';
   }
 };
 
@@ -489,13 +497,15 @@ const chooseReachableVault = (vaults = [], config = {}) => {
 };
 
 export const repairObsidianBridgeConfigFromReachableVaults = async ({
+  allowDisabledBootstrap = false,
   fetchImpl = globalThis.fetch,
   listVaults = defaultListObsidianVaults,
   readPluginData = defaultReadObsidianBridgePluginData,
   statusTimeoutMs = 1500,
 } = {}) => {
   const current = readObsidianBridgeConfig({ includeToken: true });
-  if (!current.enabled) {
+  const hasStoredBridgeConfig = Boolean(readStoredConfigRaw());
+  if (!current.enabled && !(allowDisabledBootstrap && !hasStoredBridgeConfig)) {
     return null;
   }
 

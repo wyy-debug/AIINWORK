@@ -2,7 +2,10 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 
-import { readObsidianBridgeConfig as defaultReadObsidianBridgeConfig } from './obsidian-bridge-service.js';
+import {
+  readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
+  repairObsidianBridgeConfigFromReachableVaults as defaultEnsureObsidianBridgeReady,
+} from './obsidian-bridge-service.js';
 
 const defaultIngestKnowledgeSourceToWiki = async (...args) => {
   const module = await import('./obsidian-wiki-service.js');
@@ -101,6 +104,7 @@ const summarizeObsidianResult = (result = {}) => {
 
 export const createObsidianInstructionSyncService = ({
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
+  ensureObsidianBridgeReady = defaultEnsureObsidianBridgeReady,
   ingestKnowledgeSourceToWiki = defaultIngestKnowledgeSourceToWiki,
   logger = console,
 } = {}) => {
@@ -221,7 +225,28 @@ export const createObsidianInstructionSyncService = ({
     trigger = '',
     skipIfUnchanged = false,
   } = {}) => {
-    const config = readObsidianBridgeConfig({ includeToken: false });
+    let config = readObsidianBridgeConfig({ includeToken: false });
+    if (!config.enabled && typeof ensureObsidianBridgeReady === 'function') {
+      const repaired = await ensureObsidianBridgeReady({ allowDisabledBootstrap: true }).catch((error) => {
+        logWarn('instruction_bridge_bootstrap_failed', {
+          filePath,
+          projectPath,
+          trigger,
+          error: error?.message || String(error || 'Obsidian bridge bootstrap failed.'),
+        });
+        return null;
+      });
+      if (repaired) {
+        logInfo('instruction_bridge_bootstrap_complete', {
+          filePath,
+          projectPath,
+          trigger,
+          endpoint: readString(repaired.endpoint),
+          vaultName: readString(repaired.vaultName),
+        });
+        config = readObsidianBridgeConfig({ includeToken: false });
+      }
+    }
     if (!config.enabled) {
       logInfo('instruction_sync_skipped', { reason: 'disabled', filePath, projectPath, trigger });
       return { success: true, captured: false, reason: 'disabled' };

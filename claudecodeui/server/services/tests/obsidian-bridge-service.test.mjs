@@ -284,6 +284,82 @@ describe('obsidian bridge service', () => {
     });
   });
 
+  it('bootstraps a missing bridge config from a reachable Obsidian vault', async () => {
+    const listVaults = vi.fn(async () => [
+      {
+        name: 'self',
+        path: 'C:/Users/yckui/Documents/note/self',
+        open: true,
+        bridgeEndpoint: 'http://127.0.0.1:27178',
+        bridgeReachable: true,
+        tokenConfigured: true,
+        readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+        baseFolder: 'Argus',
+        statusPluginVersion: '0.1.3',
+      },
+    ]);
+    const readPluginData = vi.fn(async () => ({
+      endpoint: 'http://127.0.0.1:27178',
+      token: 'new-token',
+      readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+      baseFolder: 'Argus',
+    }));
+
+    const repaired = await service.repairObsidianBridgeConfigFromReachableVaults({
+      allowDisabledBootstrap: true,
+      fetchImpl: vi.fn(),
+      listVaults,
+      readPluginData,
+    });
+
+    expect(repaired).toMatchObject({
+      endpoint: 'http://127.0.0.1:27178',
+      vaultName: 'self',
+      token: 'new-token',
+    });
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:27178',
+      vaultName: 'self',
+      tokenConfigured: true,
+      readableVaultFolders: ['Argus/Wiki', 'Argus/AIMemory', 'Argus/_Indexes'],
+    });
+  });
+
+  it('does not bootstrap when a stored bridge config is explicitly disabled', async () => {
+    service.saveObsidianBridgeConfig({
+      enabled: false,
+      endpoint: 'http://127.0.0.1:27177',
+      token: 'old-token',
+      vaultName: 'self',
+    });
+
+    const repaired = await service.repairObsidianBridgeConfigFromReachableVaults({
+      allowDisabledBootstrap: true,
+      fetchImpl: vi.fn(),
+      listVaults: vi.fn(async () => [
+        {
+          name: 'self',
+          path: 'C:/Users/yckui/Documents/note/self',
+          open: true,
+          bridgeEndpoint: 'http://127.0.0.1:27178',
+          bridgeReachable: true,
+          tokenConfigured: true,
+        },
+      ]),
+      readPluginData: vi.fn(async () => ({
+        endpoint: 'http://127.0.0.1:27178',
+        token: 'new-token',
+      })),
+    });
+
+    expect(repaired).toBeNull();
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      enabled: false,
+      endpoint: 'http://127.0.0.1:27177',
+    });
+  });
+
   it('retries document writes after repairing a stale bridge endpoint', async () => {
     service.saveObsidianBridgeConfig({
       enabled: true,

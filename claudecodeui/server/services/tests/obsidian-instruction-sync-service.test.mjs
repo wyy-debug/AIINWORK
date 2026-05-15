@@ -262,6 +262,47 @@ describe('Obsidian instruction sync service', () => {
     }
   });
 
+  it('bootstraps a reachable bridge before skipping instruction sync as disabled', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'argus-mtl-bootstrap-'));
+    await writeFile(join(projectPath, 'MTL.md'), '# MTL.md\n\nUse Obsidian for project instructions.\n', 'utf8');
+
+    const ingestKnowledgeSourceToWiki = vi.fn(async () => ({
+      success: true,
+      destination: 'obsidian',
+      wikiPath: 'Argus/Wiki/App/mtl-md.md',
+    }));
+    const ensureObsidianBridgeReady = vi.fn(async () => ({ endpoint: 'http://127.0.0.1:27178' }));
+    const readObsidianBridgeConfig = vi
+      .fn()
+      .mockReturnValueOnce({ enabled: false })
+      .mockReturnValue({ enabled: true });
+    const service = createObsidianInstructionSyncService({
+      ingestKnowledgeSourceToWiki,
+      readObsidianBridgeConfig,
+      ensureObsidianBridgeReady,
+    });
+
+    try {
+      const result = await service.syncProjectInstructionFiles({
+        projectPath,
+        projectName: 'App',
+        sessionId: 'session-bootstrap',
+        provider: 'claude',
+        trigger: 'preflight_project_conversation',
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        captured: true,
+        reason: 'project_instruction_scan',
+      });
+      expect(ensureObsidianBridgeReady).toHaveBeenCalledTimes(1);
+      expect(ingestKnowledgeSourceToWiki).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
   it('ensures a project MTL.md exists before a project conversation starts', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'argus-mtl-preflight-'));
     const service = createObsidianInstructionSyncService({
