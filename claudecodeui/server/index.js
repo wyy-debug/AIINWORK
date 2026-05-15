@@ -34,6 +34,10 @@ import {
 } from './services/obsidian-auto-capture-orchestrator.js';
 import { captureObsidianAutoMemory } from './services/obsidian-auto-memory-service.js';
 import {
+    isNativeAutoMemorySyncEnabled,
+    syncNativeMemoryFiles,
+} from './services/obsidian-native-memory-sync-service.js';
+import {
     syncObsidianInstructionFile,
     syncObsidianProjectInstructionFiles,
     ensureObsidianProjectInstructionFile,
@@ -2122,6 +2126,8 @@ class WebSocketWriter {
             autoCaptureTurnMemory: captureObsidianAutoMemory,
             syncInstructionFile: syncObsidianInstructionFile,
             syncProjectInstructionFiles: syncObsidianProjectInstructionFiles,
+            syncNativeMemoryFiles,
+            isNativeAutoMemorySyncEnabled,
             broadcast: (event) => this.send(createObsidianAutoCaptureStatusMessage(event)),
         });
     }

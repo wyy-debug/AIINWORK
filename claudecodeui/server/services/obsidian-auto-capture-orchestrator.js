@@ -77,6 +77,15 @@ const memoryPathFromResult = (result = {}) => {
   return '';
 };
 
+const nativeMemoryPathFromResult = (result = {}) => {
+  const results = Array.isArray(result.results) ? result.results : [];
+  for (const item of results) {
+    const path = item?.obsidianPath || item?.result?.wikiPath || item?.result?.path || item?.result?.obsidianPath;
+    if (path) return path;
+  }
+  return readString(result.obsidianPath || result.wikiPath || result.path);
+};
+
 const instructionPathFromResult = (result = {}) => (
   readString(result.obsidianBridge?.path || result.obsidianBridge?.wikiPath || result.wikiPath || result.path)
 );
@@ -119,6 +128,38 @@ const buildMemoryCaptureBroadcast = (payload = {}, result = {}) => {
     candidateCount: result.candidateCount || 0,
     fallbackCount: result.fallbackCount || 0,
     skippedCount: result.skippedCount || 0,
+    obsidianPath: memoryPath,
+    obsidianPaths: memoryPath ? { aiMemory: memoryPath } : {},
+  });
+};
+
+const buildNativeMemoryCaptureBroadcast = (payload = {}, result = {}) => {
+  const memoryPath = nativeMemoryPathFromResult(result);
+  return buildCaptureBroadcast({
+    ...payload,
+    sourceId: `${payload.sourceId || 'native'}:memory`,
+  }, {
+    ...result,
+    captured: result.captured || Number(result.syncedCount) > 0,
+    mode: 'ai-memory',
+    routingMode: 'ai-memory',
+    routingModes: ['ai-memory'],
+    reason: result.reason || (
+      Number(result.syncedCount) > 0
+        ? 'native_auto_memory_synced'
+        : 'native_auto_memory_unchanged'
+    ),
+    obsidianBridge: memoryPath
+      ? { destination: 'obsidian', path: memoryPath }
+      : undefined,
+  }, {
+    source: 'native-auto-memory',
+    nativeMemoryResult: true,
+    directCount: result.syncedCount || 0,
+    candidateCount: 0,
+    fallbackCount: 0,
+    skippedCount: result.skippedCount || 0,
+    failedCount: result.failedCount || 0,
     obsidianPath: memoryPath,
     obsidianPaths: memoryPath ? { aiMemory: memoryPath } : {},
   });
@@ -173,6 +214,8 @@ export const createObsidianAutoCaptureOrchestrator = ({
   autoCaptureTurnMemory = null,
   syncInstructionFile = null,
   syncProjectInstructionFiles = null,
+  syncNativeMemoryFiles = null,
+  isNativeAutoMemorySyncEnabled = () => false,
   broadcast = () => undefined,
 } = {}) => {
   const contexts = new Map();
@@ -432,7 +475,10 @@ export const createObsidianAutoCaptureOrchestrator = ({
     };
     const result = await autoCaptureChatKnowledge(payload);
     let memoryResult = null;
-    if (typeof autoCaptureTurnMemory === 'function') {
+    if (
+      typeof autoCaptureTurnMemory === 'function'
+      && !isNativeAutoMemorySyncEnabled(payload)
+    ) {
       try {
         memoryResult = await autoCaptureTurnMemory(payload);
       } catch (error) {
@@ -498,6 +544,50 @@ export const createObsidianAutoCaptureOrchestrator = ({
     });
     pendingCaptures.set(bufferKey, capturePromise);
     return capturePromise;
+  };
+
+  const syncNativeMemorySnapshot = async (message = {}) => {
+    if (typeof syncNativeMemoryFiles !== 'function') return null;
+    const context = resolveContext(message);
+    const provider = readString(message.provider || context.provider) || 'claude';
+    const sessionId = readString(message.sessionId || context.sessionId);
+    if (!sessionId || !isNativeAutoMemorySyncEnabled(context)) return null;
+
+    try {
+      const result = await syncNativeMemoryFiles({
+        projectPath: context.projectPath,
+        projectName: context.projectName,
+        sessionId,
+        provider,
+        trigger: 'turn_complete_scan',
+      });
+      if (result?.enabled !== false && (result?.captured || Number(result?.failedCount) > 0)) {
+        broadcast(buildNativeMemoryCaptureBroadcast({
+          provider,
+          sessionId,
+          messageId: readString(message.id) || `native-memory-${Date.now()}`,
+          sourceId: `native-memory:${sessionId || 'no-session'}`,
+        }, result));
+      }
+      return result;
+    } catch (error) {
+      const result = {
+        success: false,
+        enabled: true,
+        captured: false,
+        reason: 'native_auto_memory_error',
+        failedCount: 1,
+        error: error?.message || String(error || 'Native auto-memory sync failed.'),
+      };
+      broadcast(buildNativeMemoryCaptureBroadcast({
+        provider,
+        sessionId,
+        messageId: readString(message.id) || `native-memory-${Date.now()}`,
+        sourceId: `native-memory:${sessionId || 'no-session'}`,
+      }, result));
+      console.warn('[Obsidian Native Memory] Sync failed:', result.error);
+      return result;
+    }
   };
 
   const waitForPendingCapture = async ({ provider = 'claude', sessionId = '', timeoutMs = 1500 } = {}) => {
@@ -584,8 +674,9 @@ export const createObsidianAutoCaptureOrchestrator = ({
       }
       const capturePromise = captureTurn(message);
       const instructionScan = await syncProjectInstructionSnapshot(message);
+      const nativeMemorySync = await syncNativeMemorySnapshot(message);
       const captureResult = await capturePromise;
-      return captureResult || instructionScan;
+      return captureResult || nativeMemorySync || instructionScan;
     }
 
     return null;

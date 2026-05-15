@@ -139,9 +139,11 @@ test('Claude native memory disables bare mode and clears auto-memory blockers', 
   assert.match(source, /readObsidianBridgeConfig\(\{ includeToken: false \}\)/);
   assert.match(source, /function applyObsidianPrimaryMemoryEnv/);
   assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
-  assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.claudeNativeMemoryEnabled\] = '0'/);
-  assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY = '1'/);
-  assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION = '1'/);
+  assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC = '1'/);
+  assert.match(source, /spawnEnv\.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE = resolveNativeMemoryStagingDir/);
+  assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY/);
+  assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION/);
+  assert.doesNotMatch(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.claudeNativeMemoryEnabled\] = '0'[\s\S]{0,300}spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
 });
 
 test('Argus emits prompt injection debug payload from final spawn env and CLI args', async () => {

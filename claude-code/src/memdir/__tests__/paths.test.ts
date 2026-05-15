@@ -5,6 +5,7 @@ import { isAutoMemoryEnabled, isExtractModeActive } from '../paths'
 const savedAutoMemoryExtraction = process.env.MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION
 const savedDisableAutoMemoryExtraction = process.env.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION
 const savedObsidianPrimaryMemory = process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY
+const savedObsidianNativeMemorySync = process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC
 
 afterEach(() => {
   if (savedAutoMemoryExtraction === undefined) {
@@ -21,6 +22,11 @@ afterEach(() => {
     delete process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY
   } else {
     process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = savedObsidianPrimaryMemory
+  }
+  if (savedObsidianNativeMemorySync === undefined) {
+    delete process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC
+  } else {
+    process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC = savedObsidianNativeMemorySync
   }
   setIsInteractive(true)
 })
@@ -52,7 +58,15 @@ describe('isExtractModeActive', () => {
 describe('isAutoMemoryEnabled', () => {
   test('disables native auto-memory when Obsidian is the primary memory backend', () => {
     process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'
+    delete process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC
 
     expect(isAutoMemoryEnabled()).toBe(false)
+  })
+
+  test('keeps native auto-memory enabled when Obsidian sync is taking over writes', () => {
+    process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'
+    process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC = '1'
+
+    expect(isAutoMemoryEnabled()).toBe(true)
   })
 })

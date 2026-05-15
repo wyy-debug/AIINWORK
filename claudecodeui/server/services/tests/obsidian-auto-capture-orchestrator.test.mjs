@@ -188,6 +188,79 @@ describe('Obsidian auto-capture orchestrator', () => {
     });
   });
 
+  it('syncs native auto-memory on turn complete and skips small-model memory capture', async () => {
+    const broadcast = vi.fn();
+    const autoCaptureChatKnowledge = vi.fn(async () => ({
+      success: true,
+      captured: false,
+      reason: 'disabled',
+    }));
+    const autoCaptureTurnMemory = vi.fn();
+    const syncNativeMemoryFiles = vi.fn(async () => ({
+      success: true,
+      enabled: true,
+      captured: true,
+      status: 'synced',
+      reason: 'native_auto_memory_synced',
+      syncedCount: 1,
+      failedCount: 0,
+      results: [{
+        obsidianPath: 'Argus/AIMemory/Feedback/native-style.md',
+      }],
+    }));
+    const orchestrator = createObsidianAutoCaptureOrchestrator({
+      autoCaptureChatKnowledge,
+      autoCaptureTurnMemory,
+      syncNativeMemoryFiles,
+      isNativeAutoMemorySyncEnabled: () => true,
+      broadcast,
+    });
+    orchestrator.setContext({
+      provider: 'claude',
+      sessionId: 'session-native-memory',
+      projectName: 'App',
+      projectPath: 'E:\\repo',
+      userPrompt: '请记住我的风格',
+    });
+
+    await orchestrator.observeMessage({
+      kind: 'text',
+      role: 'assistant',
+      provider: 'claude',
+      sessionId: 'session-native-memory',
+      id: 'assistant-native-memory',
+      content: '我会保留这个偏好。',
+    });
+    await orchestrator.observeMessage({
+      kind: 'complete',
+      provider: 'claude',
+      sessionId: 'session-native-memory',
+      id: 'complete-native-memory',
+    });
+
+    expect(autoCaptureChatKnowledge).toHaveBeenCalledTimes(1);
+    expect(autoCaptureTurnMemory).not.toHaveBeenCalled();
+    expect(syncNativeMemoryFiles).toHaveBeenCalledWith(expect.objectContaining({
+      projectPath: 'E:\\repo',
+      projectName: 'App',
+      sessionId: 'session-native-memory',
+      provider: 'claude',
+      trigger: 'turn_complete_scan',
+    }));
+    expect(broadcast).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'obsidian_auto_capture_result',
+      source: 'native-auto-memory',
+      nativeMemoryResult: true,
+      captured: true,
+      status: 'synced',
+      mode: 'ai-memory',
+      routingMode: 'ai-memory',
+      reason: 'native_auto_memory_synced',
+      directCount: 1,
+      obsidianPath: 'Argus/AIMemory/Feedback/native-style.md',
+    }));
+  });
+
   it('syncs project MTL.md after a successful native Write tool result', async () => {
     const broadcast = vi.fn();
     const autoCaptureChatKnowledge = vi.fn();

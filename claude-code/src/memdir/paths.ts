@@ -28,7 +28,10 @@ import {
  *   5. Default: enabled
  */
 export function isAutoMemoryEnabled(): boolean {
-  if (isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY)) {
+  if (
+    isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY) &&
+    !isObsidianNativeMemorySyncEnabled()
+  ) {
     return false
   }
   const envVal = process.env.MTL_CODE_DISABLE_AUTO_MEMORY
@@ -55,6 +58,17 @@ export function isAutoMemoryEnabled(): boolean {
     return settings.autoMemoryEnabled
   }
   return true
+}
+
+/**
+ * Obsidian-primary memory can still keep Claude Code's native extractor
+ * running when Argus owns readback and syncs the resulting topic files.
+ */
+export function isObsidianNativeMemorySyncEnabled(): boolean {
+  return (
+    isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY) &&
+    isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC)
+  )
 }
 
 /**
