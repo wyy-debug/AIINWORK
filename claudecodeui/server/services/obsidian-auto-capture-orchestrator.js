@@ -39,7 +39,7 @@ const statusForResult = (result = {}) => {
   return result.mode === 'ai-memory' ? 'synced' : 'captured';
 };
 
-const buildCaptureBroadcast = (payload = {}, result = {}) => ({
+const buildCaptureBroadcast = (payload = {}, result = {}, extra = {}) => ({
   event: OBSIDIAN_CAPTURE_EVENT,
   provider: payload.provider || '',
   sessionId: payload.sessionId || '',
@@ -60,7 +60,65 @@ const buildCaptureBroadcast = (payload = {}, result = {}) => ({
   obsidianPaths: result.artifact?.metadata?.obsidianPaths || {},
   fallbackPath: result.obsidianBridge?.fallbackPath || '',
   error: result.error || result.obsidianBridge?.error || '',
+  ...extra,
 });
+
+const memoryPathFromResult = (result = {}) => {
+  const written = Array.isArray(result.written) ? result.written : [];
+  for (const item of written) {
+    const path = item?.result?.wikiPath || item?.result?.path || item?.result?.obsidianPath;
+    if (path) return path;
+  }
+  const fallbacks = Array.isArray(result.fallbacks) ? result.fallbacks : [];
+  for (const item of fallbacks) {
+    const path = item?.fallback?.path || item?.path;
+    if (path) return path;
+  }
+  return '';
+};
+
+const shouldBroadcastKnowledgeResult = (result = {}, memoryResult = null) => {
+  if (result.captured) return true;
+  if (!memoryResult?.captured) return true;
+  return result.reason !== 'disabled';
+};
+
+const shouldBroadcastMemoryResult = (result = null) => (
+  Boolean(result)
+  && (
+    result.captured
+    || result.status === 'candidate'
+    || result.status === 'fallback'
+    || result.reason === 'auto_memory_error'
+  )
+);
+
+const buildMemoryCaptureBroadcast = (payload = {}, result = {}) => {
+  const memoryPath = memoryPathFromResult(result);
+  return buildCaptureBroadcast({
+    ...payload,
+    sourceId: `${payload.sourceId || 'chat'}:memory`,
+  }, {
+    ...result,
+    mode: 'ai-memory',
+    routingMode: 'ai-memory',
+    routingModes: ['ai-memory'],
+    obsidianBridge: result.obsidianBridge || (
+      memoryPath
+        ? { destination: result.status === 'fallback' ? 'fallback' : 'obsidian', path: memoryPath }
+        : undefined
+    ),
+  }, {
+    source: 'auto-memory',
+    memoryResult: true,
+    directCount: result.directCount || 0,
+    candidateCount: result.candidateCount || 0,
+    fallbackCount: result.fallbackCount || 0,
+    skippedCount: result.skippedCount || 0,
+    obsidianPath: memoryPath,
+    obsidianPaths: memoryPath ? { aiMemory: memoryPath } : {},
+  });
+};
 
 export const createObsidianAutoCaptureOrchestrator = ({
   autoCaptureChatKnowledge = defaultAutoCaptureChatKnowledge,
@@ -212,7 +270,12 @@ export const createObsidianAutoCaptureOrchestrator = ({
       }
     }
     capturedTextKeys.add(key);
-    broadcast(buildCaptureBroadcast(payload, result));
+    if (shouldBroadcastKnowledgeResult(result, memoryResult)) {
+      broadcast(buildCaptureBroadcast(payload, result));
+    }
+    if (shouldBroadcastMemoryResult(memoryResult)) {
+      broadcast(buildMemoryCaptureBroadcast(payload, memoryResult));
+    }
     return memoryResult ? { ...result, memoryResult } : result;
   };
 

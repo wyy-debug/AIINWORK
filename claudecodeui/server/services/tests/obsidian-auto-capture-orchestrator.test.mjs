@@ -121,6 +121,73 @@ describe('Obsidian auto-capture orchestrator', () => {
     });
   });
 
+  it('broadcasts Obsidian AIMemory results independently from disabled Wiki capture', async () => {
+    const broadcast = vi.fn();
+    const autoCaptureChatKnowledge = vi.fn(async () => ({
+      success: true,
+      captured: false,
+      reason: 'disabled',
+    }));
+    const autoCaptureTurnMemory = vi.fn(async () => ({
+      success: true,
+      captured: true,
+      status: 'captured',
+      reason: 'auto_memory',
+      directCount: 1,
+      candidateCount: 0,
+      fallbackCount: 0,
+      written: [{
+        result: {
+          wikiPath: 'Argus/AIMemory/Feedback/final-answer-style.md',
+        },
+      }],
+    }));
+    const orchestrator = createObsidianAutoCaptureOrchestrator({
+      autoCaptureChatKnowledge,
+      autoCaptureTurnMemory,
+      broadcast,
+    });
+    orchestrator.setContext({
+      provider: 'claude',
+      sessionId: 'session-memory-broadcast',
+      projectName: 'App',
+      userPrompt: '记住：以后最终结论要简洁。',
+    });
+
+    await orchestrator.observeMessage({
+      kind: 'text',
+      role: 'assistant',
+      provider: 'claude',
+      sessionId: 'session-memory-broadcast',
+      id: 'assistant-memory',
+      content: '好的，我会按这个偏好处理。',
+    });
+    await orchestrator.observeMessage({
+      kind: 'complete',
+      provider: 'claude',
+      sessionId: 'session-memory-broadcast',
+      id: 'complete-memory',
+    });
+
+    expect(autoCaptureTurnMemory).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcast.mock.calls[0][0]).toMatchObject({
+      event: 'obsidian_auto_capture_result',
+      source: 'auto-memory',
+      memoryResult: true,
+      captured: true,
+      status: 'synced',
+      mode: 'ai-memory',
+      routingMode: 'ai-memory',
+      reason: 'auto_memory',
+      directCount: 1,
+      obsidianPath: 'Argus/AIMemory/Feedback/final-answer-style.md',
+      obsidianPaths: {
+        aiMemory: 'Argus/AIMemory/Feedback/final-answer-style.md',
+      },
+    });
+  });
+
   it('drops pending assistant content when the turn is aborted or failed', async () => {
     const autoCaptureChatKnowledge = vi.fn();
     const orchestrator = createObsidianAutoCaptureOrchestrator({

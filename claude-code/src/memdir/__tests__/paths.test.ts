@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { setIsInteractive } from '../../bootstrap/state'
-import { isExtractModeActive } from '../paths'
+import { isAutoMemoryEnabled, isExtractModeActive } from '../paths'
 
 const savedAutoMemoryExtraction = process.env.MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION
 const savedDisableAutoMemoryExtraction = process.env.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION
+const savedObsidianPrimaryMemory = process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY
 
 afterEach(() => {
   if (savedAutoMemoryExtraction === undefined) {
@@ -15,6 +16,11 @@ afterEach(() => {
     delete process.env.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION
   } else {
     process.env.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION = savedDisableAutoMemoryExtraction
+  }
+  if (savedObsidianPrimaryMemory === undefined) {
+    delete process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY
+  } else {
+    process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = savedObsidianPrimaryMemory
   }
   setIsInteractive(true)
 })
@@ -40,5 +46,13 @@ describe('isExtractModeActive', () => {
     setIsInteractive(false)
 
     expect(isExtractModeActive()).toBe(false)
+  })
+})
+
+describe('isAutoMemoryEnabled', () => {
+  test('disables native auto-memory when Obsidian is the primary memory backend', () => {
+    process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'
+
+    expect(isAutoMemoryEnabled()).toBe(false)
   })
 })

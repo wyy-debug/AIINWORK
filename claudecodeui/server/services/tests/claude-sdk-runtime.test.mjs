@@ -139,6 +139,8 @@ test('Claude native memory disables bare mode and clears auto-memory blockers', 
   assert.match(source, /readObsidianBridgeConfig\(\{ includeToken: false \}\)/);
   assert.match(source, /function applyObsidianPrimaryMemoryEnv/);
   assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
+  assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.claudeNativeMemoryEnabled\] = '0'/);
+  assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY = '1'/);
   assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION = '1'/);
 });
 

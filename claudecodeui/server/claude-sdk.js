@@ -588,6 +588,8 @@ function applyObsidianPrimaryMemoryEnv(spawnEnv) {
   }
 
   spawnEnv.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1';
+  spawnEnv[MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled] = '0';
+  spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY = '1';
   spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION = '1';
   delete spawnEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled];
 }

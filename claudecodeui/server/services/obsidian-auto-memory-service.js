@@ -14,6 +14,10 @@ const defaultIngestKnowledgeSourceToWiki = async (...args) => {
 
 const AUTO_MEMORY_SOURCE = 'auto-memory';
 const ALLOWED_MEMORY_TYPES = new Set(['user', 'feedback', 'project', 'reference']);
+const FUTURE_PREFERENCE_RE = '(?:以后|后续|接下来)(?:请|回答|回复|最终|结论|都|要|不要|别|在|如果|遇到|看到)';
+const EXPLICIT_MEMORY_PREFIX_RE = new RegExp(`^(?:记住|请记住|帮我记住|你要记住|${FUTURE_PREFERENCE_RE}|从现在起|remember(?:\\s+that)?|please\\s+remember|from\\s+now\\s+on|going\\s+forward)[\\s:：,，-]*`, 'i');
+const EXPLICIT_MEMORY_SIGNAL_RE = new RegExp(`(?:记住|请记住|帮我记住|你要记住|${FUTURE_PREFERENCE_RE}|从现在起|remember(?:\\s+that)?|please\\s+remember|from\\s+now\\s+on|going\\s+forward)`, 'i');
+const URL_RE = /\bhttps?:\/\/\S+/i;
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 const normalizeWhitespace = (value = '') => readString(value).replace(/\s+/g, ' ');
@@ -116,6 +120,41 @@ const memoriesFromJson = (json = {}, payload = {}) => {
       ? json.memory
       : [];
   return raw.map((entry) => normalizeMemory(entry, payload)).filter(Boolean);
+};
+
+const classifyExplicitMemory = (text = '') => {
+  if (URL_RE.test(text)) return 'reference';
+  if (/(?:我是|我叫|我的角色|我的职业|我负责|my role|i am|i work as|i maintain)/i.test(text)) {
+    return 'user';
+  }
+  if (/(?:项目|需求|截止|上线|发布|里程碑|业务|project|deadline|launch|release|milestone)/i.test(text)) {
+    return 'project';
+  }
+  return 'feedback';
+};
+
+const explicitMemoriesFromPayload = (payload = {}) => {
+  const prompt = normalizeWhitespace(payload.previousUserPrompt || payload.userPrompt);
+  if (!prompt || !EXPLICIT_MEMORY_SIGNAL_RE.test(prompt)) {
+    return [];
+  }
+  if (isInitCommand(payload)) {
+    return [];
+  }
+
+  const withoutPrefix = normalizeWhitespace(prompt.replace(EXPLICIT_MEMORY_PREFIX_RE, ''));
+  const text = withoutPrefix || prompt;
+  if (text.length < 4) {
+    return [];
+  }
+
+  const type = classifyExplicitMemory(text);
+  return [normalizeMemory({
+    type,
+    title: text.slice(0, 72),
+    text,
+    confidence: 0.92,
+  }, payload)].filter(Boolean);
 };
 
 const buildExtractionPrompt = (payload = {}) => JSON.stringify({
@@ -246,7 +285,14 @@ export const createObsidianAutoMemoryService = ({
       ].join('\n'),
       userPrompt: buildExtractionPrompt(payload),
     });
-    if (!extraction.success) {
+    let memories = [];
+    if (extraction.success) {
+      memories = memoriesFromJson(extraction.json, payload);
+    }
+    if (memories.length === 0) {
+      memories = explicitMemoriesFromPayload(payload);
+    }
+    if (!extraction.success && memories.length === 0) {
       return {
         success: true,
         captured: false,
@@ -254,7 +300,6 @@ export const createObsidianAutoMemoryService = ({
       };
     }
 
-    const memories = memoriesFromJson(extraction.json, payload);
     if (memories.length === 0) {
       return { success: true, captured: false, reason: 'no_memory' };
     }

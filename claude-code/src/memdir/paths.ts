@@ -28,6 +28,9 @@ import {
  *   5. Default: enabled
  */
 export function isAutoMemoryEnabled(): boolean {
+  if (isEnvTruthy(process.env.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY)) {
+    return false
+  }
   const envVal = process.env.MTL_CODE_DISABLE_AUTO_MEMORY
   if (isEnvTruthy(envVal)) {
     return false
