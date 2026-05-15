@@ -23,6 +23,8 @@ export function unescapeWithMathProtection(text: string) {
   const mathBlocks: string[] = [];
   const placeholderPrefix = '__MATH_BLOCK_';
   const placeholderSuffix = '__';
+  const windowsPathBlocks: string[] = [];
+  const windowsPathPlaceholderPrefix = '__WINDOWS_PATH_BLOCK_';
 
   let processedText = text.replace(/\$\$([\s\S]*?)\$\$|\$([^\$\n]+?)\$/g, (match) => {
     const index = mathBlocks.length;
@@ -30,12 +32,27 @@ export function unescapeWithMathProtection(text: string) {
     return `${placeholderPrefix}${index}${placeholderSuffix}`;
   });
 
-  processedText = processedText.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
+  // Preserve whitespace-delimited Windows paths like `C:\repo\release`
+  // and `D:\SOC\trunk\Assets` before decoding escaped newlines.
+  processedText = processedText.replace(/\b[A-Za-z]:(?:\\|\/)[^\s]+/g, (match) => {
+    const index = windowsPathBlocks.length;
+    windowsPathBlocks.push(match);
+    return `${windowsPathPlaceholderPrefix}${index}${placeholderSuffix}`;
+  });
+
+  processedText = processedText.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
 
   processedText = processedText.replace(
     new RegExp(`${placeholderPrefix}(\\d+)${placeholderSuffix}`, 'g'),
     (match, index) => {
       return mathBlocks[parseInt(index, 10)];
+    },
+  );
+
+  processedText = processedText.replace(
+    new RegExp(`${windowsPathPlaceholderPrefix}(\\d+)${placeholderSuffix}`, 'g'),
+    (match, index) => {
+      return windowsPathBlocks[parseInt(index, 10)];
     },
   );
 

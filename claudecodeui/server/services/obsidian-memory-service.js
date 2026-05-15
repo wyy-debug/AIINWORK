@@ -21,6 +21,8 @@ const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 
 export const OBSIDIAN_MEMORY_KINDS = Object.freeze([
   'fact',
+  'user',
+  'feedback',
   'preference',
   'decision',
   'person',
@@ -60,7 +62,7 @@ const writeCandidates = (candidates) => {
 
 const inferKindAndText = (line = '') => {
   const text = normalizeText(line);
-  const match = text.match(/^(preference|pref|decision|fact|person|project|technology)\s*[:：-]\s*(.+)$/i);
+  const match = text.match(/^(user|feedback|preference|pref|decision|fact|person|project|technology)\s*[:：-]\s*(.+)$/i);
   if (!match) {
     return { kind: 'fact', text };
   }
@@ -70,7 +72,7 @@ const inferKindAndText = (line = '') => {
 
 const inferObsidianMemoryKindAndText = (line = '') => {
   const text = normalizeText(line);
-  const match = text.match(/^(preference|pref|decision|fact|person|project|technology|reference|ref|forget)\s*[:：]\s*(.+)$/i);
+  const match = text.match(/^(user|feedback|preference|pref|decision|fact|person|project|technology|reference|ref|forget)\s*[:：]\s*(.+)$/i);
   if (!match) {
     return inferKindAndText(line);
   }

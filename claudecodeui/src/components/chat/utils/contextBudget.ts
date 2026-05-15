@@ -24,6 +24,8 @@ export type ContextBudget = {
   updatedAt: string;
 };
 
+const CURRENT_CONTEXT_INACCURATE_SOURCES = new Set(['legacy', 'cumulative_only']);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -56,9 +58,32 @@ function normalizeSection(value: unknown, fallbackTotal = 0): ContextBudgetSecti
 }
 
 export function hasAccurateCurrentContextBudget(budget: ContextBudget | null | undefined): boolean {
-  return budget?.window.source !== undefined
-    && budget.window.source !== 'legacy'
-    && budget.window.source !== 'cumulative_only';
+  if (!budget) {
+    return false;
+  }
+  return !CURRENT_CONTEXT_INACCURATE_SOURCES.has(budget.window.source);
+}
+
+function shouldDowngradeCurrentContext(section: ContextBudgetSection, windowTokens: number): boolean {
+  if (windowTokens <= 0) {
+    return false;
+  }
+  if (section.used > windowTokens) {
+    return true;
+  }
+  if (section.total > windowTokens) {
+    return true;
+  }
+  return section.percent > 100.5;
+}
+
+function zeroCurrentSection(total: number): ContextBudgetSection {
+  return {
+    used: 0,
+    total,
+    percent: 0,
+    breakdown: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+  };
 }
 
 export function normalizeContextBudget(value: unknown): ContextBudget | null {
@@ -68,17 +93,24 @@ export function normalizeContextBudget(value: unknown): ContextBudget | null {
 
   if (isRecord(envelope) && isRecord(envelope.current) && isRecord(envelope.cumulative)) {
     const windowData = isRecord(envelope.window) ? envelope.window : {};
-    const tokens = readNumber(windowData.tokens, readNumber(envelope.current.total, 0));
+    const tokens = readNumber(
+      windowData.tokens,
+      Math.max(readNumber(envelope.current.total, 0), readNumber(envelope.cumulative.total, 0)),
+    );
+    const current = normalizeSection(envelope.current, tokens);
+    const cumulative = normalizeSection(envelope.cumulative, tokens);
+    const rawSource = typeof windowData.source === 'string' && windowData.source.trim() ? windowData.source : 'unknown';
+    const downgradeCurrent = shouldDowngradeCurrentContext(current, tokens);
     return {
-      current: normalizeSection(envelope.current, tokens),
-      cumulative: normalizeSection(envelope.cumulative, tokens),
+      current: downgradeCurrent ? zeroCurrentSection(tokens) : current,
+      cumulative,
       window: {
         tokens,
         model: typeof windowData.model === 'string' && windowData.model.trim() ? windowData.model : null,
         modelProfileId: typeof windowData.modelProfileId === 'string' && windowData.modelProfileId.trim()
           ? windowData.modelProfileId
           : null,
-        source: typeof windowData.source === 'string' && windowData.source.trim() ? windowData.source : 'unknown',
+        source: downgradeCurrent ? 'cumulative_only' : rawSource,
       },
       updatedAt: typeof envelope.updatedAt === 'string' ? envelope.updatedAt : new Date().toISOString(),
     };
@@ -103,12 +135,7 @@ export function normalizeContextBudget(value: unknown): ContextBudget | null {
   };
 
   return {
-    current: {
-      used: 0,
-      total,
-      percent: 0,
-      breakdown: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
-    },
+    current: zeroCurrentSection(total),
     cumulative,
     window: {
       tokens: total,

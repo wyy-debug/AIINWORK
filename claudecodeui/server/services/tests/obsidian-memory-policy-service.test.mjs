@@ -168,6 +168,8 @@ describe('obsidian wiki policy service', () => {
     expect(claude.command).toBe('Continue.');
     expect(claude.options.appendSystemPrompt).toContain('Existing prompt.');
     expect(claude.options.appendSystemPrompt).toContain('Obsidian Wiki Policy');
+    expect(claude.options.appendSystemPrompt).toContain('Obsidian is the primary AI memory store');
+    expect(claude.options.appendSystemPrompt).not.toContain('not the Claude native personal memory store');
     expect(claude.options.appendSystemPrompt).not.toContain('only long-term memory store');
 
     const codex = service.applyObsidianWikiPolicyPromptToChatCommand({

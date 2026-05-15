@@ -32,6 +32,7 @@ import {
     createObsidianAutoCaptureOrchestrator,
     createObsidianAutoCaptureStatusMessage,
 } from './services/obsidian-auto-capture-orchestrator.js';
+import { captureObsidianAutoMemory } from './services/obsidian-auto-memory-service.js';
 import { runObsidianAutoCaptureBackfill } from './services/obsidian-auto-capture-backfill-service.js';
 import { readObsidianBridgeConfig } from './services/obsidian-bridge-service.js';
 import { ingestUploadedFilesToObsidian } from './services/obsidian-wiki-service.js';
@@ -2113,6 +2114,7 @@ class WebSocketWriter {
         this.isWebSocketWriter = true;  // Marker for transport detection
         this.pendingAutoCaptureContext = null;
         this.autoCapture = createObsidianAutoCaptureOrchestrator({
+            autoCaptureTurnMemory: captureObsidianAutoMemory,
             broadcast: (event) => this.send(createObsidianAutoCaptureStatusMessage(event)),
         });
     }

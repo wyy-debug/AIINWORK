@@ -351,6 +351,7 @@ export interface PromptInjectionDebugPayload {
   codexStylePlanMode?: boolean;
   coordinatorMode?: boolean;
   claudeNativeMemoryEnabled?: boolean;
+  autoMemoryExtractionEnabled?: boolean;
   bareMode?: boolean;
   cli?: {
     hasBareFlag?: boolean;

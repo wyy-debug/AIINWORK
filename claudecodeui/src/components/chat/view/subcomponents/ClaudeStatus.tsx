@@ -95,7 +95,7 @@ export default function ClaudeStatus({
   const visibleTodoItems = todoItems.slice(0, 4);
   const hasTodoItems = visibleTodoItems.length > 0;
   const genericLoadingState = isLoading && Boolean(STATUS_ACTION_KEY_BY_TEXT[normalizedStatusText]);
-  const showCompactProcessingLamp = hasTodoItems && genericLoadingState;
+  const showCompactProcessingLamp = genericLoadingState;
 
   const renderTodoIndicator = (itemStatus: 'completed' | 'in_progress' | 'pending') => {
     if (itemStatus === 'completed') {
@@ -118,7 +118,7 @@ export default function ClaudeStatus({
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/10">
             <SessionProviderLogo provider={provider} className="h-3.5 w-3.5" />
-            {isLoading && (
+            {isLoading && !showCompactProcessingLamp && (
               <span className="absolute inset-0 animate-pulse rounded-full ring-2 ring-emerald-500/20" />
             )}
           </div>
@@ -127,18 +127,18 @@ export default function ClaudeStatus({
             <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
               {providerLabel}
             </span>
-            <div className="flex items-center gap-1.5">
-              <span className={cn('relative flex h-2.5 w-2.5 items-center justify-center rounded-full', isLoading ? 'bg-emerald-500/20' : 'bg-amber-500/20')}>
-                {isLoading && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />}
-                <span className={cn('relative h-1.5 w-1.5 rounded-full', isLoading ? 'bg-emerald-500' : 'bg-amber-500')} />
-              </span>
-              {!showCompactProcessingLamp && (
+            {!showCompactProcessingLamp && (
+              <div className="flex items-center gap-1.5">
+                <span className={cn('relative flex h-2.5 w-2.5 items-center justify-center rounded-full', isLoading ? 'bg-emerald-500/20' : 'bg-amber-500/20')}>
+                  {isLoading && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />}
+                  <span className={cn('relative h-1.5 w-1.5 rounded-full', isLoading ? 'bg-emerald-500' : 'bg-amber-500')} />
+                </span>
                 <p className="truncate text-xs font-medium text-foreground">
                   {statusText}
                   <span className="inline-block w-4 text-primary">{isLoading ? dots : ''}</span>
                 </p>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
 

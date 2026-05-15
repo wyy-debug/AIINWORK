@@ -156,6 +156,7 @@ export default function PromptInjectionDebugPanel({
             <DebugField label="plan mode" value={formatBoolean(payload?.codexStylePlanMode)} />
             <DebugField label="coordinator" value={formatBoolean(payload?.coordinatorMode)} />
             <DebugField label="native memory" value={formatBoolean(payload?.claudeNativeMemoryEnabled)} />
+            <DebugField label="auto memory" value={formatBoolean(payload?.autoMemoryExtractionEnabled)} />
             <DebugField label="bare env" value={formatBoolean(payload?.bareMode)} />
             <DebugField label="--bare" value={formatBoolean(payload?.cli?.hasBareFlag)} />
             <DebugField label="--append" value={formatBoolean(payload?.cli?.hasAppendSystemPromptFlag)} />

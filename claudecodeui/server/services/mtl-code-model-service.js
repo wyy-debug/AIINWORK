@@ -32,6 +32,7 @@ export const OPENAI_MODEL_ENV_KEYS = {
 export const MTL_CODE_MODEL_ENV_KEYS = {
   uiBareMode: 'MTL_CODE_UI_BARE',
   claudeNativeMemoryEnabled: 'MTL_CODE_CLAUDE_NATIVE_MEMORY',
+  autoMemoryExtractionEnabled: 'MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION',
   maxContextTokens: 'MTL_CODE_MAX_CONTEXT_TOKENS',
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
@@ -814,6 +815,9 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.coordinatorMode]: coordinatorModeEnabled ? '1' : '0',
   };
+  if (claudeNativeMemoryEnabled) {
+    runtimeEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled] = '1';
+  }
   if (usesOpenAI) {
     runtimeEnv[OPENAI_MODEL_ENV_KEYS.baseUrl] = normalizedBaseUrl;
     runtimeEnv[OPENAI_MODEL_ENV_KEYS.model] = requestModel;

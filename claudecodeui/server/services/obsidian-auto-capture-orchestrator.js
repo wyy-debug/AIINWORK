@@ -64,6 +64,7 @@ const buildCaptureBroadcast = (payload = {}, result = {}) => ({
 
 export const createObsidianAutoCaptureOrchestrator = ({
   autoCaptureChatKnowledge = defaultAutoCaptureChatKnowledge,
+  autoCaptureTurnMemory = null,
   broadcast = () => undefined,
 } = {}) => {
   const contexts = new Map();
@@ -196,9 +197,23 @@ export const createObsidianAutoCaptureOrchestrator = ({
       timestamp: message.timestamp || new Date().toISOString(),
     };
     const result = await autoCaptureChatKnowledge(payload);
+    let memoryResult = null;
+    if (typeof autoCaptureTurnMemory === 'function') {
+      try {
+        memoryResult = await autoCaptureTurnMemory(payload);
+      } catch (error) {
+        memoryResult = {
+          success: false,
+          captured: false,
+          reason: 'auto_memory_error',
+          error: error?.message || String(error || 'Auto memory failed.'),
+        };
+        console.warn('[Obsidian Memory] Auto-memory capture failed:', memoryResult.error);
+      }
+    }
     capturedTextKeys.add(key);
     broadcast(buildCaptureBroadcast(payload, result));
-    return result;
+    return memoryResult ? { ...result, memoryResult } : result;
   };
 
   const captureTurn = async (message = {}, options = {}) => {

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('obsidian bridge installer service', () => {
   let service;
@@ -37,6 +37,93 @@ describe('obsidian bridge installer service', () => {
         pluginVersion: '0.1.0',
       }),
     ]);
+  });
+
+  it('reads plugin bridge data, checks reachability, and never exposes the token', async () => {
+    const vaultPath = join(tempRoot, 'Reachable Vault');
+    await mkdir(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge'), { recursive: true });
+    await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'manifest.json'), '{"version":"0.1.3"}', 'utf8');
+    await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'data.json'), JSON.stringify({
+      port: 27178,
+      token: 'secret-token',
+      baseFolder: 'Argus',
+      readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+    }), 'utf8');
+    const configPath = join(tempRoot, 'obsidian.json');
+    await writeFile(configPath, JSON.stringify({
+      vaults: {
+        reachable: {
+          path: vaultPath,
+          name: 'Reachable Vault',
+          open: true,
+        },
+      },
+    }), 'utf8');
+    const fetchImpl = vi.fn(async (url, options) => {
+      expect(url).toBe('http://127.0.0.1:27178/argus/v1/status');
+      expect(options.headers.Authorization).toBe('Bearer secret-token');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          vaultName: 'Reachable Vault',
+          pluginVersion: '0.1.3',
+        }),
+      };
+    });
+
+    const vaults = await service.listObsidianVaults({
+      obsidianConfigPath: configPath,
+      fetchImpl,
+    });
+
+    expect(vaults).toEqual([
+      expect.objectContaining({
+        name: 'Reachable Vault',
+        bridgeEndpoint: 'http://127.0.0.1:27178',
+        bridgePort: 27178,
+        tokenConfigured: true,
+        bridgeReachable: true,
+        statusVaultName: 'Reachable Vault',
+        readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+      }),
+    ]);
+    expect(vaults[0]).not.toHaveProperty('token');
+  });
+
+  it('still extracts port and token from legacy plugin data with malformed recent write JSON', async () => {
+    const vaultPath = join(tempRoot, 'Legacy Vault');
+    await mkdir(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge'), { recursive: true });
+    await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'manifest.json'), '{"version":"0.1.0"}', 'utf8');
+    await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'data.json'), [
+      '{',
+      '  "port": 27179,',
+      '  "token": "legacy-token",',
+      '  "baseFolder": "Argus",',
+      '  "recentWrites": [{ "routingReason": "broken',
+      'newline" }]',
+      '}',
+    ].join('\n'), 'utf8');
+    const configPath = join(tempRoot, 'obsidian.json');
+    await writeFile(configPath, JSON.stringify({
+      vaults: {
+        legacy: {
+          path: vaultPath,
+          name: 'Legacy Vault',
+        },
+      },
+    }), 'utf8');
+
+    const vaults = await service.listObsidianVaults({ obsidianConfigPath: configPath });
+
+    expect(vaults[0]).toMatchObject({
+      bridgeEndpoint: 'http://127.0.0.1:27179',
+      bridgePort: 27179,
+      tokenConfigured: true,
+      bridgeReachable: null,
+    });
+    expect(vaults[0]).not.toHaveProperty('token');
   });
 
   it('installs the bundled plugin files, token, and community plugin entry into a vault', async () => {

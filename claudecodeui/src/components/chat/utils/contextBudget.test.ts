@@ -47,4 +47,35 @@ describe('normalizeContextBudget', () => {
     expect(budget?.current.used).toBe(0);
     expect(budget?.cumulative.used).toBe(298_400);
   });
+
+  it('downgrades impossible current-context values to cumulative-only display', () => {
+    const budget = normalizeContextBudget({
+      contextBudget: {
+        current: {
+          used: 416_100,
+          total: 200_000,
+          percent: 208.05,
+          breakdown: { input: 416_100, output: 0, cacheRead: 0, cacheCreation: 0 },
+        },
+        cumulative: {
+          used: 416_100,
+          total: 200_000,
+          percent: 208.05,
+          breakdown: { input: 416_100, output: 0, cacheRead: 0, cacheCreation: 0 },
+        },
+        window: {
+          tokens: 200_000,
+          model: 'gpt-5',
+          modelProfileId: 'gpt5-prod',
+          source: 'session_profile',
+        },
+        updatedAt: '2026-05-14T00:00:00.000Z',
+      },
+    });
+
+    expect(budget?.window.source).toBe('cumulative_only');
+    expect(budget?.current.used).toBe(0);
+    expect(budget?.current.percent).toBe(0);
+    expect(budget?.cumulative.used).toBe(416_100);
+  });
 });

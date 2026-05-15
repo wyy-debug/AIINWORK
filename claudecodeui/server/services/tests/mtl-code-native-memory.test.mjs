@@ -31,6 +31,7 @@ describe('MTL-Code native memory runtime settings', () => {
       const runtime = await service.resolveMtlCodeModelRuntime('main', { MTL_CODE_CONFIG_DIR: dir });
       expect(runtime.env.MTL_CODE_CLAUDE_NATIVE_MEMORY).toBe('1');
       expect(runtime.env.MTL_CODE_UI_BARE).toBe('0');
+      expect(runtime.env.MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION).toBe('1');
       expect(runtime.profile).toMatchObject({
         claudeNativeMemoryEnabled: true,
         bareMode: false,
@@ -60,6 +61,7 @@ describe('MTL-Code native memory runtime settings', () => {
       const runtime = await service.resolveMtlCodeModelRuntime('main', { MTL_CODE_CONFIG_DIR: dir });
       expect(runtime.env.MTL_CODE_CLAUDE_NATIVE_MEMORY).toBe('0');
       expect(runtime.env.MTL_CODE_UI_BARE).toBe('1');
+      expect(runtime.env.MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION).toBeUndefined();
       expect(runtime.profile).toMatchObject({
         claudeNativeMemoryEnabled: false,
         bareMode: true,

@@ -25,6 +25,7 @@ import {
   DEFAULT_OBSIDIAN_BRIDGE_ENDPOINT,
   installObsidianBridgePlugin,
   listObsidianVaults,
+  readObsidianBridgePluginData,
 } from '../services/obsidian-bridge-installer-service.js';
 import { createKnowledgeDocument } from '../services/knowledge-document-service.js';
 import {
@@ -317,10 +318,71 @@ router.post('/test-connection', async (_req, res) => {
 
 router.get('/vaults', async (_req, res) => {
   try {
-    const vaults = await listObsidianVaults();
+    const vaults = await listObsidianVaults({
+      fetchImpl: globalThis.fetch,
+    });
     res.json({ success: true, vaults });
   } catch (error) {
     sendBridgeError(res, error, 'Failed to discover Obsidian vaults');
+  }
+});
+
+const normalizeVaultId = (value = '') => (
+  String(value || 'default')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'default'
+);
+
+router.post('/select-vault', async (req, res) => {
+  try {
+    const vaultPath = String(req.body?.vaultPath || '').trim();
+    if (!vaultPath) {
+      return res.status(400).json({ success: false, error: 'vaultPath is required' });
+    }
+    const bridgeData = await readObsidianBridgePluginData(vaultPath);
+    if (!bridgeData.endpoint || !bridgeData.token) {
+      return res.status(400).json({
+        success: false,
+        error: 'The selected vault does not have a configured Argus bridge endpoint and token.',
+      });
+    }
+    const currentConfig = readObsidianBridgeConfig({ includeToken: true });
+    const vaultName = String(req.body?.vaultName || path.basename(vaultPath));
+    const vaultId = normalizeVaultId(req.body?.vaultId || vaultName);
+    const readableFolders = bridgeData.readableFolders.length > 0
+      ? bridgeData.readableFolders
+      : currentConfig.readableVaultFolders;
+    const nextVault = {
+      vaultId,
+      name: vaultName,
+      endpoint: bridgeData.endpoint || DEFAULT_OBSIDIAN_BRIDGE_ENDPOINT,
+      token: bridgeData.token,
+      readableFolders,
+      writeBaseFolder: bridgeData.baseFolder || 'Argus',
+      pluginVersion: req.body?.pluginVersion || '',
+    };
+    const config = saveObsidianBridgeConfig({
+      enabled: true,
+      activeVaultId: vaultId,
+      vaults: [
+        ...(currentConfig.vaults || []).filter((vault) => vault.vaultId !== vaultId),
+        nextVault,
+      ],
+      lastError: '',
+    });
+    res.json({
+      success: true,
+      config,
+      vault: {
+        ...nextVault,
+        token: undefined,
+        tokenConfigured: true,
+      },
+    });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to select Obsidian vault');
   }
 });
 

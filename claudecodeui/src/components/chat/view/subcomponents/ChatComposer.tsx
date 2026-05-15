@@ -68,12 +68,10 @@ import { getSubagentBlockerGuidance } from '../../utils/subagentGuidance';
 
 import AgentRuntimeDiagnosticsPanel from './AgentRuntimeDiagnosticsPanel';
 import CommandMenu from './CommandMenu';
-import ClaudeStatus from './ClaudeStatus';
 import FileAttachment from './FileAttachment';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import RuntimeModelSwitcher from './RuntimeModelSwitcher';
-import TokenUsagePie from './TokenUsagePie';
 
 interface MentionableFile {
   name: string;
@@ -132,14 +130,12 @@ const extractTodoItems = (value: unknown): StatusTodoItem[] => {
 
   if (typeof value === 'string') {
     const trimmed = value.trim();
-    if (!trimmed.startsWith('[')) {
+    if (!(trimmed.startsWith('[') || trimmed.startsWith('{'))) {
       return [];
     }
     try {
       const parsed = JSON.parse(trimmed);
-      return Array.isArray(parsed)
-        ? parsed.map((item) => normalizeStatusTodoItem(item)).filter((item): item is StatusTodoItem => Boolean(item))
-        : [];
+      return extractTodoItems(parsed);
     } catch {
       return [];
     }
@@ -286,10 +282,8 @@ export default function ChatComposer({
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
-  claudeStatus,
   isLoading,
   onAbortSession,
-  provider,
   agents,
   selectedAgentId,
   selectedAgentAppBindings,
@@ -788,16 +782,6 @@ export default function ChatComposer({
 
   return (
     <div className="flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
-      {!hasPendingPermissions && (
-        <ClaudeStatus
-          status={claudeStatus}
-          isLoading={isLoading}
-          onAbort={onAbortSession}
-          provider={provider}
-          todoItems={statusTodoItems}
-        />
-      )}
-
       {pendingPermissionRequests.length > 0 && (
         <div className="mx-auto mb-3 w-full max-w-[1120px]">
           <PermissionRequestsBanner
@@ -1799,11 +1783,7 @@ export default function ChatComposer({
               }}
               disabled={isLoading || !subagentsEnabled}
               aria-pressed={subagentDispatchRequested}
-              className={cn(
-                subagentDispatchRequested
-                  ? 'bg-primary/10 text-primary hover:bg-primary/15'
-                  : 'text-muted-foreground',
-              )}
+              className="hidden"
             >
               <BotIcon />
             </PromptInputButton>
@@ -1818,11 +1798,7 @@ export default function ChatComposer({
                 void handleGoalButtonClick();
               }}
               disabled={!goalsEnabled}
-              className={cn(
-                sessionGoal
-                  ? 'bg-primary/10 text-primary hover:bg-primary/15'
-                  : 'text-muted-foreground',
-              )}
+              className="hidden"
             >
               <TargetIcon />
             </PromptInputButton>
@@ -1906,7 +1882,7 @@ export default function ChatComposer({
               </div>
             )}
 
-            <TokenUsagePie budget={contextBudget} />
+            {null}
 
             {showRuntimeDiagnostics && (
               <PromptInputButton
@@ -1933,16 +1909,51 @@ export default function ChatComposer({
               )}
             </PromptInputButton>
 
+            {statusTodoItems.length > 0 && (
+              <div className="hidden min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5 md:flex">
+                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+                  Todo
+                </span>
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                  {statusTodoItems.slice(0, 3).map((todo, index) => (
+                    <span
+                      key={todo.id ?? `${todo.content}-${index}`}
+                      className={cn(
+                        'inline-flex min-w-0 max-w-[220px] items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] leading-none',
+                        todo.status === 'completed'
+                          ? 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700 line-through dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                          : todo.status === 'in_progress'
+                            ? 'border-sky-200/80 bg-sky-50/80 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300'
+                            : 'border-border/60 bg-background/70 text-muted-foreground',
+                      )}
+                      title={todo.content}
+                    >
+                      <span
+                        className={cn(
+                          'h-2 w-2 shrink-0 rounded-full',
+                          todo.status === 'completed'
+                            ? 'bg-emerald-500'
+                            : todo.status === 'in_progress'
+                              ? 'bg-sky-500'
+                              : 'border border-muted-foreground/40 bg-transparent',
+                        )}
+                      />
+                      <span className="truncate">{todo.content}</span>
+                    </span>
+                  ))}
+                  {statusTodoItems.length > 3 && (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      +{statusTodoItems.length - 3}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
           </PromptInputTools>
 
           <div className="flex shrink-0 items-center gap-2">
-            <div
-              className={`hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground/50 transition-opacity duration-200 xl:block ${
-                input.trim() ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
-            </div>
+            {null}
             {hasInput && (
               <PromptInputButton
                 tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
@@ -1971,6 +1982,23 @@ export default function ChatComposer({
             >
               {isLoading ? '引导' : undefined}
             </PromptInputSubmit>
+            {isLoading && (
+              <button
+                type="button"
+                className="group flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-200/70 bg-emerald-50/85 text-emerald-700 transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:border-destructive/40 dark:hover:bg-destructive/15 dark:hover:text-destructive"
+                title={t('claudeStatus.controls.stop', { defaultValue: '停止' })}
+                aria-label={t('claudeStatus.controls.stop', { defaultValue: '停止' })}
+                onClick={onAbortSession}
+              >
+                <span className="relative flex h-3 w-3 items-center justify-center group-hover:hidden">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/70" />
+                  <span className="relative h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                </span>
+                <span className="hidden text-xs font-semibold group-hover:inline">
+                  停止
+                </span>
+              </button>
+            )}
           </div>
         </PromptInputFooter>
       </PromptInput>

@@ -27,18 +27,36 @@ const resolveProjectName = (data = {}) => {
     || (readString(options.projectPath || options.cwd) ? path.basename(readString(options.projectPath || options.cwd)) : '');
 };
 
-const buildProjectScopedFolders = (projectName = '') => {
+const buildProjectScopedFolders = (projectName = '', {
+  includeWiki = true,
+  includeAiMemory = true,
+  includeRaw = false,
+} = {}) => {
   const projectSegment = sanitizeVaultSegment(projectName, 'General');
-  return [
-    `Argus/Wiki/${projectSegment}`,
-    'Argus/_Indexes',
-  ];
+  const folders = [];
+  if (includeWiki) {
+    folders.push(`Argus/Wiki/${projectSegment}`);
+  }
+  if (includeAiMemory) {
+    folders.push(
+      `Argus/AIMemory/${projectSegment}`,
+      'Argus/AIMemory/User',
+      'Argus/AIMemory/Feedback',
+    );
+  }
+  if (includeRaw) {
+    folders.push(`Argus/Raw/${projectSegment}`);
+  }
+  if (includeWiki) {
+    folders.push('Argus/_Indexes');
+  }
+  return [...new Set(folders)];
 };
 
 const buildContextBlock = (context = '') => [
   'Argus Wiki Context',
-  'Use the compiled Wiki as the source of truth only when it is relevant to the current user request.',
-  'Wiki context is historical project material. Verify current files, functions, flags, and project state before recommending action from it.',
+  'Use compiled Wiki and AI memory only when relevant to the current user request.',
+  'Wiki context is historical project material. AI memory can describe durable user, feedback, project, or reference facts. Verify current files, functions, flags, and project state before recommending action from it.',
   '',
   context,
 ].filter(Boolean).join('\n');
@@ -89,6 +107,8 @@ const isWikiReadbackFolder = (folder = '', { includeRaw = false } = {}) => {
     || value.startsWith('Argus/_Indexes/')
     || value === 'Argus/Wiki'
     || value.startsWith('Argus/Wiki/')
+    || value === 'Argus/AIMemory'
+    || value.startsWith('Argus/AIMemory/')
     || (includeRaw && (value === 'Argus/Raw' || value.startsWith('Argus/Raw/')));
 };
 
@@ -108,20 +128,25 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   const command = typeof data.command === 'string' ? data.command : '';
   const options = data.options && typeof data.options === 'object' ? data.options : {};
   const config = readObsidianBridgeConfig();
-  const readbackEnabled = config.wikiReadbackEnabled !== false;
+  const wikiReadbackEnabled = config.wikiReadbackEnabled !== false;
+  const aiMemoryReadbackEnabled = config.aiMemoryReadbackEnabled !== false;
+  const readbackEnabled = wikiReadbackEnabled || aiMemoryReadbackEnabled;
   if (!config.enabled || !readbackEnabled || !command.trim()) {
     return data;
   }
 
   const projectName = resolveProjectName(data);
-  const scopedFolders = buildProjectScopedFolders(projectName);
-  if (config.wikiReadbackIncludeRaw) {
-    scopedFolders.push(`Argus/Raw/${sanitizeVaultSegment(projectName, 'General')}`);
-  }
-  const folders = config.wikiReadbackProjectScopeEnabled !== false
+  const scopedFolders = buildProjectScopedFolders(projectName, {
+    includeWiki: wikiReadbackEnabled,
+    includeAiMemory: aiMemoryReadbackEnabled,
+    includeRaw: wikiReadbackEnabled && config.wikiReadbackIncludeRaw,
+  });
+  const useProjectScope = config.wikiReadbackProjectScopeEnabled !== false
+    || config.aiMemoryProjectScopeEnabled !== false;
+  const folders = useProjectScope
     ? scopedFolders
     : filterWikiReadbackFolders(config.readableVaultFolders, {
-      includeRaw: Boolean(config.wikiReadbackIncludeRaw),
+      includeRaw: Boolean(wikiReadbackEnabled && config.wikiReadbackIncludeRaw),
     });
   const readbackFolders = folders.length > 0 ? folders : scopedFolders;
   const limit = Number.isFinite(Number(config.wikiReadbackMaxResults))

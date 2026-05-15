@@ -67,8 +67,14 @@ export function isAutoMemoryEnabled(): boolean {
  * directly in an `if` condition.
  */
 export function isExtractModeActive(): boolean {
+  if (isEnvTruthy(process.env.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION)) {
+    return false
+  }
   if (!getFeatureValue_CACHED_MAY_BE_STALE('tengu_passport_quail', false)) {
     return false
+  }
+  if (isEnvTruthy(process.env.MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION)) {
+    return true
   }
   return (
     !getIsNonInteractiveSession() ||

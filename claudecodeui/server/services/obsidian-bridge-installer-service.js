@@ -125,8 +125,125 @@ const readPluginManifest = async (vaultPath) => {
   return readJson(manifestPath, null);
 };
 
+const readRawPluginData = async (vaultPath) => {
+  const dataPath = path.join(vaultPath, '.obsidian', 'plugins', OBSIDIAN_BRIDGE_PLUGIN_ID, 'data.json');
+  try {
+    return await fs.readFile(dataPath, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+const matchString = (raw = '', key = '') => {
+  const pattern = new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, 'i');
+  return raw.match(pattern)?.[1] || '';
+};
+
+const matchNumber = (raw = '', key = '') => {
+  const pattern = new RegExp(`"${key}"\\s*:\\s*(\\d+)`, 'i');
+  const value = Number.parseInt(raw.match(pattern)?.[1] || '', 10);
+  return Number.isFinite(value) ? value : 0;
+};
+
+const normalizeFolderList = (value) => (
+  Array.isArray(value)
+    ? [...new Set(value.map((folder) => String(folder || '').trim()).filter(Boolean))]
+    : []
+);
+
+const parseReadableFoldersFallback = (raw = '') => {
+  const match = raw.match(/"readableFolders"\s*:\s*\[([\s\S]*?)\]/i);
+  if (!match) return [];
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).filter(Boolean);
+};
+
+export const readObsidianBridgePluginData = async (vaultPath) => {
+  const raw = await readRawPluginData(vaultPath);
+  if (!raw) {
+    return {
+      port: 0,
+      endpoint: '',
+      token: '',
+      tokenConfigured: false,
+      baseFolder: '',
+      readableFolders: [],
+    };
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = null;
+  }
+
+  const port = Number.parseInt(String(parsed?.port || matchNumber(raw, 'port') || ''), 10) || 0;
+  const token = String(parsed?.token || matchString(raw, 'token') || '');
+  const baseFolder = String(parsed?.baseFolder || matchString(raw, 'baseFolder') || '');
+  const readableFolders = normalizeFolderList(parsed?.readableFolders)
+    .concat(parseReadableFoldersFallback(raw))
+    .filter(Boolean);
+  const uniqueReadableFolders = [...new Set(readableFolders)];
+
+  return {
+    port,
+    endpoint: port ? `http://127.0.0.1:${port}` : '',
+    token,
+    tokenConfigured: Boolean(token),
+    baseFolder,
+    readableFolders: uniqueReadableFolders,
+  };
+};
+
+const probeBridgeStatus = async ({
+  endpoint = '',
+  token = '',
+  fetchImpl = null,
+  timeoutMs = 1200,
+} = {}) => {
+  if (!endpoint || !token || typeof fetchImpl !== 'function') {
+    return {
+      bridgeReachable: null,
+      statusVaultName: '',
+      statusPluginVersion: '',
+      bridgeLastError: '',
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(100, Number(timeoutMs) || 1200));
+  timeout.unref?.();
+  try {
+    const response = await fetchImpl(`${endpoint.replace(/\/+$/, '')}/argus/v1/status`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    return {
+      bridgeReachable: Boolean(response.ok),
+      statusVaultName: body?.vaultName || body?.vault || '',
+      statusPluginVersion: body?.pluginVersion || body?.version || '',
+      bridgeLastError: response.ok ? '' : body?.error || `HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      bridgeReachable: false,
+      statusVaultName: '',
+      statusPluginVersion: '',
+      bridgeLastError: error?.message || String(error || 'Bridge probe failed.'),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
 export const listObsidianVaults = async ({
   obsidianConfigPath = defaultObsidianConfigPath(),
+  fetchImpl = null,
+  statusTimeoutMs = 1200,
 } = {}) => {
   const config = await readJson(obsidianConfigPath, null);
   const vaults = config?.vaults && typeof config.vaults === 'object'
@@ -141,6 +258,13 @@ export const listObsidianVaults = async ({
 
     const vaultPath = path.resolve(String(vault.path));
     const manifest = await readPluginManifest(vaultPath);
+    const bridgeData = await readObsidianBridgePluginData(vaultPath);
+    const status = await probeBridgeStatus({
+      endpoint: bridgeData.endpoint,
+      token: bridgeData.token,
+      fetchImpl,
+      timeoutMs: statusTimeoutMs,
+    });
     results.push({
       name: String(vault.name || path.basename(vaultPath)),
       path: vaultPath,
@@ -148,6 +272,12 @@ export const listObsidianVaults = async ({
       hasObsidianConfig: await exists(path.join(vaultPath, '.obsidian')),
       pluginInstalled: Boolean(manifest),
       pluginVersion: manifest?.version || '',
+      bridgePort: bridgeData.port || 0,
+      bridgeEndpoint: bridgeData.endpoint || '',
+      tokenConfigured: bridgeData.tokenConfigured,
+      baseFolder: bridgeData.baseFolder,
+      readableFolders: bridgeData.readableFolders,
+      ...status,
     });
   }
 

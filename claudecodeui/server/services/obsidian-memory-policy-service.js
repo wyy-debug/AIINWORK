@@ -283,15 +283,17 @@ export const applyExplicitMemoryIntentToChatCommand = applyExplicitWikiIntentToC
 export const buildObsidianWikiPolicyPrompt = () => [
   '# Obsidian Wiki Policy',
   '',
-  'Obsidian is a project Wiki and knowledge-base readback source. It is not the Claude native personal memory store.',
+  'Obsidian is the primary AI memory store and project Wiki readback source. Local MEMORY.md is only an offline fallback when the bridge cannot write.',
   '',
-  'Use Wiki context only when it is relevant to the current user request. Treat it as historical project material, not proof of current repository, file, flag, API, or runtime state.',
+  'Use Wiki and AI memory context only when it is relevant to the current user request. Treat it as historical material, not proof of current repository, file, flag, API, or runtime state.',
   '',
   'Current code, files, settings, and external facts can drift. Verify current state with tools before recommending an action that depends on freshness.',
   '',
-  'When available, Claude native memory handles user preferences, collaboration habits, and ordinary remember/forget requests. Do not claim that Obsidian saved a memory unless an Obsidian wiki result is explicitly provided by the host.',
+  'Automatic memory extraction is handled by the host after assistant turns. Do not claim that Obsidian saved a memory unless an Obsidian result, candidate, or fallback status is explicitly provided by the host.',
   '',
-  'Only explicit requests to save to Obsidian, write to Wiki, or persist to the knowledge base are handled by the host as auditable Obsidian candidates.',
+  'Explicit requests to save to Obsidian, write to Wiki, or persist to the knowledge base are handled by the host as auditable Obsidian candidates.',
+  '',
+  '/init and project guidance templates are not memory writes.',
 ].join('\n');
 
 export const buildObsidianMemoryPolicyPrompt = buildObsidianWikiPolicyPrompt;

@@ -58,6 +58,7 @@ const ANTHROPIC_ENV_KEYS = {
 const MTL_CODE_ENV_KEYS = {
   uiBareMode: 'MTL_CODE_UI_BARE',
   claudeNativeMemoryEnabled: 'MTL_CODE_CLAUDE_NATIVE_MEMORY',
+  autoMemoryExtractionEnabled: 'MTL_CODE_ENABLE_AUTO_MEMORY_EXTRACTION',
   maxContextTokens: 'MTL_CODE_MAX_CONTEXT_TOKENS',
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
@@ -565,6 +566,11 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
 
   env[MTL_CODE_ENV_KEYS.claudeNativeMemoryEnabled] = claudeNativeMemoryEnabled ? '1' : '0';
   env[MTL_CODE_ENV_KEYS.uiBareMode] = claudeNativeMemoryEnabled ? '0' : '1';
+  if (claudeNativeMemoryEnabled) {
+    env[MTL_CODE_ENV_KEYS.autoMemoryExtractionEnabled] = '1';
+  } else {
+    delete env[MTL_CODE_ENV_KEYS.autoMemoryExtractionEnabled];
+  }
 
   const contextWindowTokens = resolveProfileContextWindow(profile, env);
   env[MTL_CODE_ENV_KEYS.maxContextTokens] = String(contextWindowTokens);

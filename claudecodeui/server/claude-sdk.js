@@ -36,6 +36,7 @@ import {
   buildContextBudgetFromModelUsage,
   toLegacyTokenBudget,
 } from './services/context-budget-service.js';
+import { readObsidianBridgeConfig } from './services/obsidian-bridge-service.js';
 import { hubUsageDb } from './database/db.js';
 import { extractTokenBreakdownFromContextBudget } from './services/hub-usage-service.js';
 import {
@@ -557,6 +558,7 @@ function getMtlCodeRequestModel(env = process.env) {
 function applyClaudeNativeMemoryEnv(spawnEnv) {
   if (isClaudeNativeMemoryEnabled(spawnEnv)) {
     spawnEnv[MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled] = '1';
+    spawnEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled] = '1';
     spawnEnv.MTL_CODE_UI_BARE = '0';
     delete spawnEnv.MTL_CODE_SIMPLE;
     delete spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY;
@@ -564,8 +566,30 @@ function applyClaudeNativeMemoryEnv(spawnEnv) {
   }
 
   spawnEnv[MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled] = '0';
+  delete spawnEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled];
   spawnEnv.MTL_CODE_UI_BARE = '1';
   spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY = '1';
+}
+
+function isObsidianPrimaryMemoryEnabled() {
+  try {
+    const config = readObsidianBridgeConfig({ includeToken: false });
+    return config.enabled === true && config.aiMemoryReadbackEnabled !== false;
+  } catch {
+    return false;
+  }
+}
+
+function applyObsidianPrimaryMemoryEnv(spawnEnv) {
+  if (!isObsidianPrimaryMemoryEnabled()) {
+    delete spawnEnv.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY;
+    delete spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION;
+    return;
+  }
+
+  spawnEnv.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1';
+  spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION = '1';
+  delete spawnEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled];
 }
 
 function hasRequestedMcpBindings(options = {}) {
@@ -692,6 +716,7 @@ function buildMtlCodeRuntimeSignature({ cwd = '', cliArgs = [], env = {} } = {})
   const stableEnvKeys = [
     'MTL_CODE_UI_BARE',
     MTL_CODE_MODEL_ENV_KEYS.claudeNativeMemoryEnabled,
+    MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled,
     'MTL_CODE_USE_OPENAI',
     ANTHROPIC_MODEL_ENV_KEYS.authToken,
     ANTHROPIC_MODEL_ENV_KEYS.baseUrl,
@@ -859,6 +884,7 @@ function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, 
       || childEnv.MTL_CODE_COORDINATOR_MODE === '1'
     ),
     claudeNativeMemoryEnabled: isClaudeNativeMemoryEnabled(childEnv),
+    autoMemoryExtractionEnabled: childEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled] === '1',
     bareMode: shouldUseBareMode(childEnv),
     cli: {
       hasBareFlag: cliArgs.includes('--bare'),
@@ -1102,6 +1128,7 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     MTL_CODE_PROVIDER_MANAGED_BY_HOST: '1',
   };
   applyClaudeNativeMemoryEnv(spawnEnv);
+  applyObsidianPrimaryMemoryEnv(spawnEnv);
   pruneInactiveProviderEnv(spawnEnv);
   if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
     spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';

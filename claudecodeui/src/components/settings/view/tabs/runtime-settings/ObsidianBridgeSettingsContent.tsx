@@ -62,6 +62,15 @@ type ObsidianVault = {
   hasObsidianConfig: boolean;
   pluginInstalled: boolean;
   pluginVersion: string;
+  bridgePort?: number;
+  bridgeEndpoint?: string;
+  tokenConfigured?: boolean;
+  bridgeReachable?: boolean | null;
+  statusVaultName?: string;
+  statusPluginVersion?: string;
+  bridgeLastError?: string;
+  readableFolders?: string[];
+  baseFolder?: string;
 };
 
 type MemoryCandidate = {
@@ -168,6 +177,7 @@ export default function ObsidianBridgeSettingsContent({
   const [isTestingReadback, setIsTestingReadback] = useState(false);
   const [isLoadingVaults, setIsLoadingVaults] = useState(false);
   const [isInstallingPlugin, setIsInstallingPlugin] = useState(false);
+  const [isSelectingVault, setIsSelectingVault] = useState(false);
   const [readbackQuery, setReadbackQuery] = useState('项目记忆');
   const [vaults, setVaults] = useState<ObsidianVault[]>([]);
   const [selectedVaultPath, setSelectedVaultPath] = useState('');
@@ -187,6 +197,16 @@ export default function ObsidianBridgeSettingsContent({
   const [wikiReadbackPreview, setWikiReadbackPreview] = useState('');
   const [selectedObsidianTab, setSelectedObsidianTab] = useState<ObsidianBridgeTab>('connection');
   const knowledgeUploadInputRef = useRef<HTMLInputElement>(null);
+
+  const reachableVault = vaults.find((vault) => vault.bridgeReachable === true && vault.bridgeEndpoint);
+  const configuredEndpoint = config.endpoint.replace(/\/+$/, '');
+  const reachableEndpoint = reachableVault?.bridgeEndpoint?.replace(/\/+$/, '') || '';
+  const hasReachableEndpointMismatch = Boolean(
+    reachableVault
+    && reachableEndpoint
+    && configuredEndpoint
+    && reachableEndpoint !== configuredEndpoint,
+  );
 
   const loadVaults = async ({ quiet = false } = {}) => {
     setIsLoadingVaults(true);
@@ -592,6 +612,35 @@ export default function ObsidianBridgeSettingsContent({
     }
   };
 
+  const selectVault = async (vault: ObsidianVault) => {
+    if (!vault.path) return;
+    setIsSelectingVault(true);
+    try {
+      const data = await parseJson<{ config: ObsidianBridgeConfig }>(
+        await apiFetch('/api/obsidian-bridge/select-vault', {
+          method: 'POST',
+          body: JSON.stringify({
+            vaultPath: vault.path,
+            vaultName: vault.name,
+            pluginVersion: vault.statusPluginVersion || vault.pluginVersion,
+          }),
+        }),
+      );
+      const nextConfig = { ...DEFAULT_CONFIG, ...data.config };
+      setConfig(nextConfig);
+      setSelectedVaultPath(vault.path);
+      setReadableFoldersText(nextConfig.readableVaultFolders.join('\n'));
+      setToken('');
+      window.dispatchEvent(new Event(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT));
+      setMessage(`已切换到可达 Obsidian vault：${vault.name} (${vault.bridgeEndpoint || nextConfig.endpoint})`);
+      await loadVaults({ quiet: true });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '切换 Obsidian vault 失败。');
+    } finally {
+      setIsSelectingVault(false);
+    }
+  };
+
   const installMcp = async () => {
     try {
       const data = await parseJson<{ command?: string; env?: Record<string, string> }>(
@@ -665,6 +714,8 @@ export default function ObsidianBridgeSettingsContent({
                 {vaults.map((vault) => (
                   <option key={vault.path} value={vault.path}>
                     {vault.name}
+                    {vault.bridgeEndpoint ? ` - ${vault.bridgeEndpoint}` : ''}
+                    {vault.bridgeReachable === true ? ' - reachable' : vault.bridgeReachable === false ? ' - offline' : ''}
                     {vault.open ? '（已打开）' : ''}
                     {vault.pluginInstalled ? ` - argus-bridge ${vault.pluginVersion || '已安装'}` : ''}
                   </option>
@@ -699,6 +750,61 @@ export default function ObsidianBridgeSettingsContent({
           </div>
         </div>
       </div>
+
+      {hasReachableEndpointMismatch && reachableVault && (
+        <div className="rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+          <div className="font-medium">Obsidian bridge 端口不一致</div>
+          <div className="mt-1">
+            当前配置：{config.endpoint || '未配置'}；实际可达：{reachableVault.name} - {reachableVault.bridgeEndpoint}
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-2 h-8"
+            onClick={() => void selectVault(reachableVault)}
+            disabled={isSelectingVault}
+          >
+            {isSelectingVault ? <RefreshCw className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+            切换到可达 vault
+          </Button>
+        </div>
+      )}
+
+      {vaults.length > 0 && (
+        <div className="space-y-2 rounded-md border border-border/70 bg-muted/20 p-3">
+          <div className="text-sm font-medium text-foreground">Vault bridge 状态</div>
+          {vaults.map((vault) => (
+            <div
+              key={`vault-status-${vault.path}`}
+              className="flex flex-col gap-2 rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium text-foreground">
+                  {vault.name}
+                  {vault.open ? ' · open' : ''}
+                  {vault.bridgeReachable === true ? ' · reachable' : vault.bridgeReachable === false ? ' · offline' : ''}
+                </div>
+                <div className="mt-1 truncate text-muted-foreground">
+                  configured plugin: {vault.pluginInstalled ? vault.pluginVersion || 'installed' : 'not installed'}
+                  {vault.bridgeEndpoint ? ` · bridge: ${vault.bridgeEndpoint}` : ' · bridge: not configured'}
+                  {vault.tokenConfigured ? ' · token ok' : ' · no token'}
+                </div>
+              </div>
+              {vault.bridgeEndpoint && vault.tokenConfigured && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 shrink-0"
+                  onClick={() => void selectVault(vault)}
+                  disabled={isSelectingVault}
+                >
+                  使用此 vault
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {config.vaults.length > 0 && (
         <div className="rounded-md border border-border/70 bg-muted/20 p-3">

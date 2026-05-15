@@ -130,9 +130,16 @@ test('Claude native memory disables bare mode and clears auto-memory blockers', 
   assert.match(source, /function isClaudeNativeMemoryEnabled/);
   assert.match(source, /function applyClaudeNativeMemoryEnv/);
   assert.match(source, /spawnEnv\.MTL_CODE_UI_BARE = '0'/);
+  assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.autoMemoryExtractionEnabled\] = '1'/);
   assert.match(source, /delete spawnEnv\.MTL_CODE_SIMPLE/);
   assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY/);
+  assert.match(source, /delete spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.autoMemoryExtractionEnabled\]/);
   assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY = '1'/);
+  assert.match(source, /function isObsidianPrimaryMemoryEnabled/);
+  assert.match(source, /readObsidianBridgeConfig\(\{ includeToken: false \}\)/);
+  assert.match(source, /function applyObsidianPrimaryMemoryEnv/);
+  assert.match(source, /spawnEnv\.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1'/);
+  assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION = '1'/);
 });
 
 test('Argus emits prompt injection debug payload from final spawn env and CLI args', async () => {
@@ -149,6 +156,7 @@ test('Argus emits prompt injection debug payload from final spawn env and CLI ar
   assert.match(source, /effectiveCommand/);
   assert.match(source, /commandChanged/);
   assert.match(source, /claudeNativeMemoryEnabled:\s*isClaudeNativeMemoryEnabled\(childEnv\)/);
+  assert.match(source, /autoMemoryExtractionEnabled:\s*childEnv\[MTL_CODE_MODEL_ENV_KEYS\.autoMemoryExtractionEnabled\] === '1'/);
   assert.match(source, /bareMode:\s*shouldUseBareMode\(childEnv\)/);
   assert.match(source, /hasBareFlag:\s*cliArgs\.includes\('--bare'\)/);
   assert.match(source, /hasAppendSystemPromptFlag:\s*cliArgs\.includes\('--append-system-prompt'\)/);

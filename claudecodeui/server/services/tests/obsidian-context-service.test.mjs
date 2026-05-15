@@ -43,7 +43,13 @@ describe('obsidian context service', () => {
     expect(buildObsidianContext).toHaveBeenCalledWith({
       query: 'Summarize today.',
       projectName: 'App',
-      folders: ['Argus/Wiki/App', 'Argus/_Indexes'],
+      folders: [
+        'Argus/Wiki/App',
+        'Argus/AIMemory/App',
+        'Argus/AIMemory/User',
+        'Argus/AIMemory/Feedback',
+        'Argus/_Indexes',
+      ],
       limit: 3,
     });
   });
@@ -86,8 +92,57 @@ describe('obsidian context service', () => {
     expect(buildObsidianContext).toHaveBeenCalledWith({
       query: 'Continue the GPUScene review.',
       projectName: 'App',
-      folders: ['Argus/Wiki/App', 'Argus/_Indexes'],
+      folders: [
+        'Argus/Wiki/App',
+        'Argus/AIMemory/App',
+        'Argus/AIMemory/User',
+        'Argus/AIMemory/Feedback',
+        'Argus/_Indexes',
+      ],
       limit: 8,
+    });
+  });
+
+  it('searches project Wiki, project AIMemory, and global user feedback memory together', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const buildObsidianContext = vi.fn(async () => ({
+      success: true,
+      context: 'Path: Argus/AIMemory/User/Style.md\nTitle: Style\nThe user prefers concise Chinese answers.',
+      results: [{ path: 'Argus/AIMemory/User/Style.md', title: 'Style' }],
+    }));
+
+    await service.applyObsidianContextToChatCommand({
+      type: 'claude-command',
+      command: '继续这个问题。',
+      options: { projectName: 'SOC trunk' },
+    }, {
+      buildObsidianContext,
+      refineWikiReadbackContext: vi.fn(async ({ context }) => ({
+        refined: false,
+        context,
+        sources: [],
+      })),
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        wikiReadbackEnabled: true,
+        aiMemoryReadbackEnabled: true,
+        wikiReadbackMaxResults: 6,
+        wikiReadbackProjectScopeEnabled: true,
+        aiMemoryProjectScopeEnabled: true,
+      }),
+    });
+
+    expect(buildObsidianContext).toHaveBeenCalledWith({
+      query: '继续这个问题。',
+      projectName: 'SOC trunk',
+      folders: [
+        'Argus/Wiki/SOC trunk',
+        'Argus/AIMemory/SOC trunk',
+        'Argus/AIMemory/User',
+        'Argus/AIMemory/Feedback',
+        'Argus/_Indexes',
+      ],
+      limit: 6,
     });
   });
 
