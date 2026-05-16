@@ -19,6 +19,7 @@ describe('argus bridge Obsidian plugin main', () => {
     for (const route of [
       '/argus/v1/active',
       '/argus/v1/patch',
+      '/argus/v1/files/upsert',
       '/argus/v1/query',
       '/argus/v1/periodic/append',
       '/argus/v1/graph',

@@ -20,25 +20,88 @@ describe('obsidian bridge service', () => {
     service.setObsidianBridgeConfigStoreForTests(store);
   });
 
-  it('returns a disabled local bridge config by default without exposing the token', () => {
+  it('returns an enabled disconnected bridge by default while Memory and CodeGraph are globally enabled', () => {
     const config = service.readObsidianBridgeConfig();
 
     expect(config).toMatchObject({
-      enabled: false,
+      enabled: true,
       endpoint: 'http://127.0.0.1:27177',
       defaultMode: 'project-knowledge',
-      aiMemoryReadbackEnabled: false,
+      aiMemoryReadbackEnabled: true,
       wikiPrimaryEnabled: true,
-      wikiReadbackEnabled: false,
+      wikiReadbackEnabled: true,
       wikiReadbackIncludeRaw: false,
       wikiReadbackMaxResults: 8,
       aiMemoryMaxResults: 8,
       aiMemoryProjectScopeEnabled: true,
       autoExportKnowledgeArtifacts: false,
       readableVaultFolders: expect.arrayContaining(['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory']),
+      codegraphEnabled: true,
+      codegraphBackgroundSyncEnabled: true,
+      codegraphWriteObsidianSummaries: true,
+      codegraphLazyLlmSummaries: false,
+      codegraphMaxSymbolNotes: 50,
+      codegraphImpactMaxDepth: 2,
+      codegraphImpactLimit: 50,
+      codegraphGhostPolicy: 'deprecate',
+      codegraphAutoDeleteGhostNotes: false,
+      codegraphStorageRoot: '',
+      codegraphExportLevel: 'structural',
+      codegraphMaxEmbeddedSymbols: 200,
       tokenConfigured: false,
     });
     expect(config).not.toHaveProperty('token');
+  });
+
+  it('treats Memory and CodeGraph switches as global opt-outs, not project-scoped defaults', () => {
+    service.saveObsidianBridgeConfig({
+      wikiReadbackEnabled: false,
+      aiMemoryReadbackEnabled: false,
+      codegraphEnabled: false,
+    });
+
+    service.saveObsidianBridgeConfig({
+      vaults: [{
+        vaultId: 'default',
+        name: 'WD',
+        endpoint: 'http://127.0.0.1:27180',
+        readableFolders: ['Argus/Wiki'],
+        writeBaseFolder: 'Argus',
+      }],
+    });
+
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      wikiReadbackEnabled: false,
+      aiMemoryReadbackEnabled: false,
+      codegraphEnabled: false,
+    });
+  });
+
+  it('migrates old normalized false defaults to the new global-on main path', () => {
+    store.set('obsidian_bridge', JSON.stringify({
+      enabled: false,
+      wikiReadbackEnabled: false,
+      aiMemoryReadbackEnabled: false,
+      codegraphEnabled: false,
+    }));
+
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      enabled: true,
+      wikiReadbackEnabled: true,
+      aiMemoryReadbackEnabled: true,
+      codegraphEnabled: true,
+    });
+  });
+
+  it('keeps a current-scope explicit bridge disable as a real opt-out', () => {
+    service.saveObsidianBridgeConfig({
+      enabled: false,
+    });
+
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      enabled: false,
+      obsidianMainPathSwitchScope: 'global-v1',
+    });
   });
 
   it('persists normalized settings and keeps the token available for internal calls', () => {
@@ -53,6 +116,14 @@ describe('obsidian bridge service', () => {
       aiMemoryMaxResults: 99,
       aiMemoryProjectScopeEnabled: false,
       readableVaultFolders: [' Argus/Projects ', '../Private', 'Argus/AIMemory'],
+      codegraphEnabled: true,
+      codegraphMaxSymbolNotes: 500,
+      codegraphImpactMaxDepth: 9,
+      codegraphImpactLimit: 999,
+      codegraphGhostPolicy: 'unknown',
+      codegraphStorageRoot: ' D:/Argus CodeGraph ',
+      codegraphExportLevel: 'everything',
+      codegraphMaxEmbeddedSymbols: 5000,
     });
 
     expect(saved).toMatchObject({
@@ -66,6 +137,14 @@ describe('obsidian bridge service', () => {
       aiMemoryMaxResults: 20,
       aiMemoryProjectScopeEnabled: false,
       readableVaultFolders: ['Argus/Projects', 'Argus/AIMemory', 'Argus/Wiki', 'Argus/_Indexes'],
+      codegraphEnabled: true,
+      codegraphMaxSymbolNotes: 200,
+      codegraphImpactMaxDepth: 5,
+      codegraphImpactLimit: 200,
+      codegraphGhostPolicy: 'deprecate',
+      codegraphStorageRoot: 'D:/Argus CodeGraph',
+      codegraphExportLevel: 'structural',
+      codegraphMaxEmbeddedSymbols: 1000,
     });
     expect(saved).not.toHaveProperty('token');
 
@@ -97,6 +176,10 @@ describe('obsidian bridge service', () => {
   });
 
   it('does not write documents when the bridge switch is disabled', async () => {
+    service.saveObsidianBridgeConfig({
+      enabled: false,
+      token: 'bridge-token',
+    });
     const fetchImpl = vi.fn();
 
     await expect(service.sendObsidianDocument({
@@ -282,6 +365,61 @@ describe('obsidian bridge service', () => {
     expect(service.readObsidianBridgeConfig({ includeToken: true }).vaults[0]).toMatchObject({
       token: 'new-token',
     });
+  });
+
+  it('repairs a stale endpoint from the open vault plugin data even when status probing is transiently stale', async () => {
+    service.saveObsidianBridgeConfig({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:27179',
+      token: 'old-token',
+      vaultName: 'WD',
+      pluginVersion: '0.1.3',
+    });
+    const logger = {
+      log: vi.fn(),
+      warn: vi.fn(),
+    };
+
+    const repaired = await service.repairObsidianBridgeConfigFromReachableVaults({
+      fetchImpl: vi.fn(),
+      logger,
+      listVaults: vi.fn(async () => [
+        {
+          name: 'WD',
+          path: 'E:/WD/WD',
+          open: true,
+          pluginInstalled: true,
+          pluginVersion: '0.1.4',
+          bridgeEndpoint: 'http://127.0.0.1:27180',
+          bridgeReachable: false,
+          tokenConfigured: true,
+          readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+          baseFolder: 'Argus',
+        },
+      ]),
+      readPluginData: vi.fn(async () => ({
+        endpoint: 'http://127.0.0.1:27180',
+        token: 'fresh-token',
+        readableFolders: ['Argus/Wiki', 'Argus/AIMemory'],
+        baseFolder: 'Argus',
+      })),
+    });
+
+    expect(repaired).toMatchObject({
+      endpoint: 'http://127.0.0.1:27180',
+      vaultName: 'WD',
+      pluginVersion: '0.1.4',
+      token: 'fresh-token',
+    });
+    expect(service.readObsidianBridgeConfig()).toMatchObject({
+      endpoint: 'http://127.0.0.1:27180',
+      vaultName: 'WD',
+      pluginVersion: '0.1.4',
+      tokenConfigured: true,
+      readableVaultFolders: ['Argus/Wiki', 'Argus/AIMemory', 'Argus/_Indexes'],
+    });
+    expect(logger.log.mock.calls.map(([message]) => String(message)).join('\n')).toContain('repair_discovery');
+    expect(logger.warn.mock.calls.map(([message]) => String(message)).join('\n')).toContain('repair_saved');
   });
 
   it('bootstraps a missing bridge config from a reachable Obsidian vault', async () => {
@@ -517,7 +655,7 @@ describe('obsidian bridge service', () => {
     );
   });
 
-  it('forwards patch, query, periodic append, and graph requests to plugin APIs', async () => {
+  it('forwards managed file, patch, query, periodic append, and graph requests to plugin APIs', async () => {
     service.saveObsidianBridgeConfig({
       enabled: true,
       endpoint: 'http://127.0.0.1:27177',
@@ -529,6 +667,11 @@ describe('obsidian bridge service', () => {
       json: async () => ({ success: true, path: 'Argus/Projects/App/Plan.md' }),
     }));
 
+    await service.upsertObsidianMarkdownFile({
+      path: 'Argus/Wiki/App/CodeGraph/Index.md',
+      content: '# CodeGraph',
+      kind: 'codegraph',
+    }, { fetchImpl });
     await service.patchObsidianNote({
       target: { path: 'Argus/Projects/App/Plan.md' },
       operation: 'append-heading',
@@ -544,10 +687,45 @@ describe('obsidian bridge service', () => {
     await service.getObsidianGraph({ projectName: 'App' }, { fetchImpl });
 
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      'http://127.0.0.1:27177/argus/v1/files/upsert',
       'http://127.0.0.1:27177/argus/v1/patch',
       'http://127.0.0.1:27177/argus/v1/query',
       'http://127.0.0.1:27177/argus/v1/periodic/append',
       'http://127.0.0.1:27177/argus/v1/graph',
     ]);
+  });
+
+  it('logs Obsidian bridge request lifecycle without leaking token or file content', async () => {
+    service.saveObsidianBridgeConfig({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:27177',
+      token: 'super-secret-token',
+      vaultName: 'WD',
+      pluginVersion: '0.1.4',
+    });
+    const logger = {
+      log: vi.fn(),
+      warn: vi.fn(),
+    };
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, path: 'Argus/Wiki/App/CodeGraph/Index.md' }),
+    }));
+
+    await service.upsertObsidianMarkdownFile({
+      path: 'Argus/Wiki/App/CodeGraph/Index.md',
+      content: '# Sensitive note body',
+      kind: 'codegraph',
+    }, { fetchImpl, logger });
+
+    const logs = logger.log.mock.calls.map(([message]) => String(message)).join('\n');
+    expect(logs).toContain('[Obsidian Bridge] request_start');
+    expect(logs).toContain('[Obsidian Bridge] request_success');
+    expect(logs).toContain('/argus/v1/files/upsert');
+    expect(logs).toContain('Argus/Wiki/App/CodeGraph/Index.md');
+    expect(logs).toContain('"contentBytes"');
+    expect(logs).not.toContain('super-secret-token');
+    expect(logs).not.toContain('Sensitive note body');
   });
 });

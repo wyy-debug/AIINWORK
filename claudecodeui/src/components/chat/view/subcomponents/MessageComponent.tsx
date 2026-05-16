@@ -79,10 +79,12 @@ type ObsidianContextSource = {
   title?: string;
   snippet?: string;
   hitReason?: string;
+  vaultName?: string;
 };
 type ObsidianContextStatus = {
   used?: boolean;
   resultCount?: number;
+  vaultName?: string;
   reranked?: boolean;
   rerankModel?: string;
   refinementModel?: string;
@@ -178,6 +180,19 @@ const formatWikiRoutingReason = (reason = '') => {
   if (!matched) return trimmed;
   const signals = matched[1] === 'default mode' ? '默认规则' : matched[1];
   return `命中 ${signals}，建议整理成 Wiki。`;
+};
+
+const buildObsidianOpenHref = (source: ObsidianContextSource, status?: ObsidianContextStatus | null) => {
+  const notePath = source.path || '';
+  const vaultName = source.vaultName || status?.vaultName || '';
+  const params = new URLSearchParams();
+  if (vaultName) {
+    params.set('vault', vaultName);
+    params.set('file', notePath);
+  } else {
+    params.set('path', notePath);
+  }
+  return `obsidian://open?${params.toString()}`;
 };
 
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, sessionId, provider, messageKey, obsidianBridgeEnabled = false, isLatestAssistantReply = false, onControlSubagent }: MessageComponentProps) => {
@@ -553,7 +568,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                           </span>
                           {source.path && (
                             <a
-                              href={`obsidian://open?path=${encodeURIComponent(source.path)}`}
+                              href={buildObsidianOpenHref(source, obsidianContextStatus)}
                               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-white/15"
                               title="打开 Obsidian 笔记"
                             >

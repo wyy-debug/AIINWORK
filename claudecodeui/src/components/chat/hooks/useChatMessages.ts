@@ -308,6 +308,7 @@ function statusPayloadForObsidianContext(message: NormalizedMessage): Record<str
     used: context.used,
     resultCount: context.resultCount,
     projectName: context.projectName,
+    vaultName: context.vaultName,
     source: context.source,
     refined: context.refined,
     refinementModel: context.refinementModel,

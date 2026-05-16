@@ -8,9 +8,30 @@ declare global {
     argusDesktop?: {
       selectProjectRoot?: (options?: {
         defaultPath?: string;
+        title?: string;
+        buttonLabel?: string;
       }) => Promise<{
         canceled: boolean;
         path?: string;
+        error?: string;
+      }>;
+      selectDirectory?: (options?: {
+        defaultPath?: string;
+        title?: string;
+        buttonLabel?: string;
+      }) => Promise<{
+        canceled: boolean;
+        path?: string;
+        error?: string;
+      }>;
+      selectCodeGraphScope?: (options?: {
+        defaultPath?: string;
+        title?: string;
+        buttonLabel?: string;
+      }) => Promise<{
+        canceled: boolean;
+        path?: string;
+        paths?: string[];
         error?: string;
       }>;
 	      browserOpen?: (options: {

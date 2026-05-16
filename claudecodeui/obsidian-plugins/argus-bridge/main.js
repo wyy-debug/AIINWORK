@@ -309,6 +309,7 @@ module.exports = class ArgusBridgePlugin extends Plugin {
             'documents',
             'active',
             'patch',
+            'files',
             'query',
             'periodic',
             'graph',
@@ -337,6 +338,13 @@ module.exports = class ArgusBridgePlugin extends Plugin {
       if (req.method === 'POST' && url.pathname === '/argus/v1/documents') {
         const payload = await readRequestBody(req);
         const result = await this.writeDocument(payload);
+        sendJson(res, 200, { success: true, ...result });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/argus/v1/files/upsert') {
+        const payload = await readRequestBody(req);
+        const result = await this.upsertManagedMarkdown(payload);
         sendJson(res, 200, { success: true, ...result });
         return;
       }
@@ -495,6 +503,42 @@ module.exports = class ArgusBridgePlugin extends Plugin {
       mode: document.mode,
       argusId: document.argusId,
       updated: false,
+      vaultName: this.app.vault.getName(),
+    };
+  }
+
+  async upsertManagedMarkdown(payload = {}) {
+    const notePath = assertSafeVaultPath(payload.path || '');
+    if (!notePath.endsWith('.md')) {
+      throw new Error('Only Markdown files can be upserted.');
+    }
+    const baseFolder = this.normalizeVaultFolder(payload.baseFolder || this.settings.baseFolder);
+    if (!this.isReadablePath(notePath, [baseFolder])) {
+      throw new Error('Target path is outside the writable Argus base folder.');
+    }
+    const content = String(payload.content || '');
+    const existing = this.app.vault.getAbstractFileByPath(notePath);
+    await this.ensureFolderForPath(notePath);
+    if (existing) {
+      await this.app.vault.process(existing, () => content);
+    } else {
+      await this.app.vault.create(notePath, content);
+    }
+    this.settings.recentWrites = [
+      {
+        path: notePath,
+        title: payload.title || notePath.split('/').pop()?.replace(/\.md$/i, '') || 'Markdown file',
+        mode: 'managed-file',
+        kind: payload.kind || 'codegraph',
+        updated: Boolean(existing),
+        writtenAt: new Date().toISOString(),
+      },
+      ...this.settings.recentWrites,
+    ].slice(0, 20);
+    await this.saveSettings();
+    return {
+      path: notePath,
+      updated: Boolean(existing),
       vaultName: this.app.vault.getName(),
     };
   }

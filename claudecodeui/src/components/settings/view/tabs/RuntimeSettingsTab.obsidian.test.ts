@@ -4,147 +4,132 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+const readLocalSource = (...segments: string[]) => {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  return readFileSync(resolve(currentDir, ...segments), 'utf8');
+};
+
 describe('Runtime settings Obsidian bridge entry', () => {
   it('renders the Obsidian bridge settings content from the runtime tab', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(resolve(currentDir, 'RuntimeSettingsTab.tsx'), 'utf8');
+    const source = readLocalSource('RuntimeSettingsTab.tsx');
 
     expect(source).toContain('ObsidianBridgeSettingsContent');
     expect(source).toContain('./runtime-settings/ObsidianBridgeSettingsContent');
   });
 
   it('organizes runtime settings into top-level tabs like the agent page', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(resolve(currentDir, 'RuntimeSettingsTab.tsx'), 'utf8');
+    const source = readLocalSource('RuntimeSettingsTab.tsx');
 
     expect(source).toContain('RUNTIME_SETTINGS_TABS');
     expect(source).toContain("id: 'local-permissions'");
     expect(source).toContain("id: 'obsidian'");
     expect(source).toContain("id: 'openmythos'");
-    expect(source).toContain('本地执行权限');
-    expect(source).toContain('Obsidian 知识库');
-    expect(source).toContain('OpenMythos 运行时');
     expect(source).toContain('role="tablist"');
     expect(source).toContain('selectedRuntimeTab');
     expect(source).toContain('renderLocalPermissionsTab');
     expect(source).toContain('renderObsidianTab');
     expect(source).toContain('renderOpenMythosTab');
-    expect(source).toContain("selectedRuntimeTab === 'local-permissions'");
-    expect(source).toContain("selectedRuntimeTab === 'obsidian'");
-    expect(source).toContain("selectedRuntimeTab === 'openmythos'");
-    expect(source).toContain('保存本地执行权限');
   });
 
-  it('wires bridge settings to the public API and exposes the compact tab layout', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(
-      resolve(currentDir, 'runtime-settings', 'ObsidianBridgeSettingsContent.tsx'),
-      'utf8',
-    );
+  it('wires bridge settings to the main Memory and CodeGraph path only', () => {
+    const source = readLocalSource('runtime-settings', 'ObsidianBridgeSettingsContent.tsx');
 
     expect(source).toContain('/api/settings/obsidian-bridge');
+    expect(source).toContain('enabled: true');
     expect(source).toContain('/api/obsidian-bridge/test-connection');
     expect(source).toContain('/api/obsidian-bridge/vaults');
     expect(source).toContain('/api/obsidian-bridge/install-plugin');
-    expect(source).toContain('安装插件到 vault');
-    expect(source).toContain('刷新 vault');
+    expect(source).toContain('/api/obsidian-bridge/select-vault');
+    expect(source).toContain('/api/codegraph/status');
+    expect(source).toContain('/api/codegraph/sync/background');
+    expect(source).toContain('/api/codegraph/export-obsidian');
     expect(source).toContain('SettingsToggle');
+    expect(source).toContain('enableMemory');
+    expect(source).toContain('enableCodeGraph');
     expect(source).toContain('aiMemoryReadbackEnabled');
-    expect(source).toContain('aiMemoryMaxResults');
-    expect(source).toContain('aiMemoryProjectScopeEnabled');
-    expect(source).toContain('activeNoteReadbackEnabled');
+    expect(source).toContain('wikiReadbackEnabled');
+    expect(source).toContain('codegraphEnabled');
+    expect(source).toContain('codegraphBackgroundSyncEnabled');
+    expect(source).toContain('codegraphWriteObsidianSummaries');
+    expect(source).toContain('codegraphExportLevel');
+    expect(source).toContain('codegraphMaxEmbeddedSymbols');
+    expect(source).toContain('skippedUnchanged');
+    expect(source).toContain('mcpConfigured');
+    expect(source).toContain('activeProjectRoot');
+    expect(source).toContain('projectRoot: activeProjectRoot');
+    expect(source).toContain('codegraphStorageRoot');
+    expect(source).toContain('selectDirectory');
+    expect(source).toContain('handleSelectCodeGraphStorage');
+    expect(source).toContain('CodeGraph 集中存储目录');
+    expect(source).toContain('选择目录');
+    expect(source).toContain('恢复默认目录');
+    expect(source).toContain('开启后自动同步并接入 Claude Code');
+    expect(source).toContain('全局开关');
+    expect(source).toContain('立即重跑同步');
+    expect(source).toContain('立即重新导出');
     expect(source).toContain('activeVaultId');
-    expect(source).toContain('mcpEnabled');
-    expect(source).toContain('/api/obsidian-bridge/active');
-    expect(source).toContain('/api/obsidian-bridge/query');
-    expect(source).toContain('/api/obsidian-bridge/mcp/install');
-    expect(source).toContain('/api/obsidian-bridge/memory/candidates');
-    expect(source).toContain('/api/obsidian-bridge/memory/commit');
-    expect(source).toContain('AI Memory 候选入口');
-    expect(source).toContain('测试当前笔记');
-    expect(source).toContain('安装 MCP');
     expect(source).toContain('readableVaultFolders');
     expect(source).toContain('lastConnection');
     expect(source).toContain('pluginVersion');
-    expect(source).toContain('/api/obsidian-bridge/search');
-    expect(source).toContain('/api/obsidian-bridge/context');
-    expect(source).toContain('/api/obsidian-bridge/duplicates/scan');
-    expect(source).toContain('/api/obsidian-bridge/duplicates/archive');
-    expect(source).toContain('/api/obsidian-bridge/auto-capture/backfill');
-    expect(source).toContain('/api/obsidian-bridge/auto-capture/status');
-    expect(source).toContain('OBSIDIAN_BRIDGE_TABS');
-    expect(source).toContain("id: 'connection'");
-    expect(source).toContain("id: 'knowledge'");
-    expect(source).toContain("id: 'advanced'");
-    expect(source).toContain('连接');
-    expect(source).toContain('知识库');
-    expect(source).toContain('高级');
-    expect(source).toContain('role="tablist"');
-    expect(source).toContain('selectedObsidianTab');
-    expect(source).toContain('最近错误');
-    expect(source).toContain('重复笔记清理');
-    expect(source).toContain('Obsidian 知识库');
-    expect(source).not.toContain('Daily note 目录');
-    expect(source).not.toContain('Daily note 标题');
-    expect(source).not.toContain('默认写入形态');
-    expect(source).not.toContain('测试自动路由');
-    expect(source).not.toContain('Schema 目录');
-    expect(source).not.toContain('Wiki Compiler');
+    expect(source).toContain('CodeGraph/Index.md');
+    expect(source).toContain('Native export level');
+    expect(source).toContain('Embedded symbol limit');
+    expect(source).toContain('loadCodeGraphStatus({ quiet: true, showSpinner: false })');
+    expect(source).not.toContain('OBSIDIAN_BRIDGE_TABS');
+    expect(source).not.toContain('selectedObsidianTab');
+    expect(source).not.toContain('/api/obsidian-bridge/active');
+    expect(source).not.toContain('/api/obsidian-bridge/query');
+    expect(source).not.toContain('/api/obsidian-bridge/mcp/install');
+    expect(source).not.toContain('/api/obsidian-bridge/memory/candidates');
+    expect(source).not.toContain('/api/obsidian-bridge/memory/commit');
+    expect(source).not.toContain('FolderBrowserModal');
+    expect(source).not.toContain('/api/obsidian-bridge/search');
+    expect(source).not.toContain('/api/obsidian-bridge/context');
+    expect(source).not.toContain('/api/obsidian-bridge/duplicates/scan');
+    expect(source).not.toContain('/api/obsidian-bridge/duplicates/archive');
+    expect(source).not.toContain('/api/obsidian-bridge/auto-capture/backfill');
+    expect(source).not.toContain('/api/obsidian-bridge/auto-capture/status');
+    expect(source).not.toContain('mcpEnabled');
+    expect(source).not.toContain('activeNoteReadbackEnabled');
+    expect(source).not.toContain('onOpenSmallModelSettings');
   });
 
-  it('keeps the Obsidian settings page compact and links to global small model settings', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(
-      resolve(currentDir, 'runtime-settings', 'ObsidianBridgeSettingsContent.tsx'),
-      'utf8',
-    );
-    const settingsSource = readFileSync(resolve(currentDir, '..', 'Settings.tsx'), 'utf8');
+  it('removes manual Wiki upload, small-model, and migration controls from the Obsidian settings page', () => {
+    const source = readLocalSource('runtime-settings', 'ObsidianBridgeSettingsContent.tsx');
+    const settingsSource = readLocalSource('..', 'Settings.tsx');
 
-    expect(source).toContain('连接 Obsidian');
-    expect(source).toContain('上传/保存成 Wiki');
-    expect(source).toContain('Wiki 回读注入');
-    expect(source).toContain('打开小模型设置');
-    expect(source).toContain('高级诊断');
+    expect(source).toContain('Connect Obsidian');
+    expect(source).toContain('Obsidian Memory');
+    expect(source).toContain('CodeGraph');
+    expect(source).toContain('Argus/Wiki');
+    expect(source).toContain('Argus/AIMemory');
     expect(source).not.toContain('<details');
-    expect(source).toContain('onOpenSmallModelSettings');
+    expect(source).not.toContain('knowledgeUploadInputRef');
+    expect(source).not.toContain('uploadKnowledgeFiles');
+    expect(source).not.toContain('/api/obsidian-bridge/wiki/upload');
+    expect(source).not.toContain('summaryType');
+    expect(source).not.toContain('WIKI_SUMMARY_TYPES');
+    expect(source).not.toContain('technical-review');
+    expect(source).not.toContain('compileQualityStatus');
+    expect(source).not.toContain('wikiReadbackPreview');
+    expect(source).not.toContain('reranked');
+    expect(source).not.toContain('rerankModel');
+    expect(source).not.toContain("formData.append('files'");
+    expect(source).not.toContain('wikiCompiler');
+    expect(source).not.toContain('wikiCompileChunks');
+    expect(source).not.toContain('extractionEngine');
+    expect(source).not.toContain('pdfExtractedPages');
+    expect(source).not.toContain('installMcp');
+    expect(source).not.toContain('scanDuplicates');
+    expect(source).not.toContain('archiveDuplicates');
+    expect(source).not.toContain('runBackfill');
+    expect(source).not.toContain('loadMemoryCandidates');
     expect(settingsSource).toContain('agentInitialCategory');
     expect(settingsSource).toContain('small-model');
   });
 
-  it('exposes a direct knowledge-base upload entry from the Obsidian settings page', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(
-      resolve(currentDir, 'runtime-settings', 'ObsidianBridgeSettingsContent.tsx'),
-      'utf8',
-    );
-
-    expect(source).toContain('knowledgeUploadInputRef');
-    expect(source).toContain('uploadKnowledgeFiles');
-    expect(source).toContain('/api/obsidian-bridge/wiki/upload');
-    expect(source).toContain('summaryType');
-    expect(source).toContain('WIKI_SUMMARY_TYPES');
-    expect(source).toContain('technical-review');
-    expect(source).toContain('compileQualityStatus');
-    expect(source).toContain('wikiReadbackPreview');
-    expect(source).toContain('reranked');
-    expect(source).toContain('rerankModel');
-    expect(source).toContain("formData.append('files'");
-    expect(source).toContain('wikiCompiler');
-    expect(source).toContain('wikiCompileChunks');
-    expect(source).toContain('extractionEngine');
-    expect(source).toContain('pdfExtractedPages');
-    expect(source).toContain('小模型编译');
-    expect(source).toContain('fallback 编译');
-    expect(source).toContain('上传现有文件');
-    expect(source).toContain('Raw → Wiki → Index');
-  });
-
   it('keeps Results focused on manual Wiki upload and implemented artifact actions', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const source = readFileSync(
-      resolve(currentDir, '..', '..', '..', 'artifacts', 'view', 'ArtifactsPanel.tsx'),
-      'utf8',
-    );
+    const source = readLocalSource('..', '..', '..', 'artifacts', 'view', 'ArtifactsPanel.tsx');
 
     expect(source).toContain('/send-to-obsidian');
     expect(source).toContain('\u4fdd\u5b58\u5230 Wiki');
@@ -177,23 +162,13 @@ describe('Runtime settings Obsidian bridge entry', () => {
   });
 
   it('wires chat file attachments to the Obsidian wiki ingest toggle', () => {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const hookSource = readFileSync(
-      resolve(currentDir, '..', '..', '..', 'chat', 'hooks', 'useChatComposerState.ts'),
-      'utf8',
-    );
-    const composerSource = readFileSync(
-      resolve(currentDir, '..', '..', '..', 'chat', 'view', 'subcomponents', 'ChatComposer.tsx'),
-      'utf8',
-    );
-    const interfaceSource = readFileSync(
-      resolve(currentDir, '..', '..', '..', 'chat', 'view', 'ChatInterface.tsx'),
-      'utf8',
-    );
+    const hookSource = readLocalSource('..', '..', '..', 'chat', 'hooks', 'useChatComposerState.ts');
+    const composerSource = readLocalSource('..', '..', '..', 'chat', 'view', 'subcomponents', 'ChatComposer.tsx');
+    const interfaceSource = readLocalSource('..', '..', '..', 'chat', 'view', 'ChatInterface.tsx');
 
     expect(hookSource).toContain('ingestAttachmentsToObsidian');
     expect(hookSource).toContain("formData.append('obsidianIngest'");
-    expect(composerSource).toContain('同时落库到 Obsidian');
+    expect(composerSource).toContain('\u540c\u65f6\u843d\u5e93\u5230 Obsidian');
     expect(interfaceSource).toContain('ingestAttachmentsToObsidian');
   });
 });

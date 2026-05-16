@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createBuildManifest } from './package-manifest.mjs';
 
@@ -51,5 +54,15 @@ describe('createBuildManifest', () => {
 
     expect(manifest.channel).toBe('preview');
     expect(manifest.debug).toBe(false);
+  });
+
+  it('generates a debug launcher that does not fail on native stderr diagnostics', () => {
+    const currentDir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(currentDir, 'package-preview-win.mjs'), 'utf8');
+
+    expect(source).toContain('$ErrorActionPreference = "Continue"');
+    expect(source).toContain('$global:PSNativeCommandUseErrorActionPreference = $false');
+    expect(source).toContain('$env:ARGUS_OBSIDIAN_DEBUG = "1"');
+    expect(source).toContain('$env:ARGUS_CODEGRAPH_DEBUG = "1"');
   });
 });

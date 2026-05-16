@@ -42,7 +42,7 @@ describe('obsidian bridge installer service', () => {
   it('reads plugin bridge data, checks reachability, and never exposes the token', async () => {
     const vaultPath = join(tempRoot, 'Reachable Vault');
     await mkdir(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge'), { recursive: true });
-    await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'manifest.json'), '{"version":"0.1.3"}', 'utf8');
+    await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'manifest.json'), '{"version":"0.1.4"}', 'utf8');
     await writeFile(join(vaultPath, '.obsidian', 'plugins', 'argus-bridge', 'data.json'), JSON.stringify({
       port: 27178,
       token: 'secret-token',
@@ -68,7 +68,7 @@ describe('obsidian bridge installer service', () => {
         json: async () => ({
           success: true,
           vaultName: 'Reachable Vault',
-          pluginVersion: '0.1.3',
+          pluginVersion: '0.1.4',
         }),
       };
     });

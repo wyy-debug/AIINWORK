@@ -67,7 +67,6 @@ const RUNTIME_SETTINGS_TABS: Array<{
 export default function RuntimeSettingsTab({
   projects = [],
   selectedProject = null,
-  onOpenSmallModelSettings,
 }: RuntimeSettingsTabProps) {
   const [permissions, setPermissions] = useState<RuntimePermissions>(DEFAULT_PERMISSIONS);
   const [allowedPathsText, setAllowedPathsText] = useState('');
@@ -216,7 +215,6 @@ export default function RuntimeSettingsTab({
     <ObsidianBridgeSettingsContent
       projects={projects}
       selectedProject={selectedProject}
-      onOpenSmallModelSettings={onOpenSmallModelSettings}
     />
   );
 

@@ -7,6 +7,7 @@ import {
 const CONFIG_KEY = 'obsidian_bridge';
 const DEFAULT_PORT = '27177';
 const DEFAULT_VAULT_ID = 'default';
+const MAIN_PATH_SWITCH_SCOPE = 'global-v1';
 
 export const OBSIDIAN_BRIDGE_MODES = [
   'project-knowledge',
@@ -15,7 +16,7 @@ export const OBSIDIAN_BRIDGE_MODES = [
 ];
 
 export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
-  enabled: false,
+  enabled: true,
   endpoint: 'http://127.0.0.1:27177',
   token: '',
   vaultName: '',
@@ -28,7 +29,7 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   lastConnection: '',
   lastError: '',
   pluginVersion: '',
-  aiMemoryReadbackEnabled: false,
+  aiMemoryReadbackEnabled: true,
   aiMemoryMaxResults: 8,
   aiMemoryProjectScopeEnabled: true,
   activeVaultId: DEFAULT_VAULT_ID,
@@ -38,13 +39,26 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   mcpEnabled: false,
   wikiPrimaryEnabled: true,
   wikiCompilerEnabled: true,
-  wikiReadbackEnabled: false,
+  wikiReadbackEnabled: true,
   wikiReadbackIncludeRaw: false,
   wikiReadbackMaxResults: 8,
   wikiRawFolder: 'Argus/Raw',
   wikiFolder: 'Argus/Wiki',
   wikiIndexFolder: 'Argus/_Indexes',
   wikiMetaFolder: 'Argus/_Meta',
+  codegraphEnabled: true,
+  codegraphBackgroundSyncEnabled: true,
+  codegraphWriteObsidianSummaries: true,
+  codegraphLazyLlmSummaries: false,
+  codegraphMaxSymbolNotes: 50,
+  codegraphImpactMaxDepth: 2,
+  codegraphImpactLimit: 50,
+  codegraphGhostPolicy: 'deprecate',
+  codegraphAutoDeleteGhostNotes: false,
+  codegraphStorageRoot: '',
+  codegraphExportLevel: 'structural',
+  codegraphMaxEmbeddedSymbols: 200,
+  obsidianMainPathSwitchScope: MAIN_PATH_SWITCH_SCOPE,
   routingRules: {
     readingNotesMode: 'second-brain',
     projectKnowledgeMode: 'project-knowledge',
@@ -72,6 +86,18 @@ export const setObsidianBridgeConfigStoreForTests = (store) => {
 };
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const hasOwn = (source, key) => Object.prototype.hasOwnProperty.call(source, key);
+
+const normalizeGlobalMainPathSwitch = (source, key) => {
+  if (!hasOwn(source, key)) {
+    return DEFAULT_OBSIDIAN_BRIDGE_CONFIG[key] === true;
+  }
+  if (source.obsidianMainPathSwitchScope !== MAIN_PATH_SWITCH_SCOPE && source[key] === false) {
+    return DEFAULT_OBSIDIAN_BRIDGE_CONFIG[key] === true;
+  }
+  return source[key] === true;
+};
 
 const normalizeMode = (value, fallback = DEFAULT_OBSIDIAN_BRIDGE_CONFIG.defaultMode) => (
   OBSIDIAN_BRIDGE_MODES.includes(value) ? value : fallback
@@ -142,6 +168,10 @@ const normalizeVaultFolder = (value) => {
   }
   return normalized;
 };
+
+const normalizeCodeGraphStorageRoot = (value) => (
+  readString(value).replace(/[<>|?*\x00-\x1f]/g, '').trim()
+);
 
 const REQUIRED_WIKI_READABLE_FOLDERS = ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'];
 
@@ -256,7 +286,7 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
   const activeVault = vaults.find((vault) => vault.vaultId === activeVaultId) || vaults[0] || buildLegacyVaultConfig(source);
 
   return {
-    enabled: source.enabled === true,
+    enabled: normalizeGlobalMainPathSwitch(source, 'enabled'),
     endpoint: activeVault.endpoint,
     token: activeVault.token,
     vaultName: activeVault.name,
@@ -271,14 +301,10 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     lastError: (activeVault.lastError || readString(source.lastError)).slice(0, 500),
     pluginVersion: (activeVault.pluginVersion || readString(source.pluginVersion)).slice(0, 80),
     wikiPrimaryEnabled: source.wikiPrimaryEnabled !== false,
-    wikiReadbackEnabled: Object.prototype.hasOwnProperty.call(source, 'wikiReadbackEnabled')
-      ? source.wikiReadbackEnabled === true
-      : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiReadbackEnabled,
+    wikiReadbackEnabled: normalizeGlobalMainPathSwitch(source, 'wikiReadbackEnabled'),
     wikiReadbackIncludeRaw: source.wikiReadbackIncludeRaw === true,
     wikiReadbackMaxResults: normalizeMaxResults(source.wikiReadbackMaxResults ?? source.aiMemoryMaxResults),
-    aiMemoryReadbackEnabled: Object.prototype.hasOwnProperty.call(source, 'aiMemoryReadbackEnabled')
-      ? source.aiMemoryReadbackEnabled === true
-      : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.aiMemoryReadbackEnabled,
+    aiMemoryReadbackEnabled: normalizeGlobalMainPathSwitch(source, 'aiMemoryReadbackEnabled'),
     aiMemoryMaxResults: normalizeMaxResults(source.aiMemoryMaxResults ?? source.wikiReadbackMaxResults),
     aiMemoryProjectScopeEnabled: source.aiMemoryProjectScopeEnabled !== false,
     activeVaultId,
@@ -291,6 +317,19 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     wikiFolder: normalizeVaultFolder(source.wikiFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiFolder,
     wikiIndexFolder: normalizeVaultFolder(source.wikiIndexFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiIndexFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiIndexFolder,
     wikiMetaFolder: normalizeVaultFolder(source.wikiMetaFolder || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiMetaFolder) || DEFAULT_OBSIDIAN_BRIDGE_CONFIG.wikiMetaFolder,
+    codegraphEnabled: normalizeGlobalMainPathSwitch(source, 'codegraphEnabled'),
+    codegraphBackgroundSyncEnabled: source.codegraphBackgroundSyncEnabled !== false,
+    codegraphWriteObsidianSummaries: source.codegraphWriteObsidianSummaries !== false,
+    codegraphLazyLlmSummaries: source.codegraphLazyLlmSummaries === true,
+    codegraphMaxSymbolNotes: normalizeNumberRange(source.codegraphMaxSymbolNotes, DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphMaxSymbolNotes, 1, 200),
+    codegraphImpactMaxDepth: normalizeNumberRange(source.codegraphImpactMaxDepth, DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphImpactMaxDepth, 1, 5),
+    codegraphImpactLimit: normalizeNumberRange(source.codegraphImpactLimit, DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphImpactLimit, 1, 200),
+    codegraphGhostPolicy: normalizeCodeGraphGhostPolicy(source.codegraphGhostPolicy),
+    codegraphAutoDeleteGhostNotes: source.codegraphAutoDeleteGhostNotes === true,
+    codegraphStorageRoot: normalizeCodeGraphStorageRoot(source.codegraphStorageRoot),
+    codegraphExportLevel: normalizeCodeGraphExportLevel(source.codegraphExportLevel),
+    codegraphMaxEmbeddedSymbols: normalizeNumberRange(source.codegraphMaxEmbeddedSymbols, DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphMaxEmbeddedSymbols, 1, 1000),
+    obsidianMainPathSwitchScope: MAIN_PATH_SWITCH_SCOPE,
     routingRules: normalizeRoutingRules(source.routingRules),
     vaults,
   };
@@ -322,6 +361,22 @@ const readStoredConfig = () => {
     return DEFAULT_OBSIDIAN_BRIDGE_CONFIG;
   }
 };
+
+const normalizeNumberRange = (value, fallback, min, max) => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, min), max);
+};
+
+const normalizeCodeGraphGhostPolicy = (value) => (
+  ['deprecate', 'archive', 'ignore'].includes(value) ? value : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphGhostPolicy
+);
+
+const normalizeCodeGraphExportLevel = (value) => (
+  ['structural', 'all'].includes(value) ? value : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphExportLevel
+);
 
 const readStoredConfigRaw = () => {
   try {
@@ -496,25 +551,101 @@ const chooseReachableVault = (vaults = [], config = {}) => {
     || reachable[0];
 };
 
+const scoreRepairVaultCandidate = (vault, config = {}) => {
+  const activeVault = activeVaultFromConfig(config);
+  let score = 0;
+  if (vault?.bridgeReachable === true) score += 100;
+  if (vault?.open === true) score += 20;
+  if (readString(vault?.name).toLowerCase() === readString(activeVault.name || config.vaultName).toLowerCase()) score += 30;
+  if (readString(vault?.bridgeEndpoint) === readString(activeVault.endpoint || config.endpoint)) score += 10;
+  if (vault?.pluginInstalled) score += 5;
+  return score;
+};
+
+const chooseRepairVaultCandidate = (vaults = [], config = {}) => {
+  const reachable = chooseReachableVault(vaults, config);
+  if (reachable) {
+    return reachable;
+  }
+
+  const candidates = (Array.isArray(vaults) ? vaults : [])
+    .filter((vault) => vault?.path && vault.bridgeEndpoint && vault.tokenConfigured)
+    .sort((left, right) => scoreRepairVaultCandidate(right, config) - scoreRepairVaultCandidate(left, config));
+  return candidates[0] || null;
+};
+
+const shouldEmitObsidianDebugLog = (logger) => Boolean(
+  logger
+    && (
+      logger !== console
+      || process.env.ARGUS_OBSIDIAN_DEBUG === '1'
+      || process.env.ARGUS_DEBUG_PACKAGE === '1'
+      || process.env.ARGUS_PACKAGE_CHANNEL === 'debug'
+    ),
+);
+
+const logObsidianBridge = (logger, event, details = {}, level = 'log') => {
+  if (!shouldEmitObsidianDebugLog(logger)) return;
+  const writer = level === 'warn'
+    ? logger.warn || logger.log || logger.info
+    : logger.log || logger.info || logger.warn;
+  if (typeof writer !== 'function') return;
+  writer.call(logger, `[Obsidian Bridge] ${event} ${JSON.stringify({
+    at: new Date().toISOString(),
+    ...details,
+  })}`);
+};
+
 export const repairObsidianBridgeConfigFromReachableVaults = async ({
   allowDisabledBootstrap = false,
   fetchImpl = globalThis.fetch,
   listVaults = defaultListObsidianVaults,
   readPluginData = defaultReadObsidianBridgePluginData,
   statusTimeoutMs = 1500,
+  logger = console,
 } = {}) => {
   const current = readObsidianBridgeConfig({ includeToken: true });
   const hasStoredBridgeConfig = Boolean(readStoredConfigRaw());
   if (!current.enabled && !(allowDisabledBootstrap && !hasStoredBridgeConfig)) {
+    logObsidianBridge(logger, 'repair_skip_disabled', {
+      allowDisabledBootstrap,
+      hasStoredBridgeConfig,
+    });
     return null;
   }
 
-  const reachableVaults = await listVaults({
-    fetchImpl,
-    statusTimeoutMs,
-  }).catch(() => []);
-  const selectedVault = chooseReachableVault(reachableVaults, current);
+  let discoveredVaults = [];
+  try {
+    discoveredVaults = await listVaults({
+      fetchImpl,
+      statusTimeoutMs,
+    });
+  } catch (error) {
+    logObsidianBridge(logger, 'repair_discovery_failed', {
+      message: error?.message || String(error || 'Vault discovery failed.'),
+    }, 'warn');
+  }
+
+  logObsidianBridge(logger, 'repair_discovery', {
+    count: Array.isArray(discoveredVaults) ? discoveredVaults.length : 0,
+    currentEndpoint: current.endpoint,
+    currentVaultName: current.vaultName,
+    candidates: (Array.isArray(discoveredVaults) ? discoveredVaults : []).slice(0, 5).map((vault) => ({
+      name: readString(vault?.name),
+      endpoint: readString(vault?.bridgeEndpoint),
+      reachable: vault?.bridgeReachable,
+      tokenConfigured: vault?.tokenConfigured === true,
+      open: vault?.open === true,
+      pluginVersion: readString(vault?.statusPluginVersion || vault?.pluginVersion),
+    })),
+  });
+
+  const selectedVault = chooseRepairVaultCandidate(discoveredVaults, current);
   if (!selectedVault?.path) {
+    logObsidianBridge(logger, 'repair_no_candidate', {
+      currentEndpoint: current.endpoint,
+      currentVaultName: current.vaultName,
+    }, 'warn');
     return null;
   }
 
@@ -522,6 +653,11 @@ export const repairObsidianBridgeConfigFromReachableVaults = async ({
   const endpoint = readString(bridgeData.endpoint || selectedVault.bridgeEndpoint);
   const token = readString(bridgeData.token);
   if (!endpoint || !token) {
+    logObsidianBridge(logger, 'repair_candidate_incomplete', {
+      vaultName: readString(selectedVault.name),
+      endpoint,
+      hasToken: Boolean(token),
+    }, 'warn');
     return null;
   }
 
@@ -551,6 +687,13 @@ export const repairObsidianBridgeConfigFromReachableVaults = async ({
     ],
     lastError: '',
   });
+  logObsidianBridge(logger, 'repair_saved', {
+    vaultName: nextVault.name,
+    endpoint,
+    previousEndpoint: activeVault.endpoint || current.endpoint,
+    pluginVersion: nextVault.pluginVersion,
+    reachable: selectedVault.bridgeReachable,
+  }, selectedVault.bridgeReachable === true ? 'log' : 'warn');
   return getConfiguredBridge({ requireEnabled: true, vaultId });
 };
 
@@ -562,17 +705,59 @@ const readResponseJson = async (response) => {
   }
 };
 
+const bridgePayloadSummary = (path, payload = {}) => {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  if (path === '/argus/v1/files/upsert') {
+    return {
+      notePath: readString(body.path),
+      kind: readString(body.kind),
+      title: readString(body.title),
+      contentBytes: Buffer.byteLength(String(body.content || ''), 'utf8'),
+    };
+  }
+  if (path === '/argus/v1/patch') {
+    return {
+      notePath: readString(body.target?.path || body.path),
+      operation: readString(body.operation),
+      heading: readString(body.heading),
+      contentBytes: Buffer.byteLength(String(body.content || ''), 'utf8'),
+    };
+  }
+  if (path === '/argus/v1/query') {
+    return {
+      query: readString(body.query),
+      folders: Array.isArray(body.folders) ? body.folders.slice(0, 5) : [],
+      limit: body.limit,
+      filterCount: Array.isArray(body.filters) ? body.filters.length : 0,
+    };
+  }
+  return {};
+};
+
 const callBridge = async (path, options = {}, config, fetchImpl, {
   allowRepair = true,
   repairBridgeConfig = repairObsidianBridgeConfigFromReachableVaults,
   vaultId = '',
   payload = null,
+  logger = console,
+  payloadSummary = null,
 } = {}) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   timeout.unref?.();
+  const startedAt = Date.now();
+  const method = readString(options.method || 'GET').toUpperCase();
 
   try {
+    logObsidianBridge(logger, 'request_start', {
+      method,
+      path,
+      endpoint: config.endpoint,
+      timeoutMs: config.timeoutMs,
+      vaultName: config.vaultName,
+      pluginVersion: config.pluginVersion,
+      ...(payloadSummary || bridgePayloadSummary(path, payload)),
+    });
     const response = await fetchImpl(`${config.endpoint}${path}`, {
       ...options,
       headers: {
@@ -584,12 +769,29 @@ const callBridge = async (path, options = {}, config, fetchImpl, {
     });
     const data = await readResponseJson(response);
     if (!response.ok || data?.error) {
+      logObsidianBridge(logger, 'request_failed', {
+        method,
+        path,
+        endpoint: config.endpoint,
+        status: response.status,
+        code: data?.code || 'OBSIDIAN_BRIDGE_REQUEST_FAILED',
+        message: data?.error || `Obsidian bridge returned HTTP ${response.status}.`,
+        durationMs: Date.now() - startedAt,
+      }, 'warn');
       throw new ObsidianBridgeError(data?.error || `Obsidian bridge returned HTTP ${response.status}.`, {
         code: data?.code || 'OBSIDIAN_BRIDGE_REQUEST_FAILED',
         statusCode: response.status >= 400 && response.status < 600 ? response.status : 502,
         details: data,
       });
     }
+    logObsidianBridge(logger, 'request_success', {
+      method,
+      path,
+      endpoint: config.endpoint,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      resultKeys: data && typeof data === 'object' ? Object.keys(data).slice(0, 12) : [],
+    });
     return data || { success: true };
   } catch (error) {
     if (error instanceof ObsidianBridgeError) {
@@ -599,11 +801,33 @@ const callBridge = async (path, options = {}, config, fetchImpl, {
       ? 'Obsidian bridge request timed out.'
       : `Unable to reach Obsidian bridge: ${error?.message || 'unknown error'}`;
     if (allowRepair && typeof repairBridgeConfig === 'function') {
+      logObsidianBridge(logger, 'repair_attempt', {
+        method,
+        path,
+        endpoint: config.endpoint,
+        reason: message,
+        durationMs: Date.now() - startedAt,
+      }, 'warn');
       const repairedConfig = await repairBridgeConfig({
         fetchImpl,
         statusTimeoutMs: Math.min(config.timeoutMs || 5000, 1500),
-      }).catch(() => null);
+        logger,
+      }).catch((repairError) => {
+        logObsidianBridge(logger, 'repair_failed', {
+          method,
+          path,
+          endpoint: config.endpoint,
+          message: repairError?.message || String(repairError || 'Bridge repair failed.'),
+        }, 'warn');
+        return null;
+      });
       if (repairedConfig?.endpoint && repairedConfig.endpoint !== config.endpoint && repairedConfig.token) {
+        logObsidianBridge(logger, 'repair_retry', {
+          method,
+          path,
+          previousEndpoint: config.endpoint,
+          nextEndpoint: repairedConfig.endpoint,
+        }, 'warn');
         const nextConfig = payload || vaultId
           ? getConfiguredBridge({
             requireEnabled: true,
@@ -616,9 +840,18 @@ const callBridge = async (path, options = {}, config, fetchImpl, {
           repairBridgeConfig,
           vaultId,
           payload,
+          logger,
+          payloadSummary,
         });
       }
     }
+    logObsidianBridge(logger, 'request_unreachable', {
+      method,
+      path,
+      endpoint: config.endpoint,
+      message,
+      durationMs: Date.now() - startedAt,
+    }, 'warn');
     throw new ObsidianBridgeError(message, {
       code: 'OBSIDIAN_BRIDGE_UNREACHABLE',
       statusCode: 502,
@@ -843,6 +1076,7 @@ export const getActiveObsidianNote = async (payload = {}, {
 
 export const patchObsidianNote = async (payload = {}, {
   fetchImpl = globalThis.fetch,
+  logger = console,
 } = {}) => {
   if (typeof fetchImpl !== 'function') {
     throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
@@ -856,11 +1090,39 @@ export const patchObsidianNote = async (payload = {}, {
   return callBridge('/argus/v1/patch', {
     method: 'POST',
     body: JSON.stringify(body),
-  }, config, fetchImpl);
+  }, config, fetchImpl, {
+    payload,
+    logger,
+    payloadSummary: bridgePayloadSummary('/argus/v1/patch', payload),
+  });
+};
+
+export const upsertObsidianMarkdownFile = async (payload = {}, {
+  fetchImpl = globalThis.fetch,
+  logger = console,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  const { vaultId: _vaultId, ...body } = payload;
+  return callBridge('/argus/v1/files/upsert', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }, config, fetchImpl, {
+    payload,
+    logger,
+    payloadSummary: bridgePayloadSummary('/argus/v1/files/upsert', payload),
+  });
 };
 
 export const queryObsidianNotes = async (payload = {}, {
   fetchImpl = globalThis.fetch,
+  logger = console,
 } = {}) => {
   if (typeof fetchImpl !== 'function') {
     throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
@@ -873,7 +1135,11 @@ export const queryObsidianNotes = async (payload = {}, {
   return callBridge('/argus/v1/query', {
     method: 'POST',
     body: JSON.stringify(normalizeObsidianSearchPayload(payload, config)),
-  }, config, fetchImpl);
+  }, config, fetchImpl, {
+    payload,
+    logger,
+    payloadSummary: bridgePayloadSummary('/argus/v1/query', payload),
+  });
 };
 
 export const appendObsidianPeriodicNote = async (payload = {}, {

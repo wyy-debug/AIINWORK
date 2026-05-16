@@ -7,6 +7,8 @@ import Database from 'better-sqlite3';
 
 const DEFAULT_STORE_FILE = 'thread-goals.db';
 const DEFAULT_LEGACY_STORE_FILE = 'thread-goals.json';
+const DEFAULT_BUSY_TIMEOUT_MS = 5000;
+const EVENT_POLL_BUSY_TIMEOUT_MS = 250;
 const VALID_SESSION_ID = /^[a-zA-Z0-9._-]+$/;
 const VALID_STORED_STATUSES = new Set(['active', 'paused', 'complete', 'budget_limited']);
 const VALID_USER_STATUSES = new Set(['active', 'paused', 'complete']);
@@ -151,39 +153,54 @@ function goalToRow(goal) {
   };
 }
 
-function openGoalDb() {
+function normalizeBusyTimeoutMs(value, fallback = DEFAULT_BUSY_TIMEOUT_MS) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.floor(parsed), 0), DEFAULT_BUSY_TIMEOUT_MS);
+}
+
+function openGoalDb({ busyTimeoutMs = DEFAULT_BUSY_TIMEOUT_MS } = {}) {
   const dbPath = getGoalStorePath();
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS thread_goals (
-      thread_id TEXT PRIMARY KEY,
-      goal_id TEXT NOT NULL,
-      objective TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'complete', 'budget_limited')),
-      token_budget INTEGER,
-      tokens_used INTEGER NOT NULL DEFAULT 0,
-      time_used_seconds INTEGER NOT NULL DEFAULT 0,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
-    )
-  `).run();
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS thread_goal_events (
-      event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      thread_id TEXT NOT NULL,
-      goal_id TEXT,
-      event_type TEXT NOT NULL CHECK (event_type IN ('thread_goal_updated', 'thread_goal_cleared', 'thread_goal_lifecycle')),
-      lifecycle_type TEXT,
-      goal_json TEXT,
-      payload_json TEXT,
-      created_at_ms INTEGER NOT NULL
-    )
-  `).run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_thread_goal_events_event_id ON thread_goal_events(event_id)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_thread_goal_events_thread_id ON thread_goal_events(thread_id)').run();
-  migrateLegacyGoals(db, dbPath);
+  const timeout = normalizeBusyTimeoutMs(busyTimeoutMs);
+  const db = new Database(dbPath, { timeout });
+  try {
+    db.pragma(`busy_timeout = ${timeout}`);
+    db.pragma('journal_mode = WAL');
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS thread_goals (
+        thread_id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'complete', 'budget_limited')),
+        token_budget INTEGER,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
+        time_used_seconds INTEGER NOT NULL DEFAULT 0,
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      )
+    `).run();
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS thread_goal_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        goal_id TEXT,
+        event_type TEXT NOT NULL CHECK (event_type IN ('thread_goal_updated', 'thread_goal_cleared', 'thread_goal_lifecycle')),
+        lifecycle_type TEXT,
+        goal_json TEXT,
+        payload_json TEXT,
+        created_at_ms INTEGER NOT NULL
+      )
+    `).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_thread_goal_events_event_id ON thread_goal_events(event_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_thread_goal_events_thread_id ON thread_goal_events(thread_id)').run();
+    migrateLegacyGoals(db, dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   return db;
 }
 
@@ -445,7 +462,7 @@ export async function clearSessionGoal(sessionId, options = {}) {
 }
 
 export async function listSessionGoalEventsAfter(eventId, limit = 100) {
-  const db = openGoalDb();
+  const db = openGoalDb({ busyTimeoutMs: EVENT_POLL_BUSY_TIMEOUT_MS });
   try {
     const rows = db.prepare(`
       SELECT *

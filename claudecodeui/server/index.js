@@ -32,6 +32,7 @@ import {
     syncObsidianProjectInstructionFiles,
     ensureObsidianProjectInstructionFile,
 } from './services/obsidian-instruction-sync-service.js';
+import { applyCodeGraphRuntimeToChatCommand } from './services/codegraph-service.js';
 import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
 import {
     isNativeAutoMemorySyncEnabled,
@@ -57,6 +58,7 @@ import agentsRoutes from './routes/agents.js';
 import artifactsRoutes from './routes/artifacts.js';
 import authRoutes from './routes/auth.js';
 import automationsRoutes, { startAutomationScheduler } from './routes/automations.js';
+import codegraphRoutes from './routes/codegraph.js';
 import codexRoutes from './routes/codex.js';
 import commandsRoutes from './routes/commands.js';
 import cursorRoutes from './routes/cursor.js';
@@ -462,6 +464,7 @@ app.use('/api/automations', authenticateToken, automationsRoutes);
 app.use('/api/triage', authenticateToken, triageRoutes);
 app.use('/api/artifacts', authenticateToken, artifactsRoutes);
 app.use('/api/ide-bridge', authenticateToken, ideBridgeRoutes);
+app.use('/api/codegraph', authenticateToken, codegraphRoutes);
 app.use('/api/obsidian-bridge', authenticateToken, obsidianBridgeRoutes);
 
 // Cursor API Routes (protected)
@@ -2566,7 +2569,9 @@ function emitObsidianWikiResult(writer, data) {
 }
 
 async function applyObsidianKnowledgeRuntimeToChatCommand(data) {
-    const withContext = await applyObsidianContextToChatCommand(data);
+    const withContext = await applyCodeGraphRuntimeToChatCommand(
+        await applyObsidianContextToChatCommand(data),
+    );
     const options = withContext?.options && typeof withContext.options === 'object'
         ? withContext.options
         : {};

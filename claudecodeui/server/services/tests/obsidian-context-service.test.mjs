@@ -84,6 +84,7 @@ describe('obsidian context service', () => {
         aiMemoryReadbackEnabled: false,
         wikiReadbackMaxResults: 8,
         aiMemoryProjectScopeEnabled: true,
+        vaultName: 'WD',
         readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
       }),
     });
@@ -94,6 +95,7 @@ describe('obsidian context service', () => {
       used: true,
       resultCount: 1,
       source: 'wiki',
+      vaultName: 'WD',
     });
     expect(buildObsidianContext).toHaveBeenCalledWith({
       query: 'Continue the GPUScene review.',
@@ -103,6 +105,74 @@ describe('obsidian context service', () => {
         'Argus/_Indexes',
       ],
       limit: 8,
+    });
+  });
+
+  it('filters scoped Wiki readback results so another project CodeGraph is never injected', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const buildObsidianContext = vi.fn(async () => ({
+      success: true,
+      context: [
+        'Path: Argus/Wiki/Soc/CodeGraph/Symbols/Renderer.md',
+        'Title: Renderer',
+        'SOC renderer note.',
+        '',
+        '---',
+        '',
+        'Path: Argus/Wiki/E--AIINWORK/CodeGraph/Symbols/startServer.md',
+        'Title: startServer',
+        'AIINWORK server note.',
+      ].join('\n'),
+      results: [{
+        path: 'Argus/Wiki/Soc/CodeGraph/Symbols/Renderer.md',
+        title: 'Renderer',
+        snippet: 'SOC renderer note.',
+      }, {
+        path: 'Argus/Wiki/E--AIINWORK/CodeGraph/Symbols/startServer.md',
+        title: 'startServer',
+        snippet: 'AIINWORK server note.',
+      }, {
+        path: 'Argus/_Indexes/Uploads.md',
+        title: 'Uploads',
+        snippet: 'Global upload index.',
+      }],
+    }));
+
+    const result = await service.applyObsidianContextToChatCommand({
+      type: 'claude-command',
+      command: '继续 SOC 渲染审查。',
+      options: { projectName: 'Soc' },
+    }, {
+      buildObsidianContext,
+      refineWikiReadbackContext: vi.fn(async ({ context, results }) => ({
+        refined: false,
+        context,
+        sources: results,
+      })),
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        wikiReadbackEnabled: true,
+        aiMemoryReadbackEnabled: false,
+        wikiReadbackMaxResults: 8,
+        wikiReadbackProjectScopeEnabled: true,
+        aiMemoryProjectScopeEnabled: true,
+        vaultName: 'WD',
+      }),
+    });
+
+    expect(result.options.appendSystemPrompt).toContain('SOC renderer note.');
+    expect(result.options.appendSystemPrompt).not.toContain('AIINWORK server note.');
+    expect(result.options.appendSystemPrompt).not.toContain('Global upload index.');
+    expect(result.options.obsidianContext).toMatchObject({
+      used: true,
+      resultCount: 1,
+      vaultName: 'WD',
+      sources: [
+        expect.objectContaining({
+          path: 'Argus/Wiki/Soc/CodeGraph/Symbols/Renderer.md',
+          vaultName: 'WD',
+        }),
+      ],
     });
   });
 
@@ -196,13 +266,13 @@ describe('obsidian context service', () => {
     const service = await import('../obsidian-context-service.js');
     const buildObsidianContext = vi.fn(async () => ({
       success: true,
-      context: 'Path: Argus/Projects/App/Plan.md\nTitle: Plan\nShip it.',
-      results: [{ path: 'Argus/Projects/App/Plan.md', title: 'Plan' }],
+      context: 'Path: Argus/Wiki/App/Plan.md\nTitle: Plan\nShip it.',
+      results: [{ path: 'Argus/Wiki/App/Plan.md', title: 'Plan' }],
     }));
     const getActiveObsidianNote = vi.fn(async () => ({
       success: true,
       note: {
-        path: 'Argus/Projects/App/Active.md',
+        path: 'Argus/Wiki/App/Active.md',
         title: 'Active',
         selection: 'Current note selection.',
       },
@@ -226,15 +296,15 @@ describe('obsidian context service', () => {
         activeNoteReadbackEnabled: true,
         aiMemoryMaxResults: 3,
         aiMemoryProjectScopeEnabled: true,
-        readableVaultFolders: ['Argus/Projects', 'Argus/AIMemory'],
+        readableVaultFolders: ['Argus/Wiki', 'Argus/AIMemory'],
       }),
     });
 
     expect(result.options.appendSystemPrompt).toContain('Active Obsidian note');
     expect(result.options.appendSystemPrompt).toContain('Current note selection.');
     expect(result.options.obsidianContext.sources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'active-note', path: 'Argus/Projects/App/Active.md' }),
-      expect.objectContaining({ kind: 'context-result', path: 'Argus/Projects/App/Plan.md' }),
+      expect.objectContaining({ kind: 'active-note', path: 'Argus/Wiki/App/Active.md' }),
+      expect.objectContaining({ kind: 'context-result', path: 'Argus/Wiki/App/Plan.md' }),
     ]));
   });
 

@@ -28,6 +28,9 @@ describe('MessageComponent Obsidian Wiki upload controls', () => {
     expect(source).toContain('\u5df2\u6ce8\u5165');
     expect(source).toContain('Wiki \u4e0a\u4e0b\u6587');
     expect(source).toContain('obsidian://open');
+    expect(source).toContain('vaultName');
+    expect(source).toContain("params.set('vault'");
+    expect(source).toContain("params.set('file'");
     expect(source).toContain('summaryType');
     expect(source).toContain('routingModes');
     expect(source).toContain('obsidianTargets');

@@ -183,9 +183,14 @@ async function main() {
     await writeFile(
       path.join(bundleRoot, 'start-debug.ps1'),
       [
-        '$ErrorActionPreference = "Stop"',
+        '$ErrorActionPreference = "Continue"',
+        'if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {',
+        '  $global:PSNativeCommandUseErrorActionPreference = $false',
+        '}',
         '$env:ARGUS_PACKAGE_CHANNEL = "debug"',
         '$env:ARGUS_DEBUG_PACKAGE = "1"',
+        '$env:ARGUS_OBSIDIAN_DEBUG = "1"',
+        '$env:ARGUS_CODEGRAPH_DEBUG = "1"',
         '$root = Split-Path -Parent $MyInvocation.MyCommand.Path',
         '& (Join-Path $root "Argus-Debug.exe")',
         '',

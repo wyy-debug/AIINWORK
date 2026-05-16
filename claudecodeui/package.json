@@ -1,6 +1,6 @@
 {
   "name": "mtl-code-ui",
-  "version": "1.31.0",
+  "version": "1.31.1",
   "description": "A local-first web UI for the Argus backend",
   "type": "module",
   "main": "dist-server/server/index.js",
@@ -86,6 +86,7 @@
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/merge": "^6.11.1",
     "@codemirror/theme-one-dark": "^6.1.2",
+    "@colbymchenry/codegraph": "^0.7.6",
     "@iarna/toml": "^2.2.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@octokit/rest": "^22.0.0",

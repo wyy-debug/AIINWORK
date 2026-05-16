@@ -1,4 +1,5 @@
-import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, SquarePen, Star, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, GitBranch, Loader2, SquarePen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -6,6 +7,7 @@ import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
+import { apiFetch } from '../../../../utils/api';
 
 import TaskIndicator from './TaskIndicator';
 import SidebarProjectSessions from './SidebarProjectSessions';
@@ -66,6 +68,21 @@ const getSessionCountDisplay = (sessions: SessionWithProvider[], hasMoreSessions
   return `${sessionCount}`;
 };
 
+type CodeGraphBuildStatus = {
+  state?: string;
+  progress?: {
+    stage?: string;
+    percent?: number;
+    label?: string;
+  };
+  lastError?: string;
+  lastExport?: {
+    documents?: number;
+    written?: number;
+    skippedUnchanged?: number;
+  };
+};
+
 export default function SidebarProjectItem({
   project,
   selectedProject,
@@ -114,12 +131,175 @@ export default function SidebarProjectItem({
   const sessionCountLabel = `${sessionCountDisplay} session${sessions.length === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
   const canDispatchWorktree = !project.worktree;
+  const [isBuildingCodeGraph, setIsBuildingCodeGraph] = useState(false);
+  const [codeGraphBuildStatus, setCodeGraphBuildStatus] = useState<CodeGraphBuildStatus | null>(null);
+  const codeGraphPollTokenRef = useRef(0);
+  const mountedRef = useRef(true);
+  const projectRoot = project.fullPath || project.path || '';
+  const codeGraphProgressPercent = Math.max(
+    0,
+    Math.min(100, Math.round(Number(codeGraphBuildStatus?.progress?.percent) || 0)),
+  );
+  const codeGraphProgressLabel = codeGraphBuildStatus?.progress?.label
+    || (codeGraphBuildStatus?.state === 'queued' ? 'CodeGraph 已排队'
+      : codeGraphBuildStatus?.state === 'syncing' ? '正在检查整个项目'
+        : codeGraphBuildStatus?.state === 'success' ? 'CodeGraph 已写入 Obsidian'
+          : codeGraphBuildStatus?.state === 'error' ? codeGraphBuildStatus.lastError || 'CodeGraph 构建失败'
+            : '');
+  const showCodeGraphProgress = codeGraphBuildStatus !== null && (
+    isBuildingCodeGraph
+    || codeGraphBuildStatus.state === 'queued'
+    || codeGraphBuildStatus.state === 'syncing'
+    || codeGraphBuildStatus.state === 'success'
+    || codeGraphBuildStatus.state === 'error'
+  );
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    codeGraphPollTokenRef.current += 1;
+  }, []);
 
   const toggleProject = () => onToggleProject(project.name);
   const toggleStarProject = () => onToggleStarProject(project.name);
 
   const saveProjectName = () => {
     onSaveProjectName(project.name);
+  };
+
+  const readCodeGraphStatus = async (): Promise<CodeGraphBuildStatus | null> => {
+    const params = new URLSearchParams({
+      projectName: project.name,
+    });
+    if (projectRoot) params.set('projectRoot', projectRoot);
+    const response = await apiFetch(`/api/codegraph/status?${params.toString()}`);
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => ({}));
+    return payload?.status || null;
+  };
+
+  const pollCodeGraphStatus = async (token: number) => {
+    let sawActiveState = false;
+    for (let attempt = 0; attempt < 720; attempt += 1) {
+      if (!mountedRef.current || codeGraphPollTokenRef.current !== token) return;
+      const status = await readCodeGraphStatus().catch(() => null);
+      if (status && mountedRef.current && codeGraphPollTokenRef.current === token) {
+        setCodeGraphBuildStatus(status);
+        sawActiveState = sawActiveState || status.state === 'queued' || status.state === 'syncing';
+        if (status.state === 'success' || status.state === 'error' || (sawActiveState && status.state === 'idle')) {
+          setIsBuildingCodeGraph(false);
+          return;
+        }
+      }
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, attempt < 8 ? 800 : 1500);
+      });
+    }
+    if (mountedRef.current && codeGraphPollTokenRef.current === token) {
+      setIsBuildingCodeGraph(false);
+    }
+  };
+
+  const selectCodeGraphScopePaths = async (): Promise<string[] | null> => {
+    const selectCodeGraphScope = window.argusDesktop?.selectCodeGraphScope;
+    if (!selectCodeGraphScope) {
+      throw new Error('当前环境不支持 Windows 原生脚本选择窗口，请使用桌面版 Argus。');
+    }
+    const result = await selectCodeGraphScope({
+      title: '选择要构建 CodeGraph 的 C# 脚本或目录',
+      buttonLabel: '构建所选脚本',
+      defaultPath: projectRoot || undefined,
+    });
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    if (result.canceled) {
+      return null;
+    }
+    const selectedPaths = (Array.isArray(result.paths) && result.paths.length > 0
+      ? result.paths
+      : [result.path || ''])
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return selectedPaths.length > 0 ? selectedPaths : null;
+  };
+
+  const buildCodeGraphAndImportObsidian = async () => {
+    if (isBuildingCodeGraph) return;
+    let scopePaths: string[] | null = null;
+    try {
+      scopePaths = await selectCodeGraphScopePaths();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '打开 Windows 原生脚本选择窗口失败');
+      return;
+    }
+    if (!scopePaths) return;
+    const token = codeGraphPollTokenRef.current + 1;
+    codeGraphPollTokenRef.current = token;
+    setIsBuildingCodeGraph(true);
+    setCodeGraphBuildStatus({
+      state: 'queued',
+      progress: {
+        stage: 'queued',
+        percent: 5,
+        label: `CodeGraph 已排队，准备构建 ${scopePaths.length} 个脚本范围`,
+      },
+    });
+    try {
+      const response = await apiFetch('/api/codegraph/build-obsidian', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectName: project.name,
+          projectRoot,
+          scopePaths,
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.error || `CodeGraph build failed with HTTP ${response.status}`);
+      }
+      void pollCodeGraphStatus(token);
+    } catch (error) {
+      console.error('[CodeGraph] Failed to queue build/import:', error);
+      setCodeGraphBuildStatus({
+        state: 'error',
+        lastError: error instanceof Error ? error.message : 'CodeGraph 构建失败',
+        progress: {
+          stage: 'error',
+          percent: 100,
+          label: error instanceof Error ? error.message : 'CodeGraph 构建失败',
+        },
+      });
+      window.alert(error instanceof Error ? error.message : 'CodeGraph 构建失败');
+      setIsBuildingCodeGraph(false);
+    }
+  };
+
+  const CodeGraphProgress = () => {
+    if (!showCodeGraphProgress) return null;
+    const isError = codeGraphBuildStatus?.state === 'error';
+    const exportStats = codeGraphBuildStatus?.lastExport?.documents
+      ? ` · ${codeGraphBuildStatus.lastExport.documents} notes`
+      : '';
+    return (
+      <div className="mx-3 mt-1 rounded-md border border-emerald-500/15 bg-emerald-500/5 px-2 py-1.5 text-[11px] text-muted-foreground md:mx-2">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className={cn('truncate', isError && 'text-red-600 dark:text-red-400')}>
+            {codeGraphProgressLabel || 'CodeGraph 处理中'}
+            {exportStats}
+          </span>
+          <span className="tabular-nums">{codeGraphProgressPercent}%</span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-background/80">
+          <div
+            className={cn(
+              'h-full rounded-full transition-all duration-500',
+              isError ? 'bg-red-500' : 'bg-emerald-500',
+            )}
+            style={{ width: `${codeGraphProgressPercent}%` }}
+          />
+        </div>
+      </div>
+    );
   };
 
   const selectAndToggleProject = () => {
@@ -237,6 +417,22 @@ export default function SidebarProjectItem({
                       title={t('sessions.newSession')}
                     >
                       <SquarePen className="h-4 w-4 text-primary" />
+                    </button>
+
+                    <button
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-500/10 active:scale-90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:bg-emerald-900/30"
+                      disabled={isBuildingCodeGraph}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void buildCodeGraphAndImportObsidian();
+                      }}
+                      title="构建 CodeGraph 并导入 Obsidian"
+                    >
+                      {isBuildingCodeGraph ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-emerald-600 dark:text-emerald-300" />
+                      ) : (
+                        <GitBranch className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
+                      )}
                     </button>
 
                     <button
@@ -390,11 +586,30 @@ export default function SidebarProjectItem({
                 >
                   <SquarePen className="h-3.5 w-3.5" />
                 </div>
+                <div
+                  className={cn(
+                    'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-emerald-600 transition-all duration-150 hover:bg-emerald-500/10 hover:text-emerald-700',
+                    isBuildingCodeGraph && 'pointer-events-none opacity-60',
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void buildCodeGraphAndImportObsidian();
+                  }}
+                  title="构建 CodeGraph 并导入 Obsidian"
+                >
+                  {isBuildingCodeGraph ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <GitBranch className="h-3.5 w-3.5" />
+                  )}
+                </div>
               </>
             )}
           </div>
         </Button>
       </div>
+
+      <CodeGraphProgress />
 
       <SidebarProjectSessions
         project={project}

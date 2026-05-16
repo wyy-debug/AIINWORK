@@ -113,6 +113,12 @@ async function main() {
     MTL_CODE_RESOURCES_DIR: resourcesDir,
     MTL_CODE_CLI_PATH: resolveMtlCodeCliPath(),
   };
+  if (path.basename(process.execPath).toLowerCase().includes('debug')) {
+    env.ARGUS_PACKAGE_CHANNEL = 'debug';
+    env.ARGUS_DEBUG_PACKAGE = '1';
+    env.ARGUS_OBSIDIAN_DEBUG = '1';
+    env.ARGUS_CODEGRAPH_DEBUG = '1';
+  }
   if (existsSync(bunExe)) {
     env.BUN_EXE = bunExe;
   }

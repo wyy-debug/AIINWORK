@@ -4,7 +4,6 @@ import { Button, Input } from '../../../shared/view/ui';
 import { browseFilesystemFolders } from '../data/workspaceApi';
 import { getSuggestionRootPath } from '../utils/pathUtils';
 import type { FolderSuggestion, WorkspaceType } from '../types';
-import FolderBrowserModal from './FolderBrowserModal';
 
 type WorkspacePathFieldProps = {
   workspaceType: WorkspaceType;
@@ -23,7 +22,6 @@ export default function WorkspacePathField({
 }: WorkspacePathFieldProps) {
   const [pathSuggestions, setPathSuggestions] = useState<FolderSuggestion[]>([]);
   const [showPathDropdown, setShowPathDropdown] = useState(false);
-  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
 
   useEffect(() => {
     if (value.trim().length <= 2) {
@@ -72,7 +70,6 @@ export default function WorkspacePathField({
   const handleFolderSelected = useCallback(
     (selectedPath: string, advanceToConfirm: boolean) => {
       onChange(selectedPath);
-      setShowFolderBrowser(false);
       if (advanceToConfirm) {
         onAdvanceToConfirm();
       }
@@ -86,26 +83,29 @@ export default function WorkspacePathField({
     }
 
     const nativeProjectRootPicker = window.argusDesktop?.selectProjectRoot;
-    if (nativeProjectRootPicker) {
-      try {
-        const result = await nativeProjectRootPicker({
-          defaultPath: value.trim() || undefined,
-        });
-
-        if (result.error) {
-          throw new Error(result.error);
-        }
-
-        if (!result.canceled && result.path) {
-          handleFolderSelected(result.path, workspaceType === 'existing');
-        }
-        return;
-      } catch (error) {
-        console.error('Failed to open native project root picker:', error);
-      }
+    if (!nativeProjectRootPicker) {
+      window.alert('当前环境不支持 Windows 原生目录选择窗口，请直接输入路径，或使用桌面版 Argus。');
+      return;
     }
 
-    setShowFolderBrowser(true);
+    try {
+      const result = await nativeProjectRootPicker({
+        title: workspaceType === 'existing' ? '选择已有项目目录' : '选择新项目目录',
+        buttonLabel: workspaceType === 'existing' ? '使用此项目' : '使用此目录',
+        defaultPath: value.trim() || undefined,
+      });
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      if (!result.canceled && result.path) {
+        handleFolderSelected(result.path, workspaceType === 'existing');
+      }
+    } catch (error) {
+      console.error('Failed to open native project root picker:', error);
+      window.alert(error instanceof Error ? error.message : '打开 Windows 原生目录选择窗口失败');
+    }
   }, [disabled, handleFolderSelected, value, workspaceType]);
 
   return (
@@ -152,13 +152,6 @@ export default function WorkspacePathField({
           <FolderOpen className="h-4 w-4" />
         </Button>
       </div>
-
-      <FolderBrowserModal
-        isOpen={showFolderBrowser}
-        autoAdvanceOnSelect={workspaceType === 'existing'}
-        onClose={() => setShowFolderBrowser(false)}
-        onFolderSelected={handleFolderSelected}
-      />
     </>
   );
 }

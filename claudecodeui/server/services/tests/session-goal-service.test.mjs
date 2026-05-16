@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Worker } from 'node:worker_threads';
 import Database from 'better-sqlite3';
 import { expect, test } from 'vitest';
 import {
@@ -13,6 +14,86 @@ import {
   setSessionGoalLegacyStorePathForTests,
   setSessionGoalStorePathForTests,
 } from '../session-goal-service.js';
+
+const holdSqliteWriteLock = (dbPath, holdMs = 120) => new Promise((resolve, reject) => {
+  const worker = new Worker(`
+    const { parentPort, workerData } = await import('node:worker_threads');
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(workerData.dbPath);
+    if (workerData.useWal) {
+      db.pragma('journal_mode = WAL');
+    }
+    db.pragma('locking_mode = EXCLUSIVE');
+    db.exec('BEGIN EXCLUSIVE');
+    if (workerData.touchSchema) {
+      db.exec('CREATE TABLE IF NOT EXISTS thread_goal_lock_probe (id INTEGER PRIMARY KEY)');
+      db.prepare('INSERT INTO thread_goal_lock_probe DEFAULT VALUES').run();
+    }
+    parentPort.postMessage('locked');
+    setTimeout(() => {
+      try {
+        db.exec('COMMIT');
+        db.close();
+        parentPort.postMessage('released');
+      } catch (error) {
+        parentPort.postMessage({ error: error.message });
+      }
+    }, workerData.holdMs);
+  `, {
+    eval: true,
+    type: 'module',
+    workerData: {
+      dbPath,
+      holdMs,
+      touchSchema: true,
+      useWal: true,
+    },
+  });
+  let settled = false;
+  worker.on('message', (message) => {
+    if (message === 'locked' && !settled) {
+      settled = true;
+      resolve(worker);
+    } else if (message?.error && !settled) {
+      settled = true;
+      reject(new Error(message.error));
+    }
+  });
+  worker.on('error', (error) => {
+    if (!settled) {
+      settled = true;
+      reject(error);
+    }
+  });
+  worker.on('exit', (code) => {
+    if (!settled && code !== 0) {
+      settled = true;
+      reject(new Error(`SQLite lock worker exited with code ${code}`));
+    }
+  });
+});
+
+const createMinimalGoalEventsDb = (dbPath) => {
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE thread_goal_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        goal_id TEXT,
+        event_type TEXT NOT NULL,
+        lifecycle_type TEXT,
+        goal_json TEXT,
+        payload_json TEXT,
+        created_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO thread_goal_events(thread_id, event_type, created_at_ms)
+      VALUES ('session-locked', 'thread_goal_cleared', 1);
+    `);
+  } finally {
+    db.close();
+  }
+};
 
 test('session goal service creates, reads, pauses, resumes, and clears goals', async () => {
   const tempDir = await mkdtemp(join(tmpdir(), 'argus-session-goals-'));
@@ -186,6 +267,27 @@ test('session goal service records ordered mutation events for pollers', async (
       db.close();
     }
   } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('session goal event polling fails fast instead of blocking on long SQLite writer locks', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'argus-session-goals-'));
+  let worker = null;
+  try {
+    const dbPath = join(tempDir, 'thread-goals.db');
+    createMinimalGoalEventsDb(dbPath);
+    setSessionGoalStorePathForTests(dbPath);
+
+    worker = await holdSqliteWriteLock(dbPath, 10_000);
+    const startedAt = Date.now();
+
+    await expect(listSessionGoalEventsAfter(0)).rejects.toThrow(/database is locked/i);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+  } finally {
+    if (worker) {
+      await worker.terminate();
+    }
     await rm(tempDir, { recursive: true, force: true });
   }
 });

@@ -83,6 +83,16 @@ const buildSources = ({ activeNote = null, results = [] } = {}) => [
   })).filter((source) => source.path) : []),
 ];
 
+const addVaultNameToSources = (sources = [], vaultName = '') => (
+  Array.isArray(sources)
+    ? sources.map((source) => (
+      source && typeof source === 'object' && vaultName
+        ? { ...source, vaultName }
+        : source
+    ))
+    : []
+);
+
 const appendToSystemPrompt = (existing = '', block = '') => (
   [readString(existing), block].filter(Boolean).join('\n\n')
 );
@@ -97,6 +107,46 @@ const buildContextFromResults = (results = []) => results.map((result) => [
   `Title: ${result.title || ''}`,
   result.snippet || '',
 ].filter(Boolean).join('\n')).join('\n\n---\n\n');
+
+const normalizeVaultPath = (value = '') => readString(value).replace(/\\/g, '/').replace(/\/+$/g, '');
+
+const isPathUnderFolder = (filePath = '', folder = '') => {
+  const normalizedPath = normalizeVaultPath(filePath);
+  const normalizedFolder = normalizeVaultPath(folder);
+  return Boolean(normalizedPath && normalizedFolder)
+    && (normalizedPath === normalizedFolder || normalizedPath.startsWith(`${normalizedFolder}/`));
+};
+
+const buildProjectScopedResultFolders = (projectName = '', {
+  includeWiki = true,
+  includeAiMemory = true,
+  includeRaw = false,
+  includeIndexes = true,
+} = {}) => {
+  const projectSegment = sanitizeVaultSegment(projectName, 'General');
+  return [
+    includeWiki ? `Argus/Wiki/${projectSegment}` : '',
+    includeAiMemory ? `Argus/AIMemory/${projectSegment}` : '',
+    includeRaw ? `Argus/Raw/${projectSegment}` : '',
+    includeIndexes ? `Argus/_Indexes/${projectSegment}` : '',
+  ].filter(Boolean);
+};
+
+const filterResultsToProjectScope = (results = [], projectName = '', options = {}) => {
+  const folders = buildProjectScopedResultFolders(projectName, options);
+  if (!folders.length) return Array.isArray(results) ? results : [];
+  return (Array.isArray(results) ? results : []).filter((result) => (
+    folders.some((folder) => isPathUnderFolder(result?.path, folder))
+  ));
+};
+
+const resolveVaultName = (config = {}) => {
+  const vaults = Array.isArray(config.vaults) ? config.vaults : [];
+  const activeVault = vaults.find((vault) => readString(vault?.vaultId) === readString(config.activeVaultId))
+    || vaults[0]
+    || {};
+  return readString(config.vaultName || config.activeVaultName || activeVault.name);
+};
 
 const mergeContextResults = (...groups) => {
   const seen = new Set();
@@ -155,6 +205,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   }
 
   const projectName = resolveProjectName(data);
+  const vaultName = resolveVaultName(config);
   const wikiScopedFolders = buildProjectScopedFolders(projectName, {
     includeWiki: wikiReadbackEnabled,
     includeAiMemory: false,
@@ -212,7 +263,15 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       }
     }
     const rawAiMemoryResults = Array.isArray(aiMemoryResult?.results) ? aiMemoryResult.results : [];
-    const filteredAiMemoryResults = rawAiMemoryResults.filter((entry) => !isArchivedMemoryResult(entry));
+    const scopedAiMemoryResults = useProjectScope
+      ? filterResultsToProjectScope(rawAiMemoryResults, projectName, {
+        includeWiki: false,
+        includeAiMemory: true,
+        includeRaw: false,
+        includeIndexes: false,
+      })
+      : rawAiMemoryResults;
+    const filteredAiMemoryResults = scopedAiMemoryResults.filter((entry) => !isArchivedMemoryResult(entry));
     const aiMemoryContext = buildContextFromResults(filteredAiMemoryResults);
     const wikiResult = wikiReadbackEnabled && readbackFolders.length > 0
       ? await buildObsidianContext({
@@ -223,9 +282,19 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       })
       : null;
     const rawWikiResults = Array.isArray(wikiResult?.results) ? wikiResult.results : [];
-    const filteredWikiResults = rawWikiResults.filter((entry) => !isArchivedMemoryResult(entry));
-    const archivedResultCount = (rawAiMemoryResults.length - filteredAiMemoryResults.length)
-      + (rawWikiResults.length - filteredWikiResults.length);
+    const scopedWikiResults = useProjectScope
+      ? filterResultsToProjectScope(rawWikiResults, projectName, {
+        includeWiki: true,
+        includeAiMemory: false,
+        includeRaw: wikiReadbackEnabled && config.wikiReadbackIncludeRaw,
+        includeIndexes: true,
+      })
+      : rawWikiResults;
+    const filteredWikiResults = scopedWikiResults.filter((entry) => !isArchivedMemoryResult(entry));
+    const archivedResultCount = (rawAiMemoryResults.length - scopedAiMemoryResults.length)
+      + (scopedAiMemoryResults.length - filteredAiMemoryResults.length)
+      + (rawWikiResults.length - scopedWikiResults.length)
+      + (scopedWikiResults.length - filteredWikiResults.length);
     const wikiBaseContext = rawWikiResults.length !== filteredWikiResults.length
       ? buildContextFromResults(filteredWikiResults)
       : readString(wikiResult?.context);
@@ -242,7 +311,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
     const context = [aiMemoryContext, wikiContext].filter(Boolean).join('\n\n---\n\n');
     const filteredResults = mergeContextResults(filteredAiMemoryResults, filteredWikiResults);
     const activeBlock = buildActiveNoteBlock(activeNote);
-    const sources = refinement?.refined
+    const sources = addVaultNameToSources(refinement?.refined
       ? [
         ...buildSources({ activeNote, results: filteredAiMemoryResults }),
         ...(Array.isArray(refinement.sources) ? refinement.sources : []),
@@ -250,7 +319,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       : buildSources({
         activeNote,
         results: filteredResults,
-      });
+      }), vaultName);
     if (!context && !activeBlock) {
       return {
         ...data,
@@ -260,6 +329,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
             used: false,
             resultCount: filteredResults.length,
             archivedResultCount,
+            vaultName,
             source: 'wiki',
             aiMemoryReadbackError,
             sources,
@@ -280,6 +350,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
             resultCount: filteredResults.length,
             archivedResultCount,
             projectName,
+            vaultName,
             source: 'wiki',
             refined: Boolean(refinement?.refined),
             refinementModel: refinement?.model || '',
@@ -303,6 +374,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           resultCount: filteredResults.length,
           archivedResultCount,
           projectName,
+          vaultName,
           source: 'wiki',
           refined: Boolean(refinement?.refined),
           refinementModel: refinement?.model || '',
