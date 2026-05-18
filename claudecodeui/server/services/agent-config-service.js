@@ -4,6 +4,13 @@ import { promises as fs } from 'fs';
 
 import { listInstalledSkills } from './agent-skill-service.js';
 import { normalizeAgentTemplateDialogs, normalizeAgentTemplateManifest } from './agent-template-manifest-service.js';
+import {
+  AGENT_PROFILE_IDS,
+  getBuiltInAgentProfiles,
+  normalizeAgentProfileKind,
+  normalizePermissionPreset,
+  resolveAgentProfileRuntimeOptions,
+} from './agent-profile-service.js';
 
 const UI_DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
 const AGENTS_DIR = process.env.MTL_CODE_AGENTS_CONFIG_DIR || path.join(UI_DATA_DIR, 'agents');
@@ -313,6 +320,45 @@ function normalizeTemplateSelectedDependencies(value = {}) {
   };
 }
 
+function normalizeAgentMcpServers(value) {
+  return normalizeStringArray(value, 60, 120)
+    .map((server) => server.replace(/^MCP:\s*/i, '').trim())
+    .filter(Boolean);
+}
+
+function buildMcpAppBindings(mcpServers) {
+  return normalizeAgentMcpServers(mcpServers).map((server) => ({
+    slot: server,
+    app: `MCP: ${server}`,
+    status: 'optional',
+  }));
+}
+
+function normalizeModelProfileId(value) {
+  return normalizeString(value, '', 160)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function mergeBuiltInAgentProfiles(agents) {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]));
+  let changed = false;
+  for (const profile of getBuiltInAgentProfiles()) {
+    if (byId.has(profile.id)) {
+      continue;
+    }
+    byId.set(profile.id, normalizeAgentConfig(profile));
+    changed = true;
+  }
+
+  const merged = [
+    ...AGENT_PROFILE_IDS.map((id) => byId.get(id)).filter(Boolean),
+    ...agents.filter((agent) => !AGENT_PROFILE_IDS.includes(agent.id)),
+  ];
+  return { agents: merged, changed };
+}
+
 function mergeNestedAgentPatch(existing, input) {
   const source = input && typeof input === 'object' ? input : {};
   return {
@@ -341,6 +387,8 @@ export function normalizeAgentConfig(value, existing = null) {
   if (!validateAgentId(id)) {
     throw new Error('Invalid agent id');
   }
+  const mcpServers = normalizeAgentMcpServers(source.mcpServers ?? existing?.mcpServers);
+  const normalizedAppBindings = normalizeAppBindings(source.appBindings ?? existing?.appBindings);
 
   return {
     id,
@@ -353,12 +401,17 @@ export function normalizeAgentConfig(value, existing = null) {
     repository: normalizeString(source.repository, existing?.repository || '', 240),
     systemPrompt: normalizeString(source.systemPrompt, existing?.systemPrompt || '', 12_000),
     channels: normalizeChannels(source.channels ?? existing?.channels),
-    appBindings: normalizeAppBindings(source.appBindings ?? existing?.appBindings),
+    appBindings: normalizedAppBindings.length > 0 ? normalizedAppBindings : buildMcpAppBindings(mcpServers),
     skills: normalizeStringArray(source.skills ?? existing?.skills, 60, 120),
     memory: normalizeMemoryConfig(source.memory ?? existing?.memory, id),
     tools: normalizeStringArray(source.tools ?? existing?.tools, 80, 120),
     guardrails: normalizeStringArray(source.guardrails ?? existing?.guardrails, 40, 240),
     triggerRules: normalizeTriggerRules(source.triggerRules ?? existing?.triggerRules),
+    profileKind: normalizeAgentProfileKind(source.profileKind ?? existing?.profileKind),
+    permissionPreset: normalizePermissionPreset(source.permissionPreset ?? existing?.permissionPreset),
+    modelProfileId: normalizeModelProfileId(source.modelProfileId ?? existing?.modelProfileId),
+    defaultSkills: normalizeStringArray(source.defaultSkills ?? existing?.defaultSkills, 60, 120),
+    mcpServers,
     templatePackage: normalizeAgentTemplatePackage(source.templatePackage ?? existing?.templatePackage),
     templateDialogs: normalizeAgentTemplateDialogs(source.templateDialogs ?? source.dialogs ?? existing?.templateDialogs),
     templateRuntime: normalizeAgentTemplateManifest({
@@ -393,9 +446,17 @@ async function readAgentsRaw() {
   try {
     const raw = JSON.parse(await fs.readFile(AGENTS_PATH, 'utf8'));
     const agents = Array.isArray(raw.agents) ? raw.agents : [];
-    return agents.map((agent) => normalizeAgentConfig(agent));
+    const normalizedAgents = agents.map((agent) => normalizeAgentConfig(agent));
+    const merged = mergeBuiltInAgentProfiles(normalizedAgents);
+    if (merged.changed) {
+      await writeAgents(merged.agents);
+    }
+    return merged.agents;
   } catch {
-    const agents = DEFAULT_AGENT_CONFIGS.map((agent) => normalizeAgentConfig(agent));
+    const agents = [
+      ...getBuiltInAgentProfiles(),
+      ...DEFAULT_AGENT_CONFIGS,
+    ].map((agent) => normalizeAgentConfig(agent));
     await writeAgents(agents);
     return agents;
   }
@@ -708,6 +769,10 @@ export async function resolveAgentRuntime(agentId, options = {}) {
 
   const runtimeSettings = await readMtlCodeRuntimeSettings();
   const model = runtimeSettings.model || undefined;
+  const profileRuntime = resolveAgentProfileRuntimeOptions(runtimeAgent, {
+    permissionMode: options.permissionMode || runtimeAgent.templateRuntime?.permissionMode,
+    toolsSettings: options.toolsSettings,
+  });
 
   const systemPromptResult = await buildAgentSystemPromptResult(runtimeAgent, options);
 
@@ -716,6 +781,7 @@ export async function resolveAgentRuntime(agentId, options = {}) {
     appendSystemPrompt: systemPromptResult.prompt,
     model,
     contextWindowTokens: runtimeSettings.contextWindowTokens,
+    profileRuntime,
   };
 }
 

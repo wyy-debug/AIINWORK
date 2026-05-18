@@ -26,6 +26,7 @@ import {
   SearchIcon,
   AtSignIcon,
   FileIcon,
+  FolderIcon,
   Loader2Icon,
   DownloadIcon,
   CloudIcon,
@@ -76,6 +77,7 @@ import RuntimeModelSwitcher from './RuntimeModelSwitcher';
 interface MentionableFile {
   name: string;
   path: string;
+  type?: 'file' | 'directory';
 }
 
 interface SlashCommand {
@@ -582,9 +584,10 @@ export default function ChatComposer({
     },
   ];
   const activePermissionMode = permissionModeOptions.find((mode) => mode.id === normalizedPermissionMode) || permissionModeOptions[0];
+  const selectedAgentIsProfile = Boolean(selectedAgent?.profileKind);
   const agentButtonLabel = selectedAgent
-    ? selectedAgent.shortName || selectedAgent.name
-    : '本对话默认';
+    ? `${selectedAgentIsProfile ? 'Profile' : 'Agent'}: ${selectedAgent.shortName || selectedAgent.name}`
+    : 'Default';
   const subagentRuntimeStatusLabel: Record<string, string> = {
     RUNNING: '运行中',
     DONE: '已完成',
@@ -798,11 +801,13 @@ export default function ChatComposer({
             {selectedAgent && (
               <span
                 className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-2.5 font-medium text-primary"
-                title={`Agent 已绑定到当前对话：${selectedAgent.name}`}
+                title={`${selectedAgentIsProfile ? 'Profile' : 'Agent'} bound to this conversation: ${selectedAgent.name}`}
               >
                 <BotIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Agent：{selectedAgent.shortName || selectedAgent.name}</span>
-                <span className="shrink-0 text-[10px] opacity-75">已绑定</span>
+                <span className="truncate">{selectedAgentIsProfile ? 'Profile' : 'Agent'}: {selectedAgent.shortName || selectedAgent.name}</span>
+                <span className="shrink-0 text-[10px] opacity-75">
+                  {selectedAgent.permissionPreset || 'bound'}
+                </span>
               </span>
             )}
             {selectedMcpBindings.map((binding) => (
@@ -902,7 +907,11 @@ export default function ChatComposer({
                     onSelectFile(file);
                   }}
                 >
-                  <FileIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  {file.type === 'directory' ? (
+                    <FolderIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <FileIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  )}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{file.name}</span>
                     <span className="block truncate font-mono text-xs text-muted-foreground">{file.path}</span>
@@ -942,12 +951,12 @@ export default function ChatComposer({
               bottom: agentMenuPosition?.bottom ?? 80,
             }}
             role="listbox"
-            aria-label="选择 Agent"
+            aria-label="Select profile or agent"
             onWheel={(event) => event.stopPropagation()}
           >
             <div className="border-b border-border/50 px-3 py-2.5">
-              <div className="text-sm font-semibold text-foreground">选择 Agent</div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground">只作用于当前对话；输入 @Agent 可只作用于单条消息。</div>
+              <div className="text-sm font-semibold text-foreground">Profiles / Agents</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">Use the selector for this conversation, or type @profile for one message.</div>
             </div>
             <div className="min-h-0 overflow-y-auto p-1.5">
               <button
@@ -971,8 +980,8 @@ export default function ChatComposer({
                   {!selectedAgentId ? <CheckIcon className="h-3.5 w-3.5" /> : <BotIcon className="h-3.5 w-3.5" />}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">本对话默认</span>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">不绑定 Agent，使用当前 Argus 模型。</span>
+                  <span className="block truncate text-sm font-medium">Default conversation</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">Use the current Argus model and permission mode.</span>
                 </span>
               </button>
 
@@ -1005,6 +1014,11 @@ export default function ChatComposer({
                       {agent.description && (
                         <span className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
                           {agent.description}
+                        </span>
+                      )}
+                      {agent.profileKind && (
+                        <span className="mt-1 block truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {agent.profileKind} · {agent.permissionPreset || 'preset'}
                         </span>
                       )}
                     </span>

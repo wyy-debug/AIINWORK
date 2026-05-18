@@ -11,8 +11,12 @@
 
 import express from 'express';
 import { sessionsService } from '../modules/providers/services/sessions.service.js';
+import { db } from '../database/db.js';
+import { createCheckpointStore } from '../services/checkpoint-service.js';
+import { aggregateAgentRuntimeTimeline } from '../services/agent-runtime-timeline-service.js';
 
 const router = express.Router();
+const checkpointStore = createCheckpointStore(db);
 
 /**
  * GET /api/sessions/:sessionId/messages
@@ -55,6 +59,51 @@ router.get('/:sessionId/messages', async (req, res) => {
   } catch (error) {
     console.error('Error fetching unified messages:', error);
     return res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+/**
+ * GET /api/sessions/:sessionId/timeline
+ *
+ * Aggregates normalized messages and checkpoints into a product-level runtime
+ * timeline. Payload details are redacted by the aggregator before returning.
+ */
+router.get('/:sessionId/timeline', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const provider = String(req.query.provider || 'claude').trim().toLowerCase();
+    const projectName = req.query.projectName || '';
+    const projectPath = req.query.projectPath || '';
+
+    const availableProviders = sessionsService.listProviderIds();
+    if (!availableProviders.includes(provider)) {
+      const available = availableProviders.join(', ');
+      return res.status(400).json({ error: `Unknown provider: ${provider}. Available: ${available}` });
+    }
+
+    const history = await sessionsService.fetchHistory(provider, sessionId, {
+      projectName,
+      projectPath,
+      limit: null,
+      offset: 0,
+    });
+    const checkpoints = checkpointStore.listCheckpoints({
+      sessionId,
+      provider,
+      projectPath,
+      limit: 200,
+    });
+    const timeline = aggregateAgentRuntimeTimeline({
+      sessionId,
+      provider,
+      messages: Array.isArray(history?.messages) ? history.messages : [],
+      checkpoints,
+    });
+
+    return res.json({ success: true, timeline });
+  } catch (error) {
+    console.error('Error fetching runtime timeline:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch runtime timeline' });
   }
 });
 

@@ -4,7 +4,7 @@ import type { LLMProvider } from '../../../types/app';
 
 export type SettingsMainTab = 'agents' | 'appearance' | 'runtime' | 'debug';
 export type AgentProvider = LLMProvider;
-export type AgentCategory = 'model' | 'small-model' | 'permissions' | 'mcp' | 'repository' | 'usage';
+export type AgentCategory = 'model' | 'small-model' | 'permissions' | 'mcp' | 'marketplace' | 'repository' | 'usage';
 export type ProjectSortOrder = 'name' | 'date';
 export type SaveStatus = 'success' | 'error' | null;
 export type CodexPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';

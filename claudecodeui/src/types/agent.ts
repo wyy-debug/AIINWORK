@@ -102,6 +102,11 @@ export interface AgentConfig {
   name: string;
   shortName: string;
   description: string;
+  profileKind?: 'plan' | 'build' | 'explore' | 'review' | 'debug' | 'docs' | '';
+  permissionPreset?: 'suggest' | 'auto-edit' | 'full-auto' | 'enterprise-safe' | '';
+  modelProfileId?: string;
+  defaultSkills?: string[];
+  mcpServers?: string[];
   status: AgentStatus;
   scope: AgentScope;
   modelConfig: AgentModelConfig;
@@ -118,8 +123,11 @@ export interface AgentConfig {
   templateDialogs?: AgentTemplateDialogs;
   templateRuntime?: {
     tools?: string[];
+    allowedTools?: string[];
+    disallowedTools?: string[];
     model?: string;
     permissionMode?: string;
+    mcpServers?: Record<string, unknown>;
   };
   templateCompat?: Record<string, string>;
   templateSelectedDependencies?: AgentTemplateSelectedDependencies;

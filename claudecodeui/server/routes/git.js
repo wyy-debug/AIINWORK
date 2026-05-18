@@ -7,9 +7,13 @@ import { extractProjectDirectory } from '../projects.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
 import { db } from '../database/db.js';
+import { createArtifact } from '../services/artifact-service.js';
+import { createCheckpointStore } from '../services/checkpoint-service.js';
+import { buildGitNativeReviewFlow } from '../services/git-native-review-flow-service.js';
 
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
+const checkpointStore = createCheckpointStore(db);
 
 function spawnAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -727,6 +731,92 @@ router.get('/review-summary', async (req, res) => {
   } catch (error) {
     console.error('Git review summary error:', error);
     res.status(500).json({ error: error.stderr || error.message || 'Failed to build review summary' });
+  }
+});
+
+async function buildUntrackedFileDiff(repositoryRootPath, filePath) {
+  const resolved = path.join(repositoryRootPath, filePath);
+  const stats = await fs.stat(resolved);
+  if (stats.isDirectory()) {
+    return `diff --git a/${filePath} b/${filePath}\nnew directory: ${filePath}\n`;
+  }
+  const content = await fs.readFile(resolved, 'utf8');
+  const lines = content.split('\n').slice(0, 800);
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    'new file mode 100644',
+    '--- /dev/null',
+    `+++ b/${filePath}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    ...lines.map((line) => `+${line}`),
+    content.split('\n').length > lines.length ? '+... file preview truncated ...' : '',
+  ].filter(Boolean).join('\n');
+}
+
+router.post('/review-flow', async (req, res) => {
+  const { project, checkpointId } = req.body || {};
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const { projectPath, repositoryRootPath } = await resolveProjectRepository(String(project));
+    const branch = await getCurrentBranchName(projectPath);
+    const { stdout: statusOutput } = await spawnAsync('git', ['status', '--porcelain'], { cwd: repositoryRootPath });
+    const files = parsePorcelainStatus(statusOutput);
+    let diff = '';
+    let diffSource = 'current';
+
+    if (typeof checkpointId === 'string' && checkpointId.trim()) {
+      const checkpoint = checkpointStore.getCheckpoint(checkpointId.trim());
+      if (!checkpoint) {
+        return res.status(404).json({ error: 'Checkpoint not found' });
+      }
+      diff = checkpoint.diff || '';
+      diffSource = `checkpoint:${checkpoint.id}`;
+    } else {
+      const [{ stdout: stagedDiff }, { stdout: unstagedDiff }] = await Promise.all([
+        spawnAsync('git', ['diff', '--cached', '--no-ext-diff'], { cwd: repositoryRootPath }),
+        spawnAsync('git', ['diff', '--no-ext-diff'], { cwd: repositoryRootPath }),
+      ]);
+      const untrackedDiffs = [];
+      for (const file of files.filter((entry) => entry.kind === 'untracked')) {
+        try {
+          untrackedDiffs.push(await buildUntrackedFileDiff(repositoryRootPath, file.path));
+        } catch (error) {
+          untrackedDiffs.push(`diff --git a/${file.path} b/${file.path}\n+Unable to read untracked file preview: ${error.message}`);
+        }
+      }
+      diff = [stagedDiff, unstagedDiff, ...untrackedDiffs].filter((part) => part && part.trim()).join('\n\n');
+    }
+
+    const review = buildGitNativeReviewFlow({
+      projectName: String(project),
+      branch,
+      files,
+      diff,
+      diffSource,
+    });
+
+    let artifact = null;
+    if (review.hasChanges) {
+      const result = await createArtifact({
+        kind: 'technical-review',
+        title: `Review flow for ${project}`,
+        projectName: String(project),
+        content: review.content,
+        metadata: {
+          source: 'git-native-review-flow',
+          ...review.metadata,
+        },
+      });
+      artifact = result.artifact;
+    }
+
+    res.json({ success: true, review, artifact });
+  } catch (error) {
+    console.error('Git review-flow error:', error);
+    res.status(500).json({ error: error.stderr || error.message || 'Failed to generate review flow' });
   }
 });
 

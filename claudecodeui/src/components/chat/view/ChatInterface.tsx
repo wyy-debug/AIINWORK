@@ -40,6 +40,8 @@ import { hasDialogInteraction, type DialogAnswers } from '../utils/agentTemplate
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 import PromptInjectionDebugPanel from './subcomponents/PromptInjectionDebugPanel';
+import CheckpointPanel from './subcomponents/CheckpointPanel';
+import AgentRuntimeTimelinePanel from './subcomponents/AgentRuntimeTimelinePanel';
 import AgentSessionSetupDialog from './subcomponents/AgentSessionSetupDialog';
 import AgentLaunchDialog from './subcomponents/AgentLaunchDialog';
 
@@ -2034,6 +2036,21 @@ function ChatInterface({
               onToggleCollapsed={() => setIsPromptDebugCollapsed((previous) => !previous)}
             />
           )}
+
+          <AgentRuntimeTimelinePanel
+            sessionId={selectedSession?.id || currentSessionId}
+            provider={(selectedSession?.__provider || provider) as LLMProvider}
+            projectName={selectedProject.name || ''}
+            projectPath={selectedProject.fullPath || selectedProject.path || ''}
+            isSessionRunning={isLoading}
+          />
+
+          <CheckpointPanel
+            sessionId={selectedSession?.id || currentSessionId}
+            provider={(selectedSession?.__provider || provider) as LLMProvider}
+            projectPath={selectedProject.fullPath || selectedProject.path || ''}
+            isSessionRunning={isLoading}
+          />
         </div>
 
         <ChatComposer
