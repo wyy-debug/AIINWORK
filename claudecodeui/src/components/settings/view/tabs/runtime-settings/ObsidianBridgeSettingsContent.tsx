@@ -300,7 +300,7 @@ export default function ObsidianBridgeSettingsContent({
 
   const save = async ({
     quiet = false,
-    nextConfig = config,
+    nextConfig: targetConfig = config,
   }: {
     quiet?: boolean;
     nextConfig?: ObsidianBridgeConfig;
@@ -312,19 +312,19 @@ export default function ObsidianBridgeSettingsContent({
         .map((folder) => folder.trim())
         .filter(Boolean);
       const payload = {
-        ...nextConfig,
-        vaults: nextConfig.vaults.length > 0
-          ? nextConfig.vaults.map((vault) => (
-            vault.vaultId === nextConfig.activeVaultId
+        ...targetConfig,
+        vaults: targetConfig.vaults.length > 0
+          ? targetConfig.vaults.map((vault) => (
+            vault.vaultId === targetConfig.activeVaultId
               ? {
                 ...vault,
-                endpoint: nextConfig.endpoint,
+                endpoint: targetConfig.endpoint,
                 readableFolders: readableVaultFolders,
                 ...(token.trim() ? { token: token.trim() } : {}),
               }
               : vault
           ))
-          : nextConfig.vaults,
+          : targetConfig.vaults,
         readableVaultFolders,
         ...(token.trim() ? { token: token.trim() } : {}),
       };
@@ -334,9 +334,9 @@ export default function ObsidianBridgeSettingsContent({
           body: JSON.stringify(payload),
         }),
       );
-      const nextConfig = { ...DEFAULT_CONFIG, ...data.config };
-      setConfig(nextConfig);
-      setReadableFoldersText(nextConfig.readableVaultFolders.join('\n'));
+      const savedConfig = { ...DEFAULT_CONFIG, ...data.config };
+      setConfig(savedConfig);
+      setReadableFoldersText(savedConfig.readableVaultFolders.join('\n'));
       setToken('');
       window.dispatchEvent(new Event(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT));
       if (!quiet) {

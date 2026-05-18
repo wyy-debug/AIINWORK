@@ -58,6 +58,7 @@ import agentsRoutes from './routes/agents.js';
 import artifactsRoutes from './routes/artifacts.js';
 import authRoutes from './routes/auth.js';
 import automationsRoutes, { startAutomationScheduler } from './routes/automations.js';
+import checkpointsRoutes from './routes/checkpoints.js';
 import codegraphRoutes from './routes/codegraph.js';
 import codexRoutes from './routes/codex.js';
 import commandsRoutes from './routes/commands.js';
@@ -72,9 +73,13 @@ import obsidianBridgeRoutes from './routes/obsidian-bridge.js';
 import obsidianBridgeIngressRoutes from './routes/obsidian-bridge-ingress.js';
 import pluginsRoutes from './routes/plugins.js';
 import projectActionsRoutes from './routes/project-actions.js';
+import projectProfileRoutes from './routes/project-profile.js';
 import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
 import providerRoutes from './modules/providers/provider.routes.js';
+import recipesRoutes from './routes/recipes.js';
+import reviewFlowRoutes from './routes/review-flow.js';
 import sessionAgentRoutes from './routes/session-agents.js';
+import sessionTimelineRoutes from './routes/session-timeline.js';
 import settingsRoutes from './routes/settings.js';
 import swarmsRoutes from './routes/swarms.js';
 import taskmasterRoutes from './routes/taskmaster.js';
@@ -84,6 +89,11 @@ import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
 import { normalizeSessionAgentConfiguration } from './services/session-agent-configuration-service.js';
+import { applyAgentProfileRuntimeToChatCommand } from './services/agent-profile-runtime-service.js';
+import {
+    completeSessionCheckpoint,
+    startSessionCheckpoint,
+} from './services/session-checkpoint-service.js';
 import {
     applyArgusCodeReviewIntentToChatCommand,
     applyArgusCollaborationModeOptions,
@@ -463,6 +473,11 @@ app.use('/api/project-actions', authenticateToken, projectActionsRoutes);
 app.use('/api/automations', authenticateToken, automationsRoutes);
 app.use('/api/triage', authenticateToken, triageRoutes);
 app.use('/api/artifacts', authenticateToken, artifactsRoutes);
+app.use('/api/checkpoints', authenticateToken, checkpointsRoutes);
+app.use('/api/recipes', authenticateToken, recipesRoutes);
+app.use('/api/project-profile', authenticateToken, projectProfileRoutes);
+app.use('/api/session-timeline', authenticateToken, sessionTimelineRoutes);
+app.use('/api/review-flow', authenticateToken, reviewFlowRoutes);
 app.use('/api/ide-bridge', authenticateToken, ideBridgeRoutes);
 app.use('/api/codegraph', authenticateToken, codegraphRoutes);
 app.use('/api/obsidian-bridge', authenticateToken, obsidianBridgeRoutes);
@@ -2119,6 +2134,7 @@ class WebSocketWriter {
         this.ipAddress = ipAddress;
         this.isWebSocketWriter = true;  // Marker for transport detection
         this.pendingAutoCaptureContext = null;
+        this.runtimeEventCapture = null;
         this.autoCapture = createObsidianAutoCaptureOrchestrator({
             syncInstructionFile: syncObsidianInstructionFile,
             syncProjectInstructionFiles: syncObsidianProjectInstructionFiles,
@@ -2128,6 +2144,9 @@ class WebSocketWriter {
     }
 
     send(data) {
+        if (this.runtimeEventCapture && data && typeof data === 'object') {
+            this.captureRuntimeEvent(data);
+        }
         if (this.ws.readyState === 1) { // WebSocket.OPEN
             this.ws.send(JSON.stringify(data));
         }
@@ -2173,6 +2192,36 @@ class WebSocketWriter {
         if (sessionId) {
             this.autoCapture.setContext(this.pendingAutoCaptureContext);
         }
+    }
+
+    beginRuntimeEventCapture() {
+        this.runtimeEventCapture = [];
+    }
+
+    endRuntimeEventCapture() {
+        const captured = this.runtimeEventCapture || [];
+        this.runtimeEventCapture = null;
+        return captured;
+    }
+
+    captureRuntimeEvent(data) {
+        const kind = data.kind || data.type || '';
+        if (!['tool_use', 'tool_result', 'permission_request', 'status'].includes(kind)) {
+            return;
+        }
+        const status = data.status || data.event || '';
+        if (kind === 'status' && !String(status).includes('subagent') && status !== 'checkpoint') {
+            return;
+        }
+        this.runtimeEventCapture.push({
+            kind,
+            status,
+            toolId: data.toolId || data.tool_use_id || data.requestId || '',
+            toolName: data.toolName || data.name || '',
+            taskId: data.taskId || '',
+            isError: data.isError === true || data.kind === 'error',
+            timestamp: data.timestamp || new Date().toISOString(),
+        });
     }
 }
 
@@ -2240,6 +2289,74 @@ async function waitForWriterAutoCaptureBarrier(writer, data, provider) {
         sessionId,
         timeoutMs: 1500,
     });
+}
+
+async function startCheckpointForChatCommand(data, provider) {
+    const options = data?.options && typeof data.options === 'object' ? data.options : {};
+    const projectPath = typeof options.projectPath === 'string' && options.projectPath.trim()
+        ? options.projectPath.trim()
+        : typeof options.cwd === 'string' && options.cwd.trim()
+            ? options.cwd.trim()
+            : '';
+    const sessionId = options.sessionId || data?.sessionId || options.clientSessionId || '';
+    if (!projectPath || !sessionId) {
+        return null;
+    }
+
+    try {
+        return await startSessionCheckpoint({
+            sessionId,
+            provider,
+            projectName: options.projectName || data?.projectName || '',
+            projectPath,
+            profileKind: options.agentProfileKind || options.agentProfile?.profileKind || '',
+            permissionPreset: options.permissionPreset || options.permissionPresetSnapshot?.id || '',
+            permissionMode: options.permissionMode || '',
+            metadata: {
+                clientMessageId: options.clientMessageId || data?.clientMessageId || '',
+                model: options.model || '',
+                modelProfileId: options.modelProfileId || '',
+            },
+        });
+    } catch (error) {
+        console.warn('[checkpoint] start failed:', error?.message || error);
+        return null;
+    }
+}
+
+async function completeCheckpointForChatCommand(checkpoint, writer, data, provider) {
+    if (!checkpoint?.id) {
+        if (typeof writer.endRuntimeEventCapture === 'function') {
+            writer.endRuntimeEventCapture();
+        }
+        return null;
+    }
+    try {
+        const toolCalls = typeof writer.endRuntimeEventCapture === 'function'
+            ? writer.endRuntimeEventCapture()
+            : [];
+        const completed = await completeSessionCheckpoint(checkpoint.id, {
+            toolCalls,
+            metadata: {
+                provider,
+                finalSessionId: data?.options?.sessionId || data?.sessionId || checkpoint.sessionId || '',
+            },
+        });
+        writer.send(createNormalizedMessage({
+            kind: 'status',
+            status: 'checkpoint',
+            content: completed?.files?.length
+                ? `Checkpoint captured ${completed.files.length} changed file(s).`
+                : 'Checkpoint captured this turn.',
+            sessionId: completed?.sessionId || checkpoint.sessionId || null,
+            provider,
+            checkpoint: completed,
+        }));
+        return completed;
+    } catch (error) {
+        console.warn('[checkpoint] complete failed:', error?.message || error);
+        return null;
+    }
 }
 
 async function prepareProjectInstructionFilesBeforeChat(data, provider = 'claude') {
@@ -2399,6 +2516,7 @@ function createRuntimeDiagnosticsPayload(data) {
         openMythosRuntime,
         provider: getProviderFromCommandType(data?.type),
         sessionId: data?.options?.sessionId || data?.sessionId || null,
+        projectName: data?.options?.projectName || data?.projectName || '',
         projectPath: data?.options?.projectPath || data?.options?.cwd || '',
         permissions,
     };
@@ -2703,6 +2821,7 @@ async function applyAgentRuntimeToChatCommand(data) {
     const optionConfiguration = (
         Array.isArray(data?.options?.agentAppBindings)
         || Array.isArray(data?.options?.sessionSkills)
+        || data?.options?.agentProfileKind
         || optionModelProfileId
         || data?.options?.sessionAgentPackageId
         || data?.options?.sessionAgentPackageVersion
@@ -2717,6 +2836,7 @@ async function applyAgentRuntimeToChatCommand(data) {
         ? normalizeSessionAgentConfiguration({
             ...(Array.isArray(data?.options?.agentAppBindings) ? { appBindings: data.options.agentAppBindings } : {}),
             ...(Array.isArray(data?.options?.sessionSkills) ? { skills: data.options.sessionSkills } : {}),
+            ...(data?.options?.agentProfileKind ? { agentProfileKind: data.options.agentProfileKind } : {}),
             ...(optionModelProfileId ? { modelProfileId: optionModelProfileId } : {}),
             packageId: data?.options?.sessionAgentPackageId,
             packageVersion: data?.options?.sessionAgentPackageVersion,
@@ -2743,6 +2863,15 @@ async function applyAgentRuntimeToChatCommand(data) {
             dialogInstanceId: sessionConfiguration.dialogInstanceId || '',
         }
         : null;
+    const agentProfileKind = normalizeModelProfileId(
+        data?.options?.agentProfileKind || sessionConfiguration?.agentProfileKind || ''
+    );
+    const agentProfile = data?.options?.agentProfile && typeof data.options.agentProfile === 'object'
+        ? data.options.agentProfile
+        : null;
+    const existingAppendSystemPromptLength = typeof data?.options?.appendSystemPrompt === 'string'
+        ? data.options.appendSystemPrompt.length
+        : 0;
     const sessionModelProfileId = normalizeModelProfileId(
         optionModelProfileId || sessionConfiguration?.modelProfileId || ''
     );
@@ -2775,6 +2904,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             if (allowSessionAgentBinding && concreteSessionId && sessionConfiguration) {
                 sessionAgentBindingsDb.setAgent(concreteSessionId, provider, '', {
                     ...sessionConfiguration,
+                    ...(agentProfileKind ? { agentProfileKind } : {}),
                     ...(sessionModelProfileId ? { modelProfileId: sessionModelProfileId } : {}),
                 });
             }
@@ -2789,6 +2919,8 @@ async function applyAgentRuntimeToChatCommand(data) {
                     ...(data.type === 'claude-command' && resolvedSessionModel ? { model: resolvedSessionModel } : {}),
                     runtimeDiagnostics: {
                         type: 'runtime',
+                        agentProfileKind,
+                        agentProfile,
                         allowSessionAgentBinding,
                         agentId: '',
                         agentName: '',
@@ -2799,7 +2931,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                         skillDetails: [],
                         skillPromptLength: 0,
                         mcpDiagnosticsSummary: [],
-                        appendSystemPromptLength: 0,
+                        appendSystemPromptLength: existingAppendSystemPromptLength,
                         contextWindowTokens: resolvedContextWindowTokens,
                         model: resolvedSessionModel || data?.options?.model || '',
                         modelProfileId: sessionModelProfileId || '',
@@ -2829,11 +2961,14 @@ async function applyAgentRuntimeToChatCommand(data) {
 
         const options = {
             ...(data.options || {}),
+            ...(agentProfileKind ? { agentProfileKind } : {}),
             modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
             ...(data.type === 'claude-command' && resolvedSessionModel ? { model: resolvedSessionModel } : {}),
             sessionSkills,
             runtimeDiagnostics: {
                 type: 'skills',
+                agentProfileKind,
+                agentProfile,
                 allowSessionAgentBinding,
                 agentId: '',
                 agentName: '',
@@ -2894,11 +3029,14 @@ async function applyAgentRuntimeToChatCommand(data) {
 
             const options = {
                 ...(data.options || {}),
+                ...(agentProfileKind ? { agentProfileKind } : {}),
                 modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
                 ...(data.type === 'claude-command' && resolvedSessionModel ? { model: resolvedSessionModel } : {}),
                 sessionSkills,
                 runtimeDiagnostics: {
                     type: 'skills',
+                    agentProfileKind,
+                    agentProfile,
                     allowSessionAgentBinding,
                     agentId: '',
                     agentName: '',
@@ -2952,6 +3090,7 @@ async function applyAgentRuntimeToChatCommand(data) {
 
     const options = {
         ...(data.options || {}),
+        ...(agentProfileKind ? { agentProfileKind } : {}),
         modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
         agentId: runtime.agent.id,
         agentRuntime: {
@@ -2961,6 +3100,8 @@ async function applyAgentRuntimeToChatCommand(data) {
         },
         runtimeDiagnostics: {
             type: 'agent',
+            agentProfileKind,
+            agentProfile,
             allowSessionAgentBinding,
             agentId: runtime.agent.id,
             agentName: runtime.agent.name,
@@ -3054,9 +3195,10 @@ function handleChatConnection(ws, request) {
                 const commandWithIntent = applyArgusToolInspectionIntentToChatCommand(
                     applyArgusCodeReviewIntentToChatCommand(data),
                 );
-                await prepareProjectInstructionFilesBeforeChat(commandWithIntent, 'claude');
+                const commandWithProfile = applyAgentProfileRuntimeToChatCommand(commandWithIntent);
+                await prepareProjectInstructionFilesBeforeChat(commandWithProfile, 'claude');
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
-                    applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithIntent)),
+                    applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithProfile)),
                 ));
                 if (commandData?.options?.debugPromptInjection === true) {
                     commandData.options = {
@@ -3072,7 +3214,13 @@ function handleChatConnection(ws, request) {
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
 
                 // Use Claude Agents SDK
-                await queryClaudeSDK(commandData.command, commandData.options, writer);
+                writer.beginRuntimeEventCapture();
+                const checkpoint = await startCheckpointForChatCommand(commandData, 'claude');
+                try {
+                    await queryClaudeSDK(commandData.command, commandData.options, writer);
+                } finally {
+                    await completeCheckpointForChatCommand(checkpoint, writer, commandData, 'claude');
+                }
             } else if (data.type === 'claude-subagent-control') {
                 const provider = data.provider || 'claude';
                 if (provider !== 'claude') {
@@ -3187,7 +3335,9 @@ function handleChatConnection(ws, request) {
                 setWriterAutoCaptureContext(writer, data, 'cursor');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'cursor');
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
-                    applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
+                    applyUploadedFilesToChatCommand(
+                        await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
+                    )
                 );
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
@@ -3196,12 +3346,20 @@ function handleChatConnection(ws, request) {
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await spawnCursor(commandData.command, commandData.options, writer);
+                writer.beginRuntimeEventCapture();
+                const checkpoint = await startCheckpointForChatCommand(commandData, 'cursor');
+                try {
+                    await spawnCursor(commandData.command, commandData.options, writer);
+                } finally {
+                    await completeCheckpointForChatCommand(checkpoint, writer, commandData, 'cursor');
+                }
             } else if (data.type === 'codex-command') {
                 setWriterAutoCaptureContext(writer, data, 'codex');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'codex');
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
-                    applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
+                    applyUploadedFilesToChatCommand(
+                        await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
+                    )
                 );
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
@@ -3210,12 +3368,20 @@ function handleChatConnection(ws, request) {
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await queryCodex(commandData.command, commandData.options, writer);
+                writer.beginRuntimeEventCapture();
+                const checkpoint = await startCheckpointForChatCommand(commandData, 'codex');
+                try {
+                    await queryCodex(commandData.command, commandData.options, writer);
+                } finally {
+                    await completeCheckpointForChatCommand(checkpoint, writer, commandData, 'codex');
+                }
             } else if (data.type === 'gemini-command') {
                 setWriterAutoCaptureContext(writer, data, 'gemini');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'gemini');
                 const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
-                    applyUploadedFilesToChatCommand(await applyAgentRuntimeToChatCommand(data))
+                    applyUploadedFilesToChatCommand(
+                        await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
+                    )
                 );
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
@@ -3224,7 +3390,13 @@ function handleChatConnection(ws, request) {
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await spawnGemini(commandData.command, commandData.options, writer);
+                writer.beginRuntimeEventCapture();
+                const checkpoint = await startCheckpointForChatCommand(commandData, 'gemini');
+                try {
+                    await spawnGemini(commandData.command, commandData.options, writer);
+                } finally {
+                    await completeCheckpointForChatCommand(checkpoint, writer, commandData, 'gemini');
+                }
             } else if (data.type === 'cursor-resume') {
                 // Backward compatibility: treat as cursor-command with resume and no prompt
                 console.log('[DEBUG] Cursor resume session (compat):', data.sessionId);

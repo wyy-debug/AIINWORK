@@ -16,6 +16,7 @@ export type SubagentRuntimeSnapshotInput = {
   modelProfileId?: string;
   projectPath?: string;
   permissionMode?: PermissionMode | string;
+  agentProfileKind?: string;
   toolsSettings?: ToolSettingsInput;
   sessionSkills?: string[];
   agentAppBindings?: AgentAppBinding[];
@@ -28,6 +29,7 @@ export type SubagentRuntimeSnapshot = {
   modelProfileId: string;
   projectPath: string;
   permissionMode: string;
+  agentProfileKind: string;
   toolsSettings: {
     allowedTools: string[];
     disallowedTools: string[];
@@ -77,6 +79,7 @@ export function buildSubagentRuntimeSnapshot(input: SubagentRuntimeSnapshotInput
     modelProfileId: normalizeString(input.modelProfileId),
     projectPath: normalizeString(input.projectPath),
     permissionMode,
+    agentProfileKind: normalizeString(input.agentProfileKind),
     toolsSettings: {
       allowedTools: normalizeStringList(toolsSettings.allowedTools),
       disallowedTools: normalizeStringList(toolsSettings.disallowedTools),

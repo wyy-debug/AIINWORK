@@ -172,6 +172,31 @@ export const ARTIFACT_LINKS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS artifact_lin
 
 export const ARTIFACT_LINKS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_artifact_links_source ON artifact_links(source_type, source_id, created_at);`;
 
+export const SESSION_CHECKPOINTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_checkpoints (
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  project_path TEXT,
+  repository_root TEXT,
+  profile_kind TEXT,
+  permission_preset TEXT,
+  permission_mode TEXT,
+  before_status_json TEXT,
+  after_status_json TEXT,
+  patch TEXT,
+  files_json TEXT,
+  tool_calls_json TEXT,
+  metadata_json TEXT,
+  rollback_status TEXT NOT NULL DEFAULT 'available',
+  rollback_error TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME
+);`;
+
+export const SESSION_CHECKPOINTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session ON session_checkpoints(session_id, provider, created_at);`;
+
 export const OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS obsidian_auto_capture_keys (
   idempotency_key TEXT PRIMARY KEY,
   source_id TEXT UNIQUE,
@@ -468,6 +493,10 @@ ${ARTIFACTS_INDEX_SQL}
 ${ARTIFACT_LINKS_TABLE_SQL}
 
 ${ARTIFACT_LINKS_INDEX_SQL}
+
+${SESSION_CHECKPOINTS_TABLE_SQL}
+
+${SESSION_CHECKPOINTS_INDEX_SQL}
 
 ${OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL}
 

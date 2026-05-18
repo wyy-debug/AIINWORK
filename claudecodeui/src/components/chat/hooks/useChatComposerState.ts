@@ -46,6 +46,13 @@ import {
   buildSubagentRuntimeSnapshot,
   getSubagentRuntimeDispatchPlanId,
 } from '../utils/subagentRuntimeSnapshot';
+import {
+  DEFAULT_AGENT_PROFILE_KIND,
+  getAgentProfile,
+  mergeAgentProfileSkillNames,
+  resolveAgentProfileInvocation,
+} from '../../../../shared/agentProfiles.js';
+import { getPermissionPreset } from '../../../../shared/permissionPresets.js';
 
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
@@ -95,6 +102,7 @@ interface UseChatComposerStateArgs {
   selectedAgentSetupPresetId?: string;
   selectedSkillNames?: string[];
   getSelectedSkillNames?: () => string[];
+  agentProfileKind?: string;
   modelProfileId?: string;
   obsidianBridgeEnabled?: boolean;
   allowSessionAgentBinding?: boolean;
@@ -306,6 +314,7 @@ export function useChatComposerState({
   selectedAgentSetupPresetId = '',
   selectedSkillNames = [],
   getSelectedSkillNames,
+  agentProfileKind = DEFAULT_AGENT_PROFILE_KIND,
   modelProfileId = '',
   obsidianBridgeEnabled = false,
   allowSessionAgentBinding = false,
@@ -896,7 +905,10 @@ export function useChatComposerState({
         return;
       }
 
-      const agentInvocation = resolveAgentInvocation(currentInput, agents, selectedAgentId);
+      const profileInvocation = resolveAgentProfileInvocation(currentInput, agentProfileKind || DEFAULT_AGENT_PROFILE_KIND);
+      const activeAgentProfile = profileInvocation.profile || getAgentProfile(agentProfileKind, DEFAULT_AGENT_PROFILE_KIND);
+      const profileScopedInput = profileInvocation.content || currentInput;
+      const agentInvocation = resolveAgentInvocation(profileScopedInput, agents, selectedAgentId);
       const activeAgent = agentInvocation.agent;
       const activeAgentAppBindings = activeAgent
         ? activeAgent.id === selectedAgentId && selectedAgentAppBindings.length > 0
@@ -941,10 +953,13 @@ export function useChatComposerState({
         : '';
       const activeAgentPackage = activeAgent?.templatePackage || {};
       const activeAgentSelectedDependencies = activeAgent?.templateSelectedDependencies || {};
-      const activeSkillNames = (getSelectedSkillNames?.() || selectedSkillNames)
-        .map((skill) => skill.trim())
-        .filter(Boolean)
-        .slice(0, 60);
+      const activeSkillNames = mergeAgentProfileSkillNames(
+        (getSelectedSkillNames?.() || selectedSkillNames)
+          .map((skill) => skill.trim())
+          .filter(Boolean)
+          .slice(0, 60),
+        activeAgentProfile,
+      );
       let messageContent = agentInvocation.content;
       if (!messageContent.trim() && hasAttachments) {
         messageContent = '请查看我上传的附件。';
@@ -1122,7 +1137,12 @@ export function useChatComposerState({
 
       const toolsSettings = getToolsSettings();
       const debugPromptInjection = getArgusDebugSettings().showPromptInjectionPanel;
-      const permissionModeForSend = subagentPlanRequestActive ? 'plan' : (oneShotPermissionModeRef.current || permissionMode);
+      const profilePermissionMode = typeof activeAgentProfile?.permissionPreset === 'string'
+        ? getPermissionPreset(activeAgentProfile.permissionPreset)?.permissionMode || activeAgentProfile.permissionPreset
+        : '';
+      const permissionModeForSend = subagentPlanRequestActive
+        ? 'plan'
+        : (oneShotPermissionModeRef.current || profilePermissionMode || permissionMode);
       const skipToolPermissions = Boolean(
         toolsSettings?.skipPermissions
         || toolsSettings?.permissionMode === 'bypassPermissions'
@@ -1156,6 +1176,7 @@ export function useChatComposerState({
           sessionSkills: activeSkillNames,
           agentAppBindings: activeAgentAppBindings,
           selectedDependencies: activeAgentSelectedDependencies,
+          agentProfileKind: activeAgentProfile?.kind || '',
         })
         : undefined;
       if (provider === 'claude' && debugPromptInjection) {
@@ -1185,6 +1206,8 @@ export function useChatComposerState({
             resume: Boolean(backendSessionId),
             model: cursorModel,
             modelProfileId,
+            agentProfileKind: activeAgentProfile?.kind || '',
+            permissionPreset: activeAgentProfile?.permissionPreset || '',
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionAgentPackageId: activeAgentPackage.packageId,
@@ -1218,6 +1241,8 @@ export function useChatComposerState({
             resume: Boolean(backendSessionId),
             model: codexModel,
             modelProfileId,
+            agentProfileKind: activeAgentProfile?.kind || '',
+            permissionPreset: activeAgentProfile?.permissionPreset || '',
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionAgentPackageId: activeAgentPackage.packageId,
@@ -1250,6 +1275,8 @@ export function useChatComposerState({
             resume: Boolean(backendSessionId),
             model: geminiModel,
             modelProfileId,
+            agentProfileKind: activeAgentProfile?.kind || '',
+            permissionPreset: activeAgentProfile?.permissionPreset || '',
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionAgentPackageId: activeAgentPackage.packageId,
@@ -1286,6 +1313,8 @@ export function useChatComposerState({
             skipPermissions: skipToolPermissions,
             model: claudeModel,
             modelProfileId,
+            agentProfileKind: activeAgentProfile?.kind || '',
+            permissionPreset: activeAgentProfile?.permissionPreset || '',
             agentId: activeAgent?.id,
             agentAppBindings: activeAgentAppBindings,
             sessionAgentPackageId: activeAgentPackage.packageId,
@@ -1373,6 +1402,7 @@ export function useChatComposerState({
       selectedAgentSetupPresetId,
       selectedSkillNames,
       getSelectedSkillNames,
+      agentProfileKind,
       subagentDispatchRequested,
       modelProfileId,
       allowSessionAgentBinding,

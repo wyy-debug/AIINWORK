@@ -72,6 +72,7 @@ import FileAttachment from './FileAttachment';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import RuntimeModelSwitcher from './RuntimeModelSwitcher';
+import AgentProfileSwitcher from './AgentProfileSwitcher';
 
 interface MentionableFile {
   name: string;
@@ -230,6 +231,8 @@ interface ChatComposerProps {
   isUserScrolledUp: boolean;
   hasMessages: boolean;
   hasConversationContext: boolean;
+  selectedAgentProfileKind?: string;
+  onAgentProfileChange?: (profileKind: string) => void;
   selectedModelProfileId?: string;
   onModelProfileChange?: (profileId: string) => void;
   onScrollToBottom: () => void;
@@ -322,6 +325,8 @@ export default function ChatComposer({
   isUserScrolledUp,
   hasMessages,
   hasConversationContext,
+  selectedAgentProfileKind,
+  onAgentProfileChange,
   selectedModelProfileId,
   onModelProfileChange,
   onScrollToBottom,
@@ -1744,6 +1749,13 @@ export default function ChatComposer({
               onProfileChange={onModelProfileChange}
               onRequestInputFocus={() => textareaRef.current?.focus()}
               hasConversationContext={hasConversationContext}
+            />
+
+            <AgentProfileSwitcher
+              disabled={isLoading}
+              selectedProfileKind={selectedAgentProfileKind}
+              onProfileChange={onAgentProfileChange}
+              onRequestInputFocus={() => textareaRef.current?.focus()}
             />
 
             {agents.length > 0 && (

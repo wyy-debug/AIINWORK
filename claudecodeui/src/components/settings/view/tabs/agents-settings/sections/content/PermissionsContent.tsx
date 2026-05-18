@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AlertTriangle, Plus, Shield, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { Button, Input } from '../../../../../../../shared/view/ui';
 import type { CodexPermissionMode, GeminiPermissionMode } from '../../../../../types/types';
 
@@ -101,27 +102,27 @@ function ClaudePermissions({
     tone: string;
   }> = [
     {
-      id: 'default',
-      title: '默认模式',
-      description: '按需申请工具权限，适合日常对话。',
+      id: 'plan',
+      title: 'Suggest',
+      description: 'Read-only planning. The agent proposes steps and asks before editing files or running risky tools.',
       tone: 'border-border bg-card/50',
     },
     {
       id: 'acceptEdits',
-      title: '自动同意编辑',
-      description: '自动允许文件编辑，其他工具仍按设置处理。',
+      title: 'Auto Edit',
+      description: 'Allow file edits automatically while keeping shell and external actions under tool policy.',
       tone: 'border-blue-400 bg-blue-50 dark:border-blue-700 dark:bg-blue-950/20',
     },
     {
       id: 'bypassPermissions',
-      title: '全权限',
-      description: '跳过权限确认，等同于危险跳过权限。',
+      title: 'Full Auto',
+      description: 'Skip permission prompts for trusted local automation. Highest risk, use only in controlled projects.',
       tone: 'border-orange-400 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/20',
     },
     {
-      id: 'plan',
-      title: 'Plan 模式',
-      description: '先生成执行计划，确认后再继续。',
+      id: 'default',
+      title: 'Enterprise Safe',
+      description: 'Conservative defaults with dangerous shell patterns blocked and approvals preserved.',
       tone: 'border-indigo-400 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-950/20',
     },
   ];
@@ -131,9 +132,9 @@ function ClaudePermissions({
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <Shield className="h-5 w-5 text-blue-500" />
-          <h3 className="text-lg font-medium text-foreground">权限 / Plan 模式</h3>
+          <h3 className="text-lg font-medium text-foreground">Permission Presets</h3>
         </div>
-        <p className="text-sm text-muted-foreground">控制聊天栏默认权限模式；聊天栏按钮会同步这里的配置。</p>
+        <p className="text-sm text-muted-foreground">Choose the default runtime risk profile used by chat, agent profiles, and tool policy diagnostics.</p>
         <div className="grid gap-3 md:grid-cols-2">
           {permissionModes.map((mode) => {
             const active = permissionMode === mode.id;

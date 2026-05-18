@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   BotIcon,
   BrainCircuitIcon,
@@ -11,6 +12,7 @@ import {
   XIcon,
 } from 'lucide-react';
 
+import { apiFetch } from '../../../../utils/api';
 import type { AgentAppBinding } from '../../../../types/agent';
 import type { AgentRuntimeDiagnostics } from '../../types/types';
 import {
@@ -22,6 +24,15 @@ type AgentRuntimeDiagnosticsPanelProps = {
   diagnostics: AgentRuntimeDiagnostics | null;
   contextBudget?: ContextBudget | null;
   onClose: () => void;
+};
+
+type RuntimeTimelineEvent = {
+  id: string;
+  type: string;
+  title: string;
+  timestamp?: string;
+  severity?: string;
+  payload?: Record<string, unknown>;
 };
 
 const EMPTY_TEXT = '暂无';
@@ -287,6 +298,34 @@ export default function AgentRuntimeDiagnosticsPanel({
   const permissions = diagnostics?.permissions;
   const hasDiagnostics = Boolean(diagnostics);
   const contextWindow = contextBudget?.window.tokens ?? diagnostics?.contextWindowTokens;
+  const [timelineEvents, setTimelineEvents] = useState<RuntimeTimelineEvent[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const sessionId = diagnostics?.sessionId;
+    if (!sessionId) {
+      setTimelineEvents([]);
+      return;
+    }
+    const projectName = typeof diagnostics?.projectName === 'string' ? diagnostics.projectName : '';
+    const params = new URLSearchParams({
+      provider: diagnostics?.provider || 'claude',
+      projectName,
+    });
+    void apiFetch(`/api/session-timeline/${encodeURIComponent(sessionId)}?${params.toString()}`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!cancelled) {
+          setTimelineEvents(Array.isArray(data?.timeline?.events) ? data.timeline.events : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTimelineEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [diagnostics?.provider, diagnostics?.projectName, diagnostics?.sessionId]);
 
   return (
     <div className="rounded-xl border border-border bg-card text-card-foreground shadow-xl">
@@ -320,6 +359,7 @@ export default function AgentRuntimeDiagnosticsPanel({
         <div className="max-h-[420px] overflow-y-auto px-4 py-3">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Agent ID" value={formatText(diagnostics?.agentId)} />
+            <Field label="Agent Profile" value={formatText(diagnostics?.agentProfileKind || diagnostics?.agentProfile?.profileKind)} />
             <Field label="Agent 名称" value={formatText(diagnostics?.agentName)} />
             <Field label="模型" value={formatText(diagnostics?.model)} />
             <Field label="模型 Profile" value={formatText(diagnostics?.modelProfileId)} />
@@ -335,6 +375,28 @@ export default function AgentRuntimeDiagnosticsPanel({
 
           <OpenMythosRuntimeSection runtime={diagnostics?.openMythosRuntime} />
           <SubagentRuntimeSection subagents={diagnostics?.subagents} />
+
+          <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <GaugeIcon className="h-4 w-4 text-primary" />
+              Runtime Timeline
+            </div>
+            {timelineEvents.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No runtime timeline events captured yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {timelineEvents.slice(-12).map((item) => (
+                  <div key={item.id} className="rounded-md border border-border bg-card/70 px-2 py-1.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-foreground">{item.title}</span>
+                      <span className="shrink-0 text-muted-foreground">{item.type}</span>
+                    </div>
+                    {item.timestamp && <div className="mt-0.5 text-[11px] text-muted-foreground">{new Date(item.timestamp).toLocaleString()}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <section className="rounded-lg border border-border bg-background/60 p-3">

@@ -371,6 +371,16 @@ export interface PromptInjectionDebugPayload {
 export interface AgentRuntimeDiagnostics {
   type?: 'agent' | 'skills' | string;
   provider?: string;
+  agentProfileKind?: string;
+  agentProfile?: {
+    profileKind?: string;
+    name?: string;
+    modelProfileId?: string;
+    permissionPreset?: string;
+    allowedTools?: string[];
+    defaultSkills?: string[];
+    mcpServers?: string[];
+  } | null;
   allowSessionAgentBinding?: boolean;
   agentId?: string;
   agentName?: string;

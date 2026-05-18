@@ -314,6 +314,14 @@ MCP diagnostics updates:
 
 ## Agent Runtime Invocation Flow
 
+Agent Profile mode:
+
+1. `ChatComposer` exposes six lightweight built-in modes: `Plan`, `Build`, `Explore`, `Review`, `Debug`, and `Docs`.
+2. The selected mode is sent as `options.agentProfileKind`; a leading `@plan`, `@build`, `@explore`, `@review`, `@debug`, or `@docs` overrides it for one message and is stripped before normal Agent mention parsing.
+3. `server/services/agent-profile-runtime-service.js` resolves the profile before `applyAgentRuntimeToChatCommand()`, applies the profile permission preset, merges default profile Skills, and appends the profile prompt through the existing `appendSystemPrompt` path.
+4. Profiles are collaboration modes, not full reusable Agent configs. Full Agents still use `options.agentId`; Profiles only narrow model behavior, permission posture, optional Skill/MCP hints, and diagnostics.
+5. `Plan` and `Explore` use plan permission posture, so they do not auto-edit. `Build`, `Debug`, and `Docs` use `acceptEdits`; `Review` stays read-only-first through prompt guidance and default permissions.
+
 1. Agent runtime configs are persisted by `server/services/agent-config-service.js` in `~/.mtl-code-ui/agents/agents.json`.
 2. The main Agent config page is a template/config management surface, not a workspace-start screen. It loads and edits configs through authenticated `/api/agents` endpoints, including model, context window, prompt, skills, tools, app bindings, guardrails, and trigger keywords.
 3. Project chat never loads or displays Agent selection. It sends commands with `allowSessionAgentBinding: false`, so project sessions use the default Argus runtime even if a stale binding row exists.
