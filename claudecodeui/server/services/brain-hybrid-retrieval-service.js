@@ -188,6 +188,11 @@ export function createBrainHybridRetrievalService({
         kind: hit.kind,
         title: hit.title,
         summary: compact(hit.summary, 360),
+        status: hit.source?.status || '',
+        confidence: hit.source?.confidence || 0,
+        pinned: Boolean(hit.source?.pinned),
+        atomType: hit.source?.atomType || '',
+        updatedAtMs: hit.source?.updatedAtMs || hit.source?.createdAtMs || 0,
         score: hit.score,
         reasons: hit.reasons,
       }));

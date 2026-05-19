@@ -321,8 +321,8 @@ describe('Argus Brain compaction and recall', () => {
     }, 'claude');
 
     expect(result.options.appendSystemPrompt).toContain('Existing prompt');
-    expect(result.options.appendSystemPrompt).toContain('## Argus Brain Context');
-    expect(result.options.appendSystemPrompt).toContain('Verify current files, code, settings, and runtime results');
+    expect(result.options.appendSystemPrompt).toContain('## Argus Brain Recall Pack');
+    expect(result.options.appendSystemPrompt).toContain('Verify historical Brain state against current files and runtime before acting.');
     expect(result.options.appendSystemPrompt).toContain('```mermaid');
     expect(result.options.appendSystemPrompt).not.toContain('raw secret');
     expect(result.options.runtimeDiagnostics.brainRuntime.recall.status).toBe('injected');

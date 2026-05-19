@@ -185,7 +185,7 @@ describe('Brain hybrid retrieval', () => {
     const diagnostics = result.options.runtimeDiagnostics.brainRuntime.recall;
     expect(diagnostics.retrieval.mode).toBe('hybrid');
     expect(diagnostics.recallHits[0].reasons[0].signal).toBeTruthy();
-    expect(result.options.appendSystemPrompt).toContain('Relevant memory:');
+    expect(result.options.appendSystemPrompt).toContain('### Relevant memory');
   });
 });
 

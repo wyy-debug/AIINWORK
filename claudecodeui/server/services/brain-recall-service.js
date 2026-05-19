@@ -1,5 +1,6 @@
 import { readResolvedBrainRuntimeConfig } from './mtl-code-model-service.js';
 import { createBrainHybridRetrievalService } from './brain-hybrid-retrieval-service.js';
+import { buildBrainRecallPack } from './brain-recall-pack-service.js';
 import { brainStore as defaultBrainStore } from './brain-store-service.js';
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -137,7 +138,7 @@ export function createBrainRecallService({
           limit: config?.hybridRetrieval?.limit || 8,
           vectorTimeoutMs: config?.hybridRetrieval?.vectorTimeoutMs || 80,
         });
-      const prompt = trimByTokenBudget(buildArgusBrainContextPrompt({
+      const legacyPrompt = buildArgusBrainContextPrompt({
         compaction,
         projectNodes,
         matchedNodes,
@@ -145,7 +146,14 @@ export function createBrainRecallService({
         diagnostics: {
           reason: compaction ? 'latest session compaction' : retrieval.hits.length ? 'hybrid retrieval' : matchedNodes.length ? 'keyword matched project nodes' : 'project decisions and risks',
         },
-      }), config.maxInjectedTokens);
+      });
+      const recallPack = buildBrainRecallPack({
+        command: data.command || '',
+        maxTokens: config.maxInjectedTokens || 1200,
+        compaction,
+        retrievalHits: retrieval.hits,
+      });
+      const prompt = trimByTokenBudget(recallPack.prompt || legacyPrompt, config.maxInjectedTokens);
       const diagnostics = {
         enabled: true,
         used: Boolean(prompt),
@@ -156,6 +164,7 @@ export function createBrainRecallService({
           ...projectNodes.map((node) => ({ kind: 'project-node', id: node.id, type: node.nodeType })),
           ...matchedNodes.map((node) => ({ kind: 'keyword-node', id: node.id, type: node.nodeType })),
         ].slice(0, 20),
+        recallPack: recallPack.diagnostics,
         retrieval: retrieval.diagnostics,
         currentGoal: compaction?.currentGoal || '',
         nextAction: compaction?.nextAction || '',
