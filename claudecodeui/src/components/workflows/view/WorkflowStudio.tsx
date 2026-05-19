@@ -125,6 +125,8 @@ const minimapFilters: WorkflowMinimapFilter[] = ['all', 'status', 'type', 'risk'
 const favoriteStorageKey = 'workflowStudio.favoriteWorkflowIds';
 const recentStorageKey = 'workflowStudio.recentWorkflowIds';
 const nodePresetStorageKey = 'workflowStudio.nodeConfigPresets';
+const pinnedRunStorageKey = 'workflowStudio.pinnedRunIds';
+const archivedRunStorageKey = 'workflowStudio.archivedRunIds';
 const transformFunctions = ['default(value)', 'join(list, ", ")', 'pick(object, "field")', 'truncate(text, 400)'];
 
 const statusTaxonomy = [
@@ -379,6 +381,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [nodeLogs, setNodeLogs] = useState<Record<string, WorkflowNodeLog[]>>({});
   const [approvalRequests, setApprovalRequests] = useState<Array<Record<string, unknown>>>([]);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
+  const [runLogQuery, setRunLogQuery] = useState('');
+  const [pinnedRunIds, setPinnedRunIds] = useState<string[]>(() => readStoredIds(pinnedRunStorageKey));
+  const [archivedRunIds, setArchivedRunIds] = useState<string[]>(() => readStoredIds(archivedRunStorageKey));
+  const [cancelConfirmation, setCancelConfirmation] = useState<WorkflowRun | null>(null);
+  const [retryFromNodePreview, setRetryFromNodePreview] = useState<{ runId: string; nodeId: string; affected: string[] } | null>(null);
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -486,6 +493,25 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const permissionSource = useMemo(() => describePermissionSource(draft, selectedNode), [draft, selectedNode]);
   const failedRuns = useMemo(() => runs.filter((run) => run.status === 'failed'), [runs]);
   const pendingApprovalRuns = useMemo(() => runs.filter((run) => run.status === 'waiting_approval' || Object.values(run.nodeRuns || {}).some((nodeRun) => nodeRun.status === 'waiting_approval')), [runs]);
+  const pollingStrategy = selectedRun?.status === 'running' || selectedRun?.status === 'waiting_approval'
+    ? 'live polling every 2s with focused run refresh'
+    : 'idle polling paused until manual refresh';
+  const resumeBannerRuns = useMemo(() => runs.filter((run) => ['waiting_approval', 'recovering', 'queued'].includes(run.status)), [runs]);
+  const visibleRuns = useMemo(() => [...runs]
+    .filter((run) => !archivedRunIds.includes(run.id))
+    .sort((a, b) => Number(pinnedRunIds.includes(b.id)) - Number(pinnedRunIds.includes(a.id))), [archivedRunIds, pinnedRunIds, runs]);
+  const streamingLogRows = useMemo(() => {
+    const rows = runs.flatMap((run) => Object.values(run.nodeRuns || {}).flatMap((nodeRun) => {
+      const storedLogs = nodeLogs[`${run.id}:${nodeRun.nodeId}`]?.map((entry) => entry.message) || [];
+      return [...(nodeRun.logs || []), ...storedLogs].map((message) => ({ run, nodeRun, message }));
+    }));
+    const query = runLogQuery.trim().toLowerCase();
+    return query ? rows.filter((row) => `${row.run.workflowName} ${row.nodeRun.title} ${row.message}`.toLowerCase().includes(query)) : rows;
+  }, [nodeLogs, runLogQuery, runs]);
+  const compareRunAttempts = useMemo(() => {
+    const attempts = Object.values(selectedRun?.nodeRuns || {}).filter((nodeRun) => nodeRun.attempt > 0);
+    return attempts.map((nodeRun) => `${nodeRun.title}: attempt ${nodeRun.attempt} / ${nodeRun.status}`);
+  }, [selectedRun]);
   const favoriteWorkflows = useMemo(() => favoriteWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow)), [favoriteWorkflowIds, workflows]);
   const recentWorkflows = useMemo(() => {
     const fromStorage = recentWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
@@ -1120,6 +1146,32 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setError(rollbackError instanceof Error ? rollbackError.message : 'Failed to rollback checkpoint');
     }
   }, [loadData]);
+
+  const retryNodeOnly = useCallback((run: WorkflowRun, nodeId: string) => {
+    void controlNode(run, nodeId, 'retry');
+  }, [controlNode]);
+
+  const previewRetryFromNode = useCallback((run: WorkflowRun, nodeId: string) => {
+    const nodeIds = draft.nodes.map((node) => node.id);
+    const start = Math.max(0, nodeIds.indexOf(nodeId));
+    setRetryFromNodePreview({ runId: run.id, nodeId, affected: nodeIds.slice(start) });
+  }, [draft.nodes]);
+
+  const toggleRunPin = useCallback((runId: string) => {
+    setPinnedRunIds((current) => {
+      const next = current.includes(runId) ? current.filter((id) => id !== runId) : [runId, ...current];
+      writeStoredIds(pinnedRunStorageKey, next);
+      return next;
+    });
+  }, []);
+
+  const toggleRunArchive = useCallback((runId: string) => {
+    setArchivedRunIds((current) => {
+      const next = current.includes(runId) ? current.filter((id) => id !== runId) : [runId, ...current];
+      writeStoredIds(archivedRunStorageKey, next);
+      return next;
+    });
+  }, []);
 
   const exportDraft = useCallback(async () => {
     const response = await api.exportWorkflow(draft.id, 'json');
@@ -2162,8 +2214,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[300px_minmax(0,1fr)_400px] lg:overflow-hidden" data-testid="workflow-runs">
           <aside className="min-h-0 overflow-auto border-r border-border p-4">
             <h3 className="text-sm font-semibold text-foreground">Run list</h3>
+            {resumeBannerRuns.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800" data-testid="workflow-resume-banner">
+                {resumeBannerRuns.length} run{resumeBannerRuns.length === 1 ? '' : 's'} can be resumed or need attention.
+              </div>
+            )}
+            <div className="mt-3 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-run-live-polling-strategy">
+              <span className="font-semibold text-foreground">Refresh strategy</span>
+              <span className="mt-1 block">{pollingStrategy}</span>
+            </div>
             <div className="mt-3 space-y-2">
-              {runs.map((run) => {
+              {visibleRuns.map((run) => {
                 const failedCount = Object.values(run.nodeRuns || {}).filter((nodeRun) => nodeRun.status === 'failed').length;
                 const approvalCount = Object.values(run.nodeRuns || {}).filter((nodeRun) => nodeRun.status === 'waiting_approval').length;
                 return (
@@ -2172,13 +2233,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                       <span className="truncate font-semibold text-foreground">{run.workflowName}</span>
                       <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-                      <span>{Object.keys(run.nodeRuns || {}).length} nodes</span>
-                      <span>{failedCount} failed</span>
-                      <span>{approvalCount} approvals</span>
-                      <span>{run.queue?.workerId || 'no worker'}</span>
-                    </div>
-                  </button>
+                     <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                       <span>{Object.keys(run.nodeRuns || {}).length} nodes</span>
+                       <span>{failedCount} failed</span>
+                       <span>{approvalCount} approvals</span>
+                       <span>{run.queue?.workerId || 'no worker'}</span>
+                       {pinnedRunIds.includes(run.id) && <span>pinned</span>}
+                     </div>
+                   </button>
                 );
               })}
             </div>
@@ -2189,8 +2251,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             )}
           </main>
           <aside className="min-h-0 overflow-auto border-l border-border p-4" data-testid="workflow-run-console">
-            {approvalRequests.length > 0 && (
-              <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="workflow-approval-inbox">
+             {approvalRequests.length > 0 && (
+               <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="workflow-approval-inbox">
                 <div data-testid="workflow-approval-inbox-panel">
                 <h3 className="text-sm font-semibold text-amber-900">Approval Inbox</h3>
                 <div className="mt-2 space-y-2">
@@ -2206,18 +2268,64 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   ))}
                 </div>
                 </div>
+               </section>
+             )}
+            <section className="mb-4 rounded-md border border-border bg-card p-3" data-testid="workflow-run-streaming-logs">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-foreground">Streaming logs</h3>
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">tailing</span>
+              </div>
+              <label className="mt-2 block text-xs text-muted-foreground" data-testid="workflow-run-log-search">
+                Search logs
+                <input value={runLogQuery} onChange={(event) => setRunLogQuery(event.target.value)} placeholder="node, status, error" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+              </label>
+              <div className="mt-2 max-h-28 space-y-1 overflow-auto">
+                {streamingLogRows.slice(0, 8).map((row, index) => (
+                  <div key={`${row.run.id}-${row.nodeRun.nodeId}-${index}`} className="rounded border border-border bg-muted/20 px-2 py-1 text-[11px] text-muted-foreground">
+                    <span className="font-medium text-foreground">{row.nodeRun.title}</span>: {row.message}
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-run-compare-attempts">
+              <span className="block font-semibold text-foreground">Attempt comparison</span>
+              <div className="mt-2 space-y-1">
+                {compareRunAttempts.length > 0 ? compareRunAttempts.map((attempt) => (
+                  <div key={attempt} className="rounded border border-border px-2 py-1">{attempt}</div>
+                )) : <div className="rounded border border-border px-2 py-1">No attempts yet.</div>}
+              </div>
+            </section>
+            {retryFromNodePreview && (
+              <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800" data-testid="workflow-retry-from-node-preview">
+                Retry from {retryFromNodePreview.nodeId} will invalidate: {retryFromNodePreview.affected.join(', ')}
               </section>
             )}
-            <h3 className="text-sm font-semibold text-foreground">Run history</h3>
-            <div className="mt-3 space-y-3">
-              {runs.map((run) => (
+            {cancelConfirmation && (
+              <section className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700" data-testid="workflow-cancel-confirmation">
+                Cancelling {cancelConfirmation.workflowName} may leave artifacts and checkpoints. Confirm from the workflow controls before stopping long tasks.
+              </section>
+            )}
+             <h3 className="text-sm font-semibold text-foreground">Run history</h3>
+             <div className="mt-3 space-y-3">
+              {visibleRuns.map((run) => (
                 <div key={run.id} data-testid="workflow-run-card" className="rounded-md border border-border bg-card p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       <h4 className="truncate text-sm font-semibold text-foreground">{run.workflowName}</h4>
                       <p className="text-xs text-muted-foreground">{formatTime(run.createdAt)}</p>
                     </div>
-                    <span className={cn('rounded-full border px-2 py-0.5 text-[11px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>
+                   <span className={cn('rounded-full border px-2 py-0.5 text-[11px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>
+                 </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button type="button" data-testid="workflow-run-pinning" onClick={() => toggleRunPin(run.id)} className="rounded border border-border px-2 py-1 text-[10px] hover:bg-muted">
+                      {pinnedRunIds.includes(run.id) ? 'Unpin' : 'Pin'}
+                    </button>
+                    <button type="button" data-testid="workflow-run-archive" onClick={() => toggleRunArchive(run.id)} className="rounded border border-border px-2 py-1 text-[10px] hover:bg-muted">
+                      Archive
+                    </button>
+                    <button type="button" onClick={() => setCancelConfirmation(run)} className="rounded border border-border px-2 py-1 text-[10px] hover:bg-muted">
+                      Cancel impact
+                    </button>
                   </div>
                   {run.queue && (
                     <div className="mt-2 rounded border border-border bg-muted/20 p-2 text-[11px] text-muted-foreground" data-testid="workflow-runtime-kernel">
@@ -2305,15 +2413,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                             </button>
                           </div>
                         )}
-                        {nodeRun.status === 'failed' && (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <button type="button" onClick={() => controlNode(run, nodeRun.nodeId, 'retry')} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
-                              <RefreshCw className="h-3 w-3" />
-                              Retry
+                         {nodeRun.status === 'failed' && (
+                           <div className="mt-2 flex flex-wrap gap-2">
+                            <button type="button" data-testid="workflow-retry-node-only" onClick={() => retryNodeOnly(run, nodeRun.nodeId)} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
+                               <RefreshCw className="h-3 w-3" />
+                               Retry
+                             </button>
+                            <button type="button" onClick={() => previewRetryFromNode(run, nodeRun.nodeId)} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
+                              Preview retry from
                             </button>
                             <button type="button" data-testid="workflow-retry-from-node" onClick={() => retryWorkflowFromNode(run, nodeRun.nodeId)} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
-                              <GitBranch className="h-3 w-3" />
-                              Retry from
+                               <GitBranch className="h-3 w-3" />
+                               Retry from
                             </button>
                           </div>
                         )}

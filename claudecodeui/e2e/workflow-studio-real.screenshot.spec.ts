@@ -177,6 +177,24 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await expect(page.getByTestId('workflow-run-console')).toBeVisible();
   await expect(page.getByTestId('workflow-approval-inbox-panel')).toBeVisible();
   await expect(page.getByTestId('workflow-run-events').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-run-live-polling-strategy')).toBeVisible();
+  await screenshot(page, 'REQ-112-workflow-run-live-polling-strategy.png');
+  await expect(page.getByTestId('workflow-run-streaming-logs')).toBeVisible();
+  await screenshot(page, 'REQ-113-workflow-run-streaming-logs.png');
+  await expect(page.getByTestId('workflow-run-log-search')).toBeVisible();
+  await screenshot(page, 'REQ-114-workflow-run-log-search.png');
+  await expect(page.getByTestId('workflow-run-compare-attempts')).toBeVisible();
+  await screenshot(page, 'REQ-115-workflow-run-compare-attempts.png');
+  await expect(page.getByTestId('workflow-resume-banner')).toBeVisible();
+  await screenshot(page, 'REQ-119-workflow-resume-banner.png');
+  await expect(page.getByTestId('workflow-run-pinning').first()).toBeVisible();
+  await page.getByTestId('workflow-run-pinning').first().click();
+  await screenshot(page, 'REQ-120-workflow-run-pinning.png');
+  await expect(page.getByTestId('workflow-run-archive').first()).toBeVisible();
+  await screenshot(page, 'REQ-121-workflow-run-archive.png');
+  await page.getByRole('button', { name: 'Cancel impact' }).first().click();
+  await expect(page.getByTestId('workflow-cancel-confirmation')).toBeVisible();
+  await screenshot(page, 'REQ-118-workflow-cancel-confirmation.png');
   await screenshot(page, 'REQ-057-real-workflow-approval.png');
   await screenshot(page, 'REQ-064-real-runtime-approval-console.png');
   await screenshot(page, 'REQ-081-run-console-approval.png');
@@ -221,6 +239,11 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await page.getByTestId('workflow-studio').getByRole('button', { name: 'Refresh' }).click();
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
   await expect(page.getByText(/permission boundary/i).first()).toBeVisible();
+  await expect(page.getByTestId('workflow-retry-node-only').first()).toBeVisible();
+  await screenshot(page, 'REQ-116-workflow-retry-node-only.png');
+  await page.getByRole('button', { name: 'Preview retry from' }).first().click();
+  await expect(page.getByTestId('workflow-retry-from-node-preview')).toBeVisible();
+  await screenshot(page, 'REQ-117-workflow-retry-from-node-preview.png');
   await screenshot(page, 'REQ-064-real-permission-deny.png');
 
   await request.delete(`/api/workflows/${workflowId}`);
