@@ -71,6 +71,7 @@ workspace/**/*.tar.gz
 **/test-results/
 **/playwright-report/
 **/blob-report/
+**/output/playwright/
 
 # Temporary files
 **/tmp/
