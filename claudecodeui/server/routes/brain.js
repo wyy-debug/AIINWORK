@@ -4,6 +4,7 @@ import {
   brainQualityBaselineService,
   formatBrainQualityReport,
 } from '../services/brain-quality-baseline-service.js';
+import { brainInspectorService } from '../services/brain-inspector-service.js';
 import { brainPostTurnExtractionService } from '../services/brain-post-turn-extraction-service.js';
 import { brainSymbolicCanvasService } from '../services/brain-symbolic-canvas-service.js';
 import { brainStore } from '../services/brain-store-service.js';
@@ -11,6 +12,7 @@ import { readResolvedBrainRuntimeConfig } from '../services/mtl-code-model-servi
 
 export function createBrainRouter({
   store = brainStore,
+  brainInspectorService: inspectorService = brainInspectorService,
   qualityBaselineService = brainQualityBaselineService,
   postTurnExtractionService = brainPostTurnExtractionService,
   symbolicCanvasService = brainSymbolicCanvasService,
@@ -89,6 +91,42 @@ export function createBrainRouter({
     } catch (error) {
       console.error('Brain node evidence error:', error);
       res.status(500).json({ error: error.message || 'Failed to load Brain node evidence' });
+    }
+  });
+
+  router.get('/session/:sessionId/inspector', async (req, res) => {
+    try {
+      const config = await readConfig();
+      if (config.enabled === false) {
+        res.json({ success: true, inspector: inspectorService.buildDisabledInspector() });
+        return;
+      }
+      const inspector = inspectorService.buildInspector({
+        sessionId: req.params.sessionId,
+        provider: String(req.query.provider || 'claude'),
+        projectName: String(req.query.projectName || ''),
+      });
+      res.json({ success: true, inspector });
+    } catch (error) {
+      console.error('Brain inspector error:', error);
+      res.status(500).json({ error: error.message || 'Failed to load Brain inspector' });
+    }
+  });
+
+  router.get('/session/:sessionId/inspector/report', async (req, res) => {
+    try {
+      const config = await readConfig();
+      const inspector = config.enabled === false
+        ? inspectorService.buildDisabledInspector()
+        : inspectorService.buildInspector({
+          sessionId: req.params.sessionId,
+          provider: String(req.query.provider || 'claude'),
+          projectName: String(req.query.projectName || ''),
+        });
+      res.type('text/markdown').send(inspectorService.exportReport(inspector));
+    } catch (error) {
+      console.error('Brain inspector report error:', error);
+      res.status(500).json({ error: error.message || 'Failed to export Brain inspector report' });
     }
   });
 

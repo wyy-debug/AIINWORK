@@ -59,6 +59,37 @@ type BrainDiagnostics = {
     artifactId?: string;
     sizeBytes?: number;
   }>;
+  inspector?: BrainInspector | null;
+};
+
+type BrainInspector = {
+  status?: string;
+  actions?: string[];
+  controls?: string[];
+  layers?: {
+    rawRefs?: Array<{
+      id: string;
+      refType?: string;
+      label?: string;
+      contentPreview?: string;
+      sensitiveHidden?: boolean;
+    }>;
+    atoms?: Array<{
+      id: string;
+      atomType?: string;
+      title?: string;
+      status?: string;
+      pinned?: boolean;
+    }>;
+    scenarios?: Array<{ id: string; title?: string }>;
+    projectProfile?: { summary?: string } | null;
+  };
+  recallHits?: Array<{
+    id: string;
+    title?: string;
+    reasons?: Array<{ signal?: string; rank?: number }>;
+  }>;
+  canvas?: { mermaid?: string; textFallback?: string };
 };
 
 const EMPTY_TEXT = 'None';
@@ -239,6 +270,79 @@ function BrainRuntimeSection({
   );
 }
 
+function BrainWorkbenchSection({ inspector }: { inspector?: BrainInspector | null }) {
+  const rawRefs = inspector?.layers?.rawRefs || [];
+  const atoms = inspector?.layers?.atoms || [];
+  const scenarios = inspector?.layers?.scenarios || [];
+  const recallHits = inspector?.recallHits || [];
+
+  return (
+    <section className="mt-3 rounded-lg border border-border bg-card/70 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-foreground">Brain Workbench</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            Raw content is hidden unless expanded through safe evidence drill-down.
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-1.5 text-xs">
+          {['Pin', 'Archive', 'Mark stale', 'Merge', 'Export report', 'Show raw preview'].map((label) => (
+            <button
+              key={label}
+              type="button"
+              className="inline-flex h-7 items-center rounded-md border border-border px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-3">
+        <div className="rounded-md border border-border bg-background/70 p-2">
+          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Raw refs</div>
+          {rawRefs.length ? rawRefs.slice(0, 4).map((ref) => (
+            <div key={ref.id} className="truncate text-xs text-foreground" title={ref.contentPreview || ref.id}>
+              {ref.label || ref.id} / {ref.refType || 'ref'}
+            </div>
+          )) : <div className="text-xs text-muted-foreground">No raw refs yet.</div>}
+        </div>
+        <div className="rounded-md border border-border bg-background/70 p-2">
+          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Atoms</div>
+          {atoms.length ? atoms.slice(0, 4).map((atom) => (
+            <div key={atom.id} className="truncate text-xs text-foreground" title={atom.title || atom.id}>
+              {atom.pinned ? 'Pinned ' : ''}{atom.atomType || 'atom'} / {atom.status || 'active'}
+            </div>
+          )) : <div className="text-xs text-muted-foreground">No atoms extracted yet.</div>}
+        </div>
+        <div className="rounded-md border border-border bg-background/70 p-2">
+          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Scenarios</div>
+          {scenarios.length ? scenarios.slice(0, 4).map((scenario) => (
+            <div key={scenario.id} className="truncate text-xs text-foreground" title={scenario.title || scenario.id}>
+              {scenario.title || scenario.id}
+            </div>
+          )) : <div className="text-xs text-muted-foreground">No scenarios yet.</div>}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="rounded-md border border-border bg-background/70 p-2">
+          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Project profile</div>
+          <div className="text-xs leading-5 text-foreground">{formatText(inspector?.layers?.projectProfile?.summary)}</div>
+        </div>
+        <div className="rounded-md border border-border bg-background/70 p-2">
+          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Recall reasons</div>
+          {recallHits.length ? recallHits.slice(0, 4).map((hit) => (
+            <div key={hit.id} className="truncate text-xs text-foreground" title={hit.title || hit.id}>
+              {hit.title || hit.id}: {(hit.reasons || []).map((reason) => reason.signal).filter(Boolean).join(', ') || 'included'}
+            </div>
+          )) : <div className="text-xs text-muted-foreground">No recall hits recorded yet.</div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function SubagentRuntimeSection({
   subagents,
 }: {
@@ -302,6 +406,21 @@ export default function AgentRuntimeDiagnosticsPanel({
       .catch(() => {
         if (!cancelled) setBrain(null);
       });
+    void apiFetch(`/api/brain/session/${encodeURIComponent(sessionId)}/inspector?${params.toString()}`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!cancelled) {
+          setBrain((current) => ({
+            ...(current || {}),
+            inspector: data?.inspector || null,
+          }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBrain((current) => current ? { ...current, inspector: null } : null);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -358,6 +477,7 @@ export default function AgentRuntimeDiagnosticsPanel({
           </div>
 
           <BrainRuntimeSection diagnostics={diagnostics} brain={brain} />
+          <BrainWorkbenchSection inspector={brain?.inspector} />
           <SubagentRuntimeSection subagents={diagnostics?.subagents} />
 
           <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
