@@ -789,7 +789,12 @@ export function createBrainStore({ db = defaultDb } = {}) {
     `).get(sessionId, provider || 'claude'))
   );
 
-  const getNodeDetail = ({ nodeId = '', sessionId = '', provider = 'claude' } = {}) => {
+  const getNodeDetail = ({
+    nodeId = '',
+    sessionId = '',
+    provider = 'claude',
+    includeRefContent = false,
+  } = {}) => {
     const node = mapNode(db.prepare('SELECT * FROM brain_nodes WHERE id = ?').get(nodeId));
     if (!node || (sessionId && node.sessionId !== sessionId) || (provider && node.provider !== provider)) {
       return null;
@@ -800,10 +805,11 @@ export function createBrainStore({ db = defaultDb } = {}) {
       ? db.prepare(`SELECT * FROM brain_events WHERE id IN (${eventIds.map(() => '?').join(',')}) ORDER BY created_at_ms ASC`)
         .all(...eventIds).map(mapEvent)
       : [];
+    const contentColumn = includeRefContent ? 'content' : 'NULL AS content';
     const refs = refIds.length
       ? db.prepare(`
           SELECT id, session_id, provider, project_name, event_id, checkpoint_id,
-                 artifact_id, ref_type, ref_id, label, NULL AS content,
+                 artifact_id, ref_type, ref_id, label, ${contentColumn},
                  metadata_json, size_bytes, created_at_ms, pruned_at_ms
           FROM brain_refs
           WHERE id IN (${refIds.map(() => '?').join(',')})
@@ -816,7 +822,10 @@ export function createBrainStore({ db = defaultDb } = {}) {
       ORDER BY updated_at_ms DESC
       LIMIT 20
     `).all(node.sessionId, node.provider).map(mapAtom)
-      .filter((atom) => atom.sourceEventIds.some((eventId) => eventIds.includes(eventId)));
+      .filter((atom) => (
+        atom.sourceEventIds.some((eventId) => eventIds.includes(eventId))
+        || atom.refIds.some((refId) => refIds.includes(refId))
+      ));
     return { node, events, refs, atoms };
   };
 
@@ -828,7 +837,7 @@ export function createBrainStore({ db = defaultDb } = {}) {
     const nodes = session
       ? db.prepare(`
           SELECT * FROM brain_nodes
-          WHERE session_id = ? AND provider = ? AND status = 'active'
+          WHERE session_id = ? AND provider = ? AND status != 'archived'
           ORDER BY updated_at_ms DESC
           LIMIT 40
         `).all(sessionId, provider || 'claude').map(mapNode)
