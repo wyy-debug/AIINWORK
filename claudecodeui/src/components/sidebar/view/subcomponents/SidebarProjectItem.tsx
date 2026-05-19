@@ -1,7 +1,6 @@
 import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, SquarePen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
@@ -309,91 +308,107 @@ export default function SidebarProjectItem({
           </div>
         </div>
 
-        <Button
-          variant="ghost"
+        <div
           className={cn(
-            'hidden md:flex h-9 w-full justify-between rounded-lg px-2 py-1.5 font-normal hover:bg-accent/55',
+            'hidden md:flex h-9 w-full items-center justify-between rounded-lg font-normal transition-colors hover:bg-accent/55',
             isSelected && 'bg-accent text-accent-foreground',
             isStarred &&
               !isSelected &&
               'bg-yellow-50/50 dark:bg-yellow-900/10 hover:bg-yellow-100/50 dark:hover:bg-yellow-900/20',
           )}
-          onClick={selectAndToggleProject}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            {isExpanded ? (
-              <FolderOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-            ) : (
-              <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-            )}
-            <div className="min-w-0 flex-1 text-left">
-              {isEditing ? (
-                <div className="flex min-w-0 items-center gap-1">
-                  <input
-                    type="text"
-                    value={editingName}
-                    onChange={(event) => onEditingNameChange(event.target.value)}
-                    className="h-7 w-full rounded border border-border bg-background px-2 text-sm text-foreground focus:ring-2 focus:ring-primary/20"
-                    placeholder={t('projects.projectNamePlaceholder')}
-                    autoFocus
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        saveProjectName();
-                      }
-                      if (event.key === 'Escape') {
-                        onCancelEditingProject();
-                      }
-                    }}
-                  />
-                </div>
+          {isEditing ? (
+            <div className="flex h-full min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5">
+              {isExpanded ? (
+                <FolderOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
               ) : (
+                <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              )}
+              <input
+                type="text"
+                value={editingName}
+                onChange={(event) => onEditingNameChange(event.target.value)}
+                className="h-7 w-full rounded border border-border bg-background px-2 text-sm text-foreground focus:ring-2 focus:ring-primary/20"
+                placeholder={t('projects.projectNamePlaceholder')}
+                autoFocus
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    saveProjectName();
+                  }
+                  if (event.key === 'Escape') {
+                    onCancelEditingProject();
+                  }
+                }}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              data-testid="sidebar-project-main-button"
+              className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-2 py-1.5 text-left font-normal focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onClick={selectAndToggleProject}
+              aria-expanded={isExpanded}
+              title={project.displayName}
+            >
+              {isExpanded ? (
+                <FolderOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              ) : (
+                <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              )}
+              <div className="min-w-0 flex-1 text-left">
                 <div className="truncate text-sm font-medium text-foreground" title={project.displayName}>
                   {project.displayName}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            </button>
+          )}
 
-          <div className="flex flex-shrink-0 items-center gap-1">
+          <div className="flex h-full flex-shrink-0 items-center gap-1 pr-1">
             {isEditing ? (
               <>
-                <div
-                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-green-600 transition-colors hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-900/20"
+                <button
+                  type="button"
+                  className="flex h-6 w-6 items-center justify-center rounded text-green-600 transition-colors hover:bg-green-50 hover:text-green-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring dark:hover:bg-green-900/20"
                   onClick={(event) => {
                     event.stopPropagation();
                     saveProjectName();
                   }}
+                  aria-label={t('common.save')}
                 >
                   <Check className="h-3 w-3" />
-                </div>
-                <div
-                  className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700 dark:hover:bg-gray-800"
+                </button>
+                <button
+                  type="button"
+                  className="flex h-6 w-6 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring dark:hover:bg-gray-800"
                   onClick={(event) => {
                     event.stopPropagation();
                     onCancelEditingProject();
                   }}
+                  aria-label={t('common.cancel')}
                 >
                   <X className="h-3 w-3" />
-                </div>
+                </button>
               </>
             ) : (
               <>
-                <div
-                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground"
+                <button
+                  type="button"
+                  data-testid="sidebar-project-new-session-button"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={(event) => {
                     event.stopPropagation();
                     onProjectSelect(project);
                     onNewSession(project);
                   }}
                   title={t('sessions.newSession')}
+                  aria-label={t('sessions.newSession')}
                 >
                   <SquarePen className="h-3.5 w-3.5" />
-                </div>
+                </button>
               </>
             )}
           </div>
-        </Button>
+        </div>
       </div>
 
       <SidebarProjectSessions
