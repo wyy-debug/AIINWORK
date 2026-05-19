@@ -48,6 +48,7 @@ import ChatComposer from './subcomponents/ChatComposer';
 import PromptInjectionDebugPanel from './subcomponents/PromptInjectionDebugPanel';
 import CheckpointPanel from './subcomponents/CheckpointPanel';
 import AgentRuntimeTimelinePanel from './subcomponents/AgentRuntimeTimelinePanel';
+import AgentRuntimeDiagnosticsPanel from './subcomponents/AgentRuntimeDiagnosticsPanel';
 import AgentSessionSetupDialog from './subcomponents/AgentSessionSetupDialog';
 import AgentLaunchDialog from './subcomponents/AgentLaunchDialog';
 
@@ -265,6 +266,9 @@ function ChatInterface({
   const agentBindingEnabled = isConversationSpace || isWorktreeProject;
   const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
   const showPromptInjectionPanel = argusDebugSettings.showPromptInjectionPanel;
+  const showRuntimeTimelinePanel = argusDebugSettings.showRuntimeTimelinePanel;
+  const showCheckpointPanel = argusDebugSettings.showCheckpointPanel;
+  const showArgusBrainDiagnosticsPanel = argusDebugSettings.showArgusBrainDiagnosticsPanel;
 
   useEffect(() => {
     const reloadDebugSettings = () => setArgusDebugSettings(getArgusDebugSettings());
@@ -2083,20 +2087,38 @@ function ChatInterface({
             />
           )}
 
-          <AgentRuntimeTimelinePanel
-            sessionId={selectedSession?.id || currentSessionId}
-            provider={(selectedSession?.__provider || provider) as LLMProvider}
-            projectName={selectedProject.name || ''}
-            projectPath={selectedProject.fullPath || selectedProject.path || ''}
-            isSessionRunning={isLoading}
-          />
+          {showRuntimeTimelinePanel && (
+            <AgentRuntimeTimelinePanel
+              sessionId={selectedSession?.id || currentSessionId}
+              provider={(selectedSession?.__provider || provider) as LLMProvider}
+              projectName={selectedProject.name || ''}
+              projectPath={selectedProject.fullPath || selectedProject.path || ''}
+              isSessionRunning={isLoading}
+            />
+          )}
 
-          <CheckpointPanel
-            sessionId={selectedSession?.id || currentSessionId}
-            provider={(selectedSession?.__provider || provider) as LLMProvider}
-            projectPath={selectedProject.fullPath || selectedProject.path || ''}
-            isSessionRunning={isLoading}
-          />
+          {showCheckpointPanel && (
+            <CheckpointPanel
+              sessionId={selectedSession?.id || currentSessionId}
+              provider={(selectedSession?.__provider || provider) as LLMProvider}
+              projectPath={selectedProject.fullPath || selectedProject.path || ''}
+              isSessionRunning={isLoading}
+            />
+          )}
+
+          {showArgusBrainDiagnosticsPanel && (
+            <div className="min-h-0 w-full border-l border-border bg-background/95 lg:w-[360px]">
+              <div className="h-full overflow-y-auto p-3">
+                <AgentRuntimeDiagnosticsPanel
+                  diagnostics={agentRuntimeDiagnostics}
+                  sessionId={selectedSession?.id || currentSessionId}
+                  provider={(selectedSession?.__provider || provider) as LLMProvider}
+                  projectName={selectedProject.name || ''}
+                  projectPath={selectedProject.fullPath || selectedProject.path || ''}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <ChatComposer

@@ -12,6 +12,7 @@ import {
 
 import { apiFetch } from '../../../../utils/api';
 import type { AgentAppBinding } from '../../../../types/agent';
+import type { LLMProvider } from '../../../../types/app';
 import type { AgentRuntimeDiagnostics } from '../../types/types';
 import {
   formatTokenCount,
@@ -21,7 +22,11 @@ import {
 type AgentRuntimeDiagnosticsPanelProps = {
   diagnostics: AgentRuntimeDiagnostics | null;
   contextBudget?: ContextBudget | null;
-  onClose: () => void;
+  sessionId?: string | null;
+  provider?: LLMProvider | string;
+  projectName?: string;
+  projectPath?: string;
+  onClose?: () => void;
 };
 
 type RuntimeTimelineEvent = {
@@ -365,27 +370,33 @@ function SubagentRuntimeSection({
 export default function AgentRuntimeDiagnosticsPanel({
   diagnostics,
   contextBudget,
+  sessionId,
+  provider,
+  projectName,
+  projectPath,
   onClose,
 }: AgentRuntimeDiagnosticsPanelProps) {
-  const hasDiagnostics = Boolean(diagnostics);
+  const effectiveSessionId = diagnostics?.sessionId || sessionId || '';
+  const effectiveProvider = diagnostics?.provider || provider || 'claude';
+  const effectiveProjectName = typeof diagnostics?.projectName === 'string' ? diagnostics.projectName : (projectName || '');
+  const effectiveProjectPath = typeof diagnostics?.projectPath === 'string' ? diagnostics.projectPath : (projectPath || '');
+  const hasDiagnostics = Boolean(diagnostics || effectiveSessionId);
   const contextWindow = contextBudget?.window.tokens ?? diagnostics?.contextWindowTokens;
   const [timelineEvents, setTimelineEvents] = useState<RuntimeTimelineEvent[]>([]);
   const [brain, setBrain] = useState<BrainDiagnostics | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const sessionId = diagnostics?.sessionId;
-    if (!sessionId) {
+    if (!effectiveSessionId) {
       setTimelineEvents([]);
       setBrain(null);
       return;
     }
-    const projectName = typeof diagnostics?.projectName === 'string' ? diagnostics.projectName : '';
     const params = new URLSearchParams({
-      provider: diagnostics?.provider || 'claude',
-      projectName,
+      provider: effectiveProvider,
+      projectName: effectiveProjectName,
     });
-    void apiFetch(`/api/session-timeline/${encodeURIComponent(sessionId)}?${params.toString()}`)
+    void apiFetch(`/api/session-timeline/${encodeURIComponent(effectiveSessionId)}?${params.toString()}`)
       .then((response) => response.ok ? response.json() : null)
       .then((data) => {
         if (!cancelled) {
@@ -395,7 +406,7 @@ export default function AgentRuntimeDiagnosticsPanel({
       .catch(() => {
         if (!cancelled) setTimelineEvents([]);
       });
-    void apiFetch(`/api/brain/session/${encodeURIComponent(sessionId)}?${params.toString()}`)
+    void apiFetch(`/api/brain/session/${encodeURIComponent(effectiveSessionId)}?${params.toString()}`)
       .then((response) => response.ok ? response.json() : null)
       .then((data) => {
         if (!cancelled) {
@@ -405,7 +416,7 @@ export default function AgentRuntimeDiagnosticsPanel({
       .catch(() => {
         if (!cancelled) setBrain(null);
       });
-    void apiFetch(`/api/brain/session/${encodeURIComponent(sessionId)}/inspector?${params.toString()}`)
+    void apiFetch(`/api/brain/session/${encodeURIComponent(effectiveSessionId)}/inspector?${params.toString()}`)
       .then((response) => response.ok ? response.json() : null)
       .then((data) => {
         if (!cancelled) {
@@ -423,7 +434,7 @@ export default function AgentRuntimeDiagnosticsPanel({
     return () => {
       cancelled = true;
     };
-  }, [diagnostics?.provider, diagnostics?.projectName, diagnostics?.sessionId]);
+  }, [effectiveProvider, effectiveProjectName, effectiveSessionId]);
 
   const brainTimelineCount = useMemo(
     () => timelineEvents.filter((event) => event.type === 'brain').length,
@@ -444,14 +455,16 @@ export default function AgentRuntimeDiagnosticsPanel({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Close diagnostics"
-        >
-          <XIcon className="h-4 w-4" />
-        </button>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Close diagnostics"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {!hasDiagnostics ? (
@@ -469,9 +482,9 @@ export default function AgentRuntimeDiagnosticsPanel({
             <Field label="Context window" value={contextWindow ? formatTokenCount(contextWindow) : EMPTY_TEXT} />
             <Field label="Current context" value={contextBudget ? `${formatTokenCount(contextBudget.current.used)} (${contextBudget.current.percent.toFixed(2)}%)` : EMPTY_TEXT} />
             <Field label="Cumulative tokens" value={contextBudget ? formatTokenCount(contextBudget.cumulative.used) : EMPTY_TEXT} />
-            <Field label="Provider" value={formatText(diagnostics?.provider)} />
-            <Field label="Session ID" value={formatText(diagnostics?.sessionId)} />
-            <Field label="Project Path" value={formatText(diagnostics?.projectPath)} />
+            <Field label="Provider" value={formatText(effectiveProvider)} />
+            <Field label="Session ID" value={formatText(effectiveSessionId)} />
+            <Field label="Project Path" value={formatText(effectiveProjectPath)} />
             <Field label="Append prompt length" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
           </div>
 

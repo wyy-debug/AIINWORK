@@ -1,4 +1,4 @@
-import { BugIcon, BracesIcon } from 'lucide-react';
+import { BugIcon, BracesIcon, BrainCircuitIcon, GitCompareIcon, ListTreeIcon } from 'lucide-react';
 
 import { saveArgusDebugSettings } from '../../../chat/utils/debugSettings';
 import type { ArgusDebugSettings } from '../../types/types';
@@ -31,13 +31,48 @@ export default function DebugSettingsTab({
       <SettingsSection title="Debug">
         <SettingsCard divided>
           <SettingsRow
-            label="Prompt injection panel"
+            label="Prompt Debug"
             description="Show command rewrites, appendSystemPrompt, and launch flags on the right side of the chat."
           >
             <SettingsToggle
               checked={settings.showPromptInjectionPanel}
               onChange={(showPromptInjectionPanel) => updateSettings({ showPromptInjectionPanel })}
               ariaLabel="Prompt injection panel"
+            />
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Runtime panel visibility">
+        <SettingsCard divided>
+          <SettingsRow
+            label="Runtime Timeline"
+            description="Show agent loop events, tool calls, retries, blocks, and runtime failures in the chat drawer."
+          >
+            <SettingsToggle
+              checked={settings.showRuntimeTimelinePanel}
+              onChange={(showRuntimeTimelinePanel) => updateSettings({ showRuntimeTimelinePanel })}
+              ariaLabel="Runtime Timeline"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Checkpoints"
+            description="Show captured session checkpoints and restore/discard controls in the chat drawer."
+          >
+            <SettingsToggle
+              checked={settings.showCheckpointPanel}
+              onChange={(showCheckpointPanel) => updateSettings({ showCheckpointPanel })}
+              ariaLabel="Checkpoints"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Argus Brain Diagnostics"
+            description="Show recall hits, atoms, Brain Workbench state, and Brain events in the runtime drawer."
+          >
+            <SettingsToggle
+              checked={settings.showArgusBrainDiagnosticsPanel}
+              onChange={(showArgusBrainDiagnosticsPanel) => updateSettings({ showArgusBrainDiagnosticsPanel })}
+              ariaLabel="Argus Brain Diagnostics"
             />
           </SettingsRow>
         </SettingsCard>
@@ -56,6 +91,20 @@ export default function DebugSettingsTab({
             <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
               <BracesIcon className="h-3.5 w-3.5 text-primary" />
               prompt/debug stream
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1">
+                <ListTreeIcon className="h-3.5 w-3.5 text-primary" />
+                runtime timeline
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1">
+                <GitCompareIcon className="h-3.5 w-3.5 text-primary" />
+                checkpoints
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1">
+                <BrainCircuitIcon className="h-3.5 w-3.5 text-primary" />
+                brain diagnostics
+              </span>
             </div>
           </div>
         </div>

@@ -52,6 +52,9 @@ export type CodeEditorSettingsState = {
 
 export type ArgusDebugSettings = {
   showPromptInjectionPanel: boolean;
+  showRuntimeTimelinePanel: boolean;
+  showCheckpointPanel: boolean;
+  showArgusBrainDiagnosticsPanel: boolean;
 };
 
 export type SettingsStoragePayload = {
