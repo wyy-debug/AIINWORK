@@ -420,4 +420,73 @@ describe('obsidian context service', () => {
       archivedResultCount: 1,
     });
   });
+
+  it('injects source-aware hybrid Wiki context with score reasons and manual source overrides', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const buildObsidianContext = vi.fn(async () => ({
+      success: true,
+      context: 'Legacy context should be replaced by source-aware blocks.',
+      results: [{
+        path: 'Argus/Wiki/App/Manual.md',
+        title: 'Manual',
+        content: '# Manual\n\n## Rollback\nManual rollback note.',
+        score: 0.9,
+        vaultName: 'Knowledge',
+        backlinks: ['Argus/Wiki/App/Active.md'],
+      }, {
+        path: 'Argus/Wiki/App/Archived.md',
+        title: 'Archived',
+        snippet: 'Do not inject.',
+        status: 'deleted',
+      }],
+    }));
+    const getActiveObsidianNote = vi.fn(async () => ({
+      success: true,
+      note: {
+        path: 'Argus/Wiki/App/Active.md',
+        title: 'Active',
+        selection: 'Current selected release note.',
+      },
+    }));
+
+    const result = await service.applyObsidianContextToChatCommand({
+      type: 'claude-command',
+      command: 'Continue rollback plan.',
+      options: {
+        projectName: 'App',
+        obsidianSelectedSources: ['Argus/Wiki/App/Manual.md'],
+      },
+    }, {
+      buildObsidianContext,
+      getActiveObsidianNote,
+      refineWikiReadbackContext: vi.fn(async ({ context, results }) => ({
+        refined: false,
+        context,
+        sources: results,
+      })),
+      readObsidianBridgeConfig: () => ({
+        enabled: true,
+        wikiReadbackEnabled: true,
+        aiMemoryReadbackEnabled: false,
+        activeNoteReadbackEnabled: true,
+        wikiReadbackMaxResults: 5,
+        wikiReadbackMaxTokensPerSource: 40,
+        wikiReadbackProjectScopeEnabled: true,
+        vaultName: 'Knowledge',
+      }),
+    });
+
+    expect(result.options.appendSystemPrompt).toContain('Source: Knowledge / Argus/Wiki/App/Active.md');
+    expect(result.options.appendSystemPrompt).toContain('Reasons: active-note');
+    expect(result.options.appendSystemPrompt).toContain('Source: Knowledge / Argus/Wiki/App/Manual.md');
+    expect(result.options.appendSystemPrompt).toContain('Reasons: semantic, selected-source, backlink');
+    expect(result.options.appendSystemPrompt).toContain('Manual rollback note.');
+    expect(result.options.appendSystemPrompt).not.toContain('Do not inject.');
+    expect(result.options.obsidianContext.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: 'Argus/Wiki/App/Manual.md',
+        reasons: expect.arrayContaining(['semantic', 'selected-source', 'backlink']),
+      }),
+    ]));
+  });
 });

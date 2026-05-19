@@ -6,6 +6,7 @@ import {
   queryObsidianNotes as defaultQueryObsidianNotes,
   readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
 } from './obsidian-bridge-service.js';
+import { buildSourceAwareObsidianContext } from './obsidian-hybrid-retrieval-service.js';
 import { refineWikiReadbackContext as defaultRefineWikiReadbackContext } from './small-model-service.js';
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -291,13 +292,37 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       })
       : rawWikiResults;
     const filteredWikiResults = scopedWikiResults.filter((entry) => !isArchivedMemoryResult(entry));
+    const hybridWiki = buildSourceAwareObsidianContext({
+      query: command.slice(0, 2000),
+      semanticResults: filteredWikiResults,
+      keywordResults: [],
+      activeNote,
+      selectedSources: Array.isArray(options.obsidianSelectedSources)
+        ? options.obsidianSelectedSources
+        : Array.isArray(options.selectedObsidianSources)
+          ? options.selectedObsidianSources
+          : [],
+      maxSources: wikiLimit,
+      maxTokensPerSource: Number.isFinite(Number(config.wikiReadbackMaxTokensPerSource))
+        ? Number(config.wikiReadbackMaxTokensPerSource)
+        : 600,
+      projectName,
+      vaultName,
+    });
+    const hasSourceAwareWikiText = hybridWiki.sources.some((source) => (
+      source.kind === 'active-note'
+      || (readString(source.snippet) && readString(source.snippet) !== readString(source.title))
+    ));
+    const hybridWikiContext = hasSourceAwareWikiText ? hybridWiki.context : '';
     const archivedResultCount = (rawAiMemoryResults.length - scopedAiMemoryResults.length)
       + (scopedAiMemoryResults.length - filteredAiMemoryResults.length)
       + (rawWikiResults.length - scopedWikiResults.length)
-      + (scopedWikiResults.length - filteredWikiResults.length);
+      + (scopedWikiResults.length - filteredWikiResults.length)
+      + Number(hybridWiki.diagnostics?.excludedCount || 0);
     const wikiBaseContext = rawWikiResults.length !== filteredWikiResults.length
-      ? buildContextFromResults(filteredWikiResults)
-      : readString(wikiResult?.context);
+      ? hybridWikiContext || buildContextFromResults(filteredWikiResults)
+      : hybridWikiContext || readString(wikiResult?.context);
+    const wikiSources = hasSourceAwareWikiText && hybridWiki.sources.length > 0 ? hybridWiki.sources : filteredWikiResults;
     const refinement = !wikiReadbackEnabled || !wikiBaseContext || config.wikiReadbackRefineEnabled === false
       ? { refined: false, context: wikiBaseContext, sources: [] }
       : await refineWikiReadbackContext({
@@ -305,21 +330,21 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
         projectName,
         context: wikiBaseContext,
         activeNote,
-        results: filteredWikiResults,
+        results: wikiSources,
       });
     const wikiContext = readString(refinement?.context) || wikiBaseContext;
     const context = [aiMemoryContext, wikiContext].filter(Boolean).join('\n\n---\n\n');
-    const filteredResults = mergeContextResults(filteredAiMemoryResults, filteredWikiResults);
-    const activeBlock = buildActiveNoteBlock(activeNote);
+    const filteredResults = mergeContextResults(filteredAiMemoryResults, wikiSources);
+    const activeBlock = wikiSources.some((source) => source.kind === 'active-note') ? '' : buildActiveNoteBlock(activeNote);
     const sources = addVaultNameToSources(refinement?.refined
       ? [
-        ...buildSources({ activeNote, results: filteredAiMemoryResults }),
+        ...buildSources({ results: filteredAiMemoryResults }),
         ...(Array.isArray(refinement.sources) ? refinement.sources : []),
       ]
-      : buildSources({
-        activeNote,
-        results: filteredResults,
-      }), vaultName);
+      : [
+        ...buildSources({ results: filteredAiMemoryResults }),
+        ...wikiSources,
+      ], vaultName);
     if (!context && !activeBlock) {
       return {
         ...data,
