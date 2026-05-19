@@ -1125,4 +1125,57 @@ describe('workflow studio service', () => {
       riskyNodes: [expect.objectContaining({ nodeId: 'shell' })],
     });
   });
+
+  test('reports workflow production readiness, virtualized logs, offline snapshots, sandbox import, backup restore, retention, size guard, smoke matrix, and migration doctor', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      autoExecute: false,
+    });
+    await store.upsertWorkflow({
+      id: 'ready-flow',
+      name: 'Ready Flow',
+      profileId: 'build',
+      nodes: Array.from({ length: 5 }, (_, index) => ({
+        id: `node-${index + 1}`,
+        type: index === 0 ? 'agent' : 'artifact',
+        prompt: `step ${index + 1}`,
+        position: { x: index * 100, y: 100 },
+      })),
+      edges: Array.from({ length: 4 }, (_, index) => ({ from: `node-${index + 1}`, to: `node-${index + 2}` })),
+    });
+    const run = await store.createRun('ready-flow');
+    const performance = store.getLargeGraphPerformanceReport('ready-flow');
+    const virtualLogs = store.listVirtualizedRunLogs(run.id, { limit: 2 });
+    const offline = store.getOfflineReadSnapshot();
+    const pkg = await store.exportWorkflowPackage(['ready-flow']);
+    const sandbox = store.validateWorkflowPackageSandbox(pkg);
+    const backup = await store.exportStorageBackup();
+    const retention = await store.updateRetentionPolicy({ maxRuns: 1, maxLogEntriesPerNode: 1 });
+    const applied = await store.applyRetentionPolicy();
+    const sizeGuard = store.getPackageSizeGuard(['ready-flow']);
+    await store.runBenchmarks({ limit: 1 });
+    const smokeMatrix = store.getReleaseSmokeMatrix();
+    const doctor = store.getMigrationDoctor();
+    const dashboard = store.getProductionReadinessDashboard();
+    const restored = await store.restoreStorageBackup(backup);
+
+    expect(performance).toMatchObject({ workflowId: 'ready-flow', nodeCount: 5, status: 'within_target' });
+    expect(virtualLogs).toMatchObject({ runId: run.id, limit: 2, rows: expect.any(Array) });
+    expect(offline.workflows.some((workflow) => workflow.id === 'ready-flow')).toBe(true);
+    expect(sandbox).toMatchObject({ valid: true, isolated: true, changes: expect.any(Array) });
+    expect(retention).toMatchObject({ maxRuns: 1, maxLogEntriesPerNode: 1 });
+    expect(applied).toMatchObject({ removedRuns: expect.any(Number), policy: expect.objectContaining({ maxRuns: 1 }) });
+    expect(sizeGuard).toMatchObject({ workflowCount: 1, status: 'ok', estimatedBytes: expect.any(Number) });
+    expect(smokeMatrix).toMatchObject({ total: 5, matrix: expect.any(Array) });
+    expect(doctor).toMatchObject({ status: expect.stringMatching(/passed|warning|failed/), findings: expect.any(Array) });
+    expect(dashboard).toMatchObject({
+      status: expect.stringMatching(/ready|needs_attention/),
+      performance: expect.any(Array),
+      quality: expect.any(Object),
+      migrationDoctor: expect.any(Object),
+      releaseSmokeMatrix: expect.any(Object),
+    });
+    expect(restored).toMatchObject({ workflowCount: expect.any(Number), runCount: expect.any(Number) });
+  });
 });

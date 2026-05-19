@@ -64,6 +64,21 @@ router.get('/:runId/events', async (req, res) => {
   }
 });
 
+router.get('/:runId/logs/virtualized', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const logs = defaultWorkflowStudioStore.listVirtualizedRunLogs(req.params.runId, {
+      offset: req.query.offset || 0,
+      limit: req.query.limit || 100,
+      query: req.query.query || '',
+    });
+    if (!logs) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, logs });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to list virtualized workflow run logs');
+  }
+});
+
 router.post('/:runId/recover', async (req, res) => {
   try {
     const result = await defaultWorkflowStudioStore.recoverStaleRuns(req.body || {});

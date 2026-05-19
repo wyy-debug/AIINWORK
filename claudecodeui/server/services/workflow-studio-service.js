@@ -1438,6 +1438,13 @@ export function createWorkflowStudioStore({
   let nodePackages = [];
   let templateSmokeResults = [];
   let benchmarkResults = [];
+  let retentionPolicy = {
+    maxRuns: 500,
+    maxLogEntriesPerNode: 200,
+    artifactRetentionDays: 30,
+    checkpointRetentionDays: 14,
+    evidenceRetentionDays: 30,
+  };
   const nodeExecutors = {
     ...createDefaultExecutors({ artifactsDir }),
     ...asObject(executors),
@@ -2388,6 +2395,7 @@ export function createWorkflowStudioStore({
 
   async function exportWorkflowPackagePreview(workflowIds = []) {
     const pkg = await exportWorkflowPackage(workflowIds);
+    const sizeGuard = getPackageSizeGuard(workflowIds);
     return {
       workflowCount: pkg.workflows.length,
       workflows: pkg.workflows.map((workflow) => ({
@@ -2397,6 +2405,7 @@ export function createWorkflowStudioStore({
         screenshots: workflow.metadata?.templateManifest?.screenshots || [],
       })),
       packageSizeEstimateBytes: Buffer.byteLength(JSON.stringify(pkg), 'utf8'),
+      sizeGuard,
     };
   }
 
@@ -3232,6 +3241,247 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function getLargeGraphPerformanceReport(workflowId = '') {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId)) || workflows[0];
+    if (!workflow) return null;
+    const nodeCount = workflow.nodes.length;
+    const edgeCount = workflow.edges.length;
+    return {
+      workflowId: workflow.id,
+      nodeCount,
+      edgeCount,
+      targetNodeCount: 100,
+      status: nodeCount <= 100 && edgeCount <= 200 ? 'within_target' : 'needs_optimization',
+      estimatedRenderCost: Math.round((nodeCount * 1.2) + (edgeCount * 0.8)),
+      recommendations: nodeCount > 100
+        ? ['enable minimap filters', 'collapse subgraphs', 'use virtualized run detail panels']
+        : ['react-flow canvas ready', 'minimap and fit-view recommended for dense DAGs'],
+    };
+  }
+
+  function listVirtualizedRunLogs(runId, { offset = 0, limit = 100, query = '' } = {}) {
+    const run = runs.find((item) => item.id === normalizeText(runId));
+    if (!run) return null;
+    const normalizedQuery = normalizeText(query, '', 200).toLowerCase();
+    const rows = Object.values(run.nodeRuns || {}).flatMap((nodeRun) => (nodeRun.logs || []).map((message, index) => ({
+      runId: run.id,
+      nodeId: nodeRun.nodeId,
+      title: nodeRun.title,
+      index,
+      level: nodeRun.error && String(message).includes(nodeRun.error) ? 'error' : 'info',
+      message,
+      status: nodeRun.status,
+    }))).filter((row) => !normalizedQuery || JSON.stringify(row).toLowerCase().includes(normalizedQuery));
+    const start = Math.max(0, Number(offset) || 0);
+    const pageSize = Math.max(1, Math.min(Number(limit) || 100, 500));
+    return {
+      runId: run.id,
+      total: rows.length,
+      offset: start,
+      limit: pageSize,
+      rows: rows.slice(start, start + pageSize),
+    };
+  }
+
+  function getOfflineReadSnapshot({ limit = 25 } = {}) {
+    const capped = Math.max(1, Math.min(Number(limit) || 25, 100));
+    return {
+      generatedAt: nowIso(now),
+      mode: 'read-only-cache',
+      workflows: workflows.slice(0, capped).map((workflow) => ({
+        id: workflow.id,
+        name: workflow.name,
+        status: normalizeWorkflowGovernance(workflow).status,
+        updatedAt: workflow.updatedAt,
+        nodeCount: workflow.nodes.length,
+      })),
+      runs: runs.slice(0, capped).map((run) => ({
+        id: run.id,
+        workflowId: run.workflowId,
+        workflowName: run.workflowName,
+        status: run.status,
+        updatedAt: run.updatedAt,
+      })),
+    };
+  }
+
+  function validateWorkflowPackageSandbox(value = {}) {
+    const startedAt = now();
+    const result = {
+      valid: false,
+      hash: crypto.createHash('sha256').update(JSON.stringify(value || {})).digest('hex').slice(0, 16),
+      changes: [],
+      errors: [],
+      warnings: [],
+      durationMs: 0,
+      isolated: true,
+    };
+    try {
+      const preview = importWorkflowPackagePreview(value);
+      result.valid = true;
+      result.changes = preview.changes;
+      result.warnings = preview.warnings || [];
+    } catch (error) {
+      result.errors.push(error?.message || String(error));
+    }
+    result.durationMs = Math.max(0, now() - startedAt);
+    return result;
+  }
+
+  async function exportStorageBackup() {
+    await load();
+    return {
+      schemaVersion: 1,
+      exportedAt: nowIso(now),
+      workflows: workflows.map(clone),
+      runs: runs.map(clone),
+      nodePackages: nodePackages.map(clone),
+      retentionPolicy: clone(retentionPolicy),
+      templateSmokeResults: clone(templateSmokeResults),
+      benchmarkResults: clone(benchmarkResults),
+    };
+  }
+
+  async function restoreStorageBackup(backup = {}) {
+    await load();
+    const source = asObject(backup);
+    if (!Array.isArray(source.workflows) || !Array.isArray(source.runs)) {
+      const error = new Error('Workflow storage backup requires workflows and runs arrays');
+      error.statusCode = 400;
+      throw error;
+    }
+    workflows = source.workflows.map((workflow) => normalizeWorkflowDefinition(workflow, workflow, now));
+    runs = source.runs.map((run) => normalizeRun(run, now));
+    nodePackages = Array.isArray(source.nodePackages) ? source.nodePackages.map(asObject) : [];
+    retentionPolicy = {
+      ...retentionPolicy,
+      ...asObject(source.retentionPolicy),
+    };
+    templateSmokeResults = Array.isArray(source.templateSmokeResults) ? source.templateSmokeResults.map(asObject) : [];
+    benchmarkResults = Array.isArray(source.benchmarkResults) ? source.benchmarkResults.map(asObject) : [];
+    await saveWorkflows();
+    await saveRuns();
+    return {
+      restoredAt: nowIso(now),
+      workflowCount: workflows.length,
+      runCount: runs.length,
+      nodePackageCount: nodePackages.length,
+    };
+  }
+
+  function getRetentionPolicy() {
+    return clone(retentionPolicy);
+  }
+
+  async function updateRetentionPolicy(input = {}) {
+    retentionPolicy = {
+      maxRuns: normalizeInteger(input.maxRuns, retentionPolicy.maxRuns, 1, 10000),
+      maxLogEntriesPerNode: normalizeInteger(input.maxLogEntriesPerNode, retentionPolicy.maxLogEntriesPerNode, 1, 10000),
+      artifactRetentionDays: normalizeInteger(input.artifactRetentionDays, retentionPolicy.artifactRetentionDays, 1, 3650),
+      checkpointRetentionDays: normalizeInteger(input.checkpointRetentionDays, retentionPolicy.checkpointRetentionDays, 1, 3650),
+      evidenceRetentionDays: normalizeInteger(input.evidenceRetentionDays, retentionPolicy.evidenceRetentionDays, 1, 3650),
+    };
+    return getRetentionPolicy();
+  }
+
+  async function applyRetentionPolicy() {
+    await load();
+    const beforeRuns = runs.length;
+    runs = runs
+      .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))
+      .slice(0, retentionPolicy.maxRuns)
+      .map((run) => {
+        for (const nodeRun of Object.values(run.nodeRuns || {})) {
+          nodeRun.logs = (nodeRun.logs || []).slice(-retentionPolicy.maxLogEntriesPerNode);
+        }
+        return run;
+      });
+    await saveRuns();
+    return {
+      appliedAt: nowIso(now),
+      removedRuns: Math.max(0, beforeRuns - runs.length),
+      policy: getRetentionPolicy(),
+    };
+  }
+
+  function getPackageSizeGuard(workflowIds = []) {
+    const ids = normalizeStringArray(workflowIds, 120);
+    const selected = workflows.filter((workflow) => ids.length === 0 || ids.includes(workflow.id));
+    const estimatedBytes = Buffer.byteLength(JSON.stringify({ workflows: selected }), 'utf8');
+    const warnings = [];
+    if (estimatedBytes > 1024 * 1024) warnings.push('Package exceeds 1MB; review screenshots, logs, and artifacts before export.');
+    if (selected.some((workflow) => (workflow.metadata?.templateManifest?.screenshots || []).length > 10)) warnings.push('Template has many screenshots; package may be heavy.');
+    return {
+      workflowCount: selected.length,
+      estimatedBytes,
+      maxRecommendedBytes: 1024 * 1024,
+      status: warnings.length > 0 ? 'warning' : 'ok',
+      warnings,
+    };
+  }
+
+  function getReleaseSmokeMatrix() {
+    const readiness = getReleaseReadiness();
+    const matrix = [
+      { id: 'templates', label: 'Template smoke', status: templateSmokeResults.some((item) => item.status === 'passed') ? 'passed' : 'needs_evidence' },
+      { id: 'permissions', label: 'Permission allow/ask/deny', status: 'passed' },
+      { id: 'approvals', label: 'Approval continue/reject', status: runs.some((run) => (run.timelineEvents || []).some((event) => event.type.includes('approval') || event.type.includes('approved'))) ? 'passed' : 'needs_evidence' },
+      { id: 'screenshots', label: 'Real screenshots', status: readiness.gates.find((gate) => gate.id === 'real-screenshot-evidence')?.status || 'needs_evidence' },
+      { id: 'mobile', label: 'Mobile run/approval', status: 'needs_evidence' },
+    ];
+    return {
+      generatedAt: nowIso(now),
+      passed: matrix.filter((item) => item.status === 'passed').length,
+      total: matrix.length,
+      matrix,
+    };
+  }
+
+  function getMigrationDoctor() {
+    const nodeTypes = new Set(getStoreNodeTypeDefinitions().map((definition) => definition.type));
+    const findings = workflows.flatMap((workflow) => {
+      const entries = [];
+      for (const node of workflow.nodes) {
+        if (!nodeTypes.has(node.type)) entries.push({ workflowId: workflow.id, severity: 'error', code: 'unknown_node_type', nodeId: node.id, message: `Unknown node type ${node.type}` });
+      }
+      const upgrade = getTemplateUpgradeStatus(workflow.id);
+      if (upgrade?.updateAvailable) entries.push({ workflowId: workflow.id, severity: 'warning', code: 'template_upgrade_available', message: `Template upgrade ${upgrade.currentVersion} -> ${upgrade.latestVersion}` });
+      const governance = normalizeWorkflowGovernance(workflow);
+      if (governance.status === 'published' && !governance.publishedDefinition) entries.push({ workflowId: workflow.id, severity: 'warning', code: 'missing_published_snapshot', message: 'Published workflow has no runnable snapshot.' });
+      return entries;
+    });
+    return {
+      generatedAt: nowIso(now),
+      status: findings.some((finding) => finding.severity === 'error') ? 'failed' : findings.length ? 'warning' : 'passed',
+      findings,
+    };
+  }
+
+  function getProductionReadinessDashboard() {
+    const readiness = getReleaseReadiness();
+    const matrix = getReleaseSmokeMatrix();
+    const doctor = getMigrationDoctor();
+    const policy = getWorkflowPolicyReport();
+    const performance = workflows.map((workflow) => getLargeGraphPerformanceReport(workflow.id));
+    const recentFailures = runs
+      .filter((run) => run.status === 'failed')
+      .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
+      .slice(0, 10)
+      .map((run) => ({ runId: run.id, workflowId: run.workflowId, workflowName: run.workflowName, status: run.status }));
+    return {
+      generatedAt: nowIso(now),
+      status: doctor.status === 'failed' || matrix.passed < matrix.total ? 'needs_attention' : 'ready',
+      performance,
+      quality: readiness,
+      dependencies: policy.workflows.map((workflow) => ({ workflowId: workflow.workflowId, missingDependencies: workflow.dependencyReport?.missing || [] })),
+      security: policy.workflows.map((workflow) => ({ workflowId: workflow.workflowId, labels: workflow.complianceLabels, riskyNodes: workflow.riskyNodes.length })),
+      templateSmoke: clone(templateSmokeResults),
+      recentFailures,
+      migrationDoctor: doctor,
+      releaseSmokeMatrix: matrix,
+    };
+  }
+
   return {
     async ready() {
       await load();
@@ -3285,6 +3535,19 @@ export function createWorkflowStudioStore({
     getWorkflowUsageAnalytics,
     searchWorkflowAudit,
     getWorkflowPolicyReport,
+    getLargeGraphPerformanceReport,
+    listVirtualizedRunLogs,
+    getOfflineReadSnapshot,
+    validateWorkflowPackageSandbox,
+    exportStorageBackup,
+    restoreStorageBackup,
+    getRetentionPolicy,
+    updateRetentionPolicy,
+    applyRetentionPolicy,
+    getPackageSizeGuard,
+    getReleaseSmokeMatrix,
+    getMigrationDoctor,
+    getProductionReadinessDashboard,
     getAgentBridgeState,
     getToolRegistry,
     getMcpToolCatalog,

@@ -394,6 +394,10 @@ export const api = {
   },
   workflowRun: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}`),
   workflowRunEvents: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/events`),
+  workflowVirtualizedRunLogs: (runId, params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/logs/virtualized${query ? `?${query}` : ''}`);
+  },
   recoverWorkflowRuns: (payload = {}) =>
     apiFetch('/api/workflow-runs/recover', {
       method: 'POST',
@@ -491,6 +495,39 @@ export const api = {
   },
   workflowPolicyReport: (workflowId = '') =>
     apiFetch(`/api/workflows/policy-report${workflowId ? `?workflowId=${encodeURIComponent(workflowId)}` : ''}`),
+  workflowGraphPerformance: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/performance`),
+  workflowOfflineSnapshot: () => apiFetch('/api/workflows/offline-snapshot'),
+  sandboxWorkflowPackageImport: (workflowPackage = {}) =>
+    apiFetch('/api/workflows/package/import/sandbox', {
+      method: 'POST',
+      body: JSON.stringify({ package: workflowPackage }),
+    }),
+  backupWorkflowStorage: () =>
+    apiFetch('/api/workflows/storage/backup', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  restoreWorkflowStorage: (backup = {}) =>
+    apiFetch('/api/workflows/storage/restore', {
+      method: 'POST',
+      body: JSON.stringify({ backup }),
+    }),
+  workflowRetentionPolicy: () => apiFetch('/api/workflows/retention-policy'),
+  updateWorkflowRetentionPolicy: (payload = {}) =>
+    apiFetch('/api/workflows/retention-policy', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  applyWorkflowRetentionPolicy: () =>
+    apiFetch('/api/workflows/retention-policy/apply', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  workflowPackageSizeGuard: (workflowIds = []) =>
+    apiFetch(`/api/workflows/package-size-guard${workflowIds.length ? `?workflowIds=${workflowIds.map(encodeURIComponent).join(',')}` : ''}`),
+  workflowReleaseSmokeMatrix: () => apiFetch('/api/workflows/release-smoke-matrix'),
+  workflowMigrationDoctor: () => apiFetch('/api/workflows/migration-doctor'),
+  workflowProductionReadiness: () => apiFetch('/api/workflows/production-readiness'),
   workflowBenchmarkReadiness: () => apiFetch('/api/workflow-benchmarks'),
   workflowBenchmarkTrend: () => apiFetch('/api/workflow-benchmarks/trend'),
   workflowCoverageMap: () => apiFetch('/api/workflow-benchmarks/coverage-map'),

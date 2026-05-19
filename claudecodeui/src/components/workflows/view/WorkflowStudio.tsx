@@ -387,6 +387,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [templateProductState, setTemplateProductState] = useState<Record<string, any> | null>(null);
   const [observabilityState, setObservabilityState] = useState<Record<string, any> | null>(null);
   const [governanceState, setGovernanceState] = useState<Record<string, any> | null>(null);
+  const [readinessState, setReadinessState] = useState<Record<string, any> | null>(null);
   const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
@@ -686,16 +687,36 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const report = governanceState?.policy?.workflows?.[0];
     return report ? `${report.status}; ${report.riskyNodes?.length || 0} risky node(s); MCP allowlist ${(report.mcpAllowlist || []).length}; approvals ${report.approvalCount || 0}` : 'Policy report summarizes security labels, dependencies, approvals, and MCP allowlist.';
   }, [governanceState]);
-  const largeGraphPerformance = useMemo(() => `${draft.nodes.length}/100 nodes visible; React Flow keeps canvas interaction stable.`, [draft.nodes.length]);
-  const virtualizedRunLogs = useMemo(() => `${streamingLogRows.length} log rows ready for virtualized rendering.`, [streamingLogRows.length]);
-  const offlineReadMode = 'Cached workflow and run summaries remain readable when backend is unavailable.';
-  const importValidationSandbox = 'Package imports validate in an isolated preview before writing project data.';
-  const storageBackupRestore = 'Backup covers definitions, templates, node packages, run summaries.';
-  const dataRetentionPolicy = 'Retention controls run logs, artifacts, checkpoints, and evidence expiry.';
-  const packageSizeGuard = 'Export/import warns on oversized screenshots, logs, and artifacts.';
-  const releaseSmokeMatrix = 'Release matrix covers templates, permissions, approvals, screenshots, mobile.';
-  const migrationDoctor = 'Upgrade doctor checks workflow schema, node packages, templates, and compatibility.';
-  const productionReadinessDashboard = 'Production readiness combines performance, quality, dependencies, security, template smoke, recent failures.';
+  const largeGraphPerformance = useMemo(() => readinessState?.performance
+    ? `${readinessState.performance.nodeCount}/100 nodes, ${readinessState.performance.edgeCount} edges, ${readinessState.performance.status}`
+    : `${draft.nodes.length}/100 nodes visible; React Flow keeps canvas interaction stable.`, [draft.nodes.length, readinessState]);
+  const virtualizedRunLogs = useMemo(() => readinessState?.virtualizedLogs
+    ? `${readinessState.virtualizedLogs.rows?.length || 0}/${readinessState.virtualizedLogs.total || 0} virtualized log rows loaded`
+    : `${streamingLogRows.length} log rows ready for virtualized rendering.`, [readinessState, streamingLogRows.length]);
+  const offlineReadMode = readinessState?.offline
+    ? `${readinessState.offline.mode}: ${readinessState.offline.workflows?.length || 0} workflows, ${readinessState.offline.runs?.length || 0} runs`
+    : 'Cached workflow and run summaries remain readable when backend is unavailable.';
+  const importValidationSandbox = templateProductState?.exportPreview?.sizeGuard
+    ? `Import/export sandbox ready; package ${templateProductState.exportPreview.sizeGuard.status}, ${templateProductState.exportPreview.sizeGuard.estimatedBytes} bytes`
+    : 'Package imports validate in an isolated preview before writing project data.';
+  const storageBackupRestore = readinessState?.production
+    ? `Backup includes ${readinessState.production.performance?.length || 0} workflow performance records plus definitions, runs, packages.`
+    : 'Backup covers definitions, templates, node packages, run summaries.';
+  const dataRetentionPolicy = readinessState?.retention
+    ? `Retention: ${readinessState.retention.maxRuns} runs, ${readinessState.retention.maxLogEntriesPerNode} logs/node, ${readinessState.retention.artifactRetentionDays} artifact days`
+    : 'Retention controls run logs, artifacts, checkpoints, and evidence expiry.';
+  const packageSizeGuard = readinessState?.sizeGuard
+    ? `${readinessState.sizeGuard.status}: ${readinessState.sizeGuard.estimatedBytes}/${readinessState.sizeGuard.maxRecommendedBytes} bytes`
+    : 'Export/import warns on oversized screenshots, logs, and artifacts.';
+  const releaseSmokeMatrix = readinessState?.smokeMatrix
+    ? `${readinessState.smokeMatrix.passed}/${readinessState.smokeMatrix.total} release smoke gates passed`
+    : 'Release matrix covers templates, permissions, approvals, screenshots, mobile.';
+  const migrationDoctor = readinessState?.migrationDoctor
+    ? `${readinessState.migrationDoctor.status}: ${readinessState.migrationDoctor.findings?.length || 0} finding(s)`
+    : 'Upgrade doctor checks workflow schema, node packages, templates, and compatibility.';
+  const productionReadinessDashboard = readinessState?.production
+    ? `${readinessState.production.status}: ${readinessState.production.recentFailures?.length || 0} recent failure(s), ${readinessState.production.security?.length || 0} security report(s)`
+    : 'Production readiness combines performance, quality, dependencies, security, template smoke, recent failures.';
   const favoriteWorkflows = useMemo(() => favoriteWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow)), [favoriteWorkflowIds, workflows]);
   const recentWorkflows = useMemo(() => {
     const fromStorage = recentWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
@@ -763,7 +784,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (!draft.id) return;
     let cancelled = false;
     const loadSecurity = async () => {
-      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse, templateResponse, upgradeResponse, exportPreviewResponse, historyResponse, governanceResponse, analyticsResponse, auditSearchResponse, policyResponse] = await Promise.all([
+      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse, templateResponse, upgradeResponse, exportPreviewResponse, historyResponse, governanceResponse, analyticsResponse, auditSearchResponse, policyResponse, performanceResponse, offlineResponse, retentionResponse, sizeGuardResponse, smokeMatrixResponse, doctorResponse, productionResponse] = await Promise.all([
         api.workflowSecurity(draft.id),
         api.exportWorkflowApprovalAudit(draft.id, selectedRun?.id || ''),
         api.workflowAgentBridge(draft.id),
@@ -777,8 +798,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         api.workflowUsageAnalytics(draft.id),
         api.workflowAuditSearch({ workflowId: draft.id, limit: 25 }),
         api.workflowPolicyReport(draft.id),
+        api.workflowGraphPerformance(draft.id),
+        api.workflowOfflineSnapshot(),
+        api.workflowRetentionPolicy(),
+        api.workflowPackageSizeGuard([draft.id]),
+        api.workflowReleaseSmokeMatrix(),
+        api.workflowMigrationDoctor(),
+        api.workflowProductionReadiness(),
       ]);
-      const [securityData, auditData, bridgeData, toolsData, mcpData, templateData, upgradeData, exportPreviewData, historyData, governanceData, analyticsData, auditSearchData, policyData] = await Promise.all([
+      const [securityData, auditData, bridgeData, toolsData, mcpData, templateData, upgradeData, exportPreviewData, historyData, governanceData, analyticsData, auditSearchData, policyData, performanceData, offlineData, retentionData, sizeGuardData, smokeMatrixData, doctorData, productionData] = await Promise.all([
         securityResponse.json(),
         auditResponse.json(),
         bridgeResponse.json(),
@@ -792,6 +820,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         analyticsResponse.json(),
         auditSearchResponse.json(),
         policyResponse.json(),
+        performanceResponse.json(),
+        offlineResponse.json(),
+        retentionResponse.json(),
+        sizeGuardResponse.json(),
+        smokeMatrixResponse.json(),
+        doctorResponse.json(),
+        productionResponse.json(),
       ]);
       if (cancelled) return;
       if (securityResponse.ok) {
@@ -815,6 +850,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         analytics: analyticsResponse.ok ? analyticsData.analytics : null,
         audit: auditSearchResponse.ok ? auditSearchData.records : null,
         policy: policyResponse.ok ? policyData.report : null,
+      });
+      setReadinessState({
+        performance: performanceResponse.ok ? performanceData.report : null,
+        offline: offlineResponse.ok ? offlineData.snapshot : null,
+        retention: retentionResponse.ok ? retentionData.policy : null,
+        sizeGuard: sizeGuardResponse.ok ? sizeGuardData.guard : null,
+        smokeMatrix: smokeMatrixResponse.ok ? smokeMatrixData.matrix : null,
+        migrationDoctor: doctorResponse.ok ? doctorData.doctor : null,
+        production: productionResponse.ok ? productionData.dashboard : null,
       });
       if (selectedRun?.id) {
         const [failuresResponse, recoveryResponse, artifactsResponse, evidenceResponse, trendResponse, coverageResponse, bundleResponse] = await Promise.all([
@@ -1460,7 +1504,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       ...current,
       ...Object.fromEntries(logPairs.map(([nodeId, logs]) => [`${run.id}:${nodeId}`, logs])),
     }));
-  }, []);
+    const virtualLogsResponse = await api.workflowVirtualizedRunLogs(run.id, { limit: 200, query: runLogQuery });
+    const virtualLogsData = await virtualLogsResponse.json();
+    if (virtualLogsResponse.ok) {
+      setReadinessState((current) => ({
+        ...(current || {}),
+        virtualizedLogs: virtualLogsData.logs,
+      }));
+    }
+  }, [runLogQuery]);
 
   const retryWorkflowFromNode = useCallback(async (run: WorkflowRun, nodeId: string) => {
     setIsBusy(true);

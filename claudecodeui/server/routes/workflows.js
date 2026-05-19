@@ -93,6 +93,108 @@ router.get('/analytics/usage', async (req, res) => {
   }
 });
 
+router.get('/offline-snapshot', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const snapshot = defaultWorkflowStudioStore.getOfflineReadSnapshot({ limit: req.query.limit || 25 });
+    res.json({ success: true, snapshot });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to build workflow offline snapshot');
+  }
+});
+
+router.post('/package/import/sandbox', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const sandbox = defaultWorkflowStudioStore.validateWorkflowPackageSandbox(req.body?.package || req.body || {});
+    res.status(sandbox.valid ? 200 : 400).json({ success: sandbox.valid, sandbox });
+  } catch (error) {
+    sendWorkflowError(res, error, 400, 'Failed to sandbox workflow package import');
+  }
+});
+
+router.post('/storage/backup', async (_req, res) => {
+  try {
+    const backup = await defaultWorkflowStudioStore.exportStorageBackup();
+    res.json({ success: true, backup });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to export workflow storage backup');
+  }
+});
+
+router.post('/storage/restore', async (req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.restoreStorageBackup(req.body?.backup || req.body || {});
+    res.json({ success: true, result });
+  } catch (error) {
+    sendWorkflowError(res, error, error?.statusCode || 400, 'Failed to restore workflow storage backup');
+  }
+});
+
+router.get('/retention-policy', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, policy: defaultWorkflowStudioStore.getRetentionPolicy() });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow retention policy');
+  }
+});
+
+router.put('/retention-policy', async (req, res) => {
+  try {
+    const policy = await defaultWorkflowStudioStore.updateRetentionPolicy(req.body || {});
+    res.json({ success: true, policy });
+  } catch (error) {
+    sendWorkflowError(res, error, 400, 'Failed to update workflow retention policy');
+  }
+});
+
+router.post('/retention-policy/apply', async (_req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.applyRetentionPolicy();
+    res.json({ success: true, result });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to apply workflow retention policy');
+  }
+});
+
+router.get('/package-size-guard', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const workflowIds = String(req.query.workflowIds || '').split(',').filter(Boolean);
+    res.json({ success: true, guard: defaultWorkflowStudioStore.getPackageSizeGuard(workflowIds) });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to check workflow package size');
+  }
+});
+
+router.get('/release-smoke-matrix', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, matrix: defaultWorkflowStudioStore.getReleaseSmokeMatrix() });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow release smoke matrix');
+  }
+});
+
+router.get('/migration-doctor', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, doctor: defaultWorkflowStudioStore.getMigrationDoctor() });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to run workflow migration doctor');
+  }
+});
+
+router.get('/production-readiness', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, dashboard: defaultWorkflowStudioStore.getProductionReadinessDashboard() });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow production readiness dashboard');
+  }
+});
+
 router.post('/import', async (req, res) => {
   try {
     const workflow = await defaultWorkflowStudioStore.importWorkflow(req.body?.content || req.body?.workflow || req.body || {});
@@ -160,6 +262,17 @@ router.get('/:id/history', async (req, res) => {
     return res.json({ success: true, history });
   } catch (error) {
     return sendWorkflowError(res, error, 500, 'Failed to load workflow history');
+  }
+});
+
+router.get('/:id/performance', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const report = defaultWorkflowStudioStore.getLargeGraphPerformanceReport(req.params.id);
+    if (!report) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, report });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to load workflow graph performance report');
   }
 });
 
