@@ -12,6 +12,7 @@ test('WebSocket Obsidian wiring keeps templates and Wiki separate from Claude na
   assert.match(source, /syncProjectInstructionFiles: syncObsidianProjectInstructionFiles/);
   assert.match(source, /applyObsidianContextToChatCommand/);
   assert.match(source, /applyExplicitWikiIntentToChatCommand/);
+  assert.match(source, /void syncObsidianProjectInstructionFiles\(/);
   assert.doesNotMatch(source, /syncNativeMemoryFiles/);
   assert.doesNotMatch(source, /obsidianNativeMemorySync/);
   assert.doesNotMatch(source, /isNativeAutoMemorySyncEnabled/);

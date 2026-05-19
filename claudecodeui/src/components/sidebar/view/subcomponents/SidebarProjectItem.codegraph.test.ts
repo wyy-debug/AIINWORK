@@ -16,10 +16,15 @@ describe('SidebarProjectItem CodeGraph action', () => {
     expect(source).toContain('selectCodeGraphScope');
     expect(source).toContain('scopePaths');
     expect(source).toContain('/api/codegraph/build-obsidian');
+    expect(source).toContain('/api/codegraph/cancel');
+    expect(source).toContain('cancelCodeGraphBuild');
     expect(source).toContain('/api/codegraph/status');
     expect(source).toContain('codeGraphBuildStatus');
     expect(source).toContain('codeGraphProgressPercent');
     expect(source).toContain('CodeGraphProgress');
     expect(source).toContain('style={{ width: `${codeGraphProgressPercent}%` }}');
+    expect(source).toContain('const token = codeGraphPollTokenRef.current + 1;');
+    expect(source).toContain('codeGraphPollTokenRef.current = token;');
+    expect(source).not.toContain("isBuildingCodeGraph && 'pointer-events-none opacity-60'");
   });
 });

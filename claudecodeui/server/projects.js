@@ -290,6 +290,11 @@ function getProjectsDir(homeDir) {
   return path.join(homeDir, 'projects');
 }
 
+function isProjectHidden(config, projectName) {
+  const projectConfig = config?.[projectName];
+  return Boolean(projectConfig?.hidden === true || projectConfig?.removedFromSidebar === true);
+}
+
 function encodeProviderProjectName(projectPath) {
   return path.resolve(projectPath).replace(/[^a-zA-Z0-9-]/g, '-');
 }
@@ -576,7 +581,8 @@ async function getProjects(progressCallback = null) {
   try {
     // First, get existing Argus projects from the file system, with legacy Claude dirs included.
     directories = (await listProviderProjectDirs())
-      .filter(entry => !isStandaloneConversationProjectName(entry.name));
+      .filter(entry => !isStandaloneConversationProjectName(entry.name))
+      .filter(entry => !isProjectHidden(config, entry.name));
 
     // Build set of existing project names for later
     directories.forEach(e => existingProjects.add(e.name));
@@ -585,6 +591,7 @@ async function getProjects(progressCallback = null) {
     const manualProjectsCount = Object.entries(config)
       .filter(([name, cfg]) => (
         cfg.manuallyAdded
+        && !isProjectHidden(config, name)
         && !existingProjects.has(name)
         && !isStandaloneConversationProjectName(name)
       ))
@@ -703,7 +710,11 @@ async function getProjects(progressCallback = null) {
     console.error('Error reading projects directories:', error);
     // Calculate total for manual projects only (no directories exist)
     totalProjects = Object.entries(config)
-      .filter(([name, cfg]) => cfg.manuallyAdded && !isStandaloneConversationProjectName(name))
+      .filter(([name, cfg]) => (
+        cfg.manuallyAdded
+        && !isProjectHidden(config, name)
+        && !isStandaloneConversationProjectName(name)
+      ))
       .length;
   }
 
@@ -712,6 +723,7 @@ async function getProjects(progressCallback = null) {
     if (
       !existingProjects.has(projectName)
       && projectConfig.manuallyAdded
+      && !isProjectHidden(config, projectName)
       && !isStandaloneConversationProjectName(projectName)
     ) {
       processedProjects++;
@@ -1593,8 +1605,26 @@ async function deleteProject(projectName, force = false, deleteData = false) {
       }
     }
 
-    // Always remove from project config
-    delete config[projectName];
+    if (deleteData) {
+      delete config[projectName];
+    } else {
+      let projectPath = config[projectName]?.path || config[projectName]?.originalPath;
+      if (!projectPath) {
+        try {
+          projectPath = await extractProjectDirectory(projectName);
+        } catch (error) {
+          projectPath = resolveDecodedProjectPath(projectName);
+        }
+      }
+
+      config[projectName] = {
+        ...(config[projectName] || {}),
+        originalPath: projectPath,
+        hidden: true,
+        removedFromSidebar: true,
+        removedAt: new Date().toISOString()
+      };
+    }
     await saveProjectConfig(config);
 
     return true;
@@ -1618,9 +1648,9 @@ async function addProjectManually(projectPath, displayName = null) {
   // Generate project name (encode path for use as directory name)
   const projectName = absolutePath.replace(/[\\/:\s~_]/g, '-');
 
-  // Check if project already exists in config
   const config = await loadProjectConfig();
-  if (config[projectName]) {
+  const existingProjectConfig = config[projectName];
+  if (existingProjectConfig && !isProjectHidden(config, projectName)) {
     throw new Error(`Project already configured for path: ${absolutePath}`);
   }
 
@@ -1636,6 +1666,9 @@ async function addProjectManually(projectPath, displayName = null) {
   if (displayName) {
     config[projectName].displayName = displayName;
   }
+  delete config[projectName].removedFromSidebar;
+  delete config[projectName].hidden;
+  delete config[projectName].removedAt;
 
   await saveProjectConfig(config);
 
@@ -2333,7 +2366,9 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
     }
     const projectDirs = options.standaloneOnly
       ? [{ name: getStandaloneConversationProjectName(), sourceHomeDir: getMtlCodeHomeDir() }]
-      : (await listProviderProjectDirs()).filter(entry => !isStandaloneConversationProjectName(entry.name));
+      : (await listProviderProjectDirs())
+        .filter(entry => !isStandaloneConversationProjectName(entry.name))
+        .filter(entry => !isProjectHidden(config, entry.name));
     let scannedProjects = 0;
     const totalProjects = projectDirs.length;
 

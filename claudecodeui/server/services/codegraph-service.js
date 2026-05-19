@@ -28,7 +28,12 @@ const DEFAULT_CODEGRAPH_COVERAGE_SHARD_SIZE = 500;
 const MAX_NATIVE_EDGES_PER_NODE = 250;
 const DEFAULT_CODEGRAPH_SCRIPT_INCLUDE = '**/*.cs';
 const CODEGRAPH_STREAM_FILE_YIELD_EVERY = 10;
+const CODEGRAPH_STREAM_NODE_YIELD_EVERY = 200;
+const CODEGRAPH_STREAM_DOCUMENT_YIELD_EVERY = 25;
 const CODEGRAPH_STREAM_PROGRESS_EVERY = 25;
+const CODEGRAPH_OBSIDIAN_EXPORT_CACHE = 'obsidian-export-cache.json';
+const CODEGRAPH_OBSIDIAN_EXPORT_CACHE_VERSION = 1;
+const CODEGRAPH_OBSIDIAN_NOTE_WRITE_TIMEOUT_MS = 15000;
 
 const DEFAULT_SETTINGS = {
   codegraphEnabled: true,
@@ -896,6 +901,16 @@ const nativeFilePayload = (file = {}) => ({
   errors: file.errors,
 });
 
+const nativeFileExportFingerprint = (file = {}) => stableHash(stableStringify({
+  path: file.path,
+  contentHash: file.contentHash,
+  language: file.language,
+  size: file.size,
+  modifiedAt: file.modifiedAt,
+  nodeCount: file.nodeCount,
+  errors: file.errors,
+}));
+
 const hasGraphEdges = (node = {}, incoming = [], outgoing = []) => (
   [...incoming, ...outgoing].some((edge) => edge.kind !== 'contains')
 );
@@ -1566,6 +1581,8 @@ const upsertCodeGraphDocumentIfChanged = async ({
   existingHashes,
   upsertMarkdown,
   logger,
+  cancelSignal = null,
+  timeoutMs = CODEGRAPH_OBSIDIAN_NOTE_WRITE_TIMEOUT_MS,
 } = {}) => {
   if (!document?.path) {
     return { action: 'skip_invalid' };
@@ -1573,13 +1590,116 @@ const upsertCodeGraphDocumentIfChanged = async ({
   if (document.documentHash && existingHashes?.get(document.path.toLowerCase()) === document.documentHash) {
     return { action: 'skip_unchanged' };
   }
-  await upsertMarkdown({
+  await withCodeGraphTimeout(upsertMarkdown({
     path: document.path,
     content: document.content,
     kind: documentKindFromPath(document.path) === 'index' ? 'codegraph-index' : 'codegraph',
     title: path.posix.basename(document.path).replace(/\.md$/i, ''),
-  }, { logger });
+  }, { logger }), {
+    timeoutMs,
+    cancelSignal,
+    description: `Obsidian CodeGraph note write timed out: ${document.path}`,
+  });
   return { action: 'written' };
+};
+
+const resolveCodeGraphExportCachePath = ({
+  projectRoot = '',
+  config = {},
+  exportCachePath = '',
+} = {}) => {
+  const explicitPath = readString(exportCachePath);
+  if (explicitPath) return path.resolve(explicitPath);
+  const storagePath = getCodeGraphProjectStoragePath(projectRoot, config);
+  return storagePath ? path.join(storagePath, CODEGRAPH_OBSIDIAN_EXPORT_CACHE) : '';
+};
+
+const emptyCodeGraphExportCache = ({
+  projectRoot = '',
+  exportLevel = DEFAULT_SETTINGS.codegraphExportLevel,
+  maxEmbeddedSymbols = DEFAULT_SETTINGS.codegraphMaxEmbeddedSymbols,
+} = {}) => ({
+  version: CODEGRAPH_OBSIDIAN_EXPORT_CACHE_VERSION,
+  projectRootHash: stableHash(comparablePath(projectRoot || '')),
+  exportLevel,
+  maxEmbeddedSymbols,
+  updatedAt: '',
+  files: {},
+});
+
+const normalizeCodeGraphExportCache = (cache = null, options = {}) => {
+  const empty = emptyCodeGraphExportCache(options);
+  if (!cache || typeof cache !== 'object') return empty;
+  if (cache.version !== CODEGRAPH_OBSIDIAN_EXPORT_CACHE_VERSION) return empty;
+  if (readString(cache.projectRootHash) !== empty.projectRootHash) return empty;
+  if (readString(cache.exportLevel) !== readString(empty.exportLevel)) return empty;
+  if (Number(cache.maxEmbeddedSymbols) !== Number(empty.maxEmbeddedSymbols)) return empty;
+  return {
+    ...empty,
+    updatedAt: readString(cache.updatedAt),
+    files: cache.files && typeof cache.files === 'object' ? cache.files : {},
+  };
+};
+
+const loadCodeGraphExportCache = async ({ cachePath = '', logger = console, ...options } = {}) => {
+  const resolvedPath = readString(cachePath);
+  if (!resolvedPath) return emptyCodeGraphExportCache(options);
+  const raw = await readJsonFile(resolvedPath);
+  const cache = normalizeCodeGraphExportCache(raw, options);
+  logCodeGraphObsidian(logger, 'export_cache_loaded', {
+    cachePath: resolvedPath,
+    cachedFiles: Object.keys(cache.files || {}).length,
+    cacheHit: Boolean(raw && cache.files),
+  });
+  return cache;
+};
+
+const writeCodeGraphExportCache = async ({ cachePath = '', cache = null, logger = console } = {}) => {
+  const resolvedPath = readString(cachePath);
+  if (!resolvedPath || !cache) return;
+  await writeJsonFile(resolvedPath, cache);
+  logCodeGraphObsidian(logger, 'export_cache_written', {
+    cachePath: resolvedPath,
+    cachedFiles: Object.keys(cache.files || {}).length,
+  });
+};
+
+const codeGraphCacheEntriesFromDocuments = (documents = []) => {
+  const activeEntries = [];
+  const replacementsByPath = {};
+  for (const document of Array.isArray(documents) ? documents : []) {
+    if (!document?.path || isNativeIndexDocument(document) || isNativeCoverageDocument(document)) continue;
+    activeEntries.push({
+      kind: documentKindFromPath(document.path),
+      path: document.path,
+      hash: document.documentHash || '',
+    });
+    for (const legacyPath of document.legacyPaths || []) {
+      if (legacyPath && legacyPath !== document.path) replacementsByPath[legacyPath] = document.path;
+    }
+  }
+  return { activeEntries, replacementsByPath };
+};
+
+const rememberCachedCodeGraphEntries = ({
+  cachedEntry = null,
+  activeEntriesByPath = new Map(),
+  replacementsByPath = {},
+} = {}) => {
+  for (const entry of Array.isArray(cachedEntry?.activeEntries) ? cachedEntry.activeEntries : []) {
+    if (!entry?.path) continue;
+    activeEntriesByPath.set(entry.path, {
+      kind: readString(entry.kind) || documentKindFromPath(entry.path),
+      path: entry.path,
+      hash: readString(entry.hash),
+    });
+  }
+  const cachedReplacements = cachedEntry?.replacementsByPath && typeof cachedEntry.replacementsByPath === 'object'
+    ? cachedEntry.replacementsByPath
+    : {};
+  for (const [legacyPath, nextPath] of Object.entries(cachedReplacements)) {
+    if (legacyPath && nextPath) replacementsByPath[legacyPath] = nextPath;
+  }
 };
 
 export const exportCodeGraphSummariesToObsidianStreaming = async ({
@@ -1587,6 +1707,7 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
   projectRoot = '',
   exportLevel = '',
   maxEmbeddedSymbols = 0,
+  lastSync = null,
   scopePaths = [],
   upsertMarkdown = upsertObsidianMarkdownFile,
   queryNotes = queryObsidianNotes,
@@ -1594,6 +1715,12 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
   openGraph = openOrInitCodeGraphProject,
   logger = console,
   onProgress = null,
+  cancelSignal = null,
+  exportCachePath = '',
+  noteWriteTimeoutMs = CODEGRAPH_OBSIDIAN_NOTE_WRITE_TIMEOUT_MS,
+  yieldToEventLoop = yieldToEventLoopDefault,
+  nodeYieldEvery = CODEGRAPH_STREAM_NODE_YIELD_EVERY,
+  documentYieldEvery = CODEGRAPH_STREAM_DOCUMENT_YIELD_EVERY,
 } = {}) => {
   const startedAt = Date.now();
   const indexedAt = new Date().toISOString();
@@ -1606,11 +1733,17 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
   const effectiveMaxEmbeddedSymbols = Number(maxEmbeddedSymbols) > 0
     ? Number(maxEmbeddedSymbols)
     : config.codegraphMaxEmbeddedSymbols || DEFAULT_SETTINGS.codegraphMaxEmbeddedSymbols;
+  const resolvedExportCachePath = resolveCodeGraphExportCachePath({
+    projectRoot: root,
+    config,
+    exportCachePath,
+  });
   const normalizedScopes = normalizeCodeGraphScopePaths(root, scopePaths);
   const scope = createCodeGraphScopeMatcher(root, normalizedScopes);
   const projectSegment = sanitizeVaultSegment(projectName, 'General');
   const { CodeGraph, mod } = codeGraphPackage || await loadCodeGraphPackage();
   const bridgeConfig = readObsidianBridgeConfig();
+  throwIfCodeGraphCancelled(cancelSignal);
   const cg = await openGraph(CodeGraph, root, {
     indexOnInit: false,
     config: bridgeConfig,
@@ -1654,6 +1787,15 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
     });
     const existingNotes = Array.isArray(existingResult?.results) ? existingResult.results : [];
     const existingHashes = buildExistingNoteHashMap(existingNotes);
+    throwIfCodeGraphCancelled(cancelSignal);
+    const exportCache = await loadCodeGraphExportCache({
+      cachePath: resolvedExportCachePath,
+      projectRoot: root,
+      exportLevel: effectiveExportLevel,
+      maxEmbeddedSymbols: effectiveMaxEmbeddedSymbols,
+      logger,
+    });
+    const nextCacheFiles = scope.hasScope ? { ...(exportCache.files || {}) } : {};
     logCodeGraphObsidian(logger, 'existing_notes_loaded', {
       projectName,
       projectRoot: root,
@@ -1666,7 +1808,7 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
       percent: 58,
       label: 'Reading CodeGraph file list for streaming export',
     });
-    await yieldToEventLoopDefault();
+    await yieldToEventLoop();
 
     let files = [];
     if (typeof cg.getFiles === 'function') {
@@ -1685,6 +1827,7 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
     let documents = 0;
     let written = 0;
     let skippedUnchanged = 0;
+    let diffSkippedFiles = 0;
     const activeEntriesByPath = new Map();
     const replacementsByPath = {};
 
@@ -1701,12 +1844,15 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
     };
 
     for (const file of files) {
+      throwIfCodeGraphCancelled(cancelSignal);
       processedFiles += 1;
       if (processedFiles === 1 || processedFiles === totalFiles || processedFiles % CODEGRAPH_STREAM_PROGRESS_EVERY === 0) {
         report({
           stage: 'export',
           percent: Math.min(95, 58 + Math.floor((processedFiles / Math.max(1, totalFiles)) * 37)),
-          label: `Writing CodeGraph notes to Obsidian ${processedFiles}/${totalFiles}`,
+          label: diffSkippedFiles > 0
+            ? `Writing CodeGraph notes to Obsidian ${processedFiles}/${totalFiles} (${diffSkippedFiles} cached)`
+            : `Writing CodeGraph notes to Obsidian ${processedFiles}/${totalFiles}`,
         });
         logCodeGraphObsidian(logger, 'stream_file_progress', {
           projectName,
@@ -1716,11 +1862,28 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
           documents,
           written,
           skippedUnchanged,
+          diffSkippedFiles,
           filePath: file.path,
         });
       }
       if (processedFiles % CODEGRAPH_STREAM_FILE_YIELD_EVERY === 0) {
-        await yieldToEventLoopDefault();
+        await yieldToEventLoop();
+      }
+      throwIfCodeGraphCancelled(cancelSignal);
+
+      const fileFingerprint = nativeFileExportFingerprint(file);
+      const cachedEntry = exportCache.files?.[file.path];
+      if (cachedEntry?.fingerprint === fileFingerprint && Array.isArray(cachedEntry.activeEntries)) {
+        diffSkippedFiles += 1;
+        nextCacheFiles[file.path] = cachedEntry;
+        rememberCachedCodeGraphEntries({
+          cachedEntry,
+          activeEntriesByPath,
+          replacementsByPath,
+        });
+        documents += cachedEntry.activeEntries.length;
+        skippedUnchanged += cachedEntry.activeEntries.length;
+        continue;
       }
 
       let fileNodes = [];
@@ -1733,6 +1896,12 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
         .map(normalizeNativeNode)
         .filter((node) => node.id && node.name && (!scope.hasScope || scope.matches(node.filePath || file.path)));
       if (normalizedNodes.length === 0) {
+        nextCacheFiles[file.path] = {
+          fingerprint: fileFingerprint,
+          activeEntries: [],
+          replacementsByPath: {},
+          updatedAt: indexedAt,
+        };
         continue;
       }
       const exportedCandidateNodes = normalizedNodes.filter((node) => (
@@ -1750,7 +1919,13 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
           if (normalized.source && normalized.target) edgeMap.set(edgeIdentity(normalized), normalized);
         }
       };
-      for (const node of exportedCandidateNodes) {
+      const nodeYieldInterval = Math.max(1, Number(nodeYieldEvery) || CODEGRAPH_STREAM_NODE_YIELD_EVERY);
+      for (const [nodeIndex, node] of exportedCandidateNodes.entries()) {
+        throwIfCodeGraphCancelled(cancelSignal);
+        if (nodeIndex > 0 && nodeIndex % nodeYieldInterval === 0) {
+          await yieldToEventLoop();
+          throwIfCodeGraphCancelled(cancelSignal);
+        }
         try {
           addEdges(typeof cg.getIncomingEdges === 'function' ? cg.getIncomingEdges(node.id) : []);
         } catch {
@@ -1789,8 +1964,17 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
         exportLevel: effectiveExportLevel,
         maxEmbeddedSymbols: effectiveMaxEmbeddedSymbols,
       }).filter((document) => !isNativeIndexDocument(document) && !isNativeCoverageDocument(document));
+      const cacheEntry = codeGraphCacheEntriesFromDocuments(batchDocuments);
+      nextCacheFiles[file.path] = {
+        fingerprint: fileFingerprint,
+        activeEntries: cacheEntry.activeEntries,
+        replacementsByPath: cacheEntry.replacementsByPath,
+        updatedAt: indexedAt,
+      };
 
+      const documentYieldInterval = Math.max(1, Number(documentYieldEvery) || CODEGRAPH_STREAM_DOCUMENT_YIELD_EVERY);
       for (const document of batchDocuments) {
+        throwIfCodeGraphCancelled(cancelSignal);
         documents += 1;
         rememberDocument(document);
         const result = await upsertCodeGraphDocumentIfChanged({
@@ -1798,11 +1982,16 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
           existingHashes,
           upsertMarkdown,
           logger,
+          cancelSignal,
+          timeoutMs: noteWriteTimeoutMs,
         });
         if (result.action === 'written') {
           written += 1;
         } else if (result.action === 'skip_unchanged') {
           skippedUnchanged += 1;
+        }
+        if (documents % documentYieldInterval === 0) {
+          await yieldToEventLoop();
         }
       }
     }
@@ -1812,6 +2001,7 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
       percent: 96,
       label: 'Writing CodeGraph native index',
     });
+    throwIfCodeGraphCancelled(cancelSignal);
     const activeEntries = [...activeEntriesByPath.values()];
     const indexDocument = buildStreamingCodeGraphIndexDocument({
       projectName,
@@ -1836,9 +2026,12 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
       existingHashes,
       upsertMarkdown,
       logger,
+      cancelSignal,
+      timeoutMs: noteWriteTimeoutMs,
     });
     if (indexResult.action === 'written') written += 1;
     if (indexResult.action === 'skip_unchanged') skippedUnchanged += 1;
+    await yieldToEventLoop();
 
     let ghostPlan = { deprecations: [], staleCandidates: [] };
     if (!scope.hasScope) {
@@ -1847,6 +2040,7 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
         percent: 98,
         label: 'Finalizing CodeGraph ghost-note cleanup',
       });
+      throwIfCodeGraphCancelled(cancelSignal);
       ghostPlan = planGhostNoteUpdates({
         activePaths: [...activeEntriesByPath.keys()],
         existingNotes,
@@ -1854,13 +2048,18 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
         replacementsByPath,
       });
       for (const deprecation of ghostPlan.deprecations || []) {
-        await upsertMarkdown({
+        throwIfCodeGraphCancelled(cancelSignal);
+        await withCodeGraphTimeout(upsertMarkdown({
           path: deprecation.path,
           content: deprecation.content,
           kind: 'codegraph-deprecated',
           title: path.posix.basename(deprecation.path).replace(/\.md$/i, ''),
-        }, { logger });
-        await yieldToEventLoopDefault();
+        }, { logger }), {
+          cancelSignal,
+          timeoutMs: noteWriteTimeoutMs,
+          description: `Obsidian CodeGraph ghost-note write timed out: ${deprecation.path}`,
+        });
+        await yieldToEventLoop();
       }
     } else {
       logCodeGraphObsidian(logger, 'ghost_cleanup_skipped_for_scope', {
@@ -1870,12 +2069,27 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
       });
     }
 
+    await writeCodeGraphExportCache({
+      cachePath: resolvedExportCachePath,
+      cache: {
+        version: CODEGRAPH_OBSIDIAN_EXPORT_CACHE_VERSION,
+        projectRootHash: stableHash(comparablePath(root || '')),
+        exportLevel: effectiveExportLevel,
+        maxEmbeddedSymbols: effectiveMaxEmbeddedSymbols,
+        updatedAt: indexedAt,
+        lastSync: lastSync || null,
+        files: nextCacheFiles,
+      },
+      logger,
+    });
+
     logCodeGraphObsidian(logger, 'export_complete', {
       projectName,
       projectRoot: root,
       documents,
       written,
       skippedUnchanged,
+      diffSkippedFiles,
       deprecated: ghostPlan.deprecations?.length || 0,
       staleCandidates: ghostPlan.staleCandidates?.length || 0,
       durationMs: Date.now() - startedAt,
@@ -1885,6 +2099,7 @@ export const exportCodeGraphSummariesToObsidianStreaming = async ({
       documents,
       written,
       skippedUnchanged,
+      diffSkippedFiles,
       deprecated: ghostPlan.deprecations?.length || 0,
       staleCandidates: ghostPlan.staleCandidates?.length || 0,
       exportLevel: effectiveExportLevel,
@@ -1980,6 +2195,53 @@ const isRetryableError = (error) => {
     || message.includes('busy');
 };
 
+export class CodeGraphCancelledError extends Error {
+  constructor(message = 'CodeGraph build cancelled.') {
+    super(message);
+    this.name = 'CodeGraphCancelledError';
+    this.code = 'CODEGRAPH_CANCELLED';
+  }
+}
+
+const isCodeGraphCancelledError = (error) => (
+  error instanceof CodeGraphCancelledError
+  || String(error?.code || '') === 'CODEGRAPH_CANCELLED'
+);
+
+const throwIfCodeGraphCancelled = (cancelSignal = null) => {
+  if (cancelSignal?.cancelled || cancelSignal?.aborted) {
+    throw new CodeGraphCancelledError();
+  }
+};
+
+const withCodeGraphTimeout = async (
+  promise,
+  {
+    timeoutMs = CODEGRAPH_OBSIDIAN_NOTE_WRITE_TIMEOUT_MS,
+    cancelSignal = null,
+    description = 'CodeGraph operation timed out.',
+  } = {},
+) => {
+  throwIfCodeGraphCancelled(cancelSignal);
+  let timeout = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(Object.assign(new Error(`${description} after ${timeoutMs}ms`), {
+            code: 'CODEGRAPH_OPERATION_TIMEOUT',
+          }));
+        }, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    throwIfCodeGraphCancelled(cancelSignal);
+  }
+};
+
 const shouldEmitCodeGraphDebugLog = (logger) => Boolean(
   logger
     && (
@@ -2031,6 +2293,7 @@ export const createCodeGraphService = ({
 } = {}) => {
   const projectQueues = new Map();
   const projectStatuses = new Map();
+  const projectCancelTokens = new Map();
   const lazySummaryInflight = new Map();
 
   const setStatus = (projectRoot, patch) => {
@@ -2049,6 +2312,7 @@ export const createCodeGraphService = ({
     projectRoot = '',
     exportToObsidian = false,
     scopePaths = [],
+    cancelSignal = null,
   } = {}) => {
     const startedAt = Date.now();
     const normalizedScopePaths = normalizeCodeGraphScopePaths(projectRoot, scopePaths).map((scope) => scope.absolutePath);
@@ -2068,6 +2332,7 @@ export const createCodeGraphService = ({
       },
     });
     try {
+      throwIfCodeGraphCancelled(cancelSignal);
       const initialized = await withRetry(
         () => initialize({
           projectName,
@@ -2094,6 +2359,7 @@ export const createCodeGraphService = ({
           label: 'Indexing project with CodeGraph',
         },
       });
+      throwIfCodeGraphCancelled(cancelSignal);
       const lastSync = await withRetry(
         () => sync({ projectName, projectRoot, scopePaths: normalizedScopePaths }),
         { maxRetries, retryDelayMs },
@@ -2115,6 +2381,7 @@ export const createCodeGraphService = ({
           label: exportToObsidian ? 'Reading CodeGraph index for Obsidian export' : 'CodeGraph sync complete',
         },
       });
+      throwIfCodeGraphCancelled(cancelSignal);
       const exportResult = exportToObsidian
         ? await withRetry(
           () => exportObsidian({
@@ -2122,7 +2389,9 @@ export const createCodeGraphService = ({
             projectRoot,
             scopePaths: normalizedScopePaths,
             lastSync,
+            cancelSignal,
             onProgress: (progress = {}) => {
+              if (cancelSignal?.cancelled) return;
               setStatus(projectRoot, {
                 state: 'syncing',
                 projectName,
@@ -2166,6 +2435,25 @@ export const createCodeGraphService = ({
       });
       return { lastSync, lastExport: exportResult };
     } catch (error) {
+      if (isCodeGraphCancelledError(error)) {
+        setStatus(projectRoot, {
+          state: 'cancelled',
+          projectName,
+          lastError: '',
+          progress: {
+            stage: 'cancelled',
+            percent: 100,
+            label: 'CodeGraph build cancelled',
+          },
+        });
+        logCodeGraphObsidian(logger, 'job_cancelled', {
+          projectName,
+          projectRoot,
+          exportToObsidian,
+          durationMs: Date.now() - startedAt,
+        }, 'warn');
+        return { cancelled: true };
+      }
       setStatus(projectRoot, {
         state: 'error',
         projectName,
@@ -2196,6 +2484,11 @@ export const createCodeGraphService = ({
     const key = readString(projectRoot);
     const normalizedScopePaths = normalizeCodeGraphScopePaths(projectRoot, scopePaths).map((scope) => scope.absolutePath);
     const previous = projectQueues.get(key) || Promise.resolve();
+    const cancelToken = {
+      cancelled: false,
+      requestedAt: '',
+    };
+    projectCancelTokens.set(key, cancelToken);
     logCodeGraphObsidian(logger, 'queue_enqueued', {
       projectName,
       projectRoot: key,
@@ -2210,9 +2503,11 @@ export const createCodeGraphService = ({
         projectRoot,
         exportToObsidian,
         scopePaths: normalizedScopePaths,
+        cancelSignal: cancelToken,
       }));
     const guarded = job.catch(() => undefined).finally(() => {
       if (projectQueues.get(key) === guarded) projectQueues.delete(key);
+      if (projectCancelTokens.get(key) === cancelToken) projectCancelTokens.delete(key);
     });
     projectQueues.set(key, guarded);
     setStatus(projectRoot, {
@@ -2236,6 +2531,36 @@ export const createCodeGraphService = ({
     scopePaths,
     exportToObsidian: true,
   });
+
+  const cancel = (projectRoot = '') => {
+    const key = readString(projectRoot);
+    const token = projectCancelTokens.get(key);
+    const hadQueue = projectQueues.has(key);
+    if (token) {
+      token.cancelled = true;
+      token.requestedAt = new Date().toISOString();
+    }
+    if (token || hadQueue) {
+      const previous = projectStatuses.get(key) || {};
+      setStatus(key, {
+        ...previous,
+        state: 'cancelling',
+        lastError: '',
+        progress: {
+          stage: 'cancelling',
+          percent: Math.max(1, Math.min(99, Number(previous.progress?.percent) || 99)),
+          label: 'Stopping CodeGraph build',
+        },
+      });
+      logCodeGraphObsidian(logger, 'queue_cancel_requested', {
+        projectRoot: key,
+        hadToken: Boolean(token),
+        hadQueue,
+      }, 'warn');
+      return { cancelled: true, projectRoot: key };
+    }
+    return { cancelled: false, projectRoot: key, reason: 'no-active-codegraph-job' };
+  };
 
   const waitForIdle = async (projectRoot = '') => {
     const key = readString(projectRoot);
@@ -2286,6 +2611,7 @@ export const createCodeGraphService = ({
   return {
     enqueueObsidianBuild,
     enqueueBackgroundSync,
+    cancel,
     ensureInitialized: initialize,
     exportAstSummaryToObsidian: exportObsidian,
     getStatus: (projectRoot = '') => projectStatuses.get(readString(projectRoot)) || {
@@ -2321,7 +2647,7 @@ const buildCodeGraphRuntimePrompt = ({ impactMaxDepth = 2, impactLimit = 50 } = 
 ].join('\n');
 
 export const applyCodeGraphRuntimeToChatCommand = async (data = {}, {
-  readConfig = () => DEFAULT_SETTINGS,
+  readConfig = readObsidianBridgeConfig,
   ensureMcpConfig = installCodeGraphMcpConfig,
 } = {}) => {
   const options = data.options && typeof data.options === 'object' ? data.options : {};
@@ -3106,12 +3432,16 @@ export const exportCodeGraphSummariesToObsidian = async ({
   maxSymbolNotes = 50,
   exportLevel = '',
   maxEmbeddedSymbols = 0,
+  lastSync = null,
   scopePaths = [],
   collectSummary = collectCodeGraphSummary,
   upsertMarkdown = upsertObsidianMarkdownFile,
   queryNotes = queryObsidianNotes,
   logger = console,
   onProgress = null,
+  cancelSignal = null,
+  exportCachePath = '',
+  noteWriteTimeoutMs = CODEGRAPH_OBSIDIAN_NOTE_WRITE_TIMEOUT_MS,
 } = {}) => {
   const startedAt = Date.now();
   const indexedAt = new Date().toISOString();
@@ -3128,11 +3458,15 @@ export const exportCodeGraphSummariesToObsidian = async ({
       projectRoot,
       exportLevel,
       maxEmbeddedSymbols,
+      lastSync,
       scopePaths,
       upsertMarkdown,
       queryNotes,
       logger,
       onProgress,
+      cancelSignal,
+      exportCachePath,
+      noteWriteTimeoutMs,
     });
   }
   const config = readObsidianBridgeConfig();
@@ -3150,12 +3484,14 @@ export const exportCodeGraphSummariesToObsidian = async ({
     });
   }
   await yieldToEventLoopDefault();
+  throwIfCodeGraphCancelled(cancelSignal);
   const summary = await collectSummary({
     projectRoot,
     exportLevel: effectiveExportLevel,
     scopePaths,
     onProgress,
   });
+  throwIfCodeGraphCancelled(cancelSignal);
   logCodeGraphObsidian(logger, 'summary_collected', {
     projectName,
     projectRoot,
@@ -3236,6 +3572,7 @@ export const exportCodeGraphSummariesToObsidian = async ({
   let skippedUnchanged = 0;
   let processed = 0;
   for (const document of documents) {
+    throwIfCodeGraphCancelled(cancelSignal);
     processed += 1;
     if (document.documentHash && existingHashes.get(document.path.toLowerCase()) === document.documentHash) {
       skippedUnchanged += 1;
@@ -3258,15 +3595,22 @@ export const exportCodeGraphSummariesToObsidian = async ({
           });
         }
       }
+      if (processed % 25 === 0) {
+        await yieldToEventLoopDefault();
+      }
       continue;
     }
     const upsertStartedAt = Date.now();
-    await upsertMarkdown({
+    await withCodeGraphTimeout(upsertMarkdown({
       path: document.path,
       content: document.content,
       kind: 'codegraph',
       title: path.posix.basename(document.path).replace(/\.md$/i, ''),
-    }, { logger });
+    }, { logger }), {
+      cancelSignal,
+      timeoutMs: noteWriteTimeoutMs,
+      description: `Obsidian CodeGraph note write timed out: ${document.path}`,
+    });
     written += 1;
     logCodeGraphObsidian(logger, 'upsert_progress', {
       projectName,
@@ -3286,6 +3630,9 @@ export const exportCodeGraphSummariesToObsidian = async ({
         label: `Wrote CodeGraph note ${processed}/${documents.length}`,
       });
     }
+    if (processed % 25 === 0) {
+      await yieldToEventLoopDefault();
+    }
   }
   const replacementsByPath = Object.fromEntries(documents.flatMap((document) => (
     (document.legacyPaths || [])
@@ -3299,19 +3646,25 @@ export const exportCodeGraphSummariesToObsidian = async ({
     replacementsByPath,
   });
   for (const deprecation of ghostPlan.deprecations || []) {
+    throwIfCodeGraphCancelled(cancelSignal);
     const deprecationStartedAt = Date.now();
-    await upsertMarkdown({
+    await withCodeGraphTimeout(upsertMarkdown({
       path: deprecation.path,
       content: deprecation.content,
       kind: 'codegraph-deprecated',
       title: path.posix.basename(deprecation.path).replace(/\.md$/i, ''),
-    }, { logger });
+    }, { logger }), {
+      cancelSignal,
+      timeoutMs: noteWriteTimeoutMs,
+      description: `Obsidian CodeGraph ghost-note write timed out: ${deprecation.path}`,
+    });
     logCodeGraphObsidian(logger, 'ghost_deprecated', {
       projectName,
       projectRoot,
       path: deprecation.path,
       durationMs: Date.now() - deprecationStartedAt,
     });
+    await yieldToEventLoopDefault();
   }
   if (typeof onProgress === 'function') {
     onProgress({
@@ -3465,7 +3818,7 @@ export const codeGraphService = createCodeGraphService({
   sync: syncCodeGraphProject,
   generateSummary: generateLazySemanticSummary,
   writeSemanticSummary: writeLazySemanticSummaryToObsidian,
-  exportObsidian: async ({ projectName, projectRoot, scopePaths, onProgress }) => {
+  exportObsidian: async ({ projectName, projectRoot, scopePaths, lastSync, onProgress, cancelSignal }) => {
     const config = readObsidianBridgeConfig({ includeToken: true });
     const skipReason = getCodeGraphObsidianExportSkipReason(config);
     if (skipReason) {
@@ -3475,9 +3828,11 @@ export const codeGraphService = createCodeGraphService({
       projectName,
       projectRoot,
       scopePaths,
+      lastSync,
       exportLevel: config.codegraphExportLevel,
       maxEmbeddedSymbols: config.codegraphMaxEmbeddedSymbols,
       onProgress,
+      cancelSignal,
     });
   },
 });

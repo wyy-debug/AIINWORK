@@ -10,6 +10,9 @@ import { refineWikiReadbackContext as defaultRefineWikiReadbackContext } from '.
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 
+const OBSIDIAN_CHAT_CONTEXT_BUDGET_MS = 1200;
+const OBSIDIAN_CHAT_CONTEXT_STEP_TIMEOUT_MS = 800;
+
 const sanitizeVaultSegment = (value, fallback = 'General') => {
   const sanitized = readString(value)
     .replace(/[\\/]+/g, ' ')
@@ -187,7 +190,73 @@ const filterWikiReadbackFolders = (folders = [], options = {}) => {
   return [...new Set(filtered)];
 };
 
-export const applyObsidianContextToChatCommand = async (data = {}, {
+const isDefaultBridgeReader = (reader, defaultReader) => reader === defaultReader;
+
+const callActiveNoteReader = (reader, payload) => (
+  isDefaultBridgeReader(reader, defaultGetActiveObsidianNote)
+    ? reader(payload, {
+      allowRepair: false,
+      timeoutMs: OBSIDIAN_CHAT_CONTEXT_STEP_TIMEOUT_MS,
+    })
+    : reader(payload)
+);
+
+const callQueryReader = (reader, payload) => (
+  isDefaultBridgeReader(reader, defaultQueryObsidianNotes)
+    ? reader(payload, {
+      allowRepair: false,
+      timeoutMs: OBSIDIAN_CHAT_CONTEXT_STEP_TIMEOUT_MS,
+    })
+    : reader(payload)
+);
+
+const callContextReader = (reader, payload) => (
+  isDefaultBridgeReader(reader, defaultBuildObsidianContext)
+    ? reader(payload, {
+      allowRepair: false,
+      timeoutMs: OBSIDIAN_CHAT_CONTEXT_STEP_TIMEOUT_MS,
+    })
+    : reader(payload)
+);
+
+const buildBudgetFallback = (data = {}, contextBudgetMs = OBSIDIAN_CHAT_CONTEXT_BUDGET_MS) => ({
+  ...data,
+  options: {
+    ...(data.options || {}),
+    obsidianContext: {
+      used: false,
+      source: 'wiki',
+      skippedByBudget: true,
+      error: `Obsidian readback skipped after ${contextBudgetMs}ms to keep chat responsive.`,
+    },
+  },
+});
+
+const runWithChatBudget = async (operation, {
+  contextBudgetMs = OBSIDIAN_CHAT_CONTEXT_BUDGET_MS,
+  onTimeout = () => null,
+} = {}) => {
+  const budgetMs = Number.isFinite(Number(contextBudgetMs))
+    ? Math.max(0, Number(contextBudgetMs))
+    : OBSIDIAN_CHAT_CONTEXT_BUDGET_MS;
+  let timeoutId = null;
+  const timeoutResult = Symbol('obsidian-context-timeout');
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve(timeoutResult), budgetMs);
+    timeoutId.unref?.();
+  });
+
+  const result = await Promise.race([operation, timeout]);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
+  if (result === timeoutResult) {
+    return onTimeout();
+  }
+  return result;
+};
+
+const applyObsidianContextToChatCommandInner = async (data = {}, {
   buildObsidianContext = defaultBuildObsidianContext,
   getActiveObsidianNote = defaultGetActiveObsidianNote,
   queryObsidianNotes = defaultQueryObsidianNotes,
@@ -229,7 +298,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
 
   try {
     const activeNoteResult = config.activeNoteReadbackEnabled
-      ? await getActiveObsidianNote({
+      ? await callActiveNoteReader(getActiveObsidianNote, {
         includeContent: false,
         includeSelection: true,
       }).catch(() => null)
@@ -245,7 +314,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
           limit: aiMemoryLimit,
           endpoint: 'query',
         }));
-        aiMemoryResult = await queryObsidianNotes({
+        aiMemoryResult = await callQueryReader(queryObsidianNotes, {
           query: '',
           projectName,
           folders: aiMemoryFolders,
@@ -274,7 +343,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
     const filteredAiMemoryResults = scopedAiMemoryResults.filter((entry) => !isArchivedMemoryResult(entry));
     const aiMemoryContext = buildContextFromResults(filteredAiMemoryResults);
     const wikiResult = wikiReadbackEnabled && readbackFolders.length > 0
-      ? await buildObsidianContext({
+      ? await callContextReader(buildObsidianContext, {
         query: command.slice(0, 2000),
         projectName,
         folders: readbackFolders,
@@ -400,4 +469,20 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
       },
     };
   }
+};
+
+export const applyObsidianContextToChatCommand = async (data = {}, dependencies = {}) => {
+  const contextBudgetMs = Number.isFinite(Number(dependencies.contextBudgetMs))
+    ? Number(dependencies.contextBudgetMs)
+    : OBSIDIAN_CHAT_CONTEXT_BUDGET_MS;
+  return runWithChatBudget(
+    applyObsidianContextToChatCommandInner(data, dependencies),
+    {
+      contextBudgetMs,
+      onTimeout: () => {
+        console.warn('[Obsidian Context] Skipping readback: chat-path budget exceeded');
+        return buildBudgetFallback(data, contextBudgetMs);
+      },
+    },
+  );
 };
