@@ -47,23 +47,6 @@ type ModelPreset = {
   contextWindowTokens: number;
 };
 
-type OpenMythosEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-type OpenMythosLoopControl = 'advisory' | 'enforced';
-
-type OpenMythosRuntimeConfig = {
-  enabled: boolean;
-  adaptiveEffort: boolean;
-  taskCard: boolean;
-  routingHints: boolean;
-  loopControl: OpenMythosLoopControl;
-  stableReinjection: boolean;
-  phaseAdapter: boolean;
-  expertRouting: boolean;
-  contextCacheDiagnostics: boolean;
-  minEffort: OpenMythosEffort;
-  maxEffort: OpenMythosEffort;
-};
-
 type MtlCodeModelConfig = {
   provider: 'anthropic';
   activeProfileId: string;
@@ -78,27 +61,11 @@ type MtlCodeModelConfig = {
     bareMode: boolean;
     contextWindowTokens: number;
   };
-  openMythosRuntime: OpenMythosRuntimeConfig;
   configPath?: string;
 };
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const MIMO_TOKEN_PLAN_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/anthropic';
-const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-const OPENMYTHOS_LOOP_CONTROLS = ['advisory', 'enforced'] as const;
-const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG: OpenMythosRuntimeConfig = {
-  enabled: false,
-  adaptiveEffort: true,
-  taskCard: true,
-  routingHints: true,
-  loopControl: 'enforced',
-  stableReinjection: true,
-  phaseAdapter: true,
-  expertRouting: true,
-  contextCacheDiagnostics: true,
-  minEffort: 'low',
-  maxEffort: 'max',
-};
 
 const makeId = (prefix = 'model') => (
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -120,50 +87,6 @@ const createProfile = (patch: Partial<ModelProfile> = {}): ModelProfile => ({
   claudeNativeMemoryEnabled: patch.claudeNativeMemoryEnabled !== false,
   bareMode: patch.claudeNativeMemoryEnabled !== false ? false : patch.bareMode !== false,
 });
-
-const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
-  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-);
-
-const normalizeBoolean = (value: unknown, fallback: boolean): boolean => (
-  typeof value === 'boolean' ? value : fallback
-);
-
-const normalizeEffort = (value: unknown, fallback: OpenMythosEffort): OpenMythosEffort => {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return OPENMYTHOS_EFFORT_LEVELS.includes(normalized as OpenMythosEffort)
-    ? (normalized as OpenMythosEffort)
-    : fallback;
-};
-
-const normalizeLoopControl = (value: unknown, fallback: OpenMythosLoopControl): OpenMythosLoopControl => {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return OPENMYTHOS_LOOP_CONTROLS.includes(normalized as OpenMythosLoopControl)
-    ? (normalized as OpenMythosLoopControl)
-    : fallback;
-};
-
-const normalizeOpenMythosRuntime = (value: unknown): OpenMythosRuntimeConfig => {
-  const data = isObjectRecord(value) ? value : {};
-  const minEffort = normalizeEffort(data.minEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort);
-  const maxEffort = normalizeEffort(data.maxEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.maxEffort);
-  const minIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(minEffort);
-  const maxIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(maxEffort);
-
-  return {
-    enabled: normalizeBoolean(data.enabled, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.enabled),
-    adaptiveEffort: normalizeBoolean(data.adaptiveEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.adaptiveEffort),
-    taskCard: normalizeBoolean(data.taskCard, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.taskCard),
-    routingHints: normalizeBoolean(data.routingHints, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.routingHints),
-    loopControl: normalizeLoopControl(data.loopControl, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.loopControl),
-    stableReinjection: normalizeBoolean(data.stableReinjection, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.stableReinjection),
-    phaseAdapter: normalizeBoolean(data.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
-    expertRouting: normalizeBoolean(data.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
-    contextCacheDiagnostics: normalizeBoolean(data.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
-    minEffort: minIndex <= maxIndex ? minEffort : maxEffort,
-    maxEffort: minIndex <= maxIndex ? maxEffort : minEffort,
-  };
-};
 
 const createEmptyConfig = (): MtlCodeModelConfig => {
   const defaultProfile = createProfile({
@@ -190,7 +113,6 @@ const createEmptyConfig = (): MtlCodeModelConfig => {
       bareMode: false,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
-    openMythosRuntime: DEFAULT_OPENMYTHOS_RUNTIME_CONFIG,
   };
 };
 
@@ -263,7 +185,6 @@ const toConfig = (value: unknown): MtlCodeModelConfig => {
       bareMode: !claudeNativeMemoryEnabled,
       contextWindowTokens: activeProfile.contextWindowTokens,
     },
-    openMythosRuntime: normalizeOpenMythosRuntime(data?.openMythosRuntime),
   };
 };
 
@@ -433,7 +354,6 @@ export default function ModelConfigContent() {
           bareMode: activeProfile?.claudeNativeMemoryEnabled === false,
           contextWindowTokens: activeProfile?.contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS,
         },
-        openMythosRuntime: config.openMythosRuntime,
       };
       const response = await apiFetch('/api/settings/mtl-code-model', {
         method: 'PUT',

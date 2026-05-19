@@ -28,7 +28,7 @@ import type { SettingsProject } from '../../../../../types/types';
 import { dependencySelectionId, resolveAgentTemplateDependencyState } from '../../utils/agentRepositoryDependencies';
 import { emptyMcpConfiguration, shouldPromptForMcpSetup } from '../../utils/mcpInstallFlow';
 
-type RepositoryKind = 'agent-template' | 'swarm-template' | 'skill' | 'mcp-server';
+type RepositoryKind = 'agent-template' | 'recipe' | 'swarm-template' | 'skill' | 'mcp-server';
 type InstallScope = 'user' | 'project';
 
 type AppOption = {
@@ -383,6 +383,7 @@ function kindLabel(kind: RepositoryKind) {
   if (kind === 'skill') return 'Skill';
   if (kind === 'mcp-server') return 'MCP';
   if (kind === 'swarm-template') return 'Swarm';
+  if (kind === 'recipe') return 'Recipe';
   return 'Agent';
 }
 
@@ -395,6 +396,9 @@ function kindAccent(kind: RepositoryKind) {
   }
   if (kind === 'swarm-template') {
     return 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-900/60 dark:bg-cyan-950/30 dark:text-cyan-300';
+  }
+  if (kind === 'recipe') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300';
   }
   return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300';
 }
@@ -1331,8 +1335,40 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
         throw new Error(await readError(response, '加载仓库目录失败'));
       }
       const data = (await response.json()) as CatalogResponse;
+      let recipeItems: RepositoryItem[] = [];
+      try {
+        const recipesResponse = await apiFetch('/api/recipes');
+        if (recipesResponse.ok) {
+          const recipesData = await recipesResponse.json() as { recipes?: Array<Record<string, unknown>> };
+          recipeItems = (recipesData.recipes || []).map((recipe) => ({
+            id: String(recipe.id || ''),
+            kind: 'recipe' as const,
+            name: String(recipe.id || ''),
+            title: String(recipe.title || recipe.id || 'Recipe'),
+            description: typeof recipe.description === 'string' ? recipe.description : '',
+            tags: Array.isArray(recipe.tags) ? recipe.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+            capabilities: Array.isArray(recipe.inputs)
+              ? recipe.inputs.map((input) => typeof input === 'object' && input ? String((input as { label?: unknown }).label || '') : '').filter(Boolean)
+              : [],
+            dependencies: (recipe.dependencies as AgentDependencies) || {},
+            likes: 0,
+            liked: false,
+            downloads: 0,
+            repoId: 'builtin-recipes',
+            repoName: 'Built-in Recipes',
+            repoWritable: false,
+            packageId: String(recipe.id || ''),
+            packageVersion: '1',
+            runtime: {
+              permissionMode: typeof recipe.permissionPreset === 'string' ? recipe.permissionPreset : 'suggest',
+            },
+          }));
+        }
+      } catch {
+        recipeItems = [];
+      }
       setRepositories(data.repositories || []);
-      setItems(data.items || []);
+      setItems([...(data.items || []), ...recipeItems]);
       setErrors(data.errors || []);
       setActionError(null);
     } catch (error) {
@@ -1421,6 +1457,10 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
 
   const agentTemplates = useMemo(
     () => filteredItems.filter((item) => item.kind === 'agent-template'),
+    [filteredItems],
+  );
+  const recipeItems = useMemo(
+    () => filteredItems.filter((item) => item.kind === 'recipe'),
     [filteredItems],
   );
   const swarmTemplates = useMemo(
@@ -1554,6 +1594,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   );
   const itemCounts = useMemo(() => ({
     agents: items.filter((item) => item.kind === 'agent-template').length,
+    recipes: items.filter((item) => item.kind === 'recipe').length,
     swarms: items.filter((item) => item.kind === 'swarm-template').length,
     skills: items.filter((item) => item.kind === 'skill').length,
     mcps: items.filter((item) => item.kind === 'mcp-server').length,
@@ -2049,6 +2090,14 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const inlineActionError = Boolean(actionError && (setupItem || mcpSetupItem));
   const showRepositoryNotice = Boolean(message || (!inlineActionError && actionError) || errors.length > 0);
 
+  const openRecipeItem = (item: RepositoryItem) => {
+    window.dispatchEvent(new CustomEvent('argus-open-tab', { detail: { tab: 'chat' } }));
+    window.dispatchEvent(new CustomEvent('argus-append-chat-input', {
+      detail: { text: `/recipe ${item.id}` },
+    }));
+    setMessage(`Recipe "${item.title}" inserted into chat.`);
+  };
+
   return (
     <div className="space-y-4">
       {message && (
@@ -2255,7 +2304,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               />
             </div>
             <div className="inline-flex h-9 overflow-hidden rounded border border-border">
-              {(['all', 'agent-template', 'swarm-template', 'skill', 'mcp-server'] as const).map((kind) => (
+              {(['all', 'agent-template', 'recipe', 'skill', 'mcp-server', 'swarm-template'] as const).map((kind) => (
                 <button
                   key={kind}
                   type="button"
@@ -2289,6 +2338,31 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   onLike={(item) => void likeItem(item)}
                   onUseTemplate={openTemplateSetup}
                 />
+              )}
+
+              {(kindFilter === 'all' || kindFilter === 'recipe') && (
+                <div className="space-y-2">
+                  {recipeItems.length > 0 && (
+                    <h3 className="text-sm font-semibold text-foreground">Recipes</h3>
+                  )}
+                  {recipeItems.map((item) => (
+                    <ItemCard
+                      key={`${item.repoId}:${item.id}`}
+                      item={item}
+                      busy={false}
+                      installed={false}
+                      onLike={(nextItem) => void likeItem(nextItem)}
+                      onInstall={openRecipeItem}
+                      onUpdate={openRecipeItem}
+                      onUninstall={openRecipeItem}
+                    />
+                  ))}
+                  {recipeItems.length === 0 && kindFilter === 'recipe' && (
+                    <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
+                      No Recipes found.
+                    </div>
+                  )}
+                </div>
               )}
 
               {(kindFilter === 'all' || kindFilter === 'swarm-template') && (

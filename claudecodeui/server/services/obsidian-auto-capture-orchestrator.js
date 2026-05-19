@@ -104,7 +104,6 @@ const isInstructionWriteTool = (toolName = '') => (
 export const createObsidianAutoCaptureOrchestrator = ({
   syncInstructionFile = null,
   syncProjectInstructionFiles = null,
-  syncNativeMemoryFiles = null,
   broadcast = () => undefined,
 } = {}) => {
   const contexts = new Map();
@@ -263,33 +262,6 @@ export const createObsidianAutoCaptureOrchestrator = ({
     }
   };
 
-  const syncNativeMemorySnapshot = async (message = {}) => {
-    if (typeof syncNativeMemoryFiles !== 'function') return null;
-    const context = resolveContext(message);
-    const provider = readString(message.provider || context.provider) || 'claude';
-    const sessionId = readString(message.sessionId || context.sessionId);
-    if (!sessionId || !readString(context.projectPath)) return null;
-
-    try {
-      return await syncNativeMemoryFiles({
-        projectPath: context.projectPath,
-        projectName: context.projectName,
-        sessionId,
-        provider,
-        trigger: 'turn_complete_scan',
-      });
-    } catch (error) {
-      const messageText = error?.message || String(error || 'Native memory sync failed.');
-      console.warn('[Obsidian Native Memory] turn-complete sync failed:', messageText);
-      return {
-        success: false,
-        captured: false,
-        reason: 'native_memory_sync_error',
-        error: messageText,
-      };
-    }
-  };
-
   const isFailedCompletion = (message = {}) => (
     message.aborted === true
     || message.success === false
@@ -342,10 +314,8 @@ export const createObsidianAutoCaptureOrchestrator = ({
         return null;
       }
       const instructionResult = await syncProjectInstructionSnapshot(message);
-      const nativeMemoryResult = await syncNativeMemorySnapshot(message);
       return {
         instructionResult,
-        nativeMemoryResult,
       };
     }
 

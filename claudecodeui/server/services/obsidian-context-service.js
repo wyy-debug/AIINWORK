@@ -52,8 +52,8 @@ const buildProjectScopedFolders = (projectName = '', {
 
 const buildContextBlock = (context = '') => [
   'Argus Wiki Context',
-  'Use compiled Wiki and AI memory only when relevant to the current user request.',
-  'Wiki context is historical project material. AI memory can describe durable user, feedback, project, or reference facts. Verify current files, functions, flags, and project state before recommending action from it.',
+  'Use compiled Wiki material only when relevant to the current user request.',
+  'Wiki context is historical project material. Verify current files, functions, flags, and project state before recommending action from it.',
   '',
   context,
 ].filter(Boolean).join('\n');
@@ -198,7 +198,7 @@ export const applyObsidianContextToChatCommand = async (data = {}, {
   const options = data.options && typeof data.options === 'object' ? data.options : {};
   const config = readObsidianBridgeConfig();
   const wikiReadbackEnabled = config.wikiReadbackEnabled !== false;
-  const aiMemoryReadbackEnabled = config.aiMemoryReadbackEnabled !== false;
+  const aiMemoryReadbackEnabled = config.aiMemoryReadbackEnabled === true;
   const readbackEnabled = wikiReadbackEnabled || aiMemoryReadbackEnabled;
   if (!config.enabled || !readbackEnabled || !command.trim()) {
     return data;

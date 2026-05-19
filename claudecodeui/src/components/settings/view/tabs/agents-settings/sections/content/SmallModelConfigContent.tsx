@@ -44,9 +44,9 @@ type ModelConfig = {
     model?: string;
   };
   runtime?: Record<string, unknown>;
-  openMythosRuntime?: Record<string, unknown>;
   subagents?: Record<string, unknown>;
   goals?: Record<string, unknown>;
+  brainRuntime?: Record<string, unknown>;
   smallModelRuntime: SmallModelRuntime;
 };
 
@@ -72,9 +72,9 @@ const normalizeConfig = (value: Partial<ModelConfig> | undefined): ModelConfig =
   profiles: Array.isArray(value?.profiles) ? value.profiles : [],
   anthropic: value?.anthropic || {},
   runtime: value?.runtime || {},
-  openMythosRuntime: value?.openMythosRuntime || {},
   subagents: value?.subagents || {},
   goals: value?.goals || {},
+  brainRuntime: value?.brainRuntime || {},
   smallModelRuntime: normalizeSmallModelRuntime(value?.smallModelRuntime),
 });
 
@@ -176,9 +176,9 @@ export default function SmallModelConfigContent() {
             model: activeProfile?.model || config.anthropic?.model || '',
           },
           runtime: config.runtime,
-          openMythosRuntime: config.openMythosRuntime,
           subagents: config.subagents,
           goals: config.goals,
+          brainRuntime: config.brainRuntime,
           smallModelRuntime: config.smallModelRuntime,
         }),
       });

@@ -173,49 +173,10 @@ describe('Obsidian capture orchestrator', () => {
     }));
   });
 
-  it('syncs native auto-memory staging files when a turn completes', async () => {
-    const syncNativeMemoryFiles = vi.fn(async () => ({
-      success: true,
-      enabled: true,
-      captured: true,
-      syncedCount: 1,
-      skippedCount: 0,
-      failedCount: 0,
-      results: [{ relativePath: 'feedback_style.md' }],
-    }));
-    const orchestrator = createObsidianAutoCaptureOrchestrator({
-      syncNativeMemoryFiles,
-      broadcast: () => undefined,
-    });
-    orchestrator.setContext({
-      provider: 'claude',
-      sessionId: 'session-native-memory',
-      projectName: 'App',
-      projectPath: 'E:/repo',
-    });
-
-    await orchestrator.observeMessage({
-      kind: 'complete',
-      provider: 'claude',
-      sessionId: 'session-native-memory',
-      id: 'complete-native-memory',
-    });
-
-    expect(syncNativeMemoryFiles).toHaveBeenCalledWith(expect.objectContaining({
-      projectPath: 'E:/repo',
-      projectName: 'App',
-      sessionId: 'session-native-memory',
-      provider: 'claude',
-      trigger: 'turn_complete_scan',
-    }));
-  });
-
   it('does not scan templates after an aborted or failed turn', async () => {
     const syncProjectInstructionFiles = vi.fn();
-    const syncNativeMemoryFiles = vi.fn();
     const orchestrator = createObsidianAutoCaptureOrchestrator({
       syncProjectInstructionFiles,
-      syncNativeMemoryFiles,
       broadcast: () => undefined,
     });
     orchestrator.setContext({
@@ -233,6 +194,5 @@ describe('Obsidian capture orchestrator', () => {
     });
 
     expect(syncProjectInstructionFiles).not.toHaveBeenCalled();
-    expect(syncNativeMemoryFiles).not.toHaveBeenCalled();
   });
 });

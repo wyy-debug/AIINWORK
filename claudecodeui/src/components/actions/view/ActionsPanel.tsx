@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Boxes, ExternalLink, Play, RefreshCw, Save, Square, TestTube2 } from 'lucide-react';
+import { Boxes, ExternalLink, FileText, Play, RefreshCw, Save, Square, TestTube2 } from 'lucide-react';
 
 import type { Project } from '../../../types/app';
 import { api, apiFetch } from '../../../utils/api';
@@ -34,6 +34,13 @@ type DetectedScript = {
   name: string;
   command: string;
   script?: string;
+};
+
+type ProjectProfileDraft = {
+  targetPath: string;
+  exists?: boolean;
+  content: string;
+  diff: string;
 };
 
 type ActionsPanelProps = {
@@ -75,6 +82,7 @@ export default function ActionsPanel({ selectedProject, sessionId }: ActionsPane
   const [worktreePrompt, setWorktreePrompt] = useState('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const [profileDraft, setProfileDraft] = useState<ProjectProfileDraft | null>(null);
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) || runs[0] || null,
@@ -151,6 +159,8 @@ export default function ActionsPanel({ selectedProject, sessionId }: ActionsPane
       const detail = (event as CustomEvent<{ tab?: string; mode?: string }>).detail;
       if (detail?.tab === 'actions' && detail.mode === 'worktree') {
         setMode('worktree');
+      } else if (detail?.tab === 'actions' && detail.mode === 'project-profile') {
+        setMode('local');
       }
     };
 
@@ -173,6 +183,51 @@ export default function ActionsPanel({ selectedProject, sessionId }: ActionsPane
       setMessage('Actions saved to .mtl-code/actions.json');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to save actions');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const generateProjectProfileDraft = async () => {
+    setBusy('project-profile');
+    setMessage('');
+    try {
+      const data = await parseJson<ProjectProfileDraft>(await apiFetch('/api/project-profile/draft', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectPath: selectedProject.fullPath || selectedProject.path,
+        }),
+      }));
+      setProfileDraft(data);
+      setMessage(data.exists ? 'MTL.md preview refreshed. Confirm before updating.' : 'MTL.md preview generated. Confirm before writing.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to generate MTL.md preview');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const commitProjectProfileDraft = async () => {
+    if (!profileDraft) return;
+    const confirmed = window.confirm(`Write ${profileDraft.targetPath}?`);
+    if (!confirmed) {
+      setMessage('MTL.md write cancelled.');
+      return;
+    }
+    setBusy('project-profile');
+    setMessage('');
+    try {
+      await parseJson(await apiFetch('/api/project-profile/commit', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectPath: selectedProject.fullPath || selectedProject.path,
+          content: profileDraft.content,
+        }),
+      }));
+      setMessage('MTL.md project profile written.');
+      setProfileDraft(null);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to write MTL.md');
     } finally {
       setBusy('');
     }
@@ -330,6 +385,39 @@ export default function ActionsPanel({ selectedProject, sessionId }: ActionsPane
 
             {mode === 'local' ? (
               <div className="space-y-4">
+                <div className="rounded-lg border border-border/70 bg-card p-4">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <h3 className="text-sm font-semibold text-foreground">Project profile</h3>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Generate or update MTL.md from detected commands, tests, risk files, and recommended workflows.
+                      </p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={generateProjectProfileDraft} disabled={Boolean(busy)}>
+                      <FileText className="h-4 w-4" />
+                      Preview
+                    </Button>
+                  </div>
+                  {profileDraft && (
+                    <div className="space-y-3">
+                      <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+                        {profileDraft.exists ? 'Updating' : 'Creating'} {profileDraft.targetPath}
+                      </div>
+                      <pre className="max-h-64 overflow-auto rounded-md border border-border/70 bg-background p-3 text-xs text-foreground">
+                        {profileDraft.diff || profileDraft.content}
+                      </pre>
+                      <div className="flex justify-end">
+                        <Button size="sm" onClick={commitProjectProfileDraft} disabled={busy === 'project-profile'}>
+                          <Save className="h-4 w-4" />
+                          Write MTL.md
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 {detectedScripts.length > 0 && (
                   <div className="rounded-lg border border-border/70 bg-card p-4">
                     <div className="mb-3">

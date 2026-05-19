@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { CLAUDE_MODELS } from '../../shared/modelConstants.js';
+import { getBuiltInRecipe, listBuiltInRecipes, renderRecipePrompt } from '../../shared/recipes.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
@@ -159,6 +160,18 @@ const builtInCommands = [
     description: 'Open the Review panel for local changes',
     namespace: 'builtin',
     metadata: { type: 'builtin', tab: 'review' }
+  },
+  {
+    name: '/init-project',
+    description: 'Generate an MTL.md project profile draft',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'actions', insertText: 'Please generate an MTL.md project profile draft and show me the preview before writing.' }
+  },
+  {
+    name: '/recipe',
+    description: 'Run a built-in workflow recipe',
+    namespace: 'builtin',
+    metadata: { type: 'builtin', tab: 'chat' }
   },
   {
     name: '/actions',
@@ -493,6 +506,45 @@ Custom commands can be created in:
     action: 'open-tab',
     data: { tab: 'review', message: 'Opening Review panel...' }
   }),
+
+  '/init-project': async () => ({
+    type: 'builtin',
+    action: 'open-tab',
+    data: {
+      tab: 'actions',
+      mode: 'project-profile',
+      message: 'Opening Project Profile init. Generate a preview before writing MTL.md.'
+    }
+  }),
+
+  '/recipe': async (args) => {
+    const recipeId = args[0] || '';
+    const recipe = getBuiltInRecipe(recipeId);
+    if (!recipe) {
+      const recipes = listBuiltInRecipes()
+        .map((item) => `- ${item.id}: ${item.title}`)
+        .join('\n');
+      return {
+        type: 'builtin',
+        action: 'insert-text',
+        data: {
+          text: `Available recipes:\n${recipes}\n\nUse /recipe <id> and provide the requested inputs.`,
+          message: 'Recipe list inserted.'
+        }
+      };
+    }
+    const placeholderValues = Object.fromEntries(
+      recipe.inputs.map((input) => [input.id, input.required ? `[${input.label}]` : ''])
+    );
+    return {
+      type: 'builtin',
+      action: 'insert-text',
+      data: {
+        text: renderRecipePrompt(recipe, placeholderValues),
+        message: `Recipe ${recipe.title} inserted.`
+      }
+    };
+  },
 
   '/actions': async () => ({
     type: 'builtin',

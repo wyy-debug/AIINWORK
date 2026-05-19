@@ -1,92 +1,85 @@
 import express from 'express';
 
 import { db } from '../database/db.js';
-import { createCheckpointStore } from '../services/checkpoint-service.js';
+import {
+  getSessionCheckpoint,
+  listSessionCheckpoints,
+  rollbackSessionCheckpoint,
+} from '../services/session-checkpoint-service.js';
 
 const router = express.Router();
-const checkpointStore = createCheckpointStore(db);
 
-function sendError(res, error, fallbackStatus = 500) {
-  const message = error?.message || 'Checkpoint request failed';
-  const status = message.includes('Invalid') || message.includes('required') ? 400 : fallbackStatus;
-  res.status(status).json({ success: false, error: message });
+function sendCheckpointError(res, error, fallbackStatus = 500, fallbackMessage = 'Checkpoint request failed') {
+  console.error(fallbackMessage, error);
+  res.status(error?.statusCode || fallbackStatus).json({
+    success: false,
+    error: error?.message || fallbackMessage,
+    details: error?.details || null,
+  });
 }
 
 router.get('/', (req, res) => {
   try {
-    const checkpoints = checkpointStore.listCheckpoints({
-      sessionId: req.query.sessionId,
-      projectPath: req.query.projectPath,
-      provider: req.query.provider,
+    const checkpoints = listSessionCheckpoints({
+      sessionId: String(req.query.sessionId || ''),
+      provider: String(req.query.provider || 'claude'),
+      projectName: String(req.query.projectName || req.query.project || ''),
       limit: req.query.limit,
     });
     res.json({ success: true, checkpoints });
   } catch (error) {
-    sendError(res, error);
+    sendCheckpointError(res, error, 500, 'Failed to list checkpoints');
   }
 });
 
 router.get('/:id', (req, res) => {
   try {
-    const checkpoint = checkpointStore.getCheckpoint(req.params.id);
+    const checkpoint = getSessionCheckpoint(req.params.id);
     if (!checkpoint) {
-      res.status(404).json({ success: false, error: 'Checkpoint not found' });
-      return;
+      return res.status(404).json({ success: false, error: 'Checkpoint not found' });
     }
-    res.json({ success: true, checkpoint });
+    return res.json({ success: true, checkpoint });
   } catch (error) {
-    sendError(res, error);
+    return sendCheckpointError(res, error, 500, 'Failed to load checkpoint');
   }
 });
 
 router.get('/:id/diff', (req, res) => {
   try {
-    const checkpoint = checkpointStore.getCheckpoint(req.params.id);
+    const checkpoint = getSessionCheckpoint(req.params.id);
     if (!checkpoint) {
-      res.status(404).json({ success: false, error: 'Checkpoint not found' });
-      return;
+      return res.status(404).json({ success: false, error: 'Checkpoint not found' });
     }
-    res.json({
+    return res.json({
       success: true,
       checkpointId: checkpoint.id,
-      phase: checkpoint.phase,
-      diff: checkpoint.diff,
-      status: checkpoint.status,
+      diff: checkpoint.patch || '',
+      status: checkpoint.rollbackStatus || '',
+      checkpoint,
     });
   } catch (error) {
-    sendError(res, error);
-  }
-});
-
-router.post('/', async (req, res) => {
-  try {
-    const checkpoint = await checkpointStore.createCheckpoint(req.body || {});
-    res.status(201).json({ success: true, checkpoint });
-  } catch (error) {
-    sendError(res, error);
+    return sendCheckpointError(res, error, 500, 'Failed to load checkpoint diff');
   }
 });
 
 router.post('/:id/rollback', async (req, res) => {
   try {
-    const result = await checkpointStore.rollbackCheckpoint(req.params.id);
-    const status = result.success ? 200 : result.reason === 'not_found' ? 404 : 409;
-    res.status(status).json({ success: result.success, ...result });
+    const checkpoint = await rollbackSessionCheckpoint(req.params.id);
+    res.json({ success: true, checkpoint });
   } catch (error) {
-    sendError(res, error);
+    sendCheckpointError(res, error, 500, 'Failed to roll back checkpoint');
   }
 });
 
 router.delete('/:id', (req, res) => {
   try {
-    const deleted = checkpointStore.deleteCheckpoint(req.params.id);
-    if (!deleted) {
-      res.status(404).json({ success: false, error: 'Checkpoint not found' });
-      return;
+    const result = db.prepare('DELETE FROM session_checkpoints WHERE id = ?').run(req.params.id);
+    if (result.changes === 0) {
+      return res.status(404).json({ success: false, error: 'Checkpoint not found' });
     }
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (error) {
-    sendError(res, error);
+    return sendCheckpointError(res, error, 500, 'Failed to delete checkpoint');
   }
 });
 

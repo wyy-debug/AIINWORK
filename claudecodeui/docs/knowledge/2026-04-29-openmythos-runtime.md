@@ -1,7 +1,9 @@
 # OpenMythos Runtime Control
 
 Date: 2026-04-29
-Updated: 2026-05-05
+Updated: 2026-05-18
+
+Status: Removed from the active runtime. This page is historical migration context only. Current task working memory is documented in [2026-05-18-argus-brain-runtime.md](2026-05-18-argus-brain-runtime.md).
 
 OpenMythos is the Argus strategy layer. It can provide task-card generation, adaptive effort guidance, phase hints, expert-route suggestions, and context diagnostics. It does not start subagents, create dispatch tickets, or bypass feature gates.
 

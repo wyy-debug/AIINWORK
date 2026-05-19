@@ -33,6 +33,7 @@ describe('session agent configuration service', () => {
     expect(configuration).toEqual({
       appBindings: [{ slot: 'mcp-linear', app: 'MCP: linear', status: 'connected' }],
       skills: ['security-review'],
+      agentProfileKind: '',
       modelProfileId: 'sonnet-large',
       packageId: 'review-pack',
       packageVersion: '2.1.0',
@@ -54,5 +55,13 @@ describe('session agent configuration service', () => {
       },
       dialogInstanceId: 'dialog-123',
     });
+  });
+
+  test('normalizes lightweight Agent Profile session binding', () => {
+    const configuration = normalizeSessionAgentConfiguration({
+      agentProfileKind: '@debug',
+    });
+
+    expect(configuration.agentProfileKind).toBe('debug');
   });
 });

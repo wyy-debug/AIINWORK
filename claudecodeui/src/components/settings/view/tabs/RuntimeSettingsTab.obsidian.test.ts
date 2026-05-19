@@ -23,12 +23,31 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('RUNTIME_SETTINGS_TABS');
     expect(source).toContain("id: 'local-permissions'");
     expect(source).toContain("id: 'obsidian'");
-    expect(source).toContain("id: 'openmythos'");
+    expect(source).toContain("id: 'brain'");
     expect(source).toContain('role="tablist"');
     expect(source).toContain('selectedRuntimeTab');
     expect(source).toContain('renderLocalPermissionsTab');
     expect(source).toContain('renderObsidianTab');
-    expect(source).toContain('renderOpenMythosTab');
+    expect(source).toContain('renderBrainTab');
+    expect(source).not.toContain('OpenMythos');
+  });
+
+  it('wires Argus Brain as the runtime task memory surface', () => {
+    const source = readLocalSource('runtime-settings', 'BrainRuntimeContent.tsx');
+
+    expect(source).toContain('/api/settings/mtl-code-model');
+    expect(source).toContain('/api/brain/project/');
+    expect(source).toContain('brainRuntime');
+    expect(source).toContain('Argus Brain');
+    expect(source).toContain('Task memory and context restore');
+    expect(source).toContain('Claude native memory handles preferences');
+    expect(source).toContain('Obsidian remains a Wiki');
+    expect(source).toContain('captureRawRefs');
+    expect(source).toContain('compactEventThreshold');
+    expect(source).toContain('maxInjectedTokens');
+    expect(source).toContain('recallTimeoutMs');
+    expect(source).not.toContain('openMythosRuntime');
+    expect(source).not.toContain('MTL_CODE_OPENMYTHOS');
   });
 
   it('wires bridge settings to the main Memory and CodeGraph path only', () => {

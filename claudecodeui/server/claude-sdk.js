@@ -24,10 +24,8 @@ import {
   MTL_CODE_MODEL_ENV_KEYS,
   OPENAI_MODEL_ENV_KEYS,
   applyAnthropicRuntimeModelDefaults,
-  applyOpenMythosRuntimeToEnv,
   applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
-  readOpenMythosRuntimeConfig,
   readSubagentRuntimeConfig,
   repairAnthropicRuntimeModelEnv,
   resolveMtlCodeModelRuntime,
@@ -571,31 +569,6 @@ function applyClaudeNativeMemoryEnv(spawnEnv) {
   spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY = '1';
 }
 
-function applyObsidianNativeMemorySyncEnv(spawnEnv, options = {}) {
-  const sync = options?.obsidianNativeMemorySync;
-  const memoryDir = typeof sync?.memoryDir === 'string' && sync.memoryDir.trim()
-    ? path.resolve(sync.memoryDir.trim())
-    : '';
-
-  if (sync?.enabled !== true || !memoryDir) {
-    delete spawnEnv.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY;
-    delete spawnEnv.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC;
-    delete spawnEnv.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE;
-    return;
-  }
-
-  spawnEnv.MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC = '1';
-  spawnEnv.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE = memoryDir;
-  delete spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY;
-  delete spawnEnv.MTL_CODE_DISABLE_AUTO_MEMORY_EXTRACTION;
-
-  if (sync.primaryReadback === true) {
-    spawnEnv.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY = '1';
-  } else {
-    delete spawnEnv.MTL_CODE_OBSIDIAN_MEMORY_PRIMARY;
-  }
-}
-
 function hasRequestedMcpBindings(options = {}) {
   const bindings = options.runtimeDiagnostics?.mcpBindings;
   return Array.isArray(bindings) && bindings.length > 0;
@@ -1082,10 +1055,6 @@ async function readMtlCodeSettingsEnv() {
     const settings = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
     if (!settings || typeof settings.env !== 'object' || Array.isArray(settings.env)) {
       const runtimeEnv = {};
-      applyOpenMythosRuntimeToEnv(
-        runtimeEnv,
-        readOpenMythosRuntimeConfig(settings || {}, runtimeEnv),
-      );
       applySubagentRuntimeToEnv(
         runtimeEnv,
         readSubagentRuntimeConfig(settings || {}, runtimeEnv),
@@ -1101,7 +1070,6 @@ async function readMtlCodeSettingsEnv() {
     if (env.MTL_CODE_USE_OPENAI !== '1') {
       repairAnthropicRuntimeModelEnv(env);
     }
-    applyOpenMythosRuntimeToEnv(env, readOpenMythosRuntimeConfig(settings, env));
     applySubagentRuntimeToEnv(env, readSubagentRuntimeConfig(settings, env));
     return env;
   } catch {
@@ -1132,7 +1100,6 @@ async function buildMtlCodeSpawnEnv(options = {}) {
     MTL_CODE_PROVIDER_MANAGED_BY_HOST: '1',
   };
   applyClaudeNativeMemoryEnv(spawnEnv);
-  applyObsidianNativeMemorySyncEnv(spawnEnv, options);
   pruneInactiveProviderEnv(spawnEnv);
   if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
     spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';

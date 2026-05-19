@@ -1,16 +1,16 @@
+import { useEffect, useMemo, useState } from 'react';
 import {
   BotIcon,
   BrainCircuitIcon,
   BracesIcon,
-  CheckCircle2Icon,
-  DatabaseIcon,
+  ClipboardIcon,
   GaugeIcon,
-  ShieldCheckIcon,
   SparklesIcon,
   WrenchIcon,
   XIcon,
 } from 'lucide-react';
 
+import { apiFetch } from '../../../../utils/api';
 import type { AgentAppBinding } from '../../../../types/agent';
 import type { AgentRuntimeDiagnostics } from '../../types/types';
 import {
@@ -24,7 +24,44 @@ type AgentRuntimeDiagnosticsPanelProps = {
   onClose: () => void;
 };
 
-const EMPTY_TEXT = '暂无';
+type RuntimeTimelineEvent = {
+  id: string;
+  type: string;
+  title: string;
+  timestamp?: string;
+  severity?: string;
+  payload?: Record<string, unknown>;
+};
+
+type BrainDiagnostics = {
+  enabled?: boolean;
+  status?: string;
+  latestCompaction?: {
+    id?: string;
+    mermaid?: string;
+    summary?: string;
+    currentGoal?: string;
+    activeDecisions?: string[];
+    openRisks?: string[];
+    nextAction?: string;
+    sourceEventCount?: number;
+    tokenEstimate?: number;
+    refs?: string[];
+  } | null;
+  compactedEventCount?: number;
+  tokenReductionEstimate?: number;
+  refs?: Array<{
+    id: string;
+    refType?: string;
+    refId?: string;
+    label?: string;
+    checkpointId?: string;
+    artifactId?: string;
+    sizeBytes?: number;
+  }>;
+};
+
+const EMPTY_TEXT = 'None';
 
 function formatNumber(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -39,6 +76,37 @@ function formatText(value: unknown) {
 
 function formatBoolean(value: unknown) {
   return typeof value === 'boolean' ? String(value) : EMPTY_TEXT;
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-sm text-foreground" title={value}>
+        {value}
+      </div>
+    </div>
+  );
+}
+function StringBadges({
+  values,
+  emptyText = EMPTY_TEXT,
+}: {
+  values?: string[];
+  emptyText?: string;
+}) {
+  if (!values || values.length === 0) {
+    return <span className="text-muted-foreground">{emptyText}</span>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {values.map((value) => (
+        <span key={value} className="inline-flex max-w-[260px] truncate rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
+          {value}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function BindingBadges({ bindings }: { bindings?: AgentAppBinding[] }) {
@@ -62,196 +130,110 @@ function BindingBadges({ bindings }: { bindings?: AgentAppBinding[] }) {
   );
 }
 
-function StringBadges({
-  values,
-  emptyText = EMPTY_TEXT,
-  tone = 'neutral',
+function BrainRuntimeSection({
+  diagnostics,
+  brain,
 }: {
-  values?: string[];
-  emptyText?: string;
-  tone?: 'neutral' | 'success' | 'warning' | 'danger';
+  diagnostics: AgentRuntimeDiagnostics | null;
+  brain: BrainDiagnostics | null;
 }) {
-  if (!values || values.length === 0) {
-    return <span className="text-muted-foreground">{emptyText}</span>;
-  }
+  const runtime = diagnostics?.brainRuntime;
+  const compaction = brain?.latestCompaction;
+  const recall = runtime?.recall;
+  const activeDecisions = compaction?.activeDecisions || recall?.activeDecisions || [];
+  const openRisks = compaction?.openRisks || recall?.openRisks || [];
+  const summary = compaction?.summary || [
+    compaction?.currentGoal || recall?.currentGoal,
+    activeDecisions.join('\n'),
+    openRisks.join('\n'),
+    compaction?.nextAction || recall?.nextAction,
+  ].filter(Boolean).join('\n');
 
-  const toneClass = {
-    neutral: 'border-border bg-muted/45 text-foreground',
-    success: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
-    warning: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
-    danger: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
-  }[tone];
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {values.map((value) => (
-        <span key={value} className={`inline-flex max-w-[220px] truncate rounded-md border px-2 py-1 text-xs ${toneClass}`}>
-          {value}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-sm text-foreground" title={value}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function SkillDetails({ details }: { details?: AgentRuntimeDiagnostics['skillDetails'] }) {
-  if (!details || details.length === 0) {
-    return <span className="text-muted-foreground">{EMPTY_TEXT}</span>;
-  }
-
-  return (
-    <div className="space-y-2">
-      {details.map((detail) => {
-        const statusText = detail.callable ? '已可调用' : detail.exists ? '已安装' : '不可用';
-        const statusClass = detail.callable
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
-          : detail.exists
-            ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'
-            : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300';
-        return (
-          <div key={`${detail.name}:${detail.path || 'missing'}`} className="rounded-lg border border-border bg-card/70 p-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="truncate text-xs font-semibold text-foreground" title={detail.label || detail.name}>
-                  {detail.label || detail.name}
-                </div>
-                <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={detail.path || 'SKILL.md 未找到'}>
-                  {detail.path || 'SKILL.md 未找到'}
-                </div>
-              </div>
-              <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${statusClass}`}>
-                {statusText}
-              </span>
-            </div>
-            <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
-              <span>{detail.provider || 'unknown'} / {detail.scope || 'unknown'}</span>
-              <span>prompt {formatNumber(detail.promptLength)}</span>
-              {detail.unavailableReason && <span className="text-amber-600 dark:text-amber-300">{detail.unavailableReason}</span>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-type PermissionSourceMap = NonNullable<NonNullable<AgentRuntimeDiagnostics['permissions']>['sources']>;
-
-function PermissionSources({ sources }: { sources?: PermissionSourceMap }) {
-  if (!sources || Object.keys(sources).length === 0) {
-    return <span className="text-muted-foreground">{EMPTY_TEXT}</span>;
-  }
-
-  return (
-    <div className="grid gap-2 lg:grid-cols-3">
-      {(['global', 'project', 'session'] as const).map((key) => {
-        const value = sources[key];
-        if (!value || Object.keys(value).length === 0) return null;
-        return (
-          <div key={key} className="rounded-lg border border-border bg-card/70 p-2">
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{key}</div>
-            <pre className="max-h-24 overflow-auto whitespace-pre-wrap text-[11px] leading-4 text-foreground">
-              {JSON.stringify(value, null, 2)}
-            </pre>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function OpenMythosRuntimeSection({
-  runtime,
-}: {
-  runtime: AgentRuntimeDiagnostics['openMythosRuntime'];
-}) {
-  const card = runtime?.runtimeCard;
-  const contextCache = runtime?.contextCache;
-  const expertRoutes = card?.expertRoutes?.map((route) => (
-    `${route.label || route.kind || '专家路线'}${route.required ? '（建议优先）' : ''}${route.reason ? `：${route.reason}` : ''}`
-  ));
+  const copySummary = () => {
+    if (summary) {
+      void navigator.clipboard?.writeText(summary);
+    }
+  };
 
   return (
     <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-        <BrainCircuitIcon className="h-4 w-4 text-primary" />
-        OpenMythos 运行时
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="已启用" value={formatBoolean(runtime?.enabled)} />
-        <Field label="自适应推理" value={formatBoolean(runtime?.adaptiveEffort)} />
-        <Field label="任务卡" value={formatBoolean(runtime?.taskCard)} />
-        <Field label="路由提示" value={formatBoolean(runtime?.routingHints)} />
-        <Field label="循环控制" value={formatText(runtime?.loopControl)} />
-        <Field label="稳定重注入" value={formatBoolean(runtime?.stableReinjection)} />
-        <Field label="阶段适配" value={formatBoolean(runtime?.phaseAdapter)} />
-        <Field label="专家路线" value={formatBoolean(runtime?.expertRouting)} />
-        <Field label="缓存诊断" value={formatBoolean(runtime?.contextCacheDiagnostics)} />
-        <Field label="最低 effort" value={formatText(runtime?.minEffort)} />
-        <Field label="最高 effort" value={formatText(runtime?.maxEffort)} />
-        <Field label="bare mode" value={formatBoolean(runtime?.bareMode)} />
-        <Field label="runtime card active" value={formatBoolean(runtime?.openMythosRuntimeCardActive)} />
-        <Field label="派发策略" value={runtime ? '仅建议，不自动派发' : EMPTY_TEXT} />
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <BrainCircuitIcon className="h-4 w-4 text-primary" />
+          Argus Brain
+        </div>
+        <button
+          type="button"
+          onClick={copySummary}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          title="Copy Brain summary"
+        >
+          <ClipboardIcon className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      {card && (
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Enabled" value={formatBoolean(runtime?.enabled ?? brain?.enabled)} />
+        <Field label="Recall status" value={formatText(recall?.status || brain?.status)} />
+        <Field label="Recall hits" value={formatNumber(recall?.recallHits?.length)} />
+        <Field label="Raw refs" value={formatBoolean(runtime?.captureRawRefs)} />
+        <Field label="Compacted events" value={formatNumber(brain?.compactedEventCount || compaction?.sourceEventCount)} />
+        <Field label="Token reduction" value={formatNumber(brain?.tokenReductionEstimate)} />
+        <Field label="Max injected tokens" value={formatNumber(runtime?.maxInjectedTokens)} />
+        <Field label="Recall timeout ms" value={formatNumber(runtime?.recallTimeoutMs)} />
+      </div>
+
+      {runtime?.enabled === false || brain?.enabled === false ? (
+        <div className="mt-3 rounded-md border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground">
+          Argus Brain is disabled. Chat will skip capture, compaction, recall, and Brain diagnostics.
+        </div>
+      ) : (
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           <div className="rounded-lg border border-border bg-card/70 p-3">
-            <div className="text-[11px] font-medium uppercase text-muted-foreground">运行时卡片</div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <Field label="effort" value={formatText(card.effort)} />
-              <Field label="循环预算" value={formatNumber(card.loopBudget)} />
-              <Field label="剩余预算" value={formatNumber(card.remainingBudget)} />
-              <Field label="风险分" value={formatNumber(card.riskScore)} />
-              <Field label="阶段" value={formatText(card.phase)} />
-              <Field label="阶段计划" value={card.phasePlan?.join(' -> ') || EMPTY_TEXT} />
-            </div>
-            <div className="mt-3 text-xs leading-5 text-muted-foreground">
-              {card.goal || EMPTY_TEXT}
-            </div>
+            <div className="text-[11px] font-medium uppercase text-muted-foreground">Current goal</div>
+            <p className="mt-2 text-xs leading-5 text-foreground">
+              {formatText(compaction?.currentGoal || recall?.currentGoal)}
+            </p>
+            <div className="mt-3 text-[11px] font-medium uppercase text-muted-foreground">Next suggested action</div>
+            <p className="mt-2 text-xs leading-5 text-foreground">
+              {formatText(compaction?.nextAction || recall?.nextAction)}
+            </p>
           </div>
           <div className="rounded-lg border border-border bg-card/70 p-3">
-            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">专家路线 / 上下文账本</div>
-            <StringBadges values={expertRoutes} />
-            <div className="mt-3 text-[11px] font-medium uppercase text-muted-foreground">子智能体派发</div>
-            <div className="mt-2 text-xs leading-5 text-muted-foreground">
-              OpenMythos 只给任务拆分建议；只有用户明确要求子智能体、委派或并行工作时，模型才会调用 Codex 风格的 spawn_agent。
-            </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Field label="compact 边界" value={formatNumber(contextCache?.compactBoundaryCount)} />
-              <Field label="microcompact" value={formatNumber(contextCache?.microcompactBoundaryCount)} />
-              <Field label="Skill prompt" value={formatNumber(contextCache?.skillPromptLength)} />
-              <Field label="追加 prompt" value={formatNumber(contextCache?.appendSystemPromptLength)} />
-            </div>
+            <div className="text-[11px] font-medium uppercase text-muted-foreground">Canvas</div>
+            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted/45 p-2 text-[11px] leading-4 text-foreground">
+              {compaction?.mermaid || 'No compacted canvas yet.'}
+            </pre>
+          </div>
+          <div className="rounded-lg border border-border bg-card/70 p-3">
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Active decisions</div>
+            <StringBadges values={activeDecisions} />
+          </div>
+          <div className="rounded-lg border border-border bg-card/70 p-3">
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Open risks</div>
+            <StringBadges values={openRisks} />
+          </div>
+          <div className="rounded-lg border border-border bg-card/70 p-3 lg:col-span-2">
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Refs</div>
+            {brain?.refs && brain.refs.length > 0 ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {brain.refs.slice(0, 12).map((ref) => (
+                  <div key={ref.id} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs">
+                    <div className="truncate font-medium text-foreground" title={ref.label || ref.refId || ref.id}>
+                      {ref.label || ref.refId || ref.id}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {ref.refType || 'ref'} / {ref.checkpointId || ref.artifactId || ref.refId || ref.id}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <span className="text-xs text-muted-foreground">No raw refs captured yet.</span>
+            )}
           </div>
         </div>
       )}
-
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          <GaugeIcon className="h-3 w-3 text-primary" />
-          自适应推理 {runtime?.adaptiveEffort ? '开启' : '关闭'}
-        </span>
-        <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          循环 {runtime?.loopControl || 'unknown'}
-        </span>
-        <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          稳定重注入 {runtime?.stableReinjection ? '开启' : '关闭'}
-        </span>
-        <span className="inline-flex rounded-md border border-border bg-muted/45 px-2 py-1 text-xs text-foreground">
-          子智能体：Codex 工具手动触发
-        </span>
-      </div>
     </section>
   );
 }
@@ -265,16 +247,13 @@ function SubagentRuntimeSection({
     <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
         <BotIcon className="h-4 w-4 text-primary" />
-        子智能体运行时
+        Subagents
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="启用状态" value={subagents?.enabled ? '开启' : '关闭'} />
-        <Field label="单会话最大并发" value={formatNumber(subagents?.maxConcurrentThreadsPerSession)} />
-        <Field label="最大嵌套深度" value={formatNumber(subagents?.maxDepth)} />
+        <Field label="Enabled" value={subagents?.enabled ? 'true' : 'false'} />
+        <Field label="Max concurrent" value={formatNumber(subagents?.maxConcurrentThreadsPerSession)} />
+        <Field label="Max depth" value={formatNumber(subagents?.maxDepth)} />
       </div>
-      <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        开启后只对新会话生效；OpenMythos 的 worker plan 是建议，不会自动派发。
-      </p>
     </section>
   );
 }
@@ -284,9 +263,53 @@ export default function AgentRuntimeDiagnosticsPanel({
   contextBudget,
   onClose,
 }: AgentRuntimeDiagnosticsPanelProps) {
-  const permissions = diagnostics?.permissions;
   const hasDiagnostics = Boolean(diagnostics);
   const contextWindow = contextBudget?.window.tokens ?? diagnostics?.contextWindowTokens;
+  const [timelineEvents, setTimelineEvents] = useState<RuntimeTimelineEvent[]>([]);
+  const [brain, setBrain] = useState<BrainDiagnostics | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const sessionId = diagnostics?.sessionId;
+    if (!sessionId) {
+      setTimelineEvents([]);
+      setBrain(null);
+      return;
+    }
+    const projectName = typeof diagnostics?.projectName === 'string' ? diagnostics.projectName : '';
+    const params = new URLSearchParams({
+      provider: diagnostics?.provider || 'claude',
+      projectName,
+    });
+    void apiFetch(`/api/session-timeline/${encodeURIComponent(sessionId)}?${params.toString()}`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!cancelled) {
+          setTimelineEvents(Array.isArray(data?.timeline?.events) ? data.timeline.events : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTimelineEvents([]);
+      });
+    void apiFetch(`/api/brain/session/${encodeURIComponent(sessionId)}?${params.toString()}`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!cancelled) {
+          setBrain(data?.brain || null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBrain(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [diagnostics?.provider, diagnostics?.projectName, diagnostics?.sessionId]);
+
+  const brainTimelineCount = useMemo(
+    () => timelineEvents.filter((event) => event.type === 'brain').length,
+    [timelineEvents],
+  );
 
   return (
     <div className="rounded-xl border border-border bg-card text-card-foreground shadow-xl">
@@ -296,9 +319,9 @@ export default function AgentRuntimeDiagnosticsPanel({
             <BracesIcon className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">运行诊断</h3>
+            <h3 className="text-sm font-semibold text-foreground">Runtime Diagnostics</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              只显示最近一次发送给后端的 Argus / Skill / MCP / OpenMythos 运行配置。
+              Shows the last runtime payload, Argus Brain state, Subagents, permissions, and runtime timeline.
             </p>
           </div>
         </div>
@@ -306,7 +329,7 @@ export default function AgentRuntimeDiagnosticsPanel({
           type="button"
           onClick={onClose}
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="关闭诊断"
+          title="Close diagnostics"
         >
           <XIcon className="h-4 w-4" />
         </button>
@@ -314,33 +337,58 @@ export default function AgentRuntimeDiagnosticsPanel({
 
       {!hasDiagnostics ? (
         <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-          还没有运行诊断。发送第一条消息后，这里会显示后端实际收到的运行配置。
+          No runtime diagnostics yet. Send a message first.
         </div>
       ) : (
         <div className="max-h-[420px] overflow-y-auto px-4 py-3">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Agent ID" value={formatText(diagnostics?.agentId)} />
-            <Field label="Agent 名称" value={formatText(diagnostics?.agentName)} />
-            <Field label="模型" value={formatText(diagnostics?.model)} />
-            <Field label="模型 Profile" value={formatText(diagnostics?.modelProfileId)} />
-            <Field label="上下文窗口" value={contextWindow ? formatTokenCount(contextWindow) : EMPTY_TEXT} />
-            <Field label="当前占用" value={contextBudget ? `${formatTokenCount(contextBudget.current.used)} (${contextBudget.current.percent.toFixed(2)}%)` : EMPTY_TEXT} />
-            <Field label="累计消耗" value={contextBudget ? formatTokenCount(contextBudget.cumulative.used) : EMPTY_TEXT} />
-            <Field label="窗口来源" value={formatText(contextBudget?.window.source)} />
+            <Field label="Agent Profile" value={formatText(diagnostics?.agentProfileKind || diagnostics?.agentProfile?.profileKind)} />
+            <Field label="Agent name" value={formatText(diagnostics?.agentName)} />
+            <Field label="Model" value={formatText(diagnostics?.model)} />
+            <Field label="Model profile" value={formatText(diagnostics?.modelProfileId)} />
+            <Field label="Context window" value={contextWindow ? formatTokenCount(contextWindow) : EMPTY_TEXT} />
+            <Field label="Current context" value={contextBudget ? `${formatTokenCount(contextBudget.current.used)} (${contextBudget.current.percent.toFixed(2)}%)` : EMPTY_TEXT} />
+            <Field label="Cumulative tokens" value={contextBudget ? formatTokenCount(contextBudget.cumulative.used) : EMPTY_TEXT} />
             <Field label="Provider" value={formatText(diagnostics?.provider)} />
             <Field label="Session ID" value={formatText(diagnostics?.sessionId)} />
             <Field label="Project Path" value={formatText(diagnostics?.projectPath)} />
-            <Field label="追加 Prompt 长度" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
+            <Field label="Append prompt length" value={formatNumber(diagnostics?.appendSystemPromptLength)} />
           </div>
 
-          <OpenMythosRuntimeSection runtime={diagnostics?.openMythosRuntime} />
+          <BrainRuntimeSection diagnostics={diagnostics} brain={brain} />
           <SubagentRuntimeSection subagents={diagnostics?.subagents} />
+
+          <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <GaugeIcon className="h-4 w-4 text-primary" />
+              Runtime Timeline
+            </div>
+            <div className="mb-2 text-xs text-muted-foreground">
+              Brain events in timeline: {brainTimelineCount}
+            </div>
+            {timelineEvents.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No runtime timeline events captured yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {timelineEvents.slice(-12).map((item) => (
+                  <div key={item.id} className="rounded-md border border-border bg-card/70 px-2 py-1.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-foreground">{item.title}</span>
+                      <span className="shrink-0 text-muted-foreground">{item.type}</span>
+                    </div>
+                    {item.timestamp && <div className="mt-0.5 text-[11px] text-muted-foreground">{new Date(item.timestamp).toLocaleString()}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <section className="rounded-lg border border-border bg-background/60 p-3">
               <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
                 <BotIcon className="h-4 w-4 text-primary" />
-                Agent / 应用绑定
+                Agent and App Bindings
               </div>
               <div className="space-y-3">
                 <div>
@@ -353,20 +401,6 @@ export default function AgentRuntimeDiagnosticsPanel({
                     mcpBindings
                   </div>
                   <BindingBadges bindings={diagnostics?.mcpBindings} />
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    MCP 工具列表由 Argus 原生 runtime 在会话启动后发现；这里显示的是已绑定的配置引用。
-                  </p>
-                  {Array.isArray(diagnostics?.mcpDiagnosticsSummary) && diagnostics.mcpDiagnosticsSummary.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {diagnostics.mcpDiagnosticsSummary.map((item) => (
-                        <div key={`${item.slot}:${item.serverName}`} className="rounded-md border border-border bg-card/70 px-2 py-1 text-[11px] text-muted-foreground">
-                          <span className="font-medium text-foreground">{item.serverName || 'MCP'}</span>
-                          <span className="ml-1">/ {item.slot || 'slot'}</span>
-                          <span className="ml-1">/ {item.runtimeToolsStatus || 'runtime discovery'}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             </section>
@@ -374,7 +408,7 @@ export default function AgentRuntimeDiagnosticsPanel({
             <section className="rounded-lg border border-border bg-background/60 p-3">
               <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
                 <SparklesIcon className="h-4 w-4 text-primary" />
-                Skill
+                Skills
               </div>
               <div className="space-y-3">
                 <div>
@@ -383,64 +417,20 @@ export default function AgentRuntimeDiagnosticsPanel({
                 </div>
                 <div>
                   <div className="mb-1 text-[11px] font-medium text-muted-foreground">effectiveSkills</div>
-                  <StringBadges values={diagnostics?.effectiveSkills} tone="success" />
+                  <StringBadges values={diagnostics?.effectiveSkills} />
                 </div>
-                <div>
-                  <div className="mb-1 text-[11px] font-medium text-muted-foreground">skillDetails</div>
-                  <SkillDetails details={diagnostics?.skillDetails} />
-                </div>
-                <Field label="Skill prompt 长度" value={formatNumber(diagnostics?.skillPromptLength)} />
+                <Field label="Skill prompt length" value={formatNumber(diagnostics?.skillPromptLength)} />
               </div>
             </section>
           </div>
 
           <section className="mt-3 rounded-lg border border-border bg-background/60 p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-              <ShieldCheckIcon className="h-4 w-4 text-primary" />
-              权限快照
-            </div>
+            <div className="mb-2 text-sm font-semibold text-foreground">Permissions</div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="permissionMode" value={formatText(permissions?.permissionMode)} />
-              <Field label="skipPermissions" value={permissions?.skipPermissions ? 'true' : 'false'} />
-              <Field label="bypass" value={permissions?.bypassPermissions ? 'true' : 'false'} />
-              <Field label="诊断时间" value={formatText(diagnostics?.receivedAt)} />
-            </div>
-            <div className="mt-3 grid gap-3 lg:grid-cols-2">
-              <div>
-                <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-                  <CheckCircle2Icon className="h-3 w-3" />
-                  allowedTools
-                </div>
-                <StringBadges values={permissions?.allowedTools} tone="success" />
-              </div>
-              <div>
-                <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-                  <DatabaseIcon className="h-3 w-3" />
-                  disallowedTools
-                </div>
-                <StringBadges values={permissions?.disallowedTools} tone="danger" />
-              </div>
-            </div>
-            {permissions?.conflicts && permissions.conflicts.length > 0 && (
-              <div className="mt-3">
-                <div className="mb-1 text-[11px] font-medium text-muted-foreground">权限冲突</div>
-                <StringBadges values={permissions.conflicts} tone="warning" />
-              </div>
-            )}
-            {permissions?.matchedRules && permissions.matchedRules.length > 0 && (
-              <div className="mt-3">
-                <div className="mb-1 text-[11px] font-medium text-muted-foreground">命中规则</div>
-                <StringBadges values={permissions.matchedRules} tone="success" />
-              </div>
-            )}
-            {permissions?.explanation && (
-              <div className="mt-3 rounded-lg border border-border bg-card/70 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                {permissions.explanation}
-              </div>
-            )}
-            <div className="mt-3">
-              <div className="mb-1 text-[11px] font-medium text-muted-foreground">权限来源</div>
-              <PermissionSources sources={permissions?.sources} />
+              <Field label="Permission mode" value={formatText(diagnostics?.permissions?.permissionMode)} />
+              <Field label="Skip permissions" value={formatBoolean(diagnostics?.permissions?.skipPermissions)} />
+              <Field label="Bypass" value={formatBoolean(diagnostics?.permissions?.bypassPermissions)} />
+              <Field label="Allowed tools" value={formatNumber(diagnostics?.permissions?.allowedTools?.length)} />
             </div>
           </section>
         </div>

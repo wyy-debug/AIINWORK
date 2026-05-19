@@ -1,3 +1,5 @@
+import { normalizeAgentProfileKind } from '../../shared/agentProfiles.js';
+
 function normalizeString(value, fallback = '', maxLength = 160) {
   const text = typeof value === 'string' ? value.trim() : '';
   return (text || fallback).slice(0, maxLength);
@@ -87,6 +89,7 @@ export function normalizeSessionAgentConfiguration(value) {
   return {
     appBindings: normalizeAppBindings(source.appBindings),
     skills: normalizeSkillNames(source.skills),
+    agentProfileKind: normalizeAgentProfileKind(source.agentProfileKind, ''),
     modelProfileId: normalizeSlug(source.modelProfileId),
     packageId: normalizeSlug(source.packageId, 120),
     packageVersion: normalizeString(source.packageVersion, '', 80),

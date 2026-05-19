@@ -155,7 +155,6 @@ const parseExplicitWikiIntent = (command = '') => {
 };
 
 export const detectExplicitWikiIntent = (command = '') => parseExplicitWikiIntent(command).intent;
-export const detectExplicitMemoryIntent = detectExplicitWikiIntent;
 
 const sourceForData = (data = {}, parsed = {}) => ({
   source: 'explicit-wiki-command',
@@ -274,19 +273,15 @@ export const applyExplicitWikiIntentToChatCommand = async (data = {}, {
   }
 };
 
-export const applyExplicitMemoryIntentToChatCommand = applyExplicitWikiIntentToChatCommand;
-
 export const buildObsidianWikiPolicyPrompt = () => [
-  '# Obsidian Template Policy',
+  '# Obsidian Wiki Policy',
   '',
-  'Obsidian runtime integration is template-only. It may sync project instruction files such as MTL.md and CLAUDE.md, but it is not the AI memory store or autonomous Wiki readback pipeline.',
+  'Obsidian is a project Wiki and knowledge base, not Claude native memory and not Argus Brain.',
   '',
-  'Claude Code native memory owns autonomous memory extraction, MEMORY.md/topic.md writes, and recall.',
+  'Use Wiki readback as historical project material. Verify current files, code, settings, and runtime state before acting on it.',
   '',
-  '/init and project guidance templates are template sync, not memory writes.',
+  'Only explicit requests such as "save to Wiki" or "保存到 Obsidian" create Obsidian Wiki candidates. Ordinary remember/forget requests belong to Claude native memory.',
 ].join('\n');
-
-export const buildObsidianMemoryPolicyPrompt = buildObsidianWikiPolicyPrompt;
 
 export const applyObsidianWikiPolicyPromptToChatCommand = (data = {}, {
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
@@ -294,5 +289,3 @@ export const applyObsidianWikiPolicyPromptToChatCommand = (data = {}, {
   void readObsidianBridgeConfig;
   return data;
 };
-
-export const applyObsidianMemoryPolicyPromptToChatCommand = applyObsidianWikiPolicyPromptToChatCommand;

@@ -73,6 +73,14 @@ type ReviewFlowArtifact = {
   title?: string;
 };
 
+type SessionCheckpoint = {
+  id: string;
+  files?: Array<{ path?: string; status?: string }>;
+  patch?: string;
+  rollbackStatus?: string;
+  createdAt?: string;
+};
+
 type ReviewPanelProps = {
   selectedProject: Project;
 };
@@ -241,10 +249,12 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
   const [actionBusy, setActionBusy] = useState<'stage' | 'unstage' | 'discard' | null>(null);
   const [hunkBusy, setHunkBusy] = useState('');
   const [comments, setComments] = useState<ReviewComment[]>([]);
+  const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
+  const [checkpointDiff, setCheckpointDiff] = useState('');
   const [commentStatus, setCommentStatus] = useState<'open' | 'closed' | 'all'>('open');
   const [commentBody, setCommentBody] = useState('');
   const [commentLine, setCommentLine] = useState('');
-	  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackText, setFeedbackText] = useState('');
   const [reviewMessage, setReviewMessage] = useState('');
   const [reviewFlow, setReviewFlow] = useState<ReviewFlowResult | null>(null);
   const [reviewFlowArtifact, setReviewFlowArtifact] = useState<ReviewFlowArtifact | null>(null);
@@ -252,8 +262,9 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
 
   const changedFiles = useMemo(() => getChangedFiles(status), [status]);
   const selectedFile = changedFiles.find((file) => file.path === selectedFilePath) || null;
-  const diffRows = useMemo(() => getRenderedDiffRows(diff), [diff]);
-  const diffHunks = useMemo(() => getDiffHunks(diff), [diff]);
+  const visibleDiff = checkpointDiff || diff;
+  const diffRows = useMemo(() => getRenderedDiffRows(visibleDiff), [visibleDiff]);
+  const diffHunks = useMemo(() => getDiffHunks(visibleDiff), [visibleDiff]);
 	  const stagedFiles = useMemo(() => changedFiles.filter((file) => file.staged), [changedFiles]);
 	  const unstagedFiles = useMemo(() => changedFiles.filter((file) => file.unstaged || !file.staged), [changedFiles]);
   const commentsByLine = useMemo(() => {
@@ -298,6 +309,21 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
     }
   }, [commentStatus, selectedProject.name]);
 
+  const loadCheckpoints = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({
+        projectName: selectedProject.name,
+        provider: 'claude',
+        limit: '12',
+      });
+      const response = await apiFetch(`/api/checkpoints?${params.toString()}`);
+      const data = await parseJsonResponse<{ checkpoints?: SessionCheckpoint[] }>(response);
+      setCheckpoints(Array.isArray(data.checkpoints) ? data.checkpoints : []);
+    } catch {
+      setCheckpoints([]);
+    }
+  }, [selectedProject.name]);
+
   const loadDiff = useCallback(async () => {
     if (!selectedFile) {
       setDiff('');
@@ -337,6 +363,10 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
   }, [loadComments]);
 
   useEffect(() => {
+    void loadCheckpoints();
+  }, [loadCheckpoints]);
+
+  useEffect(() => {
     if (changedFiles.length === 0) {
       setSelectedFilePath('');
       return;
@@ -348,8 +378,26 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
   }, [changedFiles, selectedFilePath]);
 
   useEffect(() => {
+    setCheckpointDiff('');
     void loadDiff();
   }, [loadDiff]);
+
+  const rollbackCheckpoint = async (checkpoint: SessionCheckpoint) => {
+    if (!window.confirm(`Rollback checkpoint ${checkpoint.id}?`)) {
+      return;
+    }
+    try {
+      await parseJsonResponse(await apiFetch(`/api/checkpoints/${encodeURIComponent(checkpoint.id)}/rollback`, {
+        method: 'POST',
+      }));
+      setReviewMessage('Checkpoint rolled back.');
+      setCheckpointDiff('');
+      await loadStatus();
+      await loadCheckpoints();
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : 'Checkpoint rollback failed');
+    }
+  };
 
 	  const runFileAction = useCallback(
     async (action: 'stage' | 'unstage' | 'discard') => {
@@ -684,15 +732,42 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
               </div>
             )}
           </ScrollArea>
+
+          {checkpoints.length > 0 && (
+            <div className="border-t border-border/70 p-3">
+              <div className="mb-2 text-sm font-medium text-foreground">Checkpoints</div>
+              <div className="max-h-44 space-y-2 overflow-auto pr-1">
+                {checkpoints.map((checkpoint) => (
+                  <div key={checkpoint.id} className="rounded-md border border-border/70 p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-medium text-foreground">{checkpoint.id}</span>
+                      <Badge variant="outline">{checkpoint.rollbackStatus || 'unknown'}</Badge>
+                    </div>
+                    <div className="mt-1 text-muted-foreground">
+                      {checkpoint.files?.length || 0} files {checkpoint.createdAt ? new Date(checkpoint.createdAt).toLocaleString() : ''}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => setCheckpointDiff(checkpoint.patch || '')}>
+                        View diff
+                      </Button>
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => void rollbackCheckpoint(checkpoint)} disabled={checkpoint.rollbackStatus !== 'available'}>
+                        Rollback
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
 
         <section className="flex min-h-0 flex-col overflow-hidden">
           <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5">
             <div className="min-w-0">
               <div className="truncate text-sm font-medium text-foreground">
-                {selectedFile?.path || 'No file selected'}
+                {checkpointDiff ? 'Checkpoint diff' : selectedFile?.path || 'No file selected'}
               </div>
-              {selectedFile && (
+              {selectedFile && !checkpointDiff && (
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   {FILE_KIND_META[selectedFile.kind].label}
                 </div>
@@ -700,7 +775,7 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
             </div>
 
 	            <div className="flex shrink-0 items-center gap-2">
-              <Button variant="outline" size="sm" onClick={openSelectedFile} disabled={!selectedFile}>
+              <Button variant="outline" size="sm" onClick={openSelectedFile} disabled={!selectedFile || Boolean(checkpointDiff)}>
                 <ExternalLink className="h-4 w-4" />
                 Open
               </Button>
@@ -799,7 +874,7 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
           {selectedFile && diffHunks.length > 0 && (
             <div className="flex gap-2 overflow-x-auto border-b border-border/70 px-4 py-2">
               {diffHunks.map((hunk) => {
-                const canApplyHunk = diff.includes('diff --git');
+                    const canApplyHunk = !checkpointDiff && diff.includes('diff --git');
                 const primaryAction = selectedFile.staged && !selectedFile.unstaged ? 'unstage' : 'stage';
                 return (
                   <div key={hunk.index} className="flex shrink-0 items-center gap-1 rounded-md border border-border/70 px-2 py-1">
@@ -839,7 +914,7 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
           )}
 
           <ScrollArea className="min-h-0 flex-1 bg-muted/20">
-            {!selectedFile ? (
+            {!selectedFile && !checkpointDiff ? (
               <div className="flex h-full items-center justify-center p-8 text-sm text-muted-foreground">
                 <div className="flex items-center gap-2">
                   <Check className="h-4 w-4" />
