@@ -41,7 +41,7 @@ export function extractBrainEntities(text = '') {
   const issueRefs = source.match(/#[0-9]{1,7}\b/g) || [];
   const symbols = source.match(/\b[A-Z][A-Za-z0-9]+(?:Service|Runtime|Store|Config|Provider|Panel|Route|Context)\b/g) || [];
   const commands = source.match(/\b(?:npm|pnpm|yarn|git|node|vitest|tsx|tsc)\s+[^\n\r]{1,120}/g) || [];
-  return [...new Set([...filePaths, ...issueRefs, ...symbols, ...commands].map(compactText))].slice(0, 24);
+  return [...new Set([...filePaths, ...issueRefs, ...symbols, ...commands].map((entity) => compactText(entity)))].slice(0, 24);
 }
 
 export function classifyBrainEvent(event = {}) {

@@ -1,4 +1,5 @@
 import { readResolvedBrainRuntimeConfig } from './mtl-code-model-service.js';
+import { createBrainHybridRetrievalService } from './brain-hybrid-retrieval-service.js';
 import { brainStore as defaultBrainStore } from './brain-store-service.js';
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -47,8 +48,8 @@ function trimByTokenBudget(text = '', maxTokens = 1200) {
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[Argus Brain Context truncated]` : text;
 }
 
-export function buildArgusBrainContextPrompt({ compaction = null, projectNodes = [], matchedNodes = [], diagnostics = {} } = {}) {
-  if (!compaction && projectNodes.length === 0 && matchedNodes.length === 0) {
+export function buildArgusBrainContextPrompt({ compaction = null, projectNodes = [], matchedNodes = [], hybridHits = [], diagnostics = {} } = {}) {
+  if (!compaction && projectNodes.length === 0 && matchedNodes.length === 0 && hybridHits.length === 0) {
     return '';
   }
   const decisions = [
@@ -65,6 +66,11 @@ export function buildArgusBrainContextPrompt({ compaction = null, projectNodes =
     ...(Array.isArray(compaction?.refs) ? compaction.refs : []),
     ...matchedNodes.flatMap((node) => Array.isArray(node.refIds) ? node.refIds : []),
   ].filter(Boolean).slice(0, 12);
+  const relevantMemory = hybridHits
+    .map((hit) => `${hit.title}: ${hit.summary || ''}`.trim())
+    .map((item) => compactLine(item, 200))
+    .filter(Boolean)
+    .slice(0, 8);
   const lines = [
     '## Argus Brain Context',
     'Argus Brain is historical task state. Verify current files, code, settings, and runtime results before acting on it.',
@@ -72,6 +78,7 @@ export function buildArgusBrainContextPrompt({ compaction = null, projectNodes =
     compaction?.mermaid ? ['Task canvas:', '```mermaid', compaction.mermaid, '```'].join('\n') : '',
     decisions.length ? ['Active decisions:', ...decisions.map((item) => `- ${item}`)].join('\n') : '',
     risks.length ? ['Open risks:', ...risks.map((item) => `- ${item}`)].join('\n') : '',
+    relevantMemory.length ? ['Relevant memory:', ...relevantMemory.map((item) => `- ${item}`)].join('\n') : '',
     compaction?.nextAction ? `Next suggested action: ${compactLine(compaction.nextAction)}` : '',
     refs.length ? `Refs: ${refs.join(', ')}` : '',
     diagnostics.reason ? `Recall reason: ${diagnostics.reason}` : '',
@@ -79,7 +86,12 @@ export function buildArgusBrainContextPrompt({ compaction = null, projectNodes =
   return lines.join('\n');
 }
 
-export function createBrainRecallService({ store = defaultBrainStore, readConfig = readResolvedBrainRuntimeConfig, logger = console } = {}) {
+export function createBrainRecallService({
+  store = defaultBrainStore,
+  readConfig = readResolvedBrainRuntimeConfig,
+  logger = console,
+  hybridRetrieval = createBrainHybridRetrievalService({ store }),
+} = {}) {
   const recall = async (data = {}, provider = 'claude') => {
     let config;
     try {
@@ -115,12 +127,23 @@ export function createBrainRecallService({ store = defaultBrainStore, readConfig
           .filter((node) => matchesKeywords(node, keywords))
           .slice(0, 8)
         : [];
+      const retrieval = config?.hybridRetrieval?.enabled === false
+        ? { hits: [], diagnostics: { mode: 'disabled', degraded: false, warnings: [] } }
+        : await hybridRetrieval.retrieve({
+          query: data.command || '',
+          sessionId: context.sessionId,
+          provider,
+          projectName: context.projectName,
+          limit: config?.hybridRetrieval?.limit || 8,
+          vectorTimeoutMs: config?.hybridRetrieval?.vectorTimeoutMs || 80,
+        });
       const prompt = trimByTokenBudget(buildArgusBrainContextPrompt({
         compaction,
         projectNodes,
         matchedNodes,
+        hybridHits: retrieval.hits,
         diagnostics: {
-          reason: compaction ? 'latest session compaction' : matchedNodes.length ? 'keyword matched project nodes' : 'project decisions and risks',
+          reason: compaction ? 'latest session compaction' : retrieval.hits.length ? 'hybrid retrieval' : matchedNodes.length ? 'keyword matched project nodes' : 'project decisions and risks',
         },
       }), config.maxInjectedTokens);
       const diagnostics = {
@@ -129,9 +152,11 @@ export function createBrainRecallService({ store = defaultBrainStore, readConfig
         status: prompt ? 'injected' : 'empty',
         recallHits: [
           ...(compaction ? [{ kind: 'compaction', id: compaction.id }] : []),
+          ...retrieval.hits.map((hit) => ({ kind: hit.kind, id: hit.id, title: hit.title, score: hit.score, reasons: hit.reasons })),
           ...projectNodes.map((node) => ({ kind: 'project-node', id: node.id, type: node.nodeType })),
           ...matchedNodes.map((node) => ({ kind: 'keyword-node', id: node.id, type: node.nodeType })),
         ].slice(0, 20),
+        retrieval: retrieval.diagnostics,
         currentGoal: compaction?.currentGoal || '',
         nextAction: compaction?.nextAction || '',
         openRisks: compaction?.openRisks || projectNodes.filter((node) => node.nodeType === 'risk').map((node) => node.summary || node.title),
