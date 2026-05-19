@@ -133,6 +133,12 @@ export const DEFAULT_BRAIN_QUALITY_FIXTURES = [
         eventType: 'assistant_summary',
         title: 'Review flow next action',
         content: 'Refresh review artifact after the final diff is stable.',
+        refs: [{
+          refType: 'raw_text',
+          refId: 'review-summary',
+          label: 'Review summary',
+          content: 'Review flow produced summary, risk, tests, commit message, and PR body.',
+        }],
       },
     ],
   },
@@ -162,6 +168,81 @@ export const DEFAULT_BRAIN_QUALITY_FIXTURES = [
         eventType: 'command',
         title: 'Continue context fusion guardrails',
         content: 'Continue Obsidian context fusion guardrails.',
+        refs: [{
+          refType: 'raw_text',
+          refId: 'obsidian-context',
+          label: 'Obsidian context note',
+          content: 'Obsidian context fusion requires source boundaries and independent kill switches.',
+        }],
+      },
+    ],
+  },
+  {
+    id: 'daily-use-checkpoint-rollback',
+    title: 'Checkpoint rollback recall',
+    projectName: 'ArgusQuality',
+    sessionId: 'quality-checkpoint',
+    query: 'Resume checkpoint rollback validation.',
+    expectedTerms: ['checkpoint', 'rollback', 'dirty start', 'patch'],
+    forbiddenTerms: ['password', 'secret-token'],
+    compaction: {
+      currentGoal: 'Validate checkpoint rollback safety.',
+      activeDecisions: ['Rollback uses reverse patches and blocks dirty-start checkpoints.'],
+      openRisks: ['Dirty start checkpoints cannot be rolled back safely.'],
+      nextAction: 'Assert patch rollback status before enabling the UI action.',
+      mermaid: 'flowchart TD\n  checkpoint["Checkpoint"]\n  rollback["Rollback patch"]',
+      refs: ['fixture-checkpoint-event'],
+    },
+    nodes: [
+      { id: 'quality_checkpoint_decision', nodeType: 'decision', title: 'Rollback patch safety', summary: 'Rollback uses reverse patches and blocks dirty-start checkpoints.' },
+      { id: 'quality_checkpoint_risk', nodeType: 'risk', title: 'Dirty start checkpoint', summary: 'Dirty start checkpoints cannot be rolled back safely.' },
+    ],
+    events: [
+      {
+        id: 'fixture-checkpoint-event',
+        eventType: 'checkpoint',
+        title: 'Checkpoint captured dirty start',
+        content: 'Checkpoint patch rollback is blocked for dirty start state.',
+        refs: [{
+          refType: 'diff',
+          refId: 'checkpoint-diff',
+          label: 'Checkpoint patch',
+          content: 'diff --git a/server/routes/checkpoints.js b/server/routes/checkpoints.js',
+        }],
+      },
+    ],
+  },
+  {
+    id: 'daily-use-subagent-plan',
+    title: 'Subagent adjacent recall',
+    projectName: 'ArgusQuality',
+    sessionId: 'quality-subagent',
+    query: 'Continue the delegated explorer plan.',
+    expectedTerms: ['subagent', 'explorer', 'bounded task', 'review'],
+    forbiddenTerms: ['api_key', 'bearer token'],
+    compaction: {
+      currentGoal: 'Coordinate bounded subagent work.',
+      activeDecisions: ['Use explorers only for specific bounded questions and review their output before integration.'],
+      openRisks: ['Do not duplicate work between the main rollout and a subagent.'],
+      nextAction: 'Review subagent findings before making code changes.',
+      mermaid: 'flowchart TD\n  main["Main rollout"]\n  explorer["Explorer bounded task"]\n  review["Review output"]',
+      refs: ['fixture-subagent-event'],
+    },
+    nodes: [
+      { id: 'quality_subagent_decision', nodeType: 'decision', title: 'Bounded explorer tasks', summary: 'Use explorers only for specific bounded questions and review their output before integration.' },
+    ],
+    events: [
+      {
+        id: 'fixture-subagent-event',
+        eventType: 'assistant_summary',
+        title: 'Subagent plan',
+        content: 'Explorer subagent was assigned a bounded task and needs review before integration.',
+        refs: [{
+          refType: 'raw_text',
+          refId: 'subagent-plan',
+          label: 'Subagent plan',
+          content: 'Use explorer for bounded task, then review before integration.',
+        }],
       },
     ],
   },
@@ -180,6 +261,7 @@ function createEphemeralBrainStore() {
 function seedFixture(store, fixture, createdAtMs) {
   const provider = fixture.provider || 'claude';
   const eventIds = [];
+  let rawRefCount = 0;
   for (const [index, event] of (fixture.events || []).entries()) {
     const created = store.addEvent({
       sessionId: fixture.sessionId,
@@ -193,6 +275,7 @@ function seedFixture(store, fixture, createdAtMs) {
       createdAtMs: createdAtMs + index,
     });
     if (created?.id) eventIds.push(created.id);
+    rawRefCount += Array.isArray(event.refs) ? event.refs.length : 0;
   }
   for (const node of fixture.nodes || []) {
     store.upsertNode({
@@ -224,13 +307,18 @@ function seedFixture(store, fixture, createdAtMs) {
     refs: compaction.refs || eventIds,
     createdAtMs: createdAtMs + 100,
   });
+  return { eventIds, rawRefCount };
 }
 
 function getRecallDiagnostics(result) {
   return result?.options?.runtimeDiagnostics?.brainRuntime?.recall || {};
 }
 
-function evaluateFixture({ fixture, result }) {
+function estimateTokens(text = '') {
+  return Math.ceil(String(text || '').length / 4);
+}
+
+function evaluateFixture({ fixture, result, seed }) {
   const prompt = String(result?.options?.appendSystemPrompt || '');
   const promptLower = prompt.toLowerCase();
   const expectedTerms = Array.isArray(fixture.expectedTerms) ? fixture.expectedTerms : [];
@@ -243,10 +331,15 @@ function evaluateFixture({ fixture, result }) {
   const recallScore = expectedTerms.length
     ? matchedExpectedTerms.length / expectedTerms.length
     : 1;
+  const missedTerms = expectedTerms.filter((term) => !matchedExpectedTerms.includes(term));
+  const promptTokens = estimateTokens(prompt);
+  const maxPromptTokens = Number(fixture.maxPromptTokens || 800);
+  const tokenBudgetPassed = promptTokens <= maxPromptTokens;
   const diagnostics = getRecallDiagnostics(result);
   const redactionPassed = forbiddenMatches.length === 0 && !patternLeak;
   const expectedPassed = recallScore >= (fixture.minExpectedTermRecall || 0.75);
-  const status = expectedPassed && redactionPassed ? 'passed' : 'failed';
+  const evidencePassed = Number(seed?.rawRefCount || 0) > 0;
+  const status = expectedPassed && redactionPassed && tokenBudgetPassed && evidencePassed ? 'passed' : 'failed';
   return {
     id: fixture.id,
     title: fixture.title,
@@ -254,8 +347,19 @@ function evaluateFixture({ fixture, result }) {
     expected: {
       terms: expectedTerms,
       matchedTerms: matchedExpectedTerms,
+      missedTerms,
       recallScore,
       passed: expectedPassed,
+    },
+    tokenBudget: {
+      passed: tokenBudgetPassed,
+      promptTokens,
+      maxPromptTokens,
+    },
+    evidence: {
+      passed: evidencePassed,
+      hasRawRef: evidencePassed,
+      rawRefCount: Number(seed?.rawRefCount || 0),
     },
     redaction: {
       passed: redactionPassed,
@@ -279,6 +383,8 @@ function createSnapshotPayload(report) {
       id: fixture.id,
       status: fixture.status,
       expected: fixture.expected,
+      tokenBudget: fixture.tokenBudget,
+      evidence: fixture.evidence,
       redaction: fixture.redaction,
       diagnostics: {
         status: fixture.diagnostics.status,
@@ -307,7 +413,7 @@ export function createBrainQualityBaselineService({
     for (const [index, fixture] of fixtures.entries()) {
       const { db, store } = createStore({ fixture });
       try {
-        seedFixture(store, fixture, createdAtMs + (index * 1000));
+        const seed = seedFixture(store, fixture, createdAtMs + (index * 1000));
         const recall = createRecallService({ store, fixture });
         const result = await recall.applyToChatCommand({
           command: fixture.query || fixture.title,
@@ -318,7 +424,7 @@ export function createBrainQualityBaselineService({
             appendSystemPrompt: '',
           },
         }, fixture.provider || 'claude');
-        fixtureResults.push(evaluateFixture({ fixture, result }));
+        fixtureResults.push(evaluateFixture({ fixture, result, seed }));
       } finally {
         db?.close?.();
       }
@@ -327,6 +433,8 @@ export function createBrainQualityBaselineService({
     const passed = fixtureResults.filter((fixture) => fixture.status === 'passed').length;
     const failed = total - passed;
     const redactionViolationCount = fixtureResults.reduce((sum, fixture) => sum + fixture.redaction.violationCount, 0);
+    const tokenBudgetViolationCount = fixtureResults.filter((fixture) => !fixture.tokenBudget.passed).length;
+    const evidencePassedCount = fixtureResults.filter((fixture) => fixture.evidence.passed).length;
     const report = {
       version: 1,
       generatedAtMs: createdAtMs,
@@ -344,10 +452,14 @@ export function createBrainQualityBaselineService({
           ? fixtureResults.reduce((sum, fixture) => sum + fixture.diagnostics.hitCount, 0) / total
           : 0,
         redactionViolationCount,
+        tokenBudgetViolationCount,
+        evidenceCoverage: total ? evidencePassedCount / total : 1,
       },
       gates: {
         recall: { passed: fixtureResults.every((fixture) => fixture.expected.passed) },
         redaction: { passed: redactionViolationCount === 0 },
+        tokenBudget: { passed: tokenBudgetViolationCount === 0 },
+        evidence: { passed: evidencePassedCount === total },
         snapshot: { passed: true },
       },
       fixtures: fixtureResults,
@@ -370,6 +482,8 @@ export function formatBrainQualityReport(report) {
     `Generated: ${new Date(report.generatedAtMs).toISOString()}`,
     `Pass rate: ${report.summary.passed}/${report.summary.total}`,
     `Expected term recall: ${report.metrics.averageExpectedTermRecall.toFixed(2)}`,
+    `Token budget violations: ${report.metrics.tokenBudgetViolationCount}`,
+    `Evidence coverage: ${report.metrics.evidenceCoverage.toFixed(2)}`,
     `Redaction violations: ${report.metrics.redactionViolationCount}`,
     `Snapshot: ${report.snapshot.checksum}`,
     '',
@@ -381,6 +495,11 @@ export function formatBrainQualityReport(report) {
       fixture.expected.recallScore.toFixed(2),
       fixture.redaction.passed ? 'passed |' : 'failed |',
     ].join(' | ')),
+    '',
+    '## Missed Terms and Evidence',
+    ...report.fixtures.flatMap((fixture) => [
+      `- ${fixture.title}: missed=${fixture.expected.missedTerms.length ? fixture.expected.missedTerms.join(', ') : 'none'}; rawRefs=${fixture.evidence.rawRefCount}; promptTokens=${fixture.tokenBudget.promptTokens}/${fixture.tokenBudget.maxPromptTokens}`,
+    ]),
     '',
   ];
   return lines.join('\n');
