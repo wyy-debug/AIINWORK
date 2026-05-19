@@ -69,10 +69,24 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await expect(page.getByTestId('workflow-studio')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-editor.png');
+  await screenshot(page, 'REQ-064-real-editor-create-save-reopen.png');
+
+  await page.getByRole('button', { name: 'Library' }).click();
+  await expect(page.getByTestId('workflow-template-manifest').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-clone-template').first()).toBeVisible();
+  await screenshot(page, 'REQ-064-real-template-library-clone.png');
+
+  await page.getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-dry-run-debugger').first().click();
+  await expect(page.getByTestId('workflow-dry-run-debugger').last()).toBeVisible();
+  await screenshot(page, 'REQ-064-real-editor-dry-run-debugger.png');
 
   await page.getByRole('button', { name: 'Runs' }).click();
   await expect(page.getByTestId('workflow-runs').getByText('waiting_approval').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-run-console')).toBeVisible();
+  await expect(page.getByTestId('workflow-run-events').first()).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-approval.png');
+  await screenshot(page, 'REQ-064-real-runtime-approval-console.png');
 
   const continueResponse = await request.post(`/api/workflow-runs/${runId}/nodes/approval/control`, {
     data: { action: 'continue' },
@@ -84,5 +98,33 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-completed-history.png');
 
+  const permissionWorkflowId = `req-064-permission-deny-${Date.now()}`;
+  const permissionWorkflow = {
+    id: permissionWorkflowId,
+    name: 'REQ-064 Permission Deny Smoke',
+    description: 'Real permission deny screenshot gate workflow.',
+    profileId: 'build',
+    permissionPreset: 'enterprise-safe',
+    inputs: [],
+    outputs: [{ id: 'summary', label: 'Summary', type: 'markdown' }],
+    maxConcurrency: 1,
+    nodes: [
+      { id: 'shell', type: 'shell', title: 'Denied Shell', command: 'node -e "console.log(1)"', permission: '', position: { x: 160, y: 150 } },
+    ],
+    edges: [],
+  };
+  const permissionSave = await request.post('/api/workflows', { data: { workflow: permissionWorkflow } });
+  expect(permissionSave.ok()).toBe(true);
+  const permissionRun = await request.post(`/api/workflows/${permissionWorkflowId}/runs`, {
+    data: { projectPath: process.cwd(), sessionId: `req-064-permission-${Date.now()}`, inputs: {} },
+  });
+  expect(permissionRun.ok()).toBe(true);
+
+  await page.getByTestId('workflow-studio').getByRole('button', { name: 'Refresh' }).click();
+  await page.getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByText(/permission boundary/i).first()).toBeVisible();
+  await screenshot(page, 'REQ-064-real-permission-deny.png');
+
   await request.delete(`/api/workflows/${workflowId}`);
+  await request.delete(`/api/workflows/${permissionWorkflowId}`);
 });

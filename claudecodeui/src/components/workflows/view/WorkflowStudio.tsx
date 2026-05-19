@@ -34,7 +34,16 @@ import { api } from '../../../utils/api';
 import { cn } from '../../../lib/utils';
 import type { Project } from '../../../types/app';
 import type { AgentConfig } from '../../../types/agent';
-import type { WorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowNodeType, WorkflowRun } from '../../../types/workflow';
+import type {
+  WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowNode,
+  WorkflowNodeLog,
+  WorkflowNodeType,
+  WorkflowNodeTypeDefinition,
+  WorkflowRun,
+  WorkflowRunEvent,
+} from '../../../types/workflow';
 
 type WorkflowStudioProps = {
   selectedProject: Project;
@@ -56,6 +65,18 @@ const nodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot
   { type: 'condition', label: 'Condition', icon: ChevronRight, description: 'Branch rule' },
   { type: 'join', label: 'Join', icon: Link2, description: 'Wait for inputs' },
 ];
+
+const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
+  agent: Bot,
+  subagent: GitBranch,
+  mcp: Zap,
+  tool: Braces,
+  shell: CircleDot,
+  artifact: FileText,
+  approval: ClipboardCheck,
+  condition: ChevronRight,
+  join: Link2,
+};
 
 const statusTone: Record<string, string> = {
   pending: 'border-slate-200 bg-slate-50 text-slate-700',
@@ -101,6 +122,13 @@ function stringifyValue(value: unknown) {
   }
 }
 
+function getTemplateManifest(workflow: WorkflowDefinition) {
+  const manifest = workflow.metadata?.templateManifest;
+  return manifest && typeof manifest === 'object' && !Array.isArray(manifest)
+    ? manifest as { version?: string; tags?: string[]; dependencies?: Record<string, unknown>; expectedOutputs?: unknown[] }
+    : {};
+}
+
 function createBlankWorkflow(project: Project): WorkflowDefinition {
   return {
     id: `workflow-${Date.now()}`,
@@ -137,6 +165,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [nodeTypeDefinitions, setNodeTypeDefinitions] = useState<WorkflowNodeTypeDefinition[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
   const [draft, setDraft] = useState<WorkflowDefinition>(() => createBlankWorkflow(selectedProject));
   const [selectedNodeId, setSelectedNodeId] = useState('');
@@ -147,6 +176,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [canvasZoom, setCanvasZoom] = useState(1);
   const [showMinimap, setShowMinimap] = useState(true);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
+  const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
+  const [runEvents, setRunEvents] = useState<Record<string, WorkflowRunEvent[]>>({});
+  const [nodeLogs, setNodeLogs] = useState<Record<string, WorkflowNodeLog[]>>({});
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -155,22 +187,40 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === selectedNodeId) || null, [draft.nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => draft.edges.find((edge) => edge.id === selectedEdgeId) || null, [draft.edges, selectedEdgeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
+  const paletteNodeTypes = useMemo(() => {
+    if (nodeTypeDefinitions.length === 0) return nodeTypes;
+    return nodeTypeDefinitions.map((definition) => ({
+      type: definition.type,
+      label: definition.label,
+      icon: nodeIconByType[definition.type] || Bot,
+      description: definition.description,
+    }));
+  }, [nodeTypeDefinitions]);
+  const selectedNodeDefinition = useMemo(
+    () => nodeTypeDefinitions.find((definition) => definition.type === selectedNode?.type) || null,
+    [nodeTypeDefinitions, selectedNode?.type],
+  );
   const filteredNodeTypes = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
-    if (!query) return nodeTypes;
-    return nodeTypes.filter((item) => [item.type, item.label, item.description].join(' ').toLowerCase().includes(query));
-  }, [nodeSearch]);
+    if (!query) return paletteNodeTypes;
+    return paletteNodeTypes.filter((item) => [item.type, item.label, item.description].join(' ').toLowerCase().includes(query));
+  }, [nodeSearch, paletteNodeTypes]);
   const availableVariables = useMemo(() => {
     const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
     if (!selectedNode) return inputVariables;
     const upstreamIds = draft.edges.filter((edge) => edge.to === selectedNode.id).map((edge) => edge.from);
-    const upstreamVariables = upstreamIds.flatMap((nodeId) => [
-      `nodes.${nodeId}.output.summary`,
-      `nodes.${nodeId}.output.artifactId`,
-      `nodes.${nodeId}.output.stdout`,
-    ]);
+    const upstreamVariables = upstreamIds.flatMap((nodeId) => {
+      const upstreamNode = draft.nodes.find((node) => node.id === nodeId);
+      const definition = nodeTypeDefinitions.find((item) => item.type === upstreamNode?.type);
+      const fields = definition?.outputSchema?.fields?.map((field) => `nodes.${nodeId}.output.${field.name}`) || [];
+      return fields.length > 0 ? fields : [
+        `nodes.${nodeId}.output.summary`,
+        `nodes.${nodeId}.output.artifactId`,
+        `nodes.${nodeId}.output.stdout`,
+      ];
+    });
     return [...inputVariables, ...upstreamVariables];
-  }, [draft.edges, draft.inputs, selectedNode]);
+  }, [draft.edges, draft.inputs, draft.nodes, nodeTypeDefinitions, selectedNode]);
   const selectedNodeTemplateText = selectedNode?.type === 'shell'
     ? selectedNode.command || ''
     : selectedNode?.type === 'condition'
@@ -182,25 +232,36 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   }, [availableVariables, selectedNodeTemplateText]);
   const permissionSource = useMemo(() => describePermissionSource(draft, selectedNode), [draft, selectedNode]);
 
+  const loadNodeTypes = useCallback(async () => {
+    const response = await api.workflowNodeTypes();
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Failed to load workflow node types');
+    setNodeTypeDefinitions(data.nodeTypes || []);
+  }, []);
+
   const loadData = useCallback(async () => {
     setError('');
-    const [workflowsResponse, runsResponse, agentsResponse] = await Promise.all([
+    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse] = await Promise.all([
       api.workflows(),
       api.workflowRuns({ limit: 25 }),
       api.agents(false, 'all'),
+      api.workflowNodeTypes(),
     ]);
-    const [workflowsData, runsData, agentsData] = await Promise.all([
+    const [workflowsData, runsData, agentsData, nodeTypesData] = await Promise.all([
       workflowsResponse.json(),
       runsResponse.json(),
       agentsResponse.json(),
+      nodeTypesResponse.json(),
     ]);
     if (!workflowsResponse.ok) throw new Error(workflowsData?.error || 'Failed to load workflows');
     if (!runsResponse.ok) throw new Error(runsData?.error || 'Failed to load workflow runs');
     if (!agentsResponse.ok) throw new Error(agentsData?.error || 'Failed to load agents');
+    if (!nodeTypesResponse.ok) throw new Error(nodeTypesData?.error || 'Failed to load workflow node types');
     const loadedWorkflows = workflowsData.workflows || [];
     setWorkflows(loadedWorkflows);
     setRuns(runsData.runs || []);
     setAgents(agentsData.agents || []);
+    setNodeTypeDefinitions(nodeTypesData.nodeTypes || []);
     if (!selectedWorkflowId && loadedWorkflows[0]) {
       setSelectedWorkflowId(loadedWorkflows[0].id);
       setDraft(loadedWorkflows[0]);
@@ -214,6 +275,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setError(loadError instanceof Error ? loadError.message : 'Failed to load Workflow Studio');
     });
   }, [loadData]);
+
+  useEffect(() => {
+    if (nodeTypeDefinitions.length === 0) {
+      void loadNodeTypes().catch(() => undefined);
+    }
+  }, [loadNodeTypes, nodeTypeDefinitions.length]);
 
   const selectWorkflow = useCallback((workflow: WorkflowDefinition) => {
     setSelectedWorkflowId(workflow.id);
@@ -369,6 +436,26 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }
   }, [draft, loadData, runInputs]);
 
+  const validateRun = useCallback(async () => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.validateWorkflowRun(draft.id, { inputs: runInputs });
+      const data = await response.json();
+      const validation = data.validation || {};
+      const messages = [
+        ...(validation.errors || []).map((item: { message?: string }) => item.message || 'Workflow run validation failed'),
+        ...(validation.warnings || []).map((item: { message?: string }) => item.message || 'Workflow run warning'),
+      ];
+      setDryRunMessages(messages.length > 0 ? messages : ['Dry run passed.']);
+      if (!response.ok) throw new Error(data?.error || 'Workflow run validation failed');
+    } catch (validationError) {
+      setError(validationError instanceof Error ? validationError.message : 'Workflow run validation failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [draft.id, runInputs]);
+
   const startRun = useCallback(async () => {
     setIsBusy(true);
     setError('');
@@ -403,6 +490,64 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setIsBusy(false);
     }
   }, []);
+
+  const loadRunConsole = useCallback(async (run: WorkflowRun) => {
+    const eventsResponse = await api.workflowRunEvents(run.id);
+    const eventsData = await eventsResponse.json();
+    if (eventsResponse.ok) {
+      setRunEvents((current) => ({ ...current, [run.id]: eventsData.events || [] }));
+    }
+    const logPairs = await Promise.all(Object.keys(run.nodeRuns || {}).map(async (nodeId) => {
+      const logsResponse = await api.workflowNodeLogs(run.id, nodeId);
+      const logsData = await logsResponse.json();
+      return [nodeId, logsResponse.ok ? logsData.logs || [] : []] as const;
+    }));
+    setNodeLogs((current) => ({
+      ...current,
+      ...Object.fromEntries(logPairs.map(([nodeId, logs]) => [`${run.id}:${nodeId}`, logs])),
+    }));
+  }, []);
+
+  const retryWorkflowFromNode = useCallback(async (run: WorkflowRun, nodeId: string) => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.retryWorkflowFromNode(run.id, nodeId);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to retry workflow from node');
+      setRuns((current) => [data.run, ...current.filter((item) => item.id !== data.run.id)]);
+      await loadRunConsole(data.run);
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : 'Failed to retry workflow from node');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [loadRunConsole]);
+
+  const cloneWorkflow = useCallback(async (workflow: WorkflowDefinition) => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.cloneWorkflow(workflow.id, {
+        name: `${workflow.name} Copy`,
+        projectPath: selectedProject.path || selectedProject.fullPath,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to clone workflow');
+      await loadData();
+      selectWorkflow(data.workflow);
+    } catch (cloneError) {
+      setError(cloneError instanceof Error ? cloneError.message : 'Failed to clone workflow');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [loadData, selectWorkflow, selectedProject.fullPath, selectedProject.path]);
+
+  useEffect(() => {
+    if (selectedRun) {
+      void loadRunConsole(selectedRun).catch(() => undefined);
+    }
+  }, [loadRunConsole, selectedRun]);
 
   const openCheckpointDiff = useCallback(async (checkpointId: string) => {
     setError('');
@@ -618,6 +763,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   <Link2 className="h-3.5 w-3.5" />
                 </button>
               </div>
+              <div className="mt-2 text-[10px] opacity-80" data-testid="workflow-node-dependency-status">
+                {riskyNodeTypes.has(node.type)
+                  ? `Permission: ${node.permission || draft.permissionPreset}`
+                  : node.type === 'mcp' && !node.toolName
+                    ? 'Missing MCP tool'
+                    : 'Dependencies ready'}
+              </div>
               {runState && (
                 <span className={cn('mt-3 inline-flex rounded-full border px-2 py-0.5 text-[11px]', statusTone[runState.status] || statusTone.pending)}>
                   {runState.status}
@@ -750,11 +902,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {workflows.map((workflow) => (
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 key={workflow.id}
                 data-testid="workflow-library-item"
                 onClick={() => selectWorkflow(workflow)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') selectWorkflow(workflow);
+                }}
                 className={cn(
                   'rounded-md border bg-card p-4 text-left transition-colors hover:bg-muted/40',
                   workflow.id === selectedWorkflowId ? 'border-primary' : 'border-border',
@@ -762,12 +918,29 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               >
                 <h3 className="truncate text-sm font-semibold text-foreground">{workflow.name}</h3>
                 <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{workflow.description || 'No description.'}</p>
+                <div className="mt-3 rounded border border-border bg-muted/20 p-2 text-[11px] text-muted-foreground" data-testid="workflow-template-manifest">
+                  <span className="font-semibold text-foreground">Template</span>
+                  <span className="ml-2">{String(getTemplateManifest(workflow).version || workflow.metadata?.version || 'local')}</span>
+                  <span className="ml-2">{Array.isArray(getTemplateManifest(workflow).tags) ? (getTemplateManifest(workflow).tags || []).slice(0, 2).join(', ') : 'workflow'}</span>
+                </div>
                 <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
                   <span className="rounded border border-border px-2 py-1">{workflow.nodes.length} nodes</span>
                   <span className="rounded border border-border px-2 py-1">{workflow.edges.length} edges</span>
                   <span className="rounded border border-border px-2 py-1">{workflow.profileId}</span>
                 </div>
-              </button>
+                <button
+                  type="button"
+                  data-testid="workflow-clone-template"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void cloneWorkflow(workflow);
+                  }}
+                  className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-muted"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Clone
+                </button>
+              </div>
             ))}
           </div>
         </div>
@@ -836,6 +1009,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <Save className="h-4 w-4" />
                 Save
               </button>
+              <button type="button" data-testid="workflow-dry-run-debugger" onClick={validateRun} disabled={isBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted disabled:opacity-50">
+                <AlertTriangle className="h-4 w-4" />
+                Dry run
+              </button>
               <button type="button" onClick={exportDraft} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
                 <Download className="h-4 w-4" />
                 Export
@@ -845,6 +1022,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             {validationMessages.length > 0 && (
               <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                 {validationMessages.map((message) => <div key={message} className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{message}</div>)}
+              </div>
+            )}
+            {dryRunMessages.length > 0 && (
+              <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800" data-testid="workflow-dry-run-debugger">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-700">Dry run debugger</h3>
+                {dryRunMessages.map((message) => <div key={message} className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{message}</div>)}
               </div>
             )}
             {renderCanvas()}
@@ -887,6 +1070,29 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <span className="mt-2 block text-amber-700">Risky node: shell, MCP, tool, git/write-style actions may ask or deny before execution.</span>
                   )}
                 </div>
+                <div className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground" data-testid="workflow-node-dependency-status">
+                  <span className="block font-semibold text-foreground">Dependency status</span>
+                  <span className="mt-1 block">
+                    {selectedNode.type === 'mcp' && !selectedNode.toolName
+                      ? 'Blocked: choose an MCP server.tool before running.'
+                      : riskyNodeTypes.has(selectedNode.type)
+                        ? `Permission gate: ${selectedNode.permission || draft.permissionPreset}`
+                        : 'Ready: no external dependency required.'}
+                  </span>
+                </div>
+                {selectedNodeDefinition?.configSchema?.fields?.length ? (
+                  <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+                    <span className="block font-semibold text-foreground">Typed config</span>
+                    <div className="mt-2 space-y-1">
+                      {selectedNodeDefinition.configSchema.fields.map((field) => (
+                        <div key={field.name} className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1">
+                          <span>{field.label || field.name}{field.required ? ' *' : ''}</span>
+                          <span className="font-mono text-[10px]">{field.type}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => duplicateNode(selectedNode.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
                     <Copy className="h-4 w-4" />
@@ -964,7 +1170,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <div className="rounded-md border border-dashed border-border p-10 text-center text-sm text-muted-foreground">No workflow run yet.</div>
             )}
           </main>
-          <aside className="min-h-0 overflow-auto border-l border-border p-4">
+          <aside className="min-h-0 overflow-auto border-l border-border p-4" data-testid="workflow-run-console">
             <h3 className="text-sm font-semibold text-foreground">Run history</h3>
             <div className="mt-3 space-y-3">
               {runs.map((run) => (
@@ -977,6 +1183,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <span className={cn('rounded-full border px-2 py-0.5 text-[11px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>
                   </div>
                   <div className="mt-3 space-y-2">
+                    <details className="rounded border border-border bg-muted/20 p-2" data-testid="workflow-run-events">
+                      <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Run events</summary>
+                      <div className="mt-2 max-h-32 space-y-1 overflow-auto">
+                        {(runEvents[run.id] || run.timelineEvents || []).map((event) => (
+                          <div key={String(event.id || `${event.type}-${event.createdAt}`)} className="rounded bg-background px-2 py-1 text-[11px] text-foreground">
+                            {event.type}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                     {Object.values(run.nodeRuns || {}).map((nodeRun) => (
                       <div key={nodeRun.nodeId} className="rounded border border-border p-2">
                         <div className="flex items-center justify-between gap-2">
@@ -987,6 +1203,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         {nodeRun.error && <p className="mt-1 text-xs text-red-700">{nodeRun.error}</p>}
                         {nodeRun.logs?.length ? <p className="mt-1 text-xs text-muted-foreground">{nodeRun.logs.at(-1)}</p> : null}
                         <div className="mt-2 grid gap-2" data-testid="workflow-node-run-details">
+                          <details className="rounded border border-border bg-muted/20 p-2" data-testid="workflow-node-logs">
+                            <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Logs</summary>
+                            <div className="mt-2 max-h-32 space-y-1 overflow-auto">
+                              {(nodeLogs[`${run.id}:${nodeRun.nodeId}`] || []).map((entry, index) => (
+                                <div key={`${entry.timestamp || index}-${entry.message}`} className={cn('rounded px-2 py-1 text-[11px]', entry.level === 'error' ? 'bg-red-50 text-red-700' : 'bg-background text-foreground')}>
+                                  <span className="font-mono uppercase">{entry.level}</span> {entry.message}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
                           <details className="rounded border border-border bg-muted/20 p-2">
                             <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Input / output</summary>
                             <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-[11px] text-foreground">{stringifyValue({ input: nodeRun.input, output: nodeRun.output })}</pre>
@@ -1028,10 +1254,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                           </div>
                         )}
                         {nodeRun.status === 'failed' && (
-                          <button type="button" onClick={() => controlNode(run, nodeRun.nodeId, 'retry')} disabled={isBusy} className="mt-2 inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
-                            <RefreshCw className="h-3 w-3" />
-                            Retry
-                          </button>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button type="button" onClick={() => controlNode(run, nodeRun.nodeId, 'retry')} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
+                              <RefreshCw className="h-3 w-3" />
+                              Retry
+                            </button>
+                            <button type="button" data-testid="workflow-retry-from-node" onClick={() => retryWorkflowFromNode(run, nodeRun.nodeId)} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-xs hover:bg-muted">
+                              <GitBranch className="h-3 w-3" />
+                              Retry from
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))}

@@ -41,6 +41,46 @@ router.get('/:runId', async (req, res) => {
   }
 });
 
+router.get('/:runId/events', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const run = defaultWorkflowStudioStore.getRun(req.params.runId);
+    if (!run) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({
+      success: true,
+      events: defaultWorkflowStudioStore.listRunEvents(req.params.runId, { limit: req.query.limit || 500 }),
+    });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to list workflow run events');
+  }
+});
+
+router.get('/:runId/nodes/:nodeId/logs', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const run = defaultWorkflowStudioStore.getRun(req.params.runId);
+    if (!run?.nodeRuns?.[req.params.nodeId]) {
+      return res.status(404).json({ success: false, error: 'Workflow run or node not found' });
+    }
+    return res.json({
+      success: true,
+      logs: defaultWorkflowStudioStore.listNodeLogs(req.params.runId, req.params.nodeId, { limit: req.query.limit || 200 }),
+    });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to list workflow node logs');
+  }
+});
+
+router.post('/:runId/nodes/:nodeId/retry-from', async (req, res) => {
+  try {
+    const run = await defaultWorkflowStudioStore.retryFromNode(req.params.runId, req.params.nodeId);
+    if (!run) return res.status(404).json({ success: false, error: 'Workflow run or node not found' });
+    return res.json({ success: true, run });
+  } catch (error) {
+    return sendRunError(res, error, 400, 'Failed to retry workflow from node');
+  }
+});
+
 router.post('/:runId/control', async (req, res) => {
   try {
     const run = await defaultWorkflowStudioStore.controlRun(req.params.runId, req.body || {});

@@ -310,6 +310,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   workflows: () => apiFetch('/api/workflows'),
+  workflowNodeTypes: () => apiFetch('/api/workflows/node-types'),
   workflow: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}`),
   saveWorkflow: (workflow) =>
     apiFetch(workflow?.id ? `/api/workflows/${encodeURIComponent(workflow.id)}` : '/api/workflows', {
@@ -320,6 +321,16 @@ export const api = {
     apiFetch('/api/workflows/validate', {
       method: 'POST',
       body: JSON.stringify({ workflow }),
+    }),
+  validateWorkflowRun: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/validate-run`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  cloneWorkflow: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/clone`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
     exportWorkflow: (workflowId, format = 'json') =>
       apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/export?format=${encodeURIComponent(format)}`),
@@ -352,6 +363,14 @@ export const api = {
     return apiFetch(`/api/workflow-runs${query ? `?${query}` : ''}`);
   },
   workflowRun: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}`),
+  workflowRunEvents: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/events`),
+  workflowNodeLogs: (runId, nodeId) =>
+    apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/logs`),
+  retryWorkflowFromNode: (runId, nodeId) =>
+    apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry-from`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   controlWorkflowRun: (runId, payload = {}) =>
     apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/control`, {
       method: 'POST',

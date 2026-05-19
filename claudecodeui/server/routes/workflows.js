@@ -1,6 +1,6 @@
 import express from 'express';
 
-import { defaultWorkflowStudioStore } from '../services/workflow-studio-service.js';
+import { defaultWorkflowStudioStore, getWorkflowNodeTypeDefinitions } from '../services/workflow-studio-service.js';
 
 const router = express.Router();
 
@@ -30,6 +30,10 @@ router.post('/validate', async (req, res) => {
   } catch (error) {
     sendWorkflowError(res, error, 400, 'Failed to validate workflow');
   }
+});
+
+router.get('/node-types', (_req, res) => {
+  res.json({ success: true, nodeTypes: getWorkflowNodeTypeDefinitions() });
 });
 
 router.post('/import', async (req, res) => {
@@ -109,6 +113,24 @@ router.get('/:id/export', async (req, res) => {
     return res.json({ success: true, format: req.query.format || 'json', content });
   } catch (error) {
     return sendWorkflowError(res, error, 500, 'Failed to export workflow');
+  }
+});
+
+router.post('/:id/validate-run', async (req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.validateRun(req.params.id, req.body || {});
+    res.status(result.valid ? 200 : 400).json({ success: result.valid, validation: result });
+  } catch (error) {
+    sendWorkflowError(res, error, error?.statusCode || 400, 'Failed to validate workflow run');
+  }
+});
+
+router.post('/:id/clone', async (req, res) => {
+  try {
+    const workflow = await defaultWorkflowStudioStore.cloneWorkflow(req.params.id, req.body || {});
+    res.status(201).json({ success: true, workflow });
+  } catch (error) {
+    sendWorkflowError(res, error, error?.statusCode || 400, 'Failed to clone workflow');
   }
 });
 

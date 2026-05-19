@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   createWorkflowStudioStore,
+  getWorkflowNodeTypeDefinitions,
   normalizeWorkflowDefinition,
   validateWorkflowDefinition,
 } from '../workflow-studio-service.js';
@@ -480,5 +481,141 @@ describe('workflow studio service', () => {
       'recipe-code-impact-analysis',
       'recipe-pr-description',
     ]));
+  });
+
+  test('exposes typed node definitions for the visual editor contract', () => {
+    const definitions = getWorkflowNodeTypeDefinitions();
+
+    expect(definitions.map((definition) => definition.type)).toEqual(expect.arrayContaining([
+      'agent',
+      'subagent',
+      'mcp',
+      'tool',
+      'shell',
+      'artifact',
+      'approval',
+      'condition',
+      'join',
+    ]));
+    expect(definitions.find((definition) => definition.type === 'shell')).toMatchObject({
+      label: 'Shell',
+      permissions: expect.objectContaining({ risky: true, action: 'shell' }),
+      configSchema: expect.objectContaining({
+        fields: expect.arrayContaining([
+          expect.objectContaining({ name: 'command', required: true }),
+          expect.objectContaining({ name: 'timeoutMs' }),
+        ]),
+      }),
+      outputSchema: expect.objectContaining({
+        fields: expect.arrayContaining([
+          expect.objectContaining({ name: 'stdout', type: 'text' }),
+          expect.objectContaining({ name: 'exitCode', type: 'number' }),
+        ]),
+      }),
+    });
+  });
+
+  test('validates run inputs, node mappings, dependencies, and permission blockers without executing', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'dry-run-flow',
+      name: 'Dry Run Flow',
+      profileId: 'build',
+      permissionPreset: 'enterprise-safe',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', prompt: 'Review {{nodes.explore.output.summary}}' },
+        { id: 'broken', type: 'agent', prompt: 'Missing {{nodes.review.output.not_here}}' },
+        { id: 'shell', type: 'shell', command: 'npm test' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'broken' },
+        { from: 'broken', to: 'shell' },
+      ],
+    });
+
+    const result = await store.validateRun('dry-run-flow', { inputs: {} });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_required_input', inputId: 'change_request' }),
+      expect.objectContaining({ code: 'missing_output_field', nodeId: 'broken', field: 'prompt' }),
+      expect.objectContaining({ code: 'permission_denied', nodeId: 'shell' }),
+    ]));
+    expect(result.availableVariables).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'inputs.change_request', type: 'text' }),
+      expect.objectContaining({ path: 'nodes.explore.output.summary' }),
+    ]));
+  });
+
+  test('clones workflow templates with manifest metadata into editable workflows', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.ready();
+
+    const clone = await store.cloneWorkflow('recipe-redmine-review', {
+      name: 'Project Redmine Review',
+      projectPath: 'E:\\AIINWORK',
+    });
+
+    expect(clone.id).not.toBe('recipe-redmine-review');
+    expect(clone.name).toBe('Project Redmine Review');
+    expect(clone.metadata.templateManifest).toMatchObject({
+      version: expect.any(String),
+      dependencies: expect.any(Object),
+      expectedOutputs: expect.any(Array),
+    });
+    expect(store.getWorkflow(clone.id)).toMatchObject({ id: clone.id, name: 'Project Redmine Review' });
+  });
+
+  test('lists run events and node logs, and retries from a failed node through downstream nodes', async () => {
+    let failReview = true;
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        agent: async ({ node }) => {
+          if (node.id === 'review' && failReview) {
+            throw new Error('review failed');
+          }
+          return { summary: `${node.id} done` };
+        },
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'retry-from-flow',
+      name: 'Retry From Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [
+        { id: 'explore', type: 'agent' },
+        { id: 'review', type: 'agent' },
+        { id: 'artifact', type: 'artifact' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'artifact' },
+      ],
+    });
+
+    const failed = await store.createRun('retry-from-flow');
+    expect(failed.status).toBe('failed');
+
+    const events = store.listRunEvents(failed.id);
+    const logs = store.listNodeLogs(failed.id, 'review');
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_failed']));
+    expect(logs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'error', message: 'review failed' }),
+    ]));
+
+    failReview = false;
+    const retried = await store.retryFromNode(failed.id, 'review');
+
+    expect(retried.status).toBe('completed');
+    expect(retried.nodeRuns.explore.status).toBe('completed');
+    expect(retried.nodeRuns.review.status).toBe('completed');
+    expect(retried.nodeRuns.artifact.status).toBe('completed');
+    expect(store.listRunEvents(failed.id).map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_retry_from']));
   });
 });

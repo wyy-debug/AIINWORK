@@ -46,6 +46,44 @@ export interface WorkflowEdge {
   condition?: string;
 }
 
+export interface WorkflowNodeConfigField {
+  name: string;
+  label: string;
+  type: string;
+  required?: boolean;
+  defaultValue?: unknown;
+  options?: string[];
+}
+
+export interface WorkflowNodeTypeDefinition {
+  type: WorkflowNodeType;
+  label: string;
+  description: string;
+  ports?: { inputs?: string[]; outputs?: string[] };
+  configSchema?: { fields?: WorkflowNodeConfigField[] };
+  permissions?: { risky?: boolean; action?: string };
+  outputSchema?: { fields?: Array<{ name: string; type: string; label?: string }> };
+  ui?: Record<string, unknown>;
+  layout?: Record<string, unknown>;
+}
+
+export interface WorkflowRunEvent {
+  id: string;
+  category?: string;
+  type: string;
+  payload?: Record<string, unknown>;
+  createdAt?: number;
+  runId?: string;
+  workflowId?: string;
+}
+
+export interface WorkflowNodeLog {
+  timestamp?: number;
+  level: 'info' | 'warn' | 'error' | string;
+  message: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface WorkflowDefinition {
   id: string;
   name: string;
