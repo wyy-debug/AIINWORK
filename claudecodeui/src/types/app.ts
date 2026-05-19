@@ -10,6 +10,7 @@ export type AppTab =
   | 'browser'
   | 'artifacts'
   | 'subagents'
+  | 'workflows'
   | 'tasks'
   | 'preview'
   | 'agents'

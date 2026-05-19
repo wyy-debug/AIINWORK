@@ -16,6 +16,7 @@ describe('E2E screenshot evidence gate', () => {
     expect(existsSync(resolve(root, 'playwright.config.ts'))).toBe(true);
     expect(existsSync(resolve(root, 'e2e/runtime-panels.screenshot.spec.ts'))).toBe(true);
     expect(existsSync(resolve(root, 'e2e/agent-capabilities.screenshot.spec.ts'))).toBe(true);
+    expect(existsSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'))).toBe(true);
     expect(existsSync(resolve(root, '../docs/verification/screenshot-evidence-gate.md'))).toBe(true);
     expect(existsSync(resolve(root, '../docs/verification/req-001-008-screenshot-backfill.md'))).toBe(true);
 
@@ -32,8 +33,12 @@ describe('E2E screenshot evidence gate', () => {
       'REQ-006-mcp-skill-marketplace.png',
       'REQ-007-runtime-timeline.png',
       'REQ-008-git-native-review-flow.png',
+      'REQ-049-workflow-editor.png',
+      'REQ-049-workflow-runner-approval.png',
+      'REQ-049-workflow-history-completed.png',
     ].forEach((screenshotName) => {
-      expect(spec).toContain(screenshotName);
+      const workflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+      expect(`${spec}\n${workflowSpec}`).toContain(screenshotName);
     });
   });
 });

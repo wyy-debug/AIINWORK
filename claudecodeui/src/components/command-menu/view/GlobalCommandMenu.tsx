@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FileDiff, FileText, Globe2, Layers3, Network, Play, Search } from 'lucide-react';
+import { FileDiff, FileText, GitBranch, Globe2, Layers3, Network, Play, Search } from 'lucide-react';
 import type { Dispatch, SetStateAction } from 'react';
 
 import type { AppTab, Project } from '../../../types/app';
@@ -29,6 +29,7 @@ const BUILT_IN: CommandItem[] = [
   { name: '/results', description: 'Open saved results', tab: 'artifacts' },
   { name: '/artifacts', description: 'Open saved results', tab: 'artifacts' },
   { name: '/subagents', description: 'Open Subagent workspace', tab: 'subagents' },
+  { name: '/workflows', description: 'Open Agent Workflow Studio', tab: 'workflows' },
   { name: '/worktree', description: 'Open Worktree controls', tab: 'actions', mode: 'worktree' },
   { name: '/status', description: 'Show Argus status', tab: 'chat' },
   { name: '/mcp', description: 'Open MCP settings', tab: 'chat', mode: 'mcp' },
@@ -43,6 +44,7 @@ const iconFor = (name: string) => {
   if (name.includes('preview')) return Globe2;
   if (name.includes('artifact') || name.includes('result')) return FileText;
   if (name.includes('subagent')) return Network;
+  if (name.includes('workflow')) return GitBranch;
   if (name.includes('action') || name.includes('worktree')) return Play;
   if (name.includes('run')) return Play;
   return Layers3;

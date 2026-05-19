@@ -8,6 +8,7 @@ import ActionsPanel from '../../actions/view/ActionsPanel';
 import BrowserPanel from '../../browser/view/BrowserPanel';
 import ArtifactsPanel from '../../artifacts/view/ArtifactsPanel';
 import SubagentsWorkspace from '../../subagents/view/SubagentsWorkspace';
+import WorkflowStudio from '../../workflows/view/WorkflowStudio';
 import GlobalCommandMenu from '../../command-menu/view/GlobalCommandMenu';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
@@ -232,6 +233,15 @@ function MainContent({
           {visibleActiveTab === 'subagents' && (
             <div className="h-full overflow-hidden">
               <SubagentsWorkspace
+                selectedProject={selectedProject}
+                sessionId={selectedSession?.id || null}
+              />
+            </div>
+          )}
+
+          {visibleActiveTab === 'workflows' && (
+            <div className="h-full overflow-hidden">
+              <WorkflowStudio
                 selectedProject={selectedProject}
                 sessionId={selectedSession?.id || null}
               />

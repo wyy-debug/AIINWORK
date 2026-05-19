@@ -71,6 +71,8 @@ import subagentRunsRoutes from './routes/subagent-runs.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import triageRoutes from './routes/triage.js';
 import userRoutes from './routes/user.js';
+import workflowRunsRoutes from './routes/workflow-runs.js';
+import workflowsRoutes from './routes/workflows.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
 import { resolveAgentRuntime, resolveSkillReferences } from './services/agent-config-service.js';
@@ -508,6 +510,8 @@ app.use('/api/agents', authenticateToken, agentsRoutes);
 app.use('/api/agent-profiles', authenticateToken, agentProfilesRoutes);
 app.use('/api/recipes', authenticateToken, recipesRoutes);
 app.use('/api/subagent-runs', authenticateToken, subagentRunsRoutes);
+app.use('/api/workflows', authenticateToken, workflowsRoutes);
+app.use('/api/workflow-runs', authenticateToken, workflowRunsRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, sessionAgentRoutes);

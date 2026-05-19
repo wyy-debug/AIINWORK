@@ -309,6 +309,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  workflows: () => apiFetch('/api/workflows'),
+  workflow: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}`),
+  saveWorkflow: (workflow) =>
+    apiFetch(workflow?.id ? `/api/workflows/${encodeURIComponent(workflow.id)}` : '/api/workflows', {
+      method: workflow?.id ? 'PUT' : 'POST',
+      body: JSON.stringify({ workflow }),
+    }),
+  validateWorkflow: (workflow) =>
+    apiFetch('/api/workflows/validate', {
+      method: 'POST',
+      body: JSON.stringify({ workflow }),
+    }),
+  exportWorkflow: (workflowId, format = 'json') =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/export?format=${encodeURIComponent(format)}`),
+  importWorkflow: (content) =>
+    apiFetch('/api/workflows/import', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  startWorkflowRun: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  workflowRuns: ({ workflowId = '', status = '', limit = 25 } = {}) => {
+    const params = new URLSearchParams();
+    if (workflowId) params.set('workflowId', workflowId);
+    if (status) params.set('status', status);
+    if (limit) params.set('limit', String(limit));
+    const query = params.toString();
+    return apiFetch(`/api/workflow-runs${query ? `?${query}` : ''}`);
+  },
+  workflowRun: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}`),
+  controlWorkflowRun: (runId, payload = {}) =>
+    apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/control`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  controlWorkflowNode: (runId, nodeId, payload = {}) =>
+    apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/control`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   hubUsage: ({ days = 7, from = '', to = '' } = {}) => {
     const params = new URLSearchParams();
     if (days) params.set('days', String(days));

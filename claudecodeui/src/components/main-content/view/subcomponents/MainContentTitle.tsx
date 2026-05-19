@@ -41,6 +41,10 @@ function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: st
     return 'Subagents';
   }
 
+  if (activeTab === 'workflows') {
+    return 'Workflows';
+  }
+
   if (activeTab === 'tasks' && shouldShowTasksTab) {
     return 'TaskMaster';
   }

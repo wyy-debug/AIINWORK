@@ -100,6 +100,7 @@ export default function AppContent() {
         || tab === 'browser'
         || tab === 'artifacts'
         || tab === 'subagents'
+        || tab === 'workflows'
       ) {
         setActiveTab(tab);
       }

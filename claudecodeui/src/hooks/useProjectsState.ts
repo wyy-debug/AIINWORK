@@ -133,6 +133,7 @@ const VALID_TABS: Set<string> = new Set([
   'browser',
   'artifacts',
   'subagents',
+  'workflows',
 ]);
 
 const isValidTab = (tab: string): tab is AppTab => {

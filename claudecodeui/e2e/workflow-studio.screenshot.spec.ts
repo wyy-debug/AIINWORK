@@ -1,0 +1,128 @@
+import { mkdir, stat } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+
+import { expect, type Page, type Route, test } from '@playwright/test';
+
+const screenshotDir = resolve(process.cwd(), 'output/playwright/screenshots');
+
+test.use({ viewport: { width: 1920, height: 1080 } });
+
+const project = {
+  name: 'AIINWORK',
+  displayName: 'AIINWORK',
+  fullPath: 'E:\\AIINWORK',
+  path: 'E:\\AIINWORK',
+  sessions: [],
+};
+
+const workflow = {
+  id: 'agent-review-delivery',
+  name: 'Agent Review Delivery',
+  description: 'Explore, approve, build, and collect an artifact.',
+  profileId: 'build',
+  permissionPreset: 'auto-edit',
+  inputs: [{ id: 'change_request', label: 'Change request', type: 'textarea', required: true }],
+  outputs: [{ id: 'summary', label: 'Summary', type: 'markdown' }],
+  maxConcurrency: 4,
+  nodes: [
+    { id: 'explore', type: 'subagent', title: 'Explore Subagent', agentId: 'subagent-explore', prompt: 'Explore impact.', permission: '', position: { x: 80, y: 140 } },
+    { id: 'approval', type: 'approval', title: 'Human Approval', prompt: 'Confirm before edits.', permission: '', position: { x: 360, y: 140 } },
+    { id: 'artifact', type: 'artifact', title: 'Delivery Artifact', prompt: 'Collect summary.', permission: '', position: { x: 640, y: 140 } },
+  ],
+  edges: [
+    { id: 'explore-approval', from: 'explore', to: 'approval', mode: 'success' },
+    { id: 'approval-artifact', from: 'approval', to: 'artifact', mode: 'success' },
+  ],
+};
+
+const waitingRun = {
+  id: 'workflow-run-1',
+  workflowId: workflow.id,
+  workflowName: workflow.name,
+  status: 'waiting_approval',
+  createdAt: Date.now(),
+  nodeRuns: {
+    explore: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent', status: 'completed', attempt: 1, logs: ['Completed subagent node.'] },
+    approval: { nodeId: 'approval', type: 'approval', title: 'Human Approval', status: 'waiting_approval', attempt: 1, waitingReason: 'Waiting for approval.', logs: ['Waiting for approval.'] },
+    artifact: { nodeId: 'artifact', type: 'artifact', title: 'Delivery Artifact', status: 'pending', attempt: 0, logs: [] },
+  },
+  artifacts: [],
+  timelineEvents: [],
+};
+
+const completedRun = {
+  ...waitingRun,
+  status: 'completed',
+  nodeRuns: {
+    ...waitingRun.nodeRuns,
+    approval: { ...waitingRun.nodeRuns.approval, status: 'completed', waitingReason: '', logs: ['Approval decision: continue.'] },
+    artifact: { ...waitingRun.nodeRuns.artifact, status: 'completed', attempt: 1, logs: ['Completed artifact node.'] },
+  },
+  artifacts: [{ id: 'artifact-1', kind: 'workflow-summary', title: 'Delivery Artifact' }],
+};
+
+async function json(route: Route, body: unknown, status = 200) {
+  await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+}
+
+async function installMockApi(page: Page) {
+  let runState = waitingRun;
+
+  await page.addInitScript(() => {
+    localStorage.setItem('activeTab', 'workflows');
+  });
+
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+
+    if (path === '/api/projects') return json(route, [project]);
+    if (path.startsWith('/api/conversations')) return json(route, { project: { ...project, name: 'Conversations', sessions: [] } });
+    if (path === '/api/workflows') return json(route, { success: true, workflows: [workflow] });
+    if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
+    if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
+    if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
+    if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
+    if (path === `/api/workflow-runs/${waitingRun.id}/nodes/approval/control`) {
+      runState = completedRun;
+      return json(route, { success: true, run: runState });
+    }
+    if (path === '/api/agents') return json(route, {
+      success: true,
+      agents: [
+        { id: 'build', name: 'Build', status: 'enabled', mode: 'primary' },
+        { id: 'subagent-explore', name: 'Explore', status: 'enabled', mode: 'subagent' },
+      ],
+    });
+    if (path === '/api/git/status') return json(route, { files: [] });
+    if (path === '/api/artifacts') return json(route, { artifacts: [] });
+    if (path === '/api/settings/notification-preferences') return json(route, { success: true, preferences: {} });
+    if (path === '/api/commands/list') return json(route, { builtIn: [], custom: [] });
+    return json(route, { success: true });
+  });
+}
+
+async function screenshot(page: Page, name: string) {
+  const path = resolve(screenshotDir, name);
+  await mkdir(dirname(path), { recursive: true });
+  await page.screenshot({ path, fullPage: true });
+  const file = await stat(path);
+  expect(file.size).toBeGreaterThan(0);
+}
+
+test('REQ-049 captures Workflow Studio editor, runner, approval, and history @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
+  await screenshot(page, 'REQ-049-workflow-editor.png');
+
+  await page.getByTestId('workflow-run').click();
+  await expect(page.getByTestId('workflow-runs')).toBeVisible();
+  await expect(page.getByTestId('workflow-runs').getByText('waiting_approval').first()).toBeVisible();
+  await screenshot(page, 'REQ-049-workflow-runner-approval.png');
+
+  await page.getByTestId('workflow-approve-node').click();
+  await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
+  await screenshot(page, 'REQ-049-workflow-history-completed.png');
+});
