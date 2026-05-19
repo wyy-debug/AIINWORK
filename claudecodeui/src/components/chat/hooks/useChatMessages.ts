@@ -270,7 +270,12 @@ function toSubagentControlEvent(value: unknown): Pick<SubagentEventEnvelope, 'ty
 function isObsidianAutoCaptureStatus(message: NormalizedMessage): boolean {
   const event = (message as any).event;
   return message.kind === 'status'
-    && (message.text === 'obsidian_auto_capture_result' || event === 'obsidian_auto_capture_result');
+    && (
+      message.text === 'obsidian_auto_capture_result'
+      || event === 'obsidian_auto_capture_result'
+      || message.text === 'obsidian_wiki_result'
+      || event === 'obsidian_wiki_result'
+    );
 }
 
 function isObsidianContextStatus(message: NormalizedMessage): boolean {
@@ -281,6 +286,16 @@ function isObsidianContextStatus(message: NormalizedMessage): boolean {
 
 function statusPayloadForObsidianCapture(message: NormalizedMessage): Record<string, unknown> {
   const record = message as any;
+  const wiki = record.obsidianWiki && typeof record.obsidianWiki === 'object' ? record.obsidianWiki : null;
+  if (wiki) {
+    return {
+      ...wiki,
+      status: wiki.status,
+      candidateIds: wiki.candidateIds,
+      candidates: wiki.candidates,
+      error: wiki.error,
+    };
+  }
   return {
     status: record.status,
     captured: record.captured,

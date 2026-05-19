@@ -4,6 +4,9 @@ import {
   createMemoryCandidates as defaultCreateMemoryCandidates,
 } from './obsidian-memory-service.js';
 import {
+  createWikiCandidates as defaultCreateWikiCandidates,
+} from './obsidian-wiki-candidate-service.js';
+import {
   readObsidianBridgeConfig as defaultReadObsidianBridgeConfig,
 } from './obsidian-bridge-service.js';
 
@@ -209,6 +212,7 @@ const resolveWikiText = (data = {}, parsed = {}) => {
 export const applyExplicitWikiIntentToChatCommand = async (data = {}, {
   readObsidianBridgeConfig = defaultReadObsidianBridgeConfig,
   createMemoryCandidates = defaultCreateMemoryCandidates,
+  createWikiCandidates = null,
 } = {}) => {
   const command = typeof data.command === 'string' ? data.command : '';
   const parsed = parseExplicitWikiIntent(command);
@@ -244,7 +248,10 @@ export const applyExplicitWikiIntentToChatCommand = async (data = {}, {
     const source = sourceForData(data, parsed);
     const explicitWikiContext = normalizeExplicitWikiContext(data.options?.explicitWikiContext);
     const kind = parsed.referential ? classifyWikiKind(text) : parsed.kind;
-    const candidateResult = await createMemoryCandidates({
+    const createCandidates = createWikiCandidates || (createMemoryCandidates === defaultCreateMemoryCandidates
+      ? defaultCreateWikiCandidates
+      : createMemoryCandidates);
+    const candidateResult = await createCandidates({
       candidates: [buildWikiCandidate(text, kind, {
         ...source,
         ...(explicitWikiContext ? { explicitWikiContext } : {}),

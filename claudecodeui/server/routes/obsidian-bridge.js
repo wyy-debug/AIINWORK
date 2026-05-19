@@ -38,6 +38,13 @@ import {
   listMemoryCandidates,
 } from '../services/obsidian-memory-service.js';
 import {
+  commitWikiCandidates,
+  createWikiCandidates,
+  discardWikiCandidate,
+  editWikiCandidate,
+  listWikiCandidates,
+} from '../services/obsidian-wiki-candidate-service.js';
+import {
   assessChatKnowledgeCapture,
   autoCaptureChatKnowledge,
 } from '../services/chat-knowledge-capture-service.js';
@@ -290,6 +297,46 @@ const handleWikiUpload = async (req, res) => {
 
 router.post('/wiki/upload', (req, res) => {
   void handleWikiUpload(req, res);
+});
+
+router.get('/wiki/candidates', async (_req, res) => {
+  try {
+    res.json(listWikiCandidates());
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to list Obsidian Wiki candidates');
+  }
+});
+
+router.post('/wiki/candidates', async (req, res) => {
+  try {
+    res.json(createWikiCandidates(req.body || {}));
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to create Obsidian Wiki candidates');
+  }
+});
+
+router.patch('/wiki/candidates/:id', async (req, res) => {
+  try {
+    res.json(editWikiCandidate({ candidateId: req.params.id, patch: req.body || {} }));
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to edit Obsidian Wiki candidate');
+  }
+});
+
+router.delete('/wiki/candidates/:id', async (req, res) => {
+  try {
+    res.json(discardWikiCandidate({ candidateId: req.params.id }));
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to discard Obsidian Wiki candidate');
+  }
+});
+
+router.post('/wiki/candidates/commit', async (req, res) => {
+  try {
+    res.json(await commitWikiCandidates(req.body || {}, { ingestKnowledgeSourceToWiki }));
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to commit Obsidian Wiki candidates');
+  }
 });
 
 router.post('/wiki/ingest', async (req, res) => {

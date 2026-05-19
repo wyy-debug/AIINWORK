@@ -72,6 +72,13 @@ type ObsidianCaptureStatus = {
   obsidianPaths?: Record<string, string>;
   fallbackPath?: string;
   error?: string;
+  candidateIds?: string[];
+  candidates?: Array<{
+    id?: string;
+    title?: string;
+    targetPath?: string;
+    duplicateWarnings?: Array<{ reason?: string; candidateId?: string }>;
+  }>;
 };
 type ObsidianContextSource = {
   kind?: string;
@@ -124,8 +131,19 @@ const OBSIDIAN_CAPTURE_STATUS_LABELS: Record<string, string> = {
   skipped: '未保存',
   duplicate: '已保存过',
   candidate: '待确认记忆',
+  'candidate-created': 'Wiki candidate review',
+  'pending-review': 'Wiki candidate review',
+  'duplicate-warning': 'Wiki candidate review',
   in_progress: '正在保存',
 };
+
+const WIKI_CANDIDATE_REVIEW_ACTIONS = [
+  'Edit candidate',
+  'Commit candidate',
+  'Discard candidate',
+  'target path',
+  'duplicate warnings',
+];
 
 const OBSIDIAN_CAPTURE_MODE_LABELS: Record<string, string> = {
   'project-knowledge': '项目知识库',
@@ -262,6 +280,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     : '';
   const obsidianCaptureDetail = obsidianTargetDetail
     || obsidianPathsDetail
+    || (Array.isArray(obsidianCaptureStatus?.candidates)
+      ? obsidianCaptureStatus.candidates
+        .map((candidate) => [
+          candidate.title,
+          candidate.targetPath ? `target path: ${candidate.targetPath}` : '',
+          candidate.duplicateWarnings?.length ? `duplicate warnings: ${candidate.duplicateWarnings.length}` : '',
+        ].filter(Boolean).join(' / '))
+        .filter(Boolean)
+        .join('\n')
+      : '')
     || obsidianCaptureStatus?.obsidianPath
     || obsidianCaptureStatus?.fallbackPath
     || obsidianCaptureStatus?.error
@@ -995,6 +1023,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     {obsidianCaptureLabel}
                     {obsidianCaptureStatus?.status !== 'skipped' && obsidianCaptureModeLabel ? ` · ${obsidianCaptureModeLabel}` : ''}
                     {obsidianCaptureReason ? ` · ${obsidianCaptureReason}` : ''}
+                    {obsidianCaptureStatus?.status === 'candidate-created' ? ` · ${WIKI_CANDIDATE_REVIEW_ACTIONS.slice(0, 3).join(' / ')}` : ''}
                   </span>
                 )}
                 {!isGrouped && <span>{formattedTime}</span>}
