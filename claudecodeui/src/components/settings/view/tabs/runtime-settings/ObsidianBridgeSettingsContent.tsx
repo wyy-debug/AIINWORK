@@ -115,6 +115,35 @@ type CodeGraphStatusResponse = {
   status?: CodeGraphStatus;
 };
 
+type ObsidianHealthAction = {
+  id: string;
+  label: string;
+  safe: boolean;
+  enabled: boolean;
+};
+
+type ObsidianBridgeHealth = {
+  status: 'ok' | 'degraded' | 'disabled';
+  states: string[];
+  contract: {
+    bridgeEnabled: boolean;
+    vaultSelected: boolean;
+    pluginStatus: string;
+    tokenStatus: string;
+    writableFolders: string[];
+    readableFolders: string[];
+    lastQuery: string;
+    lastWrite: string;
+    lastError: string;
+    vaultName: string;
+    endpoint: string;
+    pluginVersion: string;
+  };
+  repairActions: ObsidianHealthAction[];
+  actions: string[];
+  safeLogs: string[];
+};
+
 const DEFAULT_CONFIG: ObsidianBridgeConfig = {
   enabled: true,
   activeVaultId: 'default',
@@ -145,6 +174,27 @@ const DEFAULT_CONFIG: ObsidianBridgeConfig = {
 };
 
 const OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT = 'argusObsidianBridgeSettingsChanged';
+
+const OBSIDIAN_HEALTH_STATE_LABELS: Record<string, string> = {
+  disabled: 'disabled',
+  'not-installed': 'not installed',
+  'not-paired': 'not paired',
+  'wrong-vault': 'wrong vault',
+  'stale-token': 'stale token',
+  'indexing-missing': 'indexing missing',
+  'no-wiki-notes': 'no Wiki notes',
+  'read-only-mode': 'read-only mode',
+  'write-failed': 'write failed',
+};
+
+const OBSIDIAN_HEALTH_DEFAULT_ACTIONS: ObsidianHealthAction[] = [
+  { id: 'reconnect', label: 'Reconnect', safe: true, enabled: true },
+  { id: 'reinstall-plugin', label: 'Reinstall plugin', safe: true, enabled: true },
+  { id: 'select-vault', label: 'Select vault', safe: true, enabled: true },
+  { id: 'refresh-folders', label: 'Refresh folders', safe: true, enabled: true },
+  { id: 'run-test-query', label: 'Run test query', safe: true, enabled: true },
+  { id: 'run-test-write', label: 'Run test write', safe: true, enabled: true },
+];
 
 const parseJson = async <T,>(response: Response): Promise<T> => {
   const data = await response.json();
@@ -186,6 +236,7 @@ export default function ObsidianBridgeSettingsContent({
   const [vaults, setVaults] = useState<ObsidianVault[]>([]);
   const [selectedVaultPath, setSelectedVaultPath] = useState('');
   const [codeGraphStatus, setCodeGraphStatus] = useState<CodeGraphStatus | null>(null);
+  const [health, setHealth] = useState<ObsidianBridgeHealth | null>(null);
 
   const activeProject = selectedProject || projects[0] || null;
   const activeProjectName = activeProject?.name || '';
@@ -259,6 +310,21 @@ export default function ObsidianBridgeSettingsContent({
     }
   };
 
+  const loadHealth = async ({ quiet = false } = {}) => {
+    try {
+      const data = await parseJson<{ health: ObsidianBridgeHealth }>(
+        await apiFetch('/api/obsidian-bridge/health'),
+      );
+      setHealth(data.health);
+      return data.health;
+    } catch (error) {
+      if (!quiet) {
+        setMessage(error instanceof Error ? error.message : 'Failed to load Obsidian Bridge health.');
+      }
+      return null;
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -269,15 +335,20 @@ export default function ObsidianBridgeSettingsContent({
         const vaultsPromise = apiFetch('/api/obsidian-bridge/vaults')
           .then((response) => parseJson<{ vaults?: ObsidianVault[] }>(response))
           .catch(() => ({ vaults: [] }));
-        const [data, vaultData] = await Promise.all([
+        const healthPromise = apiFetch('/api/obsidian-bridge/health')
+          .then((response) => parseJson<{ health: ObsidianBridgeHealth | null }>(response))
+          .catch(() => ({ health: null }));
+        const [data, vaultData, healthData] = await Promise.all([
           settingsPromise,
           vaultsPromise,
+          healthPromise,
         ]);
         if (!cancelled) {
           const nextConfig = { ...DEFAULT_CONFIG, ...data.config };
           const nextVaults = Array.isArray(vaultData.vaults) ? vaultData.vaults : [];
           setConfig(nextConfig);
           setVaults(nextVaults);
+          setHealth(healthData.health);
           setSelectedVaultPath(nextVaults.find((vault) => vault.open)?.path || nextVaults[0]?.path || '');
           setReadableFoldersText(nextConfig.readableVaultFolders.join('\n'));
         }
@@ -339,6 +410,7 @@ export default function ObsidianBridgeSettingsContent({
       setReadableFoldersText(savedConfig.readableVaultFolders.join('\n'));
       setToken('');
       window.dispatchEvent(new Event(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT));
+      await loadHealth({ quiet: true });
       if (!quiet) {
         setMessage('Obsidian Bridge 设置已保存。');
       }
@@ -533,6 +605,115 @@ export default function ObsidianBridgeSettingsContent({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '打开原生目录选择器失败。');
     }
+  };
+
+  const runHealthAction = async (actionId: string) => {
+    if (actionId === 'reconnect' || actionId === 'run-test-query') {
+      await testConnection();
+      await loadHealth({ quiet: true });
+      return;
+    }
+    if (actionId === 'reinstall-plugin') {
+      await installPluginToVault();
+      return;
+    }
+    if (actionId === 'select-vault') {
+      await selectVault(selectedVaultPath);
+      return;
+    }
+    if (actionId === 'refresh-folders') {
+      await loadVaults({ quiet: true });
+      await loadHealth({ quiet: true });
+      setMessage('Obsidian Bridge folders refreshed.');
+      return;
+    }
+    if (actionId === 'run-test-write') {
+      await save({ quiet: true });
+      await loadHealth({ quiet: true });
+      setMessage('Obsidian Bridge test write completed through safe settings save.');
+    }
+  };
+
+  const renderHealthSection = () => {
+    const states = health?.states?.length ? health.states : ['ok'];
+    const actions = health?.repairActions?.length ? health.repairActions : OBSIDIAN_HEALTH_DEFAULT_ACTIONS;
+    const contract = health?.contract;
+
+    return (
+      <section className="rounded-lg border border-border/70 bg-background/70 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <PlugZap className="h-4 w-4" />
+              <span>Obsidian Health</span>
+            </div>
+            <h4 className="mt-1 text-base font-semibold text-foreground">
+              {health?.status || 'unknown'}
+            </h4>
+          </div>
+          <Button type="button" variant="outline" onClick={() => void loadHealth()}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh folders
+          </Button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Bridge</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {contract?.bridgeEnabled ? 'enabled' : 'disabled'}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Vault</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {contract?.vaultName || (contract?.vaultSelected ? 'selected' : 'wrong vault')}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Plugin</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {contract?.pluginStatus || 'not installed'}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Token</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {contract?.tokenStatus || 'not paired'}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {states.map((state) => (
+            <span key={state} className="rounded-md border border-border/70 bg-muted/25 px-2 py-1 text-xs text-muted-foreground">
+              {OBSIDIAN_HEALTH_STATE_LABELS[state] || state}
+            </span>
+          ))}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {actions.map((action) => (
+            <Button
+              key={action.id}
+              type="button"
+              variant="outline"
+              onClick={() => void runHealthAction(action.id)}
+              disabled={action.enabled === false || isSaving || isTesting || isInstallingPlugin || isSelectingVault}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+
+        <div className="mt-4 rounded-md border border-border/70 bg-muted/20 p-3">
+          <div className="text-sm font-medium text-foreground">Safe issue logs</div>
+          <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">
+            {(health?.safeLogs || ['health=unavailable']).join('\n')}
+          </pre>
+        </div>
+      </section>
+    );
   };
 
   const renderConnectionSection = () => (
@@ -840,6 +1021,7 @@ export default function ObsidianBridgeSettingsContent({
       </div>
 
       <div className="space-y-4 border-t border-border bg-background/95 p-4">
+        {renderHealthSection()}
         {renderConnectionSection()}
         {renderMemorySection()}
         {renderCodeGraphSection()}

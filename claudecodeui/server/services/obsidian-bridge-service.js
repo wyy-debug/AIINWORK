@@ -27,6 +27,8 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
   fallbackToProjectKnowledge: true,
   lastConnection: '',
+  lastQuery: '',
+  lastWrite: '',
   lastError: '',
   pluginVersion: '',
   aiMemoryReadbackEnabled: true,
@@ -298,6 +300,8 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     readableVaultFolders: activeVault.readableFolders,
     fallbackToProjectKnowledge: source.fallbackToProjectKnowledge !== false,
     lastConnection: activeVault.lastConnection || readString(source.lastConnection),
+    lastQuery: readString(source.lastQuery).slice(0, 500),
+    lastWrite: readString(source.lastWrite).slice(0, 500),
     lastError: (activeVault.lastError || readString(source.lastError)).slice(0, 500),
     pluginVersion: (activeVault.pluginVersion || readString(source.pluginVersion)).slice(0, 80),
     wikiPrimaryEnabled: source.wikiPrimaryEnabled !== false,
@@ -389,6 +393,92 @@ const readStoredConfigRaw = () => {
 export const readObsidianBridgeConfig = ({ includeToken = false } = {}) => {
   const config = readStoredConfig();
   return includeToken ? config : toPublicConfig(config);
+};
+
+const hasAuthError = (value = '') => /\b(401|403|unauthori[sz]ed|forbidden|stale\s+token|token)\b/i.test(value);
+
+const hasWriteFailure = (value = '') => /\b(write|save|upsert|patch)\b.*\b(fail|failed|error|denied)\b|\b(fail|failed|error|denied)\b.*\b(write|save|upsert|patch)\b/i.test(value);
+
+const buildBridgeRepairActions = () => [
+  { id: 'reconnect', label: 'Reconnect', safe: true, enabled: true },
+  { id: 'reinstall-plugin', label: 'Reinstall plugin', safe: true, enabled: true },
+  { id: 'select-vault', label: 'Select vault', safe: true, enabled: true },
+  { id: 'refresh-folders', label: 'Refresh folders', safe: true, enabled: true },
+  { id: 'run-test-query', label: 'Run test query', safe: true, enabled: true },
+  { id: 'run-test-write', label: 'Run test write', safe: true, enabled: true },
+];
+
+export const getObsidianBridgeHealth = () => {
+  const config = readObsidianBridgeConfig({ includeToken: true });
+  const activeVault = activeVaultFromConfig(config);
+  const lastError = readString(config.lastError || activeVault?.lastError);
+  const tokenConfigured = Boolean(config.token || activeVault?.token);
+  const pluginVersion = readString(config.pluginVersion || activeVault?.pluginVersion);
+  const vaultName = readString(config.vaultName || activeVault?.name);
+  const writableFolders = config.wikiPrimaryEnabled === false
+    ? []
+    : [normalizeVaultFolder(activeVault?.writeBaseFolder || '')].filter(Boolean);
+  const readableFolders = normalizeVaultFolders(config.readableVaultFolders || activeVault?.readableFolders);
+  const tokenStatus = !tokenConfigured
+    ? 'missing'
+    : hasAuthError(lastError)
+      ? 'stale'
+      : 'configured';
+  const pluginStatus = pluginVersion ? 'installed' : 'not-installed';
+  const states = new Set();
+
+  if (config.enabled === false) states.add('disabled');
+  if (!pluginVersion) states.add('not-installed');
+  if (!tokenConfigured) states.add('not-paired');
+  if (!vaultName) states.add('wrong-vault');
+  if (tokenStatus === 'stale') states.add('stale-token');
+  if (config.codegraphEnabled !== false && !readString(config.codegraphStorageRoot)) states.add('indexing-missing');
+  if (config.wikiReadbackEnabled !== false && !readableFolders.some((folder) => /wiki/i.test(folder))) states.add('no-wiki-notes');
+  if (writableFolders.length === 0) states.add('read-only-mode');
+  if (hasWriteFailure(lastError)) states.add('write-failed');
+
+  const stateList = [...states];
+  const status = config.enabled === false
+    ? 'disabled'
+    : stateList.length > 0
+      ? 'degraded'
+      : 'ok';
+  const actions = [];
+  if (config.enabled === false) actions.push('Enable Obsidian Bridge in Settings');
+  if (!tokenConfigured || tokenStatus === 'stale') actions.push('Reconnect Obsidian Bridge');
+  if (!pluginVersion) actions.push('Reinstall Obsidian plugin');
+  if (!vaultName) actions.push('Select the correct Obsidian vault');
+  if (writableFolders.length === 0) actions.push('Confirm write folders or disable read-only mode');
+  if (config.codegraphEnabled !== false && !readString(config.codegraphStorageRoot)) actions.push('Refresh CodeGraph indexing state');
+
+  return {
+    status,
+    states: stateList,
+    contract: {
+      bridgeEnabled: config.enabled !== false,
+      vaultSelected: Boolean(vaultName),
+      pluginStatus,
+      tokenStatus,
+      writableFolders,
+      readableFolders,
+      lastQuery: readString(config.lastQuery),
+      lastWrite: readString(config.lastWrite),
+      lastError,
+      vaultName,
+      endpoint: readString(config.endpoint),
+      pluginVersion,
+    },
+    repairActions: buildBridgeRepairActions(),
+    actions,
+    safeLogs: [
+      `status=${status}`,
+      `states=${stateList.join(',') || 'none'}`,
+      `endpoint=${readString(config.endpoint) || 'unset'}`,
+      `vault=${vaultName || 'unset'}`,
+      `plugin=${pluginVersion || 'missing'}`,
+      `lastError=${lastError || 'none'}`,
+    ],
+  };
 };
 
 export const saveObsidianBridgeConfig = (value = {}) => {

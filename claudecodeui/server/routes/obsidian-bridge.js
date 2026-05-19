@@ -9,6 +9,7 @@ import {
   appendObsidianPeriodicNote,
   buildObsidianContext,
   getActiveObsidianNote,
+  getObsidianBridgeHealth,
   getObsidianGraph,
   archiveObsidianDuplicates,
   migrateObsidianWikiLegacy,
@@ -170,6 +171,14 @@ router.get('/auto-capture/status', async (_req, res) => {
     res.json(getObsidianAutoCaptureBackfillStatus());
   } catch (error) {
     sendBridgeError(res, error, 'Failed to read Obsidian auto-capture status');
+  }
+});
+
+router.get('/health', async (_req, res) => {
+  try {
+    res.json({ success: true, health: getObsidianBridgeHealth() });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to read Obsidian bridge health');
   }
 });
 
