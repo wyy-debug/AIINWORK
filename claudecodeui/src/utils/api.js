@@ -359,8 +359,18 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ workflowIds }),
       }),
+    previewWorkflowPackageExport: (workflowIds = []) =>
+      apiFetch('/api/workflows/package/export/preview', {
+        method: 'POST',
+        body: JSON.stringify({ workflowIds }),
+      }),
     importWorkflowPackage: (workflowPackage) =>
       apiFetch('/api/workflows/package/import', {
+        method: 'POST',
+        body: JSON.stringify({ package: workflowPackage }),
+      }),
+    previewWorkflowPackageImport: (workflowPackage) =>
+      apiFetch('/api/workflows/package/import/preview', {
         method: 'POST',
         body: JSON.stringify({ package: workflowPackage }),
       }),
@@ -432,6 +442,19 @@ export const api = {
     apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/smoke`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  workflowTemplateDetail: (templateId) => apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/detail`),
+  workflowTemplateDependencies: (templateId) => apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/dependencies`),
+  forkWorkflowTemplate: (templateId, payload = {}) =>
+    apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/fork`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  workflowTemplateUpgradeStatus: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/template-upgrade`),
+  upgradeWorkflowTemplate: (workflowId) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/template-upgrade`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     }),
   workflowBenchmarkReadiness: () => apiFetch('/api/workflow-benchmarks'),
   runWorkflowBenchmarks: (payload = {}) =>

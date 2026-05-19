@@ -384,6 +384,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [agentBridgeState, setAgentBridgeState] = useState<Record<string, any> | null>(null);
   const [workflowToolRegistry, setWorkflowToolRegistry] = useState<Array<Record<string, any>>>([]);
   const [workflowMcpCatalog, setWorkflowMcpCatalog] = useState<Array<Record<string, any>>>([]);
+  const [templateProductState, setTemplateProductState] = useState<Record<string, any> | null>(null);
   const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
@@ -589,16 +590,28 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const browserScreenshotNode = workflowToolRegistry.some((tool) => tool.id === 'browser-screenshot')
     ? 'Browser Screenshot node is registered and outputs screenshotPath plus artifactId.'
     : 'Browser Screenshot node outputs screenshot artifact path and evidence reference.';
-  const templateDetailPage = useMemo(() => filteredWorkflows[0] ? `${filteredWorkflows[0].name}: DAG, inputs, dependencies, screenshots` : 'No template selected.', [filteredWorkflows]);
-  const templateDependencyCheck = 'Checks Agent/Profile/MCP/Skill/Secret dependencies before clone or run.';
-  const templateSmokeBadge = useMemo(() => releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Smoke status waits for benchmark readiness.', [releaseReadiness]);
-  const templateVersionUpgrade = 'Installed templates show available version upgrades and compatibility warnings.';
-  const templateMigrationNotes = 'Breaking changes and migration notes appear before template upgrade.';
-  const templateFork = 'Built-in templates can be forked into project-private workflows.';
-  const packageExportWizard = 'Export wizard collects workflow, dependencies, sample inputs, screenshots.';
-  const packageImportPreview = 'Import preview lists added/overwritten workflows, packages, templates.';
-  const marketplaceTrustBadge = 'Trust: built-in / local enterprise / community / unsigned.';
-  const enterpriseTemplatePack = 'CrashSight Analysis, Redmine Review, Code Impact Analysis, Publish PR.';
+  const templateDetailPage = useMemo(() => templateProductState?.detail
+    ? `${templateProductState.detail.manifest?.name}: ${templateProductState.detail.dag?.nodes?.length || 0} nodes, ${templateProductState.detail.manifest?.inputs?.length || 0} inputs`
+    : filteredWorkflows[0] ? `${filteredWorkflows[0].name}: DAG, inputs, dependencies, screenshots` : 'No template selected.', [filteredWorkflows, templateProductState]);
+  const templateDependencyCheck = templateProductState?.detail?.dependencyReport
+    ? `${templateProductState.detail.dependencyReport.ready ? 'ready' : 'missing'}: ${(templateProductState.detail.dependencyReport.missing || []).map((item: any) => item.name).join(', ') || 'all dependencies satisfied'}`
+    : 'Checks Agent/Profile/MCP/Skill/Secret dependencies before clone or run.';
+  const templateSmokeBadge = useMemo(() => templateProductState?.detail?.smokeStatus
+    ? `${templateProductState.detail.smokeStatus.status}: ${templateProductState.detail.smokeStatus.error || 'last smoke passed'}`
+    : releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Smoke status waits for benchmark readiness.', [releaseReadiness, templateProductState]);
+  const templateVersionUpgrade = templateProductState?.upgrade
+    ? `${templateProductState.upgrade.currentVersion} -> ${templateProductState.upgrade.latestVersion} (${templateProductState.upgrade.updateAvailable ? 'upgrade available' : 'current'})`
+    : 'Installed templates show available version upgrades and compatibility warnings.';
+  const templateMigrationNotes = Array.isArray(templateProductState?.upgrade?.migrationNotes) && templateProductState.upgrade.migrationNotes.length > 0
+    ? templateProductState.upgrade.migrationNotes.join('; ')
+    : 'No breaking migration notes for the selected template.';
+  const templateFork = templateProductState?.detail?.trust ? `Fork creates project-private copy from ${templateProductState.detail.trust} template.` : 'Built-in templates can be forked into project-private workflows.';
+  const packageExportWizard = templateProductState?.exportPreview
+    ? `Export preview: ${templateProductState.exportPreview.workflowCount} workflow(s), ${templateProductState.exportPreview.packageSizeEstimateBytes} bytes.`
+    : 'Export wizard collects workflow, dependencies, sample inputs, screenshots.';
+  const packageImportPreview = 'Import preview API lists added/overwritten workflows, packages, templates before writing.';
+  const marketplaceTrustBadge = templateProductState?.detail?.trust ? `Trust: ${templateProductState.detail.trust}` : 'Trust: built-in / local enterprise / community / unsigned.';
+  const enterpriseTemplatePack = workflows.filter((workflow) => ['recipe-crashsight-analysis', 'recipe-redmine-review', 'recipe-code-impact-analysis', 'recipe-pr-description'].includes(workflow.id)).map((workflow) => workflow.name).join(', ') || 'CrashSight Analysis, Redmine Review, Code Impact Analysis, Publish PR.';
   const eventTimelineCorrelation = useMemo(() => selectedRun ? `${selectedRun.id}: timeline events link back to run nodes` : 'No run selected.', [selectedRun]);
   const replayVisualizer = useMemo(() => selectedRun ? `${(runEvents[selectedRun.id] || selectedRun.timelineEvents || []).length} events available for replay` : 'No replay events.', [runEvents, selectedRun]);
   const failureClassifier = useMemo(() => Object.values(selectedRun?.nodeRuns || {}).some((nodeRun) => nodeRun.error) ? 'classified: permission / dependency / timeout / agent / mcp / shell / schema' : 'No failures to classify.', [selectedRun]);
@@ -696,19 +709,25 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (!draft.id) return;
     let cancelled = false;
     const loadSecurity = async () => {
-      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse] = await Promise.all([
+      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse, templateResponse, upgradeResponse, exportPreviewResponse] = await Promise.all([
         api.workflowSecurity(draft.id),
         api.exportWorkflowApprovalAudit(draft.id, selectedRun?.id || ''),
         api.workflowAgentBridge(draft.id),
         api.workflowToolRegistry(),
         api.workflowMcpToolCatalog(draft.id),
+        api.workflowTemplateDetail(draft.id),
+        api.workflowTemplateUpgradeStatus(draft.id),
+        api.previewWorkflowPackageExport([draft.id]),
       ]);
-      const [securityData, auditData, bridgeData, toolsData, mcpData] = await Promise.all([
+      const [securityData, auditData, bridgeData, toolsData, mcpData, templateData, upgradeData, exportPreviewData] = await Promise.all([
         securityResponse.json(),
         auditResponse.json(),
         bridgeResponse.json(),
         toolsResponse.json(),
         mcpResponse.json(),
+        templateResponse.json(),
+        upgradeResponse.json(),
+        exportPreviewResponse.json(),
       ]);
       if (cancelled) return;
       if (securityResponse.ok) {
@@ -721,6 +740,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       if (bridgeResponse.ok) setAgentBridgeState(bridgeData.bridge || null);
       if (toolsResponse.ok) setWorkflowToolRegistry(Array.isArray(toolsData.tools) ? toolsData.tools : []);
       if (mcpResponse.ok) setWorkflowMcpCatalog(Array.isArray(mcpData.tools) ? mcpData.tools : []);
+      setTemplateProductState({
+        detail: templateResponse.ok ? templateData.detail : null,
+        upgrade: upgradeResponse.ok ? upgradeData.status : null,
+        exportPreview: exportPreviewResponse.ok ? exportPreviewData.preview : null,
+      });
     };
     void loadSecurity().catch(() => undefined);
     return () => {

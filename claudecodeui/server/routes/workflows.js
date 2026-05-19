@@ -82,12 +82,32 @@ router.post('/package/export', async (req, res) => {
   }
 });
 
+router.post('/package/export/preview', async (req, res) => {
+  try {
+    const workflowIds = Array.isArray(req.body?.workflowIds) ? req.body.workflowIds : [];
+    const preview = await defaultWorkflowStudioStore.exportWorkflowPackagePreview(workflowIds);
+    res.json({ success: true, preview });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to preview workflow package export');
+  }
+});
+
 router.post('/package/import', async (req, res) => {
   try {
     const result = await defaultWorkflowStudioStore.importWorkflowPackage(req.body?.package || req.body || {});
     res.status(201).json({ success: true, ...result });
   } catch (error) {
     sendWorkflowError(res, error, 400, 'Failed to import workflow package');
+  }
+});
+
+router.post('/package/import/preview', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const preview = defaultWorkflowStudioStore.importWorkflowPackagePreview(req.body?.package || req.body || {});
+    res.json({ success: true, preview });
+  } catch (error) {
+    sendWorkflowError(res, error, 400, 'Failed to preview workflow package import');
   }
 });
 
@@ -151,6 +171,27 @@ router.get('/:id/approval-audit/export', async (req, res) => {
     return res.json({ success: true, audit });
   } catch (error) {
     return sendWorkflowError(res, error, 500, 'Failed to export workflow approval audit');
+  }
+});
+
+router.get('/:id/template-upgrade', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const status = defaultWorkflowStudioStore.getTemplateUpgradeStatus(req.params.id);
+    if (!status) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, status });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to load workflow template upgrade status');
+  }
+});
+
+router.post('/:id/template-upgrade', async (req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.upgradeTemplateWorkflow(req.params.id);
+    if (!result) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return sendWorkflowError(res, error, 400, 'Failed to upgrade workflow template');
   }
 });
 

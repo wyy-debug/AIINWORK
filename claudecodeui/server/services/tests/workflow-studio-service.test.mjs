@@ -920,4 +920,75 @@ describe('workflow studio service', () => {
       expect.objectContaining({ id: 'workflow-benchmarks' }),
     ]));
   });
+
+  test('productizes workflow templates with detail, dependency checks, fork, package previews, trust, and upgrade metadata', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.ready();
+
+    const detail = store.getTemplateDetail('recipe-redmine-review');
+    expect(detail).toMatchObject({
+      manifest: expect.objectContaining({ id: 'redmine-review', version: expect.any(String) }),
+      trust: 'built-in',
+      dag: expect.objectContaining({ nodes: expect.any(Array), edges: expect.any(Array) }),
+    });
+
+    const dependencyReport = store.checkTemplateDependencies('recipe-redmine-review');
+    expect(dependencyReport).toMatchObject({ templateId: 'recipe-redmine-review', ready: expect.any(Boolean), missing: expect.any(Array) });
+
+    const fork = await store.forkTemplate('recipe-redmine-review', { name: 'Private Redmine Review' });
+    expect(fork).toMatchObject({
+      name: 'Private Redmine Review',
+      metadata: expect.objectContaining({ forkedFrom: 'recipe-redmine-review', visibility: 'project-private', trust: 'local' }),
+    });
+
+    const exportPreview = await store.exportWorkflowPackagePreview([fork.id]);
+    expect(exportPreview).toMatchObject({
+      workflowCount: 1,
+      workflows: [expect.objectContaining({ id: fork.id, dependencyReport: expect.any(Object) })],
+      packageSizeEstimateBytes: expect.any(Number),
+    });
+
+    const pkg = await store.exportWorkflowPackage([fork.id]);
+    const importPreview = store.importWorkflowPackagePreview(pkg);
+    expect(importPreview.changes).toEqual([
+      expect.objectContaining({ id: fork.id, action: 'overwrite' }),
+    ]);
+
+    await store.upsertWorkflow({
+      id: 'template-source',
+      name: 'Template Source',
+      profileId: 'build',
+      metadata: {
+        templateManifest: {
+          id: 'template-source',
+          version: '2.0.0',
+          migrationNotes: ['Re-map output.summary to output.report'],
+          changelog: ['Added approval node'],
+        },
+      },
+      nodes: [{ id: 'agent', type: 'agent', prompt: 'source' }],
+      edges: [],
+    });
+    await store.upsertWorkflow({
+      id: 'template-installed',
+      name: 'Template Installed',
+      profileId: 'build',
+      metadata: {
+        clonedFrom: 'template-source',
+        templateManifest: { id: 'template-source', version: '1.0.0' },
+      },
+      nodes: [{ id: 'agent', type: 'agent', prompt: 'installed' }],
+      edges: [],
+    });
+    const upgrade = store.getTemplateUpgradeStatus('template-installed');
+    expect(upgrade).toMatchObject({
+      updateAvailable: true,
+      currentVersion: '1.0.0',
+      latestVersion: '2.0.0',
+      migrationNotes: ['Re-map output.summary to output.report'],
+    });
+    const upgraded = await store.upgradeTemplateWorkflow('template-installed');
+    expect(upgraded.upgraded).toBe(true);
+    expect(store.getTemplateUpgradeStatus('template-installed').updateAvailable).toBe(false);
+  });
 });

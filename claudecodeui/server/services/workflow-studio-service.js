@@ -1994,6 +1994,137 @@ export function createWorkflowStudioStore({
     });
   }
 
+  function getTemplateDetail(templateId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(templateId));
+    if (!workflow) return null;
+    const manifest = workflow.metadata?.templateManifest || createTemplateManifest({
+      id: workflow.id,
+      name: workflow.name,
+      description: workflow.description,
+      inputs: workflow.inputs,
+      dependencies: workflow.metadata?.dependencies || {},
+      expectedOutputs: workflow.outputs,
+      screenshots: workflow.metadata?.screenshots || [],
+    });
+    const smoke = templateSmokeResults.find((result) => result.templateId === workflow.id) || null;
+    return {
+      workflow: clone(workflow),
+      manifest: clone(manifest),
+      dependencyReport: checkTemplateDependencies(workflow.id),
+      smokeStatus: smoke ? clone(smoke) : null,
+      trust: workflow.metadata?.source === 'recipe' ? 'built-in' : workflow.metadata?.trust || 'local',
+      dag: {
+        nodes: workflow.nodes.map((node) => summarizeNode(node)),
+        edges: workflow.edges.map(clone),
+      },
+    };
+  }
+
+  function checkTemplateDependencies(templateId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(templateId));
+    if (!workflow) return null;
+    const manifest = workflow.metadata?.templateManifest || {};
+    const dependencies = asObject(manifest.dependencies || workflow.metadata?.dependencies);
+    const missing = [];
+    for (const profile of dependencies.profiles || []) {
+      if (profile && profile !== workflow.profileId) missing.push({ type: 'profile', name: profile });
+    }
+    for (const mcp of dependencies.mcpServers || []) {
+      if (mcp && !getWorkflowSecurity(workflow).mcpAllowlist.some((tool) => tool.startsWith(`${mcp}.`) || tool === mcp)) {
+        missing.push({ type: 'mcp-server', name: mcp });
+      }
+    }
+    for (const permission of dependencies.permissions || []) {
+      if (permission && permission !== workflow.permissionPreset) missing.push({ type: 'permission', name: permission });
+    }
+    return {
+      templateId: workflow.id,
+      dependencies: clone(dependencies),
+      missing,
+      ready: missing.length === 0,
+    };
+  }
+
+  function getTemplateUpgradeStatus(workflowId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const sourceId = workflow.metadata?.clonedFrom;
+    const source = sourceId ? workflows.find((item) => item.id === sourceId) : null;
+    const currentVersion = workflow.metadata?.templateManifest?.version || workflow.metadata?.version || '1.0.0';
+    const latestVersion = source?.metadata?.templateManifest?.version || currentVersion;
+    return {
+      workflowId: workflow.id,
+      sourceTemplateId: sourceId || '',
+      currentVersion,
+      latestVersion,
+      updateAvailable: Boolean(source && latestVersion !== currentVersion),
+      migrationNotes: source?.metadata?.templateManifest?.migrationNotes || source?.metadata?.migrationNotes || [],
+      changelog: source?.metadata?.templateManifest?.changelog || source?.metadata?.changelog || [],
+    };
+  }
+
+  async function upgradeTemplateWorkflow(workflowId) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const status = getTemplateUpgradeStatus(workflow.id);
+    if (!status?.updateAvailable) return { upgraded: false, status };
+    workflow.metadata = {
+      ...asObject(workflow.metadata),
+      templateManifest: {
+        ...asObject(workflow.metadata?.templateManifest),
+        version: status.latestVersion,
+      },
+      upgradedAt: nowIso(now),
+    };
+    workflow.updatedAt = nowIso(now);
+    await saveWorkflows();
+    return { upgraded: true, status: getTemplateUpgradeStatus(workflow.id), workflow: clone(workflow) };
+  }
+
+  async function forkTemplate(templateId, input = {}) {
+    const fork = await cloneWorkflow(templateId, {
+      ...input,
+      name: normalizeText(input.name, `${normalizeText(input.name, '') || 'Forked'} Workflow`, 180),
+    });
+    fork.metadata = {
+      ...asObject(fork.metadata),
+      forkedFrom: templateId,
+      visibility: 'project-private',
+      trust: 'local',
+    };
+    return upsertWorkflow(fork);
+  }
+
+  async function exportWorkflowPackagePreview(workflowIds = []) {
+    const pkg = await exportWorkflowPackage(workflowIds);
+    return {
+      workflowCount: pkg.workflows.length,
+      workflows: pkg.workflows.map((workflow) => ({
+        id: workflow.id,
+        name: workflow.name,
+        dependencyReport: checkTemplateDependencies(workflow.id),
+        screenshots: workflow.metadata?.templateManifest?.screenshots || [],
+      })),
+      packageSizeEstimateBytes: Buffer.byteLength(JSON.stringify(pkg), 'utf8'),
+    };
+  }
+
+  function importWorkflowPackagePreview(value = {}) {
+    const pkg = validateWorkflowPackage(value);
+    return {
+      workflowCount: pkg.workflows.length,
+      changes: pkg.workflows.map((workflow) => ({
+        id: workflow.id,
+        name: workflow.name,
+        action: workflows.some((item) => item.id === workflow.id) ? 'overwrite' : 'add',
+        dependencyReport: {
+          dependencies: workflow.metadata?.templateManifest?.dependencies || workflow.metadata?.dependencies || {},
+        },
+      })),
+    };
+  }
+
   function listRunEvents(runId, { limit = 500 } = {}) {
     const run = runs.find((item) => item.id === normalizeText(runId));
     if (!run) return [];
@@ -2574,6 +2705,13 @@ export function createWorkflowStudioStore({
     replayRun,
     validateRun,
     cloneWorkflow,
+    getTemplateDetail,
+    checkTemplateDependencies,
+    getTemplateUpgradeStatus,
+    upgradeTemplateWorkflow,
+    forkTemplate,
+    exportWorkflowPackagePreview,
+    importWorkflowPackagePreview,
     listRunEvents,
     listNodeLogs,
     listApprovalRequests,
