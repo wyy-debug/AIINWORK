@@ -24,6 +24,8 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-invalid-variables"');
     expect(source).toContain('data-testid="workflow-node-run-details"');
     expect(source).toContain('data-testid="workflow-permission-source"');
+    expect(source).toContain('data-testid="workflow-checkpoint-actions"');
+    expect(source).toContain('rollbackCheckpoint');
     expect(source).toContain('Agent Workflow Studio');
   });
 

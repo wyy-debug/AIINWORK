@@ -351,6 +351,30 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }
   }, []);
 
+  const openCheckpointDiff = useCallback(async (checkpointId: string) => {
+    setError('');
+    try {
+      const response = await api.checkpointDiff(checkpointId);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to load checkpoint diff');
+      await navigator.clipboard?.writeText(data.diff || '');
+    } catch (diffError) {
+      setError(diffError instanceof Error ? diffError.message : 'Failed to load checkpoint diff');
+    }
+  }, []);
+
+  const rollbackCheckpoint = useCallback(async (checkpointId: string) => {
+    setError('');
+    try {
+      const response = await api.rollbackCheckpoint(checkpointId);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to rollback checkpoint');
+      await loadData();
+    } catch (rollbackError) {
+      setError(rollbackError instanceof Error ? rollbackError.message : 'Failed to rollback checkpoint');
+    }
+  }, [loadData]);
+
   const exportDraft = useCallback(async () => {
     const response = await api.exportWorkflow(draft.id, 'json');
     const data = await response.json();
@@ -793,10 +817,27 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                             <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Input / output</summary>
                             <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-[11px] text-foreground">{stringifyValue({ input: nodeRun.input, output: nodeRun.output })}</pre>
                           </details>
-                          {(nodeRun as { checkpoints?: Record<string, unknown> }).checkpoints && Object.keys((nodeRun as { checkpoints?: Record<string, unknown> }).checkpoints || {}).length > 0 && (
+                          {nodeRun.checkpoints && Object.keys(nodeRun.checkpoints || {}).length > 0 && (
                             <details className="rounded border border-border bg-muted/20 p-2">
                               <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Checkpoints</summary>
-                              <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] text-foreground">{stringifyValue((nodeRun as { checkpoints?: Record<string, unknown> }).checkpoints)}</pre>
+                              <div className="mt-2 space-y-2" data-testid="workflow-checkpoint-actions">
+                                {Object.entries(nodeRun.checkpoints || {}).map(([phase, checkpoint]) => {
+                                  const checkpointId = typeof checkpoint?.id === 'string' ? checkpoint.id : '';
+                                  return (
+                                    <div key={phase} className="rounded border border-border bg-background p-2">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[11px] font-semibold text-foreground">{phase}: {checkpointId || 'pending'}</span>
+                                        {checkpointId && (
+                                          <div className="flex gap-1">
+                                            <button type="button" onClick={() => openCheckpointDiff(checkpointId)} className="rounded border border-border px-2 py-1 text-[10px] hover:bg-muted">Diff</button>
+                                            <button type="button" onClick={() => rollbackCheckpoint(checkpointId)} className="rounded border border-border px-2 py-1 text-[10px] hover:bg-muted">Rollback</button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </details>
                           )}
                         </div>

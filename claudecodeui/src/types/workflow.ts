@@ -75,6 +75,7 @@ export interface WorkflowNodeRun {
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;
   artifacts?: Array<Record<string, unknown>>;
+  checkpoints?: Record<string, Record<string, unknown>>;
   error?: string;
   waitingReason?: string;
   permissionDecision?: string;

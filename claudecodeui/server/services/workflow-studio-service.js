@@ -6,7 +6,9 @@ import { exec as execCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { listBuiltInRecipes, renderRecipePrompt } from '../../shared/recipes.js';
+import { db } from '../database/db.js';
 import { getAgentConfig } from './agent-config-service.js';
+import { createCheckpointStore } from './checkpoint-service.js';
 import { buildGitNativeReviewFlow } from './git-native-review-flow-service.js';
 import { defaultSubagentRunStore } from './subagent-run-service.js';
 
@@ -14,6 +16,7 @@ const DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.m
 const DEFAULT_WORKFLOWS_PATH = path.join(DATA_DIR, 'workflows.json');
 const DEFAULT_RUNS_PATH = path.join(DATA_DIR, 'workflow-runs.json');
 const execAsync = promisify(execCallback);
+const defaultWorkflowCheckpointStore = createCheckpointStore(db);
 
 export const WORKFLOW_NODE_TYPES = Object.freeze([
   'agent',
@@ -604,7 +607,7 @@ export function createWorkflowStudioStore({
   subagentRunStore = defaultSubagentRunStore,
   agentResolver = getAgentConfig,
   executors = {},
-  checkpointService = null,
+  checkpointService = defaultWorkflowCheckpointStore,
 } = {}) {
   let loaded = false;
   let workflows = [];
@@ -779,13 +782,28 @@ export function createWorkflowStudioStore({
 
     try {
       nodeRun.input = buildNodeInput(node, run);
-      if (checkpointService?.createCheckpoint) {
+      const shouldCheckpoint = RISKY_NODE_TYPES.has(node.type) && run.sessionId && run.projectPath;
+      if (shouldCheckpoint && checkpointService?.createCheckpoint) {
         nodeRun.checkpoints.before = await checkpointService.createCheckpoint({
+          sessionId: run.sessionId,
+          provider: 'workflow',
+          projectPath: run.projectPath,
+          phase: 'before',
+          turnId: run.id,
+          runtimeContext: {
+            profileKind: workflow.profileId,
+            permissionPreset: workflow.permissionPreset,
+          },
+          metadata: {
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            nodeId: node.id,
+            nodeType: node.type,
+          },
           workflow,
           run,
           node,
           nodeRun,
-          phase: 'before',
         });
       }
 
@@ -843,13 +861,28 @@ export function createWorkflowStudioStore({
         }
       }
 
-      if (checkpointService?.createCheckpoint) {
+      if (shouldCheckpoint && checkpointService?.createCheckpoint) {
         nodeRun.checkpoints.after = await checkpointService.createCheckpoint({
+          sessionId: run.sessionId,
+          provider: 'workflow',
+          projectPath: run.projectPath,
+          phase: 'after',
+          turnId: run.id,
+          beforeCheckpointId: nodeRun.checkpoints.before?.id || null,
+          runtimeContext: {
+            profileKind: workflow.profileId,
+            permissionPreset: workflow.permissionPreset,
+          },
+          metadata: {
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            nodeId: node.id,
+            nodeType: node.type,
+          },
           workflow,
           run,
           node,
           nodeRun,
-          phase: 'after',
         });
       }
 
