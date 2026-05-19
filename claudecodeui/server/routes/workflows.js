@@ -41,6 +41,16 @@ router.post('/import', async (req, res) => {
   }
 });
 
+router.post('/package/export', async (req, res) => {
+  try {
+    const workflowIds = Array.isArray(req.body?.workflowIds) ? req.body.workflowIds : [];
+    const pkg = await defaultWorkflowStudioStore.exportWorkflowPackage(workflowIds);
+    res.json({ success: true, package: pkg });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to export workflow package');
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();

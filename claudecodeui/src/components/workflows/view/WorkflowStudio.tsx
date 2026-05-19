@@ -82,6 +82,16 @@ function formatTime(value?: number | string | null) {
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function stringifyValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return 'None';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function createBlankWorkflow(project: Project): WorkflowDefinition {
   return {
     id: `workflow-${Date.now()}`,
@@ -115,6 +125,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [selectedNodeId, setSelectedNodeId] = useState('');
   const [connectFrom, setConnectFrom] = useState('');
   const [draggingNodeId, setDraggingNodeId] = useState('');
+  const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -122,6 +133,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const selectedRun = runs[0] || null;
   const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === selectedNodeId) || null, [draft.nodes, selectedNodeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
+  const availableVariables = useMemo(() => {
+    const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
+    if (!selectedNode) return inputVariables;
+    const upstreamIds = draft.edges.filter((edge) => edge.to === selectedNode.id).map((edge) => edge.from);
+    const upstreamVariables = upstreamIds.flatMap((nodeId) => [
+      `nodes.${nodeId}.output.summary`,
+      `nodes.${nodeId}.output.artifactId`,
+      `nodes.${nodeId}.output.stdout`,
+    ]);
+    return [...inputVariables, ...upstreamVariables];
+  }, [draft.edges, draft.inputs, selectedNode]);
 
   const loadData = useCallback(async () => {
     setError('');
@@ -146,6 +168,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setSelectedWorkflowId(loadedWorkflows[0].id);
       setDraft(loadedWorkflows[0]);
       setSelectedNodeId(loadedWorkflows[0].nodes?.[0]?.id || '');
+      setRunInputs(Object.fromEntries((loadedWorkflows[0].inputs || []).map((input: { id: string; defaultValue?: unknown }) => [input.id, String(input.defaultValue ?? '')])));
     }
   }, [selectedWorkflowId]);
 
@@ -159,6 +182,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setSelectedWorkflowId(workflow.id);
     setDraft(workflow);
     setSelectedNodeId(workflow.nodes[0]?.id || '');
+    setRunInputs(Object.fromEntries((workflow.inputs || []).map((input) => [input.id, String(input.defaultValue ?? '')])));
     setValidationMessages([]);
     setActiveView('Editor');
   }, []);
@@ -251,13 +275,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       if (!response.ok) throw new Error(data?.error || 'Failed to save workflow');
       setDraft(data.workflow);
       setSelectedWorkflowId(data.workflow.id);
+      setRunInputs(Object.fromEntries((data.workflow.inputs || []).map((input: { id: string; defaultValue?: unknown }) => [input.id, runInputs[input.id] ?? String(input.defaultValue ?? '')])));
       await loadData();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save workflow');
     } finally {
       setIsBusy(false);
     }
-  }, [draft, loadData]);
+  }, [draft, loadData, runInputs]);
 
   const startRun = useCallback(async () => {
     setIsBusy(true);
@@ -266,7 +291,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       const response = await api.startWorkflowRun(draft.id, {
         projectPath: selectedProject.path || selectedProject.fullPath,
         sessionId: sessionId || '',
-        inputs: { change_request: 'Run this workflow from Agent Workflow Studio.' },
+        inputs: runInputs,
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || 'Failed to run workflow');
@@ -277,7 +302,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     } finally {
       setIsBusy(false);
     }
-  }, [draft.id, loadData, selectedProject.fullPath, selectedProject.path, sessionId]);
+  }, [draft.id, loadData, runInputs, selectedProject.fullPath, selectedProject.path, sessionId]);
 
   const controlNode = useCallback(async (run: WorkflowRun, nodeId: string, action: string) => {
     setIsBusy(true);
@@ -478,6 +503,36 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             );
           })}
         </div>
+        {draft.inputs?.length > 0 && (
+          <div className="mt-4 rounded-md border border-border bg-card p-3" data-testid="workflow-run-inputs">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-foreground">Run inputs</h3>
+              <span className="text-xs text-muted-foreground">{draft.inputs.length} field{draft.inputs.length === 1 ? '' : 's'}</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {draft.inputs.map((input) => (
+                <label key={input.id} className="text-xs font-medium text-muted-foreground">
+                  {input.label || input.id}{input.required ? ' *' : ''}
+                  {input.type === 'textarea' ? (
+                    <textarea
+                      data-testid="workflow-run-input"
+                      value={runInputs[input.id] ?? ''}
+                      onChange={(event) => setRunInputs((current) => ({ ...current, [input.id]: event.target.value }))}
+                      className="mt-1 min-h-20 w-full rounded-md border border-border bg-background p-2 text-sm text-foreground"
+                    />
+                  ) : (
+                    <input
+                      data-testid="workflow-run-input"
+                      value={runInputs[input.id] ?? ''}
+                      onChange={(event) => setRunInputs((current) => ({ ...current, [input.id]: event.target.value }))}
+                      className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                    />
+                  )}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -636,6 +691,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     </button>
                   ))}
                 </div>
+                <div data-testid="workflow-node-variables">
+                  <h4 className="mb-2 text-xs font-semibold text-muted-foreground">Available variables</h4>
+                  <div className="space-y-1">
+                    {availableVariables.map((variable) => (
+                      <code key={variable} className="block rounded border border-border bg-muted/40 px-2 py-1 text-[11px] text-foreground">
+                        {'{{'}{variable}{'}}'}
+                      </code>
+                    ))}
+                  </div>
+                </div>
               </div>
             ) : (
               <p className="mt-3 text-sm text-muted-foreground">Select a node to edit its runtime contract.</p>
@@ -673,6 +738,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         {nodeRun.waitingReason && <p className="mt-1 text-xs text-amber-700">{nodeRun.waitingReason}</p>}
                         {nodeRun.error && <p className="mt-1 text-xs text-red-700">{nodeRun.error}</p>}
                         {nodeRun.logs?.length ? <p className="mt-1 text-xs text-muted-foreground">{nodeRun.logs.at(-1)}</p> : null}
+                        <div className="mt-2 grid gap-2" data-testid="workflow-node-run-details">
+                          <details className="rounded border border-border bg-muted/20 p-2">
+                            <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Input / output</summary>
+                            <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-[11px] text-foreground">{stringifyValue({ input: nodeRun.input, output: nodeRun.output })}</pre>
+                          </details>
+                          {(nodeRun as { checkpoints?: Record<string, unknown> }).checkpoints && Object.keys((nodeRun as { checkpoints?: Record<string, unknown> }).checkpoints || {}).length > 0 && (
+                            <details className="rounded border border-border bg-muted/20 p-2">
+                              <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Checkpoints</summary>
+                              <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] text-foreground">{stringifyValue((nodeRun as { checkpoints?: Record<string, unknown> }).checkpoints)}</pre>
+                            </details>
+                          )}
+                        </div>
                         {nodeRun.status === 'waiting_approval' && (
                           <div className="mt-2 flex gap-2">
                             <button type="button" data-testid="workflow-approve-node" onClick={() => controlNode(run, nodeRun.nodeId, 'continue')} disabled={isBusy} className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-xs text-primary-foreground">

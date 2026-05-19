@@ -17,6 +17,10 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-connect-node"');
     expect(source).toContain('data-testid="workflow-approve-node"');
     expect(source).toContain('data-testid="workflow-run-card"');
+    expect(source).toContain('data-testid="workflow-run-inputs"');
+    expect(source).toContain('data-testid="workflow-run-input"');
+    expect(source).toContain('data-testid="workflow-node-variables"');
+    expect(source).toContain('data-testid="workflow-node-run-details"');
     expect(source).toContain('Agent Workflow Studio');
   });
 

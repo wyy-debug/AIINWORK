@@ -307,6 +307,7 @@ function createNodeRun(node, now) {
     input: {},
     output: {},
     artifacts: [],
+    checkpoints: {},
     error: '',
     waitingReason: '',
     permissionDecision: '',
@@ -317,6 +318,7 @@ function createNodeRun(node, now) {
 function createRunEvent(type, payload, now) {
   return {
     id: `workflow_event_${crypto.randomUUID()}`,
+    category: 'workflow',
     type,
     payload: asObject(payload),
     createdAt: now(),
@@ -360,6 +362,124 @@ function buildRunSummary(run) {
   };
 }
 
+function getPathValue(source, dottedPath) {
+  const segments = String(dottedPath || '').split('.').filter(Boolean);
+  let current = source;
+  for (const segment of segments) {
+    if (!current || typeof current !== 'object' || !(segment in current)) {
+      return { found: false, value: undefined };
+    }
+    current = current[segment];
+  }
+  return { found: true, value: current };
+}
+
+function stringifyTemplateValue(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
+function renderTemplate(text, context) {
+  const source = typeof text === 'string' ? text : '';
+  return source.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (match, expression) => {
+    const result = getPathValue(context, expression);
+    if (!result.found) {
+      const error = new Error(`Workflow variable not found: ${expression}`);
+      error.code = 'missing_variable';
+      error.variable = expression;
+      throw error;
+    }
+    return stringifyTemplateValue(result.value);
+  });
+}
+
+function buildTemplateContext(run) {
+  return {
+    inputs: run.inputs || {},
+    nodes: Object.fromEntries(Object.entries(run.nodeRuns || {}).map(([nodeId, nodeRun]) => [nodeId, {
+      input: nodeRun.input || {},
+      output: nodeRun.output || {},
+      status: nodeRun.status,
+      error: nodeRun.error || '',
+    }])),
+  };
+}
+
+function buildNodeInput(node, run) {
+  const context = buildTemplateContext(run);
+  return {
+    prompt: renderTemplate(node.prompt || '', context),
+    command: renderTemplate(node.command || '', context),
+    condition: renderTemplate(node.condition || '', context),
+    toolName: renderTemplate(node.toolName || '', context),
+    config: clone(node.config || {}),
+  };
+}
+
+function validateRunInputs(workflow, inputs) {
+  const errors = [];
+  const runInputs = asObject(inputs);
+  for (const input of workflow.inputs || []) {
+    const value = runInputs[input.id];
+    const empty = value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+    if (input.required && empty && input.defaultValue === '') {
+      errors.push({
+        code: 'missing_required_input',
+        inputId: input.id,
+        message: `Workflow input is required: ${input.label || input.id}`,
+      });
+    }
+  }
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+function createDefaultExecutors() {
+  return {
+    async agent({ node, nodeInput }) {
+      return {
+        summary: `${node.title} completed.`,
+        prompt: nodeInput.prompt,
+      };
+    },
+    async tool({ node, nodeInput }) {
+      return {
+        summary: `${node.title} completed.`,
+        toolName: nodeInput.toolName || node.toolName,
+      };
+    },
+    async shell({ node, nodeInput }) {
+      return {
+        stdout: nodeInput.command ? `simulated shell: ${nodeInput.command}` : '',
+        command: nodeInput.command || node.command,
+      };
+    },
+    async mcp({ node, nodeInput }) {
+      return {
+        summary: `${node.title} completed.`,
+        toolName: nodeInput.toolName || node.toolName,
+      };
+    },
+    async artifact({ workflow, run, node, nodeInput }) {
+      const artifact = {
+        id: `workflow_artifact_${crypto.randomUUID()}`,
+        kind: 'workflow-summary',
+        title: node.title,
+        content: nodeInput.prompt || `Workflow ${workflow.name} completed node ${node.title}.`,
+      };
+      run.artifacts.push(artifact);
+      return {
+        artifact,
+        output: { artifactId: artifact.id, summary: artifact.content },
+      };
+    },
+  };
+}
+
 function normalizeRun(input, now) {
   const source = asObject(input);
   const workflow = asObject(source.workflow);
@@ -394,10 +514,16 @@ export function createWorkflowStudioStore({
   now = () => Date.now(),
   subagentRunStore = defaultSubagentRunStore,
   agentResolver = getAgentConfig,
+  executors = {},
+  checkpointService = null,
 } = {}) {
   let loaded = false;
   let workflows = [];
   let runs = [];
+  const nodeExecutors = {
+    ...createDefaultExecutors(),
+    ...asObject(executors),
+  };
 
   async function load() {
     if (loaded) return;
@@ -562,44 +688,96 @@ export function createWorkflowStudioStore({
       return;
     }
 
-    if (node.type === 'subagent') {
-      const agent = await agentResolver(node.agentId || 'subagent-general');
-      const subagentRun = await subagentRunStore.createRun({
-        agent: agent || { id: node.agentId || 'subagent-general', name: node.title, mode: 'subagent' },
-        objective: node.prompt || run.inputs.change_request || workflow.description,
-        projectPath: run.projectPath,
-        sessionId: run.sessionId,
-        source: 'workflow',
-      });
-      nodeRun.output = { subagentRunId: subagentRun.id, status: subagentRun.status };
-      nodeRun.artifacts.push({ kind: 'subagent-run', refId: subagentRun.id, title: node.title });
-    } else if (node.type === 'condition') {
-      nodeRun.output = { matched: true, condition: node.condition || 'always' };
-    } else if (node.type === 'artifact') {
-      const artifact = {
-        id: `workflow_artifact_${crypto.randomUUID()}`,
-        kind: 'workflow-summary',
-        title: node.title,
-        content: `Workflow ${workflow.name} completed node ${node.title}.`,
-      };
-      run.artifacts.push(artifact);
-      nodeRun.artifacts.push(artifact);
-      nodeRun.output = { artifactId: artifact.id };
-    } else {
-      nodeRun.output = {
-        summary: `${node.title} completed.`,
-        nodeType: node.type,
-        toolName: node.toolName,
-        command: node.command,
-      };
-    }
+    try {
+      nodeRun.input = buildNodeInput(node, run);
+      if (checkpointService?.createCheckpoint) {
+        nodeRun.checkpoints.before = await checkpointService.createCheckpoint({
+          workflow,
+          run,
+          node,
+          nodeRun,
+          phase: 'before',
+        });
+      }
 
-    nodeRun.status = 'completed';
-    nodeRun.completedAt = now();
-    nodeRun.durationMs = nodeRun.completedAt - nodeRun.startedAt;
-    nodeRun.updatedAt = now();
-    nodeRun.logs.push(`Completed ${node.type} node.`);
-    run.timelineEvents.push(createRunEvent('workflow_node_completed', summarizeNode(node), now));
+      if (node.type === 'subagent') {
+        const agent = await agentResolver(node.agentId || 'subagent-general');
+        const subagentRun = await subagentRunStore.createRun({
+          agent: agent || { id: node.agentId || 'subagent-general', name: node.title, mode: 'subagent' },
+          objective: nodeRun.input.prompt || run.inputs.change_request || workflow.description,
+          projectPath: run.projectPath,
+          sessionId: run.sessionId,
+          source: 'workflow',
+        });
+        nodeRun.output = {
+          subagentRunId: subagentRun.id,
+          status: subagentRun.status,
+          result: subagentRun.result || subagentRun.output || null,
+          error: subagentRun.error || '',
+        };
+        nodeRun.artifacts.push({ kind: 'subagent-run', refId: subagentRun.id, title: node.title });
+        if (subagentRun.status === 'failed') {
+          throw new Error(subagentRun.error || `Subagent run failed: ${subagentRun.id}`);
+        }
+      } else if (node.type === 'condition') {
+        nodeRun.output = { matched: true, condition: nodeRun.input.condition || 'always' };
+      } else if (node.type === 'artifact') {
+        const artifactResult = await nodeExecutors.artifact({
+          workflow,
+          run,
+          node,
+          nodeRun,
+          nodeInput: nodeRun.input,
+        });
+        if (artifactResult?.artifact) {
+          nodeRun.artifacts.push(artifactResult.artifact);
+        }
+        nodeRun.output = asObject(artifactResult?.output || artifactResult);
+      } else {
+        const executor = nodeExecutors[node.type];
+        if (typeof executor === 'function') {
+          nodeRun.output = asObject(await executor({
+            workflow,
+            run,
+            node,
+            nodeRun,
+            nodeInput: nodeRun.input,
+          }));
+        } else {
+          nodeRun.output = {
+            summary: `${node.title} completed.`,
+            nodeType: node.type,
+            toolName: nodeRun.input.toolName || node.toolName,
+            command: nodeRun.input.command || node.command,
+          };
+        }
+      }
+
+      if (checkpointService?.createCheckpoint) {
+        nodeRun.checkpoints.after = await checkpointService.createCheckpoint({
+          workflow,
+          run,
+          node,
+          nodeRun,
+          phase: 'after',
+        });
+      }
+
+      nodeRun.status = 'completed';
+      nodeRun.completedAt = now();
+      nodeRun.durationMs = nodeRun.completedAt - nodeRun.startedAt;
+      nodeRun.updatedAt = now();
+      nodeRun.logs.push(`Completed ${node.type} node.`);
+      run.timelineEvents.push(createRunEvent('workflow_node_completed', summarizeNode(node), now));
+    } catch (error) {
+      nodeRun.status = 'failed';
+      nodeRun.error = error?.message || String(error);
+      nodeRun.completedAt = now();
+      nodeRun.durationMs = nodeRun.completedAt - nodeRun.startedAt;
+      nodeRun.updatedAt = now();
+      nodeRun.logs.push(nodeRun.error);
+      run.timelineEvents.push(createRunEvent('workflow_node_failed', { ...summarizeNode(node), error: nodeRun.error }, now));
+    }
   }
 
   async function executeReadyNodes(workflow, run) {
@@ -658,6 +836,16 @@ export function createWorkflowStudioStore({
       error.validation = validation;
       throw error;
     }
+    const providedInputs = asObject(input.inputs);
+    const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
+    Object.assign(runInputs, providedInputs);
+    const inputValidation = validateRunInputs(workflow, runInputs);
+    if (!inputValidation.valid) {
+      const error = new Error(inputValidation.errors.map((entry) => entry.message).join('; '));
+      error.statusCode = 400;
+      error.validation = inputValidation;
+      throw error;
+    }
 
     const agent = await agentResolver(workflow.profileId);
     const timestamp = now();
@@ -668,7 +856,7 @@ export function createWorkflowStudioStore({
       status: 'running',
       projectPath: input.projectPath || '',
       sessionId: input.sessionId || '',
-      inputs: asObject(input.inputs),
+      inputs: runInputs,
       profileSnapshot: {
         profileId: workflow.profileId,
         permissionPreset: workflow.permissionPreset,
@@ -806,6 +994,42 @@ export function createWorkflowStudioStore({
     return upsertWorkflow(parsed);
   }
 
+  function listTimelineEvents({ sessionId = '', projectPath = '', workflowId = '', runId = '', limit = 200 } = {}) {
+    const normalizedSessionId = normalizeText(sessionId);
+    const normalizedProjectPath = normalizeText(projectPath);
+    const normalizedWorkflowId = normalizeText(workflowId);
+    const normalizedRunId = normalizeText(runId);
+    return runs
+      .filter((run) => !normalizedSessionId || run.sessionId === normalizedSessionId)
+      .filter((run) => !normalizedProjectPath || run.projectPath === normalizedProjectPath)
+      .filter((run) => !normalizedWorkflowId || run.workflowId === normalizedWorkflowId)
+      .filter((run) => !normalizedRunId || run.id === normalizedRunId)
+      .flatMap((run) => (run.timelineEvents || []).map((event) => ({
+        workflowId: run.workflowId,
+        workflowName: run.workflowName,
+        runId: run.id,
+        sessionId: run.sessionId,
+        projectPath: run.projectPath,
+        ...event,
+        category: event.category || 'workflow',
+      })))
+      .sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0))
+      .slice(0, Math.max(1, Math.min(Number(limit) || 200, 1000)))
+      .map(clone);
+  }
+
+  async function exportWorkflowPackage(workflowIds = []) {
+    await load();
+    const ids = Array.isArray(workflowIds) ? workflowIds.map((id) => normalizeText(id)).filter(Boolean) : [];
+    const selected = workflows.filter((workflow) => ids.length === 0 || ids.includes(workflow.id));
+    return {
+      schemaVersion: 1,
+      kind: 'workflow-package',
+      exportedAt: nowIso(now),
+      workflows: selected.map(clone),
+    };
+  }
+
   return {
     async ready() {
       await load();
@@ -825,6 +1049,8 @@ export function createWorkflowStudioStore({
     controlNode,
     exportWorkflow,
     importWorkflow,
+    exportWorkflowPackage,
+    listTimelineEvents,
   };
 }
 

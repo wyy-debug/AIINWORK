@@ -321,11 +321,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ workflow }),
     }),
-  exportWorkflow: (workflowId, format = 'json') =>
-    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/export?format=${encodeURIComponent(format)}`),
-  importWorkflow: (content) =>
-    apiFetch('/api/workflows/import', {
-      method: 'POST',
+    exportWorkflow: (workflowId, format = 'json') =>
+      apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/export?format=${encodeURIComponent(format)}`),
+    exportWorkflowPackage: (workflowIds = []) =>
+      apiFetch('/api/workflows/package/export', {
+        method: 'POST',
+        body: JSON.stringify({ workflowIds }),
+      }),
+    importWorkflow: (content) =>
+      apiFetch('/api/workflows/import', {
+        method: 'POST',
       body: JSON.stringify({ content }),
     }),
   startWorkflowRun: (workflowId, payload = {}) =>
