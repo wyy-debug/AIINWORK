@@ -71,7 +71,11 @@ import subagentRunsRoutes from './routes/subagent-runs.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import triageRoutes from './routes/triage.js';
 import userRoutes from './routes/user.js';
+import workflowApprovalsRoutes from './routes/workflow-approvals.js';
+import workflowBenchmarksRoutes from './routes/workflow-benchmarks.js';
+import workflowNodePackagesRoutes from './routes/workflow-node-packages.js';
 import workflowRunsRoutes from './routes/workflow-runs.js';
+import workflowTemplatesRoutes from './routes/workflow-templates.js';
 import workflowsRoutes from './routes/workflows.js';
 import worktreeRoutes from './routes/worktrees.js';
 import sessionManager from './sessionManager.js';
@@ -512,6 +516,10 @@ app.use('/api/recipes', authenticateToken, recipesRoutes);
 app.use('/api/subagent-runs', authenticateToken, subagentRunsRoutes);
 app.use('/api/workflows', authenticateToken, workflowsRoutes);
 app.use('/api/workflow-runs', authenticateToken, workflowRunsRoutes);
+app.use('/api/workflow-approvals', authenticateToken, workflowApprovalsRoutes);
+app.use('/api/workflow-node-packages', authenticateToken, workflowNodePackagesRoutes);
+app.use('/api/workflow-templates', authenticateToken, workflowTemplatesRoutes);
+app.use('/api/workflow-benchmarks', authenticateToken, workflowBenchmarksRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, sessionAgentRoutes);

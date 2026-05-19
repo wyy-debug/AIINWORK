@@ -618,4 +618,145 @@ describe('workflow studio service', () => {
     expect(retried.nodeRuns.artifact.status).toBe('completed');
     expect(store.listRunEvents(failed.id).map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_retry_from']));
   });
+
+  test('queues workflow runs, exposes worker lease metadata, and recovers stale runs', async () => {
+    let timestamp = 2000000000000;
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      autoExecute: false,
+      now: () => {
+        timestamp += 100;
+        return timestamp;
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'queued-flow',
+      name: 'Queued Flow',
+      profileId: 'build',
+      maxConcurrency: 1,
+      nodes: [{ id: 'agent', type: 'agent' }],
+      edges: [],
+    });
+
+    const queued = await store.createRun('queued-flow');
+    expect(queued.status).toBe('queued');
+    expect(queued.queue).toMatchObject({ state: 'queued', maxConcurrency: 1 });
+
+    const leased = await store.acquireNextRun({ workerId: 'worker-a', leaseMs: 500 });
+    expect(leased.status).toBe('running');
+    expect(leased.queue.workerId).toBe('worker-a');
+    expect(leased.queue.leaseExpiresAt).toBeGreaterThan(leased.queue.heartbeatAt);
+
+    timestamp += 1000;
+    const recovered = await store.recoverStaleRuns({ nowMs: timestamp });
+    expect(recovered.recovered).toBe(1);
+    expect(store.getRun(queued.id).status).toBe('queued');
+    expect(store.getRun(queued.id).queue.state).toBe('recovering');
+  });
+
+  test('captures node input/output snapshots and replays workflow state from events', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        agent: async ({ nodeInput }) => ({ summary: `done ${nodeInput.prompt}` }),
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'io-replay-flow',
+      name: 'IO Replay Flow',
+      profileId: 'build',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [{ id: 'agent', type: 'agent', prompt: 'Handle {{inputs.change_request}}' }],
+      edges: [],
+    });
+
+    const run = await store.createRun('io-replay-flow', { inputs: { change_request: 'typed dataflow' } });
+    const io = store.getNodeIo(run.id, 'agent');
+    const replay = store.replayRun(run.id);
+
+    expect(io).toMatchObject({
+      nodeId: 'agent',
+      input: { prompt: 'Handle typed dataflow' },
+      output: { summary: 'done Handle typed dataflow' },
+      inputSchema: expect.objectContaining({ fields: expect.any(Array) }),
+      outputSchema: expect.objectContaining({ fields: expect.any(Array) }),
+    });
+    expect(replay.status).toBe('completed');
+    expect(replay.nodes.agent.status).toBe('completed');
+    expect(replay.events.map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_started', 'workflow_node_completed']));
+  });
+
+  test('lists approval inbox requests and records audited decisions', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'approval-inbox-flow',
+      name: 'Approval Inbox Flow',
+      profileId: 'build',
+      permissionPreset: 'suggest',
+      nodes: [{ id: 'shell', type: 'shell', title: 'Risky Shell', command: 'npm test' }],
+      edges: [],
+    });
+
+    const waiting = await store.createRun('approval-inbox-flow');
+    const approvals = store.listApprovalRequests();
+    expect(approvals).toEqual([
+      expect.objectContaining({
+        runId: waiting.id,
+        nodeId: 'shell',
+        riskLevel: 'high',
+        status: 'pending',
+      }),
+    ]);
+
+    const decided = await store.decideApproval(approvals[0].id, { decision: 'approve', reason: 'verified by reviewer', approver: 'qa' });
+    expect(decided.status).toBe('completed');
+    const events = store.listRunEvents(waiting.id);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'workflow_approval_decision',
+        payload: expect.objectContaining({ decision: 'approve', approver: 'qa' }),
+      }),
+    ]));
+  });
+
+  test('registers workflow node packages and validates missing dependencies', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const registered = await store.installNodePackage({
+      id: 'crashsight-node',
+      type: 'crashsight-analysis',
+      label: 'CrashSight Analysis',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'crashId', label: 'Crash ID', type: 'text', required: true }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+      permissions: { risky: true, action: 'mcp' },
+      dependencies: { mcpServers: ['crashsight'] },
+    });
+
+    expect(registered.status).toBe('missing_dependencies');
+    expect(store.listNodePackages()).toEqual([
+      expect.objectContaining({ id: 'crashsight-node', enabled: false, status: 'missing_dependencies' }),
+    ]);
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('crashsight-analysis');
+  });
+
+  test('smokes workflow templates and exposes benchmark release readiness results', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.ready();
+
+    const smoke = await store.smokeTemplate('recipe-code-impact-analysis', {
+      inputs: { change_request: 'smoke code impact' },
+    });
+    const benchmarks = await store.runBenchmarks({ limit: 3 });
+    const readiness = store.getReleaseReadiness();
+
+    expect(smoke).toMatchObject({ templateId: 'recipe-code-impact-analysis', status: 'passed' });
+    expect(benchmarks.results.length).toBeGreaterThan(0);
+    expect(benchmarks.results[0]).toEqual(expect.objectContaining({ workflowId: expect.any(String), status: expect.any(String) }));
+    expect(readiness.workflowBenchmarks.total).toBeGreaterThan(0);
+    expect(readiness.gates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'workflow-benchmarks' }),
+    ]));
+  });
 });

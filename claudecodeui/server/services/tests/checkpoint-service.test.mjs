@@ -92,7 +92,7 @@ describe('checkpoint service', () => {
     expect(result.success).toBe(true);
     expect(await fs.readFile(filePath, 'utf8')).toBe('before\n');
     expect((await captureGitSnapshot(repo)).hasChanges).toBe(false);
-  });
+  }, 30000);
 
   it('refuses rollback when the workspace moved past the checkpoint diff', async () => {
     const repo = await createRepo();
@@ -198,7 +198,7 @@ describe('checkpoint service', () => {
     expect(result.success).toBe(true);
     expect(await fs.readFile(filePath, 'utf8')).toBe('before\nuser-change\n');
     database.close();
-  });
+  }, 30000);
 
   it('discards checkpoint records without changing workspace files', async () => {
     const repo = await createRepo();

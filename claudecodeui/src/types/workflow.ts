@@ -19,7 +19,8 @@ export type WorkflowNodeStatus =
   | 'skipped'
   | 'cancelled';
 
-export type WorkflowRunStatus = 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
+export type WorkflowRunStatus = 'queued' | 'running' | 'recovering' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
+export type WorkflowQueueState = 'queued' | 'running' | 'recovering' | 'stale' | 'completed' | string;
 
 export interface WorkflowNode {
   id: string;
@@ -128,6 +129,15 @@ export interface WorkflowRun {
   sessionId?: string;
   inputs?: Record<string, unknown>;
   profileSnapshot?: Record<string, unknown>;
+  queue?: {
+    state?: WorkflowQueueState;
+    workerId?: string;
+    heartbeatAt?: number | null;
+    leaseExpiresAt?: number | null;
+    maxConcurrency?: number;
+    recoveredAt?: number | null;
+    updatedAt?: number;
+  };
   nodeRuns: Record<string, WorkflowNodeRun>;
   logs?: string[];
   artifacts?: Array<Record<string, unknown>>;

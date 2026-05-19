@@ -179,6 +179,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
   const [runEvents, setRunEvents] = useState<Record<string, WorkflowRunEvent[]>>({});
   const [nodeLogs, setNodeLogs] = useState<Record<string, WorkflowNodeLog[]>>({});
+  const [approvalRequests, setApprovalRequests] = useState<Array<Record<string, unknown>>>([]);
+  const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -241,17 +243,21 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const loadData = useCallback(async () => {
     setError('');
-    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse] = await Promise.all([
+    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse, approvalsResponse, readinessResponse] = await Promise.all([
       api.workflows(),
       api.workflowRuns({ limit: 25 }),
       api.agents(false, 'all'),
       api.workflowNodeTypes(),
+      api.workflowApprovals(),
+      api.workflowBenchmarkReadiness(),
     ]);
-    const [workflowsData, runsData, agentsData, nodeTypesData] = await Promise.all([
+    const [workflowsData, runsData, agentsData, nodeTypesData, approvalsData, readinessData] = await Promise.all([
       workflowsResponse.json(),
       runsResponse.json(),
       agentsResponse.json(),
       nodeTypesResponse.json(),
+      approvalsResponse.json(),
+      readinessResponse.json(),
     ]);
     if (!workflowsResponse.ok) throw new Error(workflowsData?.error || 'Failed to load workflows');
     if (!runsResponse.ok) throw new Error(runsData?.error || 'Failed to load workflow runs');
@@ -262,6 +268,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setRuns(runsData.runs || []);
     setAgents(agentsData.agents || []);
     setNodeTypeDefinitions(nodeTypesData.nodeTypes || []);
+    setApprovalRequests(approvalsResponse.ok ? approvalsData.approvals || [] : []);
+    setReleaseReadiness(readinessResponse.ok ? readinessData.readiness || null : null);
     if (!selectedWorkflowId && loadedWorkflows[0]) {
       setSelectedWorkflowId(loadedWorkflows[0].id);
       setDraft(loadedWorkflows[0]);
@@ -490,6 +498,54 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setIsBusy(false);
     }
   }, []);
+
+  const decideApproval = useCallback(async (approvalId: string, decision: string) => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.decideWorkflowApproval(approvalId, { decision, approver: 'local-user' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to decide workflow approval');
+      await loadData();
+    } catch (approvalError) {
+      setError(approvalError instanceof Error ? approvalError.message : 'Failed to decide workflow approval');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [loadData]);
+
+  const smokeTemplate = useCallback(async (workflow: WorkflowDefinition) => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.smokeWorkflowTemplate(workflow.id, {
+        inputs: Object.fromEntries((workflow.inputs || []).map((input) => [input.id, runInputs[input.id] || String(input.defaultValue || `smoke ${input.id}`)])),
+        projectPath: selectedProject.path || selectedProject.fullPath,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || data?.smoke?.error || 'Template smoke failed');
+      await loadData();
+    } catch (smokeError) {
+      setError(smokeError instanceof Error ? smokeError.message : 'Template smoke failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [loadData, runInputs, selectedProject.fullPath, selectedProject.path]);
+
+  const runBenchmarks = useCallback(async () => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.runWorkflowBenchmarks({ limit: 10 });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Workflow benchmarks failed');
+      await loadData();
+    } catch (benchmarkError) {
+      setError(benchmarkError instanceof Error ? benchmarkError.message : 'Workflow benchmarks failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [loadData]);
 
   const loadRunConsole = useCallback(async (run: WorkflowRun) => {
     const eventsResponse = await api.workflowRunEvents(run.id);
@@ -817,6 +873,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <RefreshCw className="h-4 w-4" />
               Refresh
             </button>
+            <button type="button" data-testid="workflow-run-benchmarks" onClick={runBenchmarks} disabled={isBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted disabled:opacity-50">
+              <ClipboardCheck className="h-4 w-4" />
+              Benchmarks
+            </button>
             <button type="button" data-testid="workflow-run" onClick={startRun} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
               <Play className="h-4 w-4" />
               Run
@@ -827,6 +887,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </button>
           </div>
         </div>
+        {releaseReadiness && (
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground" data-testid="workflow-release-readiness">
+            {((releaseReadiness.gates as Array<Record<string, unknown>> | undefined) || []).map((gate) => (
+              <span key={String(gate.id)} className="rounded-md border border-border bg-card px-2 py-1">
+                {String(gate.label)}: {String(gate.status)}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="mt-4 flex gap-2">
           {views.map((view) => {
             const Icon = view === 'Library' ? LibraryBig : view === 'Editor' ? GitBranch : History;
@@ -922,6 +991,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   <span className="font-semibold text-foreground">Template</span>
                   <span className="ml-2">{String(getTemplateManifest(workflow).version || workflow.metadata?.version || 'local')}</span>
                   <span className="ml-2">{Array.isArray(getTemplateManifest(workflow).tags) ? (getTemplateManifest(workflow).tags || []).slice(0, 2).join(', ') : 'workflow'}</span>
+                  <span className="ml-2" data-testid="workflow-template-smoke-status">
+                    smoke: {String(((releaseReadiness?.templateSmoke as Array<Record<string, unknown>> | undefined) || []).find((item) => item.templateId === workflow.id)?.status || 'not run')}
+                  </span>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
                   <span className="rounded border border-border px-2 py-1">{workflow.nodes.length} nodes</span>
@@ -939,6 +1011,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 >
                   <Copy className="h-3.5 w-3.5" />
                   Clone
+                </button>
+                <button
+                  type="button"
+                  data-testid="workflow-smoke-template"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void smokeTemplate(workflow);
+                  }}
+                  className="ml-2 mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-muted"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  Smoke
                 </button>
               </div>
             ))}
@@ -1171,6 +1255,23 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             )}
           </main>
           <aside className="min-h-0 overflow-auto border-l border-border p-4" data-testid="workflow-run-console">
+            {approvalRequests.length > 0 && (
+              <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="workflow-approval-inbox">
+                <h3 className="text-sm font-semibold text-amber-900">Approval Inbox</h3>
+                <div className="mt-2 space-y-2">
+                  {approvalRequests.map((approval) => (
+                    <div key={String(approval.id)} className="rounded border border-amber-200 bg-background p-2 text-xs">
+                      <div className="font-semibold text-foreground">{String(approval.nodeTitle || approval.nodeId)}</div>
+                      <div className="mt-1 text-amber-700">{String(approval.riskLevel || 'medium')} · {String(approval.reason || 'Waiting for approval')}</div>
+                      <div className="mt-2 flex gap-2">
+                        <button type="button" onClick={() => void decideApproval(String(approval.id), 'approve')} className="rounded bg-primary px-2 py-1 text-[11px] text-primary-foreground">Approve</button>
+                        <button type="button" onClick={() => void decideApproval(String(approval.id), 'reject')} className="rounded border border-border px-2 py-1 text-[11px] hover:bg-muted">Reject</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             <h3 className="text-sm font-semibold text-foreground">Run history</h3>
             <div className="mt-3 space-y-3">
               {runs.map((run) => (
@@ -1182,6 +1283,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     </div>
                     <span className={cn('rounded-full border px-2 py-0.5 text-[11px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>
                   </div>
+                  {run.queue && (
+                    <div className="mt-2 rounded border border-border bg-muted/20 p-2 text-[11px] text-muted-foreground" data-testid="workflow-runtime-kernel">
+                      <span className="font-semibold text-foreground">Runtime</span>
+                      <span className="ml-2">queue: {run.queue.state || run.status}</span>
+                      <span className="ml-2">worker: {run.queue.workerId || 'none'}</span>
+                      <span className="ml-2">max: {run.queue.maxConcurrency || draft.maxConcurrency}</span>
+                    </div>
+                  )}
                   <div className="mt-3 space-y-2">
                     <details className="rounded border border-border bg-muted/20 p-2" data-testid="workflow-run-events">
                       <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Run events</summary>
@@ -1201,6 +1310,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         </div>
                         {nodeRun.waitingReason && <p className="mt-1 text-xs text-amber-700">{nodeRun.waitingReason}</p>}
                         {nodeRun.error && <p className="mt-1 text-xs text-red-700">{nodeRun.error}</p>}
+                        {nodeRun.error && (
+                          <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-[11px] text-red-700" data-testid="workflow-failure-diagnosis">
+                            Failure diagnosis: inspect node input/output, permission decision {nodeRun.permissionDecision || 'n/a'}, then retry from this node or rollback an attached checkpoint.
+                          </div>
+                        )}
                         {nodeRun.logs?.length ? <p className="mt-1 text-xs text-muted-foreground">{nodeRun.logs.at(-1)}</p> : null}
                         <div className="mt-2 grid gap-2" data-testid="workflow-node-run-details">
                           <details className="rounded border border-border bg-muted/20 p-2" data-testid="workflow-node-logs">

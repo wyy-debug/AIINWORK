@@ -38,9 +38,11 @@ export const WORKFLOW_NODE_TYPES = Object.freeze([
 
 const NODE_TYPES = new Set(WORKFLOW_NODE_TYPES);
 const NODE_STATUSES = new Set([
+  'queued',
   'pending',
   'ready',
   'running',
+  'recovering',
   'waiting_approval',
   'completed',
   'failed',
@@ -52,6 +54,8 @@ const RISKY_NODE_TYPES = new Set(['shell', 'mcp', 'tool']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+
+const BUILT_IN_NODE_TYPES = new Set(WORKFLOW_NODE_TYPES);
 
 const NODE_TYPE_DEFINITIONS = Object.freeze([
   {
@@ -624,6 +628,20 @@ function createRunEvent(type, payload, now) {
   };
 }
 
+function createQueueState(source = {}, now = () => Date.now()) {
+  const queue = asObject(source);
+  const timestamp = now();
+  return {
+    state: normalizeText(queue.state, '', 40),
+    workerId: normalizeText(queue.workerId, '', 120),
+    heartbeatAt: Number(queue.heartbeatAt) || null,
+    leaseExpiresAt: Number(queue.leaseExpiresAt) || null,
+    maxConcurrency: normalizeInteger(queue.maxConcurrency, 4, 1, 64),
+    recoveredAt: Number(queue.recoveredAt) || null,
+    updatedAt: Number(queue.updatedAt) || timestamp,
+  };
+}
+
 function summarizeNode(node) {
   return {
     nodeId: node.id,
@@ -1034,6 +1052,7 @@ function normalizeRun(input, now) {
     inputs: asObject(source.inputs),
     profileSnapshot: asObject(source.profileSnapshot),
     nodeRuns,
+    queue: createQueueState(source.queue, now),
     logs: Array.isArray(source.logs) ? source.logs : [],
     artifacts: Array.isArray(source.artifacts) ? source.artifacts : [],
     timelineEvents: Array.isArray(source.timelineEvents) ? source.timelineEvents : [],
@@ -1067,6 +1086,7 @@ export function createWorkflowStudioStore({
   workflowsPath = DEFAULT_WORKFLOWS_PATH,
   runsPath = DEFAULT_RUNS_PATH,
   persist = true,
+  autoExecute = true,
   now = () => Date.now(),
   subagentRunStore = defaultSubagentRunStore,
   agentResolver = getAgentConfig,
@@ -1076,6 +1096,9 @@ export function createWorkflowStudioStore({
   let loaded = false;
   let workflows = [];
   let runs = [];
+  let nodePackages = [];
+  let templateSmokeResults = [];
+  let benchmarkResults = [];
   const nodeExecutors = {
     ...createDefaultExecutors(),
     ...asObject(executors),
@@ -1135,6 +1158,58 @@ export function createWorkflowStudioStore({
     const id = normalizeText(workflowId);
     const workflow = workflows.find((item) => item.id === id);
     return workflow ? clone(workflow) : null;
+  }
+
+  function normalizeNodePackage(input = {}) {
+    const source = asObject(input);
+    const type = normalizeId(source.type || source.id, 'custom-node');
+    const definition = {
+      type,
+      label: normalizeText(source.label || source.name || type, type, 120),
+      description: normalizeText(source.description, '', 500),
+      ports: asObject(source.ports),
+      configSchema: asObject(source.configSchema),
+      permissions: asObject(source.permissions),
+      outputSchema: asObject(source.outputSchema),
+      ui: asObject(source.ui),
+      layout: asObject(source.layout),
+      packageId: normalizeId(source.id || type, type),
+      version: normalizeText(source.version, '1.0.0', 40),
+      dependencies: asObject(source.dependencies),
+    };
+    const hasDependencies = Object.values(definition.dependencies).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value));
+    return {
+      id: definition.packageId,
+      enabled: source.enabled !== false && !hasDependencies,
+      status: hasDependencies ? 'missing_dependencies' : 'ready',
+      installedAt: source.installedAt || nowIso(now),
+      updatedAt: nowIso(now),
+      definition,
+    };
+  }
+
+  function listNodePackages() {
+    return nodePackages.map(clone);
+  }
+
+  function getStoreNodeTypeDefinitions() {
+    return [
+      ...getWorkflowNodeTypeDefinitions(),
+      ...nodePackages.map((item) => item.definition),
+    ].map(clone);
+  }
+
+  async function installNodePackage(input = {}) {
+    await load();
+    const normalized = normalizeNodePackage(input);
+    const index = nodePackages.findIndex((item) => item.id === normalized.id);
+    if (index >= 0) nodePackages[index] = normalized;
+    else nodePackages.push(normalized);
+    return clone(normalized);
+  }
+
+  function getStoreNodeTypeDefinition(type) {
+    return getNodeTypeDefinition(type) || nodePackages.find((item) => item.definition.type === type)?.definition || null;
   }
 
   async function upsertWorkflow(input = {}) {
@@ -1463,6 +1538,11 @@ export function createWorkflowStudioStore({
         permissionPreset: workflow.permissionPreset,
         agentName: agent?.name || workflow.profileId,
       },
+      queue: {
+        state: autoExecute ? 'running' : 'queued',
+        maxConcurrency: workflow.maxConcurrency,
+        updatedAt: timestamp,
+      },
       nodeRuns: Object.fromEntries(workflow.nodes.map((node) => [node.id, createNodeRun(node, now)])),
       logs: [`Created workflow run for ${workflow.name}.`],
       timelineEvents: [createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name }, now)],
@@ -1472,6 +1552,13 @@ export function createWorkflowStudioStore({
     }, now);
     runs.push(run);
     await saveRuns();
+    if (!autoExecute) {
+      run.status = 'queued';
+      run.queue.state = 'queued';
+      run.timelineEvents.push(createRunEvent('workflow_run_queued', { maxConcurrency: workflow.maxConcurrency }, now));
+      await saveRuns();
+      return clone(run);
+    }
     return executeReadyNodes(workflow, run);
   }
 
@@ -1493,6 +1580,96 @@ export function createWorkflowStudioStore({
   function getRun(runId) {
     const run = runs.find((item) => item.id === normalizeText(runId));
     return run ? clone(run) : null;
+  }
+
+  async function acquireNextRun({ workerId = `workflow-worker-${process.pid}`, leaseMs = 30000 } = {}) {
+    await load();
+    const activeLeases = runs.filter((run) => run.status === 'running' && run.queue?.leaseExpiresAt && run.queue.leaseExpiresAt > now()).length;
+    const queued = runs.find((run) => run.status === 'queued');
+    if (!queued) return null;
+    const workflow = workflows.find((item) => item.id === queued.workflowId);
+    const maxConcurrency = workflow?.maxConcurrency || queued.queue?.maxConcurrency || 4;
+    if (activeLeases >= maxConcurrency) return null;
+    queued.status = 'running';
+    queued.queue = {
+      ...createQueueState(queued.queue, now),
+      state: 'running',
+      workerId: normalizeText(workerId, 'workflow-worker', 120),
+      heartbeatAt: now(),
+      leaseExpiresAt: now() + Math.max(1000, Number(leaseMs) || 30000),
+      maxConcurrency,
+      updatedAt: now(),
+    };
+    queued.timelineEvents.push(createRunEvent('workflow_worker_acquired', {
+      workerId: queued.queue.workerId,
+      leaseExpiresAt: queued.queue.leaseExpiresAt,
+    }, now));
+    await saveRuns();
+    return clone(queued);
+  }
+
+  async function recoverStaleRuns({ nowMs = now() } = {}) {
+    await load();
+    let recovered = 0;
+    for (const run of runs) {
+      if (run.status !== 'running') continue;
+      if (!run.queue?.leaseExpiresAt || run.queue.leaseExpiresAt > nowMs) continue;
+      run.status = 'queued';
+      run.queue = {
+        ...createQueueState(run.queue, now),
+        state: 'recovering',
+        workerId: '',
+        heartbeatAt: nowMs,
+        leaseExpiresAt: null,
+        recoveredAt: nowMs,
+        updatedAt: nowMs,
+      };
+      run.timelineEvents.push(createRunEvent('workflow_run_recovered', { recoveredAt: nowMs }, now));
+      run.updatedAt = nowMs;
+      recovered += 1;
+    }
+    if (recovered > 0) await saveRuns();
+    return { recovered };
+  }
+
+  function getNodeIo(runId, nodeId) {
+    const run = runs.find((item) => item.id === normalizeText(runId));
+    const nodeRun = run?.nodeRuns?.[normalizeText(nodeId)];
+    if (!run || !nodeRun) return null;
+    const definition = getStoreNodeTypeDefinition(nodeRun.type);
+    return {
+      runId: run.id,
+      workflowId: run.workflowId,
+      nodeId: nodeRun.nodeId,
+      type: nodeRun.type,
+      status: nodeRun.status,
+      input: clone(nodeRun.input || {}),
+      output: clone(nodeRun.output || {}),
+      inputSchema: {
+        fields: definition?.configSchema?.fields || [],
+      },
+      outputSchema: definition?.outputSchema || { fields: [] },
+    };
+  }
+
+  function replayRun(runId) {
+    const run = runs.find((item) => item.id === normalizeText(runId));
+    if (!run) return null;
+    const nodes = Object.fromEntries(Object.entries(run.nodeRuns || {}).map(([nodeId, nodeRun]) => [nodeId, {
+      status: nodeRun.status,
+      attempt: nodeRun.attempt,
+      error: nodeRun.error || '',
+      startedAt: nodeRun.startedAt || null,
+      completedAt: nodeRun.completedAt || null,
+    }]));
+    return {
+      runId: run.id,
+      workflowId: run.workflowId,
+      status: run.status,
+      nodes,
+      events: listRunEvents(run.id),
+      diagnostics: [],
+    };
   }
 
   async function validateRun(workflowId, input = {}) {
@@ -1594,6 +1771,54 @@ export function createWorkflowStudioStore({
     return entries
       .slice(-Math.max(1, Math.min(Number(limit) || 200, 1000)))
       .map(clone);
+  }
+
+  function createApprovalRequest(run, nodeRun) {
+    return {
+      id: `workflow_approval_${run.id}_${nodeRun.nodeId}`,
+      runId: run.id,
+      workflowId: run.workflowId,
+      workflowName: run.workflowName,
+      nodeId: nodeRun.nodeId,
+      nodeTitle: nodeRun.title,
+      nodeType: nodeRun.type,
+      status: nodeRun.status === 'waiting_approval' ? 'pending' : nodeRun.status,
+      riskLevel: RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium',
+      reason: nodeRun.waitingReason || 'Workflow is waiting for human approval.',
+      input: clone(nodeRun.input || {}),
+      output: clone(nodeRun.output || {}),
+      projectPath: run.projectPath,
+      sessionId: run.sessionId,
+      createdAt: nodeRun.startedAt || run.createdAt,
+      updatedAt: nodeRun.updatedAt || run.updatedAt,
+    };
+  }
+
+  function listApprovalRequests({ status = 'pending' } = {}) {
+    const normalizedStatus = normalizeText(status, 'pending', 40);
+    return runs
+      .flatMap((run) => Object.values(run.nodeRuns || {}).map((nodeRun) => ({ run, nodeRun })))
+      .filter(({ nodeRun }) => normalizedStatus !== 'pending' || nodeRun.status === 'waiting_approval')
+      .map(({ run, nodeRun }) => createApprovalRequest(run, nodeRun))
+      .map(clone);
+  }
+
+  async function decideApproval(approvalId, input = {}) {
+    await load();
+    const parts = String(approvalId || '').replace(/^workflow_approval_/, '').split('_');
+    const nodeId = parts.pop();
+    const runId = parts.join('_');
+    const run = runs.find((item) => item.id === runId);
+    if (!run || !nodeId || !run.nodeRuns?.[nodeId]) return null;
+    const decision = normalizeText(input.decision, 'approve', 40).toLowerCase();
+    run.timelineEvents.push(createRunEvent('workflow_approval_decision', {
+      nodeId,
+      decision,
+      reason: normalizeText(input.reason, '', 1000),
+      approver: normalizeText(input.approver, 'local-user', 120),
+    }, now));
+    await saveRuns();
+    return controlNode(runId, nodeId, decision === 'reject' ? { action: 'reject', reason: input.reason } : { action: 'continue' });
   }
 
   async function retryFromNode(runId, nodeId) {
@@ -1779,6 +2004,109 @@ export function createWorkflowStudioStore({
     };
   }
 
+  async function smokeTemplate(templateId, input = {}) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(templateId));
+    if (!workflow) {
+      const error = new Error('Workflow template not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    const startedAt = now();
+    let status = 'passed';
+    let errorMessage = '';
+    let run = null;
+    try {
+      const smokeInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [
+        entry.id,
+        entry.defaultValue || `smoke ${entry.label || entry.id}`,
+      ]));
+      Object.assign(smokeInputs, asObject(input.inputs));
+      run = await createRun(workflow.id, {
+        inputs: smokeInputs,
+        projectPath: input.projectPath || '',
+        sessionId: input.sessionId || '',
+      });
+      status = run.status === 'failed' || run.status === 'cancelled' ? 'failed' : 'passed';
+      errorMessage = Object.values(run.nodeRuns || {}).find((nodeRun) => nodeRun.error)?.error || '';
+    } catch (error) {
+      status = 'failed';
+      errorMessage = error?.message || String(error);
+    }
+    const result = {
+      templateId: workflow.id,
+      workflowName: workflow.name,
+      status,
+      runId: run?.id || '',
+      error: errorMessage,
+      durationMs: Math.max(0, now() - startedAt),
+      verifiedAt: nowIso(now),
+    };
+    templateSmokeResults = [result, ...templateSmokeResults.filter((item) => item.templateId !== workflow.id)].slice(0, 100);
+    return clone(result);
+  }
+
+  async function runBenchmarks({ limit = 10 } = {}) {
+    await load();
+    const selected = workflows.slice(0, Math.max(1, Math.min(Number(limit) || 10, 10)));
+    const results = [];
+    for (const workflow of selected) {
+      const inputDefaults = Object.fromEntries((workflow.inputs || []).map((entry) => [
+        entry.id,
+        entry.defaultValue || `benchmark ${entry.id}`,
+      ]));
+      const result = await smokeTemplate(workflow.id, { inputs: inputDefaults });
+      results.push({
+        benchmarkId: `benchmark-${workflow.id}`,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        status: result.status,
+        runId: result.runId,
+        durationMs: result.durationMs,
+        screenshot: '',
+        error: result.error,
+      });
+    }
+    benchmarkResults = results;
+    return {
+      generatedAt: nowIso(now),
+      total: results.length,
+      passed: results.filter((result) => result.status === 'passed').length,
+      failed: results.filter((result) => result.status !== 'passed').length,
+      results: clone(results),
+    };
+  }
+
+  function getReleaseReadiness() {
+    const total = benchmarkResults.length;
+    const passed = benchmarkResults.filter((result) => result.status === 'passed').length;
+    const failed = benchmarkResults.filter((result) => result.status !== 'passed').length;
+    return {
+      generatedAt: nowIso(now),
+      workflowBenchmarks: {
+        total,
+        passed,
+        failed,
+        results: clone(benchmarkResults),
+      },
+      templateSmoke: clone(templateSmokeResults),
+      gates: [
+        {
+          id: 'workflow-benchmarks',
+          label: 'Workflow benchmarks',
+          status: total > 0 && failed === 0 ? 'passed' : 'needs_evidence',
+          summary: `${passed}/${total} workflow benchmarks passed.`,
+        },
+        {
+          id: 'real-screenshot-evidence',
+          label: 'Real screenshot evidence',
+          status: 'needs_evidence',
+          summary: 'Attach Playwright screenshot paths before closing UI or execution issues.',
+        },
+      ],
+    };
+  }
+
   return {
     async ready() {
       await load();
@@ -1792,12 +2120,18 @@ export function createWorkflowStudioStore({
     deleteWorkflow,
     validateWorkflowDefinition,
     createRun,
+    acquireNextRun,
+    recoverStaleRuns,
     listRuns,
     getRun,
+    getNodeIo,
+    replayRun,
     validateRun,
     cloneWorkflow,
     listRunEvents,
     listNodeLogs,
+    listApprovalRequests,
+    decideApproval,
     retryFromNode,
     controlRun,
     controlNode,
@@ -1805,6 +2139,12 @@ export function createWorkflowStudioStore({
     importWorkflow,
     exportWorkflowPackage,
     importWorkflowPackage,
+    installNodePackage,
+    listNodePackages,
+    getWorkflowNodeTypeDefinitions: getStoreNodeTypeDefinitions,
+    smokeTemplate,
+    runBenchmarks,
+    getReleaseReadiness,
     listTimelineEvents,
   };
 }

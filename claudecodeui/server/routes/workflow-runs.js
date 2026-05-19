@@ -30,6 +30,15 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.post('/recover', async (req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.recoverStaleRuns(req.body || {});
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to recover workflow runs');
+  }
+});
+
 router.get('/:runId', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();
@@ -55,6 +64,26 @@ router.get('/:runId/events', async (req, res) => {
   }
 });
 
+router.post('/:runId/recover', async (req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.recoverStaleRuns(req.body || {});
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to recover workflow runs');
+  }
+});
+
+router.get('/:runId/replay', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const replay = defaultWorkflowStudioStore.replayRun(req.params.runId);
+    if (!replay) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, replay });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to replay workflow run');
+  }
+});
+
 router.get('/:runId/nodes/:nodeId/logs', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();
@@ -68,6 +97,17 @@ router.get('/:runId/nodes/:nodeId/logs', async (req, res) => {
     });
   } catch (error) {
     return sendRunError(res, error, 500, 'Failed to list workflow node logs');
+  }
+});
+
+router.get('/:runId/nodes/:nodeId/io', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const io = defaultWorkflowStudioStore.getNodeIo(req.params.runId, req.params.nodeId);
+    if (!io) return res.status(404).json({ success: false, error: 'Workflow run or node not found' });
+    return res.json({ success: true, io });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to read workflow node IO');
   }
 });
 

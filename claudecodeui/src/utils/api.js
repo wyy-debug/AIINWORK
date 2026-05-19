@@ -364,6 +364,14 @@ export const api = {
   },
   workflowRun: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}`),
   workflowRunEvents: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/events`),
+  recoverWorkflowRuns: (payload = {}) =>
+    apiFetch('/api/workflow-runs/recover', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  replayWorkflowRun: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/replay`),
+  workflowNodeIo: (runId, nodeId) =>
+    apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/io`),
   workflowNodeLogs: (runId, nodeId) =>
     apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/logs`),
   retryWorkflowFromNode: (runId, nodeId) =>
@@ -378,6 +386,29 @@ export const api = {
     }),
   controlWorkflowNode: (runId, nodeId, payload = {}) =>
     apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/control`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  workflowApprovals: () => apiFetch('/api/workflow-approvals'),
+  decideWorkflowApproval: (approvalId, payload = {}) =>
+    apiFetch(`/api/workflow-approvals/${encodeURIComponent(approvalId)}/decision`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  workflowNodePackages: () => apiFetch('/api/workflow-node-packages'),
+  installWorkflowNodePackage: (workflowNodePackage = {}) =>
+    apiFetch('/api/workflow-node-packages/install', {
+      method: 'POST',
+      body: JSON.stringify({ package: workflowNodePackage }),
+    }),
+  smokeWorkflowTemplate: (templateId, payload = {}) =>
+    apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/smoke`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  workflowBenchmarkReadiness: () => apiFetch('/api/workflow-benchmarks'),
+  runWorkflowBenchmarks: (payload = {}) =>
+    apiFetch('/api/workflow-benchmarks/runs', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
