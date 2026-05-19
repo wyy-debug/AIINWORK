@@ -237,7 +237,6 @@ function ChatInterface({
   const selectedModelProfileIdRef = useRef('');
   const [selectedAgentProfileKind, setSelectedAgentProfileKind] = useState(DEFAULT_AGENT_PROFILE_KIND);
   const selectedAgentProfileKindRef = useRef(DEFAULT_AGENT_PROFILE_KIND);
-  const [subagentsEnabled, setSubagentsEnabled] = useState(false);
   const [goalsEnabled, setGoalsEnabled] = useState(false);
   const [sessionGoal, setSessionGoal] = useState<SessionGoal | null>(null);
   const [draftSessionGoal, setDraftSessionGoal] = useState<DraftSessionGoal | null>(null);
@@ -443,7 +442,7 @@ function ChatInterface({
   }, [agentBindingEnabled, selectedProject]);
 
   const enabledAgents = useMemo(
-    () => agents.filter((agent) => agent.status === 'enabled'),
+    () => agents.filter((agent) => agent.status === 'enabled' && agent.hidden !== true),
     [agents],
   );
   const selectedAgent = useMemo(
@@ -876,7 +875,6 @@ function ChatInterface({
           return;
         }
         setDefaultModelProfileId(nextProfileId);
-        setSubagentsEnabled(Boolean(data?.config?.subagents?.enabled));
         setGoalsEnabled(Boolean(data?.config?.goals?.enabled));
         if (!activeConversationSessionId) {
           setSelectedModelProfileId(nextProfileId);
@@ -1749,8 +1747,6 @@ function ChatInterface({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
-    subagentDispatchRequested,
-    setSubagentDispatchRequested,
     pendingLaunchDialog,
     setPendingLaunchDialog,
     confirmLaunchDialog,
@@ -2153,9 +2149,6 @@ function ChatInterface({
           showRuntimeDiagnostics={agentBindingEnabled || activeSkillNames.length > 0 || Boolean(agentRuntimeDiagnostics)}
           agentRuntimeDiagnostics={agentRuntimeDiagnostics}
           subagentActivity={subagentActivity ?? undefined}
-          subagentsEnabled={subagentsEnabled}
-          subagentDispatchRequested={subagentDispatchRequested}
-          onSubagentDispatchRequestedChange={setSubagentDispatchRequested}
           goalsEnabled={goalsEnabled}
           sessionGoal={displayedSessionGoal}
           onSetGoal={handleSetSessionGoal}

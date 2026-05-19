@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const CAPABILITY_KINDS = new Set(['skill', 'mcp-server', 'recipe', 'agent-template', 'swarm-template']);
+const CAPABILITY_KINDS = new Set(['skill', 'mcp-server', 'recipe', 'agent-template']);
 
 function normalizeString(value, fallback = '', maxLength = 240) {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -22,7 +22,6 @@ function normalizeKind(value) {
   const kind = normalizeString(value, 'skill', 40).toLowerCase();
   if (kind === 'mcp' || kind === 'mcp_server' || kind === 'mcp-server-template') return 'mcp-server';
   if (kind === 'agent' || kind === 'template') return 'agent-template';
-  if (kind === 'swarm') return 'swarm-template';
   return CAPABILITY_KINDS.has(kind) ? kind : 'skill';
 }
 
@@ -89,7 +88,7 @@ function hasRequiredConfiguration(setupFields = [], configuration = {}) {
 export function normalizeCapabilityMarketplaceItem(value = {}, options = {}) {
   const kind = normalizeKind(value.kind || value.type);
   const rawId = value.id || value.itemId || value.name || value.title;
-  const slug = sanitizeSlug(String(rawId || '').replace(/^(skill|mcp-server|recipe|agent-template|swarm-template)-/, ''), kind);
+  const slug = sanitizeSlug(String(rawId || '').replace(/^(skill|mcp-server|recipe|agent-template)-/, ''), kind);
   const id = `${kind}-${slug}`;
   const setupFields = normalizeSetupFields(value.setupFields || value.mcp?.setupFields || value.configurationFields);
   const installed = options.installed === true || value.installState === 'installed' || value.installed === true;

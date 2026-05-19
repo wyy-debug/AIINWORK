@@ -37,7 +37,7 @@ function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: st
     return 'Results';
   }
 
-  if (activeTab === 'swarms') {
+  if (activeTab === 'subagents') {
     return 'Subagents';
   }
 

@@ -21,6 +21,8 @@ const DEFAULT_INLINE_SKILL_CONTENT_CHARS = 16_000;
 const MAX_INLINE_SKILL_CONTENT_CHARS = 200_000;
 const INLINE_SKILL_CONTEXT_TOKEN_RATIO = 0.05;
 const APPROX_CHARS_PER_TOKEN = 4;
+const AGENT_MODES = new Set(['primary', 'subagent', 'all']);
+const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const MTL_CODE_HOME_DIR = process.env.MTL_CODE_CONFIG_DIR || path.join(os.homedir(), '.mtl-code');
 const LEGACY_CLAUDE_HOME_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const MTL_CODE_MODEL_ENV_KEYS = {
@@ -160,6 +162,51 @@ function normalizeScope(value) {
   return value === 'project' ? 'project' : 'global';
 }
 
+function normalizeAgentMode(value) {
+  const mode = normalizeString(value, 'all', 40).toLowerCase();
+  return AGENT_MODES.has(mode) ? mode : 'all';
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function normalizePermissionAction(value, fallback = 'ask') {
+  const action = normalizeString(value, '', 20).toLowerCase();
+  return PERMISSION_ACTIONS.has(action) ? action : fallback;
+}
+
+function normalizePermissionPatternMap(value) {
+  if (typeof value === 'string') return normalizePermissionAction(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result = {};
+  for (const [rawPattern, rawAction] of Object.entries(value)) {
+    const pattern = normalizeString(rawPattern, '', 120);
+    if (!pattern) continue;
+    result[pattern] = normalizePermissionAction(rawAction);
+  }
+  return result;
+}
+
+function normalizeAgentPermission(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const result = {};
+  for (const key of ['read', 'edit', 'glob', 'grep', 'list', 'bash', 'task', 'external_directory', 'todowrite', 'webfetch', 'websearch', 'lsp', 'skill', 'question']) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      result[key] = key === 'task' || typeof source[key] === 'object'
+        ? normalizePermissionPatternMap(source[key])
+        : normalizePermissionAction(source[key]);
+    }
+  }
+  return result;
+}
+
 function normalizePositiveInteger(value, fallback, max = MAX_CONTEXT_WINDOW_TOKENS) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -170,6 +217,12 @@ function normalizeTemperature(value, fallback = 0.2) {
   const parsed = Number.parseFloat(String(value ?? ''));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, Math.min(parsed, 2));
+}
+
+function normalizeMaxTurns(value) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(parsed, 200);
 }
 
 async function readJsonIfExists(filePath) {
@@ -395,6 +448,11 @@ export function normalizeAgentConfig(value, existing = null) {
     name: normalizeString(source.name, existing?.name || id, 120),
     shortName: normalizeString(source.shortName, existing?.shortName || id.slice(0, 2).toUpperCase(), 16),
     description: normalizeString(source.description, existing?.description || '', 800),
+    mode: normalizeAgentMode(source.mode ?? existing?.mode),
+    hidden: normalizeBoolean(source.hidden ?? existing?.hidden, false),
+    color: normalizeString(source.color, existing?.color || '', 40),
+    maxTurns: normalizeMaxTurns(source.maxTurns ?? existing?.maxTurns),
+    permission: normalizeAgentPermission(source.permission ?? existing?.permission),
     status: normalizeStatus(source.status ?? existing?.status),
     scope: normalizeScope(source.scope ?? existing?.scope),
     modelConfig: normalizeModelConfig(source.modelConfig ?? existing?.modelConfig),
@@ -429,6 +487,12 @@ export function normalizeAgentConfig(value, existing = null) {
     createdAt,
     updatedAt: nowIso(),
   };
+}
+
+export function filterAgentsByMode(agents = [], mode = 'all') {
+  const normalizedMode = normalizeAgentMode(mode);
+  if (normalizedMode === 'all') return agents;
+  return agents.filter((agent) => agent.mode === normalizedMode || agent.mode === 'all');
 }
 
 async function ensureAgentsStore() {

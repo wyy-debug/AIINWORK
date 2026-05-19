@@ -37,15 +37,7 @@ import {
   normalizeDialogAnswersForSubmit,
   type DialogAnswers,
 } from '../utils/agentTemplateDialogs';
-import {
-  buildSubagentDispatchPlanRequest,
-  shouldRequestSubagentDispatchPlan,
-} from '../utils/subagentDispatchPlan';
 import { findAutoAnswerableRequestUserInput } from '../utils/requestUserInput';
-import {
-  buildSubagentRuntimeSnapshot,
-  getSubagentRuntimeDispatchPlanId,
-} from '../utils/subagentRuntimeSnapshot';
 import {
   DEFAULT_AGENT_PROFILE_KIND,
   getAgentProfile,
@@ -78,8 +70,6 @@ type ProgrammaticChatSubmit = {
   text: string;
   displayText?: string;
   permissionMode?: PermissionMode | string;
-  subagentDispatch?: boolean;
-  approvedSubagentPlan?: string;
   sourceSessionId?: string;
 };
 
@@ -189,13 +179,11 @@ function buildPendingPromptInjectionDebug({
   originalCommand,
   effectiveCommand,
   permissionMode,
-  coordinatorMode,
   sessionId,
 }: {
   originalCommand: string;
   effectiveCommand: string;
   permissionMode: PermissionMode | string;
-  coordinatorMode: boolean;
   sessionId: string;
 }): PromptInjectionDebugPayload {
   const original = originalCommand.trim();
@@ -209,7 +197,6 @@ function buildPendingPromptInjectionDebug({
     commandChanged: Boolean(original && effective && original !== effective),
     permissionMode: String(permissionMode || ''),
     codexStylePlanMode: permissionMode === 'plan',
-    coordinatorMode,
     cli: {},
     sessionId,
     receivedAt: 'Waiting for backend final launch',
@@ -318,7 +305,6 @@ export function useChatComposerState({
   const [fileAttachmentErrors, setFileAttachmentErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
-  const [subagentDispatchRequested, setSubagentDispatchRequested] = useState(false);
   const [pendingLaunchDialog, setPendingLaunchDialog] = useState<LaunchDialogState | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -328,15 +314,12 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const oneShotPermissionModeRef = useRef<PermissionMode | string | null>(null);
-  const oneShotSubagentDispatchRef = useRef(false);
   const oneShotDisplayTextRef = useRef<string | null>(null);
   const oneShotSourceSessionIdRef = useRef<string | null>(null);
-  const approvedSubagentDispatchPlanRef = useRef('');
   const inputValueRef = useRef(input);
   const draftInputProjectNameRef = useRef(selectedProjectName);
   const pendingDraftRestoreRef = useRef<{ projectName: string; input: string } | null>(null);
   const launchDialogApprovalRef = useRef<LaunchDialogApproval | null>(null);
-  const pendingSubmitChatInputRef = useRef<ProgrammaticChatSubmit | null>(null);
   const isLoadingRef = useRef(isLoading);
   const abortStatusCheckTimersRef = useRef<number[]>([]);
 
@@ -352,11 +335,7 @@ export function useChatComposerState({
       ? detail.displayText.trim()
       : null;
     oneShotPermissionModeRef.current = detail.permissionMode || null;
-    oneShotSubagentDispatchRef.current = detail.subagentDispatch === true;
     oneShotSourceSessionIdRef.current = detail.sourceSessionId || null;
-    approvedSubagentDispatchPlanRef.current = typeof detail.approvedSubagentPlan === 'string'
-      ? detail.approvedSubagentPlan.trim()
-      : '';
     window.setTimeout(() => {
       void handleSubmitRef.current?.(createFakeSubmitEvent());
     }, 0);
@@ -881,21 +860,11 @@ export function useChatComposerState({
       const activeAgentSetupAnswers = activeAgent && activeAgent.id === selectedAgentId
         ? selectedAgentSetupAnswers
         : {};
-      const oneShotSubagentDispatch = oneShotSubagentDispatchRef.current === true;
-      const dispatchRequestedForSend = subagentDispatchRequested || oneShotSubagentDispatch;
-      const subagentPlanRequestActive = provider === 'claude'
-        && shouldRequestSubagentDispatchPlan({
-          prompt: agentInvocation.content || currentInput,
-          explicitDispatch: subagentDispatchRequested,
-        })
-        && !oneShotSubagentDispatch;
       const launchApproval = activeAgent && launchDialogApprovalRef.current?.agentId === activeAgent.id
         ? launchDialogApprovalRef.current
         : null;
       const needsLaunchDialog = Boolean(
         activeAgent
-        && dispatchRequestedForSend
-        && !subagentPlanRequestActive
         && hasDialogInteraction(activeAgent.templateDialogs?.launch),
       );
       if (needsLaunchDialog && activeAgent && !launchApproval) {
@@ -908,10 +877,10 @@ export function useChatComposerState({
         submitLockRef.current = false;
         return;
       }
-      const activeAgentLaunchAnswers = activeAgent && dispatchRequestedForSend && !subagentPlanRequestActive
+      const activeAgentLaunchAnswers = activeAgent
         ? (launchApproval?.answers || collectDialogDefaults(activeAgent.templateDialogs?.launch))
         : {};
-      const activeAgentLaunchPresetId = activeAgent && dispatchRequestedForSend && !subagentPlanRequestActive
+      const activeAgentLaunchPresetId = activeAgent
         ? (launchApproval?.presetId || getDefaultDialogPresetId(activeAgent.templateDialogs?.launch))
         : '';
       const activeAgentPackage = activeAgent?.templatePackage || {};
@@ -931,13 +900,42 @@ export function useChatComposerState({
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
         messageContent = `${selectedThinkingMode.prefix}: ${messageContent}`;
       }
-      if (subagentPlanRequestActive) {
-        messageContent = buildSubagentDispatchPlanRequest({
-          prompt: agentInvocation.content || currentInput,
-          agentName: activeAgent?.name || activeAgent?.shortName,
+      if (activeAgent?.mode === 'subagent') {
+        const prompt = messageContent.trim() || currentInput.trim();
+        if (!prompt) {
+          submitLockRef.current = false;
+          return;
+        }
+        const response = await apiFetch(`/api/agents/${encodeURIComponent(activeAgent.id)}/invoke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            projectPath: selectedProject.fullPath || selectedProject.path || '',
+            sessionId: currentSessionId || selectedSession?.id || null,
+            source: 'manual',
+          }),
         });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.error || 'Failed to start subagent');
+        }
+        addMessage({
+          type: 'assistant',
+          content: `Started ${activeAgent.name || activeAgent.shortName || activeAgent.id}. Open Subagents to track the run.`,
+          timestamp: new Date(),
+        });
+        window.dispatchEvent(new CustomEvent('argus-open-tab', { detail: { tab: 'subagents' } }));
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setAttachedImages([]);
+        setAttachedFiles([]);
+        setImageErrors(new Map());
+        setFileAttachmentErrors(new Map());
+        submitLockRef.current = false;
+        return;
       }
-
       let uploadedImages: unknown[] = [];
       if (attachedImages.length > 0) {
         const formData = new FormData();
@@ -1101,9 +1099,7 @@ export function useChatComposerState({
       const profilePermissionMode = typeof activeAgentProfile?.permissionPreset === 'string'
         ? getPermissionPreset(activeAgentProfile.permissionPreset)?.permissionMode || activeAgentProfile.permissionPreset
         : '';
-      const permissionModeForSend = subagentPlanRequestActive
-        ? 'plan'
-        : (oneShotPermissionModeRef.current || profilePermissionMode || permissionMode);
+      const permissionModeForSend = oneShotPermissionModeRef.current || profilePermissionMode || permissionMode;
       const skipToolPermissions = Boolean(
         toolsSettings?.skipPermissions
         || toolsSettings?.permissionMode === 'bypassPermissions'
@@ -1111,41 +1107,11 @@ export function useChatComposerState({
       );
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
-      const shouldSendSubagentDispatch = dispatchRequestedForSend && !subagentPlanRequestActive;
-      const approvedSubagentDispatchPlan = approvedSubagentDispatchPlanRef.current.trim();
-      const dispatchPlanId = shouldSendSubagentDispatch
-        ? getSubagentRuntimeDispatchPlanId({
-          prompt: agentInvocation.content || currentInput,
-          agentId: activeAgent?.id || selectedAgentId,
-          approvedPlan: approvedSubagentDispatchPlan,
-        })
-        : '';
-      const subagentRuntimeSnapshot = shouldSendSubagentDispatch
-        ? buildSubagentRuntimeSnapshot({
-          provider,
-          model: provider === 'cursor'
-            ? cursorModel
-            : provider === 'codex'
-              ? codexModel
-              : provider === 'gemini'
-                ? geminiModel
-                : claudeModel,
-          modelProfileId,
-          projectPath: resolvedProjectPath,
-          permissionMode: permissionModeForSend,
-          toolsSettings,
-          sessionSkills: activeSkillNames,
-          agentAppBindings: activeAgentAppBindings,
-          selectedDependencies: activeAgentSelectedDependencies,
-          agentProfileKind: activeAgentProfile?.kind || '',
-        })
-        : undefined;
       if (provider === 'claude' && debugPromptInjection) {
         const pendingPromptInjection = buildPendingPromptInjectionDebug({
           originalCommand: currentInput,
           effectiveCommand: messageContent,
           permissionMode: permissionModeForSend,
-          coordinatorMode: shouldSendSubagentDispatch,
           sessionId: sessionToActivate,
         });
         setPromptInjectionDebug?.(pendingPromptInjection);
@@ -1178,7 +1144,7 @@ export function useChatComposerState({
             sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
             sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
             sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
-            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
+            sessionAgentDialogInstanceId: '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             skipPermissions: skipToolPermissions,
@@ -1212,7 +1178,7 @@ export function useChatComposerState({
             sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
             sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
             sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
-            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
+            sessionAgentDialogInstanceId: '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
@@ -1245,7 +1211,7 @@ export function useChatComposerState({
             sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
             sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
             sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
-            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
+            sessionAgentDialogInstanceId: '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
@@ -1282,7 +1248,7 @@ export function useChatComposerState({
             sessionAgentLaunchAnswers: normalizeDialogAnswersForSubmit(activeAgentLaunchAnswers),
             sessionAgentLaunchPresetId: activeAgentLaunchPresetId,
             sessionAgentSelectedDependencies: activeAgentSelectedDependencies,
-            sessionAgentDialogInstanceId: shouldSendSubagentDispatch && activeAgent ? `dispatch-${clientMessageId}` : '',
+            sessionAgentDialogInstanceId: '',
             sessionSkills: activeSkillNames,
             allowSessionAgentBinding,
             sessionSummary,
@@ -1291,16 +1257,6 @@ export function useChatComposerState({
             clientMessageId,
             clientSessionId: sessionToActivate,
             ...(debugPromptInjection ? { debugPromptInjection: true } : {}),
-            ...(shouldSendSubagentDispatch
-              ? {
-                coordinatorMode: true,
-                subagentDispatch: true,
-                subagentDispatchPlanApproved: Boolean(approvedSubagentDispatchPlan),
-                subagentDispatchPlan: approvedSubagentDispatchPlan,
-                subagentRuntimeSnapshot,
-                dispatchPlanId,
-              }
-              : {}),
           },
         });
       }
@@ -1317,12 +1273,9 @@ export function useChatComposerState({
       setFileAttachmentErrors(new Map());
       setIsTextareaExpanded(false);
       setThinkingMode('none');
-      setSubagentDispatchRequested(false);
       oneShotPermissionModeRef.current = null;
-      oneShotSubagentDispatchRef.current = false;
       oneShotDisplayTextRef.current = null;
       oneShotSourceSessionIdRef.current = null;
-      approvedSubagentDispatchPlanRef.current = '';
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -1357,7 +1310,6 @@ export function useChatComposerState({
       selectedSkillNames,
       getSelectedSkillNames,
       agentProfileKind,
-      subagentDispatchRequested,
       modelProfileId,
       allowSessionAgentBinding,
       sendMessage,
@@ -1388,14 +1340,7 @@ export function useChatComposerState({
 
   useEffect(() => {
     isLoadingRef.current = isLoading;
-    if (isLoading || !pendingSubmitChatInputRef.current) {
-      return;
-    }
-
-    const pendingSubmit = pendingSubmitChatInputRef.current;
-    pendingSubmitChatInputRef.current = null;
-    window.setTimeout(() => submitProgrammaticChatInput(pendingSubmit), 0);
-  }, [isLoading, submitProgrammaticChatInput]);
+  }, [isLoading]);
 
   useEffect(() => {
     const handleAppendChatInput = (event: Event) => {
@@ -1421,8 +1366,6 @@ export function useChatComposerState({
         text?: string;
         displayText?: string;
         permissionMode?: PermissionMode | string;
-        subagentDispatch?: boolean;
-        approvedSubagentPlan?: string;
         sourceSessionId?: string;
       }>).detail || {};
       const text = typeof detail.text === 'string' ? detail.text.trim() : '';
@@ -1434,25 +1377,8 @@ export function useChatComposerState({
         text,
         displayText: typeof detail.displayText === 'string' ? detail.displayText.trim() : '',
         permissionMode: detail.permissionMode,
-        subagentDispatch: detail.subagentDispatch,
-        approvedSubagentPlan: detail.approvedSubagentPlan,
         sourceSessionId: detail.sourceSessionId,
       };
-      if (detail.subagentDispatch === true && isLoadingRef.current) {
-        const pendingSubmit = pendingSubmitChatInputRef.current;
-        if (
-          !pendingSubmit
-          || pendingSubmit.text !== programmaticSubmit.text
-          || pendingSubmit.displayText !== programmaticSubmit.displayText
-          || pendingSubmit.approvedSubagentPlan !== programmaticSubmit.approvedSubagentPlan
-          || pendingSubmit.sourceSessionId !== programmaticSubmit.sourceSessionId
-        ) {
-          pendingSubmitChatInputRef.current = programmaticSubmit;
-          setInput(text);
-          inputValueRef.current = text;
-        }
-        return;
-      }
 
       submitProgrammaticChatInput(programmaticSubmit);
     };
@@ -1759,8 +1685,6 @@ export function useChatComposerState({
     isTextareaExpanded,
     thinkingMode,
     setThinkingMode,
-    subagentDispatchRequested,
-    setSubagentDispatchRequested,
     pendingLaunchDialog,
     setPendingLaunchDialog,
     confirmLaunchDialog,

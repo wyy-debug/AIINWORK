@@ -6,8 +6,6 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 
 const docsToCheck = [
   'claude-code/docs/agent/sub-agents.mdx',
-  'claude-code/docs/agent/coordinator-and-swarm.mdx',
-  'claude-code/docs/features/coordinator-mode.md',
   'claudecodeui/docs/knowledge/2026-05-05-codex-subagent-source-migration.md',
 ];
 

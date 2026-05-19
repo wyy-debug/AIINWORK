@@ -3,7 +3,6 @@ export const MARKETPLACE_CATEGORIES = Object.freeze([
   Object.freeze({ id: 'recipe', label: 'Recipes' }),
   Object.freeze({ id: 'skill', label: 'Skills' }),
   Object.freeze({ id: 'mcp-server', label: 'MCP Servers' }),
-  Object.freeze({ id: 'swarm-template', label: 'Swarms' }),
 ]);
 
 const CATEGORY_IDS = new Set(MARKETPLACE_CATEGORIES.map((category) => category.id));

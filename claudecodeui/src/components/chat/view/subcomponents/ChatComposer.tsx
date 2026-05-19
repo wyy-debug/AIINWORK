@@ -209,9 +209,6 @@ interface ChatComposerProps {
   showRuntimeDiagnostics: boolean;
   agentRuntimeDiagnostics: AgentRuntimeDiagnostics | null;
   subagentActivity?: SubagentActivitySummary;
-  subagentsEnabled?: boolean;
-  subagentDispatchRequested: boolean;
-  onSubagentDispatchRequestedChange: (value: boolean) => void;
   goalsEnabled?: boolean;
   sessionGoal?: SessionGoal | null;
   onSetGoal?: (objective: string, tokenBudget?: number | null) => Promise<void> | void;
@@ -302,9 +299,6 @@ export default function ChatComposer({
   showRuntimeDiagnostics,
   agentRuntimeDiagnostics,
   subagentActivity,
-  subagentsEnabled = false,
-  subagentDispatchRequested,
-  onSubagentDispatchRequestedChange,
   goalsEnabled = false,
   sessionGoal,
   onSetGoal,
@@ -1777,25 +1771,7 @@ export default function ChatComposer({
               </button>
             )}
 
-            <PromptInputButton
-              tooltip={{
-                content: subagentsEnabled
-                  ? (subagentDispatchRequested ? '本条消息已允许多任务分发' : '本条消息允许多任务分发')
-                  : '先在设置里开启 Subagent',
-              }}
-              onClick={() => {
-                if (!subagentsEnabled) {
-                  return;
-                }
-                onSubagentDispatchRequestedChange(!subagentDispatchRequested);
-                textareaRef.current?.focus();
-              }}
-              disabled={isLoading || !subagentsEnabled}
-              aria-pressed={subagentDispatchRequested}
-              className="hidden"
-            >
-              <BotIcon />
-            </PromptInputButton>
+
 
             <PromptInputButton
               tooltip={{

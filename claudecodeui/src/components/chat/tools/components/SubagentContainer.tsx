@@ -77,20 +77,6 @@ const extractTextContent = (value: unknown): string => {
 const isAsyncLaunchNoise = (text: string): boolean =>
   /Async agent launched successfully|agentId: .*internal ID|The agent is working in the background|output_file/i.test(text);
 
-const openSwarmRun = (runId: string) => {
-  try {
-    window.localStorage.setItem('argus:pending-swarm-run-id', runId);
-  } catch {
-    // Non-critical handoff state; the panel can still open without it.
-  }
-  window.dispatchEvent(new CustomEvent('argus-open-panel', {
-    detail: { panel: 'swarms', runId },
-  }));
-  window.dispatchEvent(new CustomEvent('argus:open-swarm-run', {
-    detail: { runId },
-  }));
-};
-
 const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => {
   const input = parseObject(toolInput);
   const pick = (...keys: string[]) => {
@@ -199,8 +185,6 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
   const status = runtimeStatus || (isComplete ? 'DONE' : 'RUNNING');
   const taskId = subagentState.taskId || subagentState.registryRecord?.taskId || '';
-  const swarmRunId = stringifyValue((subagentState.registryRecord as Record<string, unknown> | undefined)?.swarmRunId);
-  const swarmRoleId = stringifyValue((subagentState.registryRecord as Record<string, unknown> | undefined)?.swarmRoleId);
   const readToolCount = childTools.filter(child =>
     /^(Read|FileRead|View)$/i.test(child.toolName)
   ).length;
@@ -265,16 +249,6 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = React.memo(({
               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700 ring-1 ring-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:ring-blue-900">
                 后台运行
               </span>
-            )}
-            {swarmRunId && (
-              <button
-                type="button"
-                onClick={() => openSwarmRun(swarmRunId)}
-                className="max-w-full rounded-full bg-cyan-50 px-2 py-0.5 text-cyan-700 ring-1 ring-cyan-200 transition-colors hover:bg-cyan-100 dark:bg-cyan-950/30 dark:text-cyan-300 dark:ring-cyan-900"
-                title={swarmRunId}
-              >
-                <span className="block truncate">Swarm{swarmRoleId ? `: ${swarmRoleId}` : ''}</span>
-              </button>
             )}
           </div>
 

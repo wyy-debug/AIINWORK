@@ -28,7 +28,7 @@ import type { SettingsProject } from '../../../../../types/types';
 import { dependencySelectionId, resolveAgentTemplateDependencyState } from '../../utils/agentRepositoryDependencies';
 import { emptyMcpConfiguration, shouldPromptForMcpSetup } from '../../utils/mcpInstallFlow';
 
-type RepositoryKind = 'agent-template' | 'recipe' | 'swarm-template' | 'skill' | 'mcp-server';
+type RepositoryKind = 'agent-template' | 'recipe' | 'skill' | 'mcp-server';
 type InstallScope = 'user' | 'project';
 
 type AppOption = {
@@ -382,7 +382,6 @@ async function readError(response: Response, fallback: string) {
 function kindLabel(kind: RepositoryKind) {
   if (kind === 'skill') return 'Skill';
   if (kind === 'mcp-server') return 'MCP';
-  if (kind === 'swarm-template') return 'Swarm';
   if (kind === 'recipe') return 'Recipe';
   return 'Agent';
 }
@@ -393,9 +392,6 @@ function kindAccent(kind: RepositoryKind) {
   }
   if (kind === 'mcp-server') {
     return 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-300';
-  }
-  if (kind === 'swarm-template') {
-    return 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-900/60 dark:bg-cyan-950/30 dark:text-cyan-300';
   }
   if (kind === 'recipe') {
     return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300';
@@ -557,12 +553,11 @@ type ItemCardProps = {
   onInstall: (item: RepositoryItem) => void;
   onUpdate: (item: RepositoryItem) => void;
   onUninstall: (item: RepositoryItem) => void;
-  onDispatch?: (item: RepositoryItem) => void;
   onDiagnose?: (item: RepositoryItem) => void;
   diagnostics?: McpDiagnostics;
 };
 
-function ItemCard({ item, busy, installed, dependencyResolution, onLike, onInstall, onUpdate, onUninstall, onDispatch, onDiagnose, diagnostics }: ItemCardProps) {
+function ItemCard({ item, busy, installed, dependencyResolution, onLike, onInstall, onUpdate, onUninstall, onDiagnose, diagnostics }: ItemCardProps) {
   const runtimeReady = !dependencyResolution?.blockingMissing?.length;
   const diagnosticStatusClass = diagnostics?.status === 'ok'
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
@@ -631,7 +626,7 @@ function ItemCard({ item, busy, installed, dependencyResolution, onLike, onInsta
               ))}
             </div>
           )}
-          {(item.kind === 'agent-template' || item.kind === 'swarm-template') && (
+          {item.kind === 'agent-template' && (
             <div className="mt-2 flex flex-wrap gap-1 text-xs text-muted-foreground">
               {dependencyResolution?.blockingMissing?.length ? (
                 <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
@@ -641,18 +636,6 @@ function ItemCard({ item, busy, installed, dependencyResolution, onLike, onInsta
                 <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
                   Dependencies ready
                 </span>
-              ) : null}
-              {item.kind === 'swarm-template' && item.topology?.type && (
-                <span className="rounded bg-muted px-1.5 py-0.5">Topology: {item.topology.type}</span>
-              )}
-              {item.kind === 'swarm-template' && item.roles?.length ? (
-                <span className="rounded bg-muted px-1.5 py-0.5">Roles: {item.roles.length}</span>
-              ) : null}
-              {item.kind === 'swarm-template' && item.bus?.provider && (
-                <span className="rounded bg-muted px-1.5 py-0.5">Bus: {item.bus.provider}</span>
-              )}
-              {item.kind === 'swarm-template' && item.policies?.maxAgents ? (
-                <span className="rounded bg-muted px-1.5 py-0.5">Max agents: {item.policies.maxAgents}</span>
               ) : null}
               {item.runtime?.model && (
                 <span className="rounded bg-muted px-1.5 py-0.5">Model: {item.runtime.model}</span>
@@ -779,18 +762,6 @@ function ItemCard({ item, busy, installed, dependencyResolution, onLike, onInsta
             <Heart className={cn('h-3.5 w-3.5', item.liked && 'fill-current')} />
             <span>{item.likes}</span>
           </button>
-          {item.kind === 'swarm-template' && onDispatch && (
-            <button
-              type="button"
-              onClick={() => onDispatch(item)}
-              disabled={busy || !runtimeReady}
-              title={runtimeReady ? 'Dispatch swarm template' : 'Required dependencies must be ready before dispatch'}
-              className="inline-flex h-8 items-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
-            >
-              <Network className="h-3.5 w-3.5" />
-              Dispatch
-            </button>
-          )}
           {installed ? (
             <>
               {item.kind === 'mcp-server' && onDiagnose && (
@@ -1463,13 +1434,9 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
     () => filteredItems.filter((item) => item.kind === 'recipe'),
     [filteredItems],
   );
-  const swarmTemplates = useMemo(
-    () => filteredItems.filter((item) => item.kind === 'swarm-template'),
-    [filteredItems],
-  );
   const distributableTemplates = useMemo(
-    () => [...agentTemplates, ...swarmTemplates],
-    [agentTemplates, swarmTemplates],
+    () => [...agentTemplates],
+    [agentTemplates],
   );
   const skillItems = useMemo(
     () => filteredItems.filter((item) => item.kind === 'skill'),
@@ -1595,7 +1562,6 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
   const itemCounts = useMemo(() => ({
     agents: items.filter((item) => item.kind === 'agent-template').length,
     recipes: items.filter((item) => item.kind === 'recipe').length,
-    swarms: items.filter((item) => item.kind === 'swarm-template').length,
     skills: items.filter((item) => item.kind === 'skill').length,
     mcps: items.filter((item) => item.kind === 'mcp-server').length,
   }), [items]);
@@ -1744,40 +1710,6 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
       return null;
     } finally {
       setBusyKey(null);
-    }
-  };
-
-  const dispatchSwarmTemplate = (item: RepositoryItem) => {
-    const resolution = dependencyResolutions[templateKey(item)];
-    if (resolution?.blockingMissing?.length) {
-      setActionError('Required dependencies must be available before dispatching this swarm template.');
-      return;
-    }
-    const manifest = {
-      schemaVersion: 1,
-      id: item.packageId || item.name,
-      version: item.packageVersion || item.version || '1.0.0',
-      kind: 'swarm-template',
-      topology: item.topology,
-      roles: item.roles,
-      routing: item.routing,
-      bus: item.bus,
-      memory: item.memory,
-      policies: item.policies,
-      dialogs: item.dialogs,
-      dependencies: item.dependencies,
-      examples: item.examples,
-      compat: item.compat,
-    };
-    const payload = { itemId: item.id, repoId: item.repoId, title: item.title, manifest };
-    try {
-      window.localStorage.setItem('argus:pending-swarm-template', JSON.stringify(payload));
-      window.dispatchEvent(new CustomEvent('argus:dispatch-swarm-template', { detail: payload }));
-      window.dispatchEvent(new CustomEvent('argus-open-panel', { detail: { panel: 'swarms' } }));
-      setMessage(`Swarm template "${item.title}" is ready to dispatch from the Swarm dashboard.`);
-      setActionError(null);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to prepare swarm dispatch');
     }
   };
 
@@ -2011,7 +1943,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           tags: parseTags(uploadForm.tags),
           supportedApps: parseAppOptions(uploadForm.supportedApps),
           capabilities: parseTags(uploadForm.capabilities),
-          dependencies: uploadForm.kind === 'agent-template' || uploadForm.kind === 'swarm-template'
+          dependencies: uploadForm.kind === 'agent-template'
             ? {
                 skills: parseDependencies(uploadForm.skillDependencies, 'skill'),
                 mcpServers: parseDependencies(uploadForm.mcpDependencies, 'mcp-server'),
@@ -2131,7 +2063,6 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span className="rounded bg-muted px-2 py-1">{repositories.length} 个仓库</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.agents} 个 Agent</span>
-                <span className="rounded bg-muted px-2 py-1">{itemCounts.swarms} 个 Swarm</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.skills} 个 Skill</span>
                 <span className="rounded bg-muted px-2 py-1">{itemCounts.mcps} MCP</span>
               </div>
@@ -2304,7 +2235,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               />
             </div>
             <div className="inline-flex h-9 overflow-hidden rounded border border-border">
-              {(['all', 'agent-template', 'recipe', 'skill', 'mcp-server', 'swarm-template'] as const).map((kind) => (
+              {(['all', 'agent-template', 'recipe', 'skill', 'mcp-server'] as const).map((kind) => (
                 <button
                   key={kind}
                   type="button"
@@ -2360,39 +2291,6 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
                   {recipeItems.length === 0 && kindFilter === 'recipe' && (
                     <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
                       No Recipes found.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {(kindFilter === 'all' || kindFilter === 'swarm-template') && (
-                <div className="space-y-2">
-                  {swarmTemplates.length > 0 && (
-                    <h3 className="text-sm font-semibold text-foreground">Swarm Templates</h3>
-                  )}
-                  {swarmTemplates.map((item) => {
-                    const busy = busyKey === `like:${item.repoId}:${item.id}`
-                      || busyKey === `install:${item.repoId}:${item.id}`
-                      || busyKey === `update:${item.repoId}:${item.id}`
-                      || busyKey === `uninstall:${item.repoId}:${item.id}`;
-                    return (
-                      <ItemCard
-                        key={`${item.repoId}:${item.id}`}
-                        item={item}
-                        busy={busy}
-                        installed={false}
-                        dependencyResolution={dependencyResolutions[templateKey(item)]}
-                        onLike={(nextItem) => void likeItem(nextItem)}
-                        onInstall={(nextItem) => void installItem(nextItem)}
-                        onUpdate={(nextItem) => void installItem(nextItem, undefined, { overwrite: true, action: 'update' })}
-                        onUninstall={(nextItem) => void uninstallItem(nextItem)}
-                        onDispatch={(nextItem) => dispatchSwarmTemplate(nextItem)}
-                      />
-                    );
-                  })}
-                  {swarmTemplates.length === 0 && kindFilter === 'swarm-template' && (
-                    <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
-                      No Swarm Templates found.
                     </div>
                   )}
                 </div>
@@ -2504,7 +2402,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
           </div>
 
           <div className="mt-3 inline-flex h-9 overflow-hidden rounded border border-border">
-            {(['agent-template', 'swarm-template', 'skill'] as const).map((kind) => (
+            {(['agent-template', 'skill'] as const).map((kind) => (
               <button
                 key={kind}
                 type="button"
@@ -2523,7 +2421,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <input
               value={uploadForm.name}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder={uploadForm.kind === 'skill' ? 'skill-name' : uploadForm.kind === 'swarm-template' ? 'swarm-name' : 'agent-name'}
+              placeholder={uploadForm.kind === 'skill' ? 'skill-name' : 'agent-name'}
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
             <input
@@ -2557,7 +2455,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
               placeholder="Icon text"
               className="h-9 rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
             />
-            {(uploadForm.kind === 'agent-template' || uploadForm.kind === 'swarm-template') && (
+            {uploadForm.kind === 'agent-template' && (
               <>
                 <input
                   value={uploadForm.supportedApps}
@@ -2611,7 +2509,7 @@ export default function RepositoryContent({ projects }: RepositoryContentProps) 
             <textarea
               value={uploadForm.content}
               onChange={(event) => setUploadForm((prev) => ({ ...prev, content: event.target.value, packageFiles: [] }))}
-              placeholder={uploadForm.kind === 'skill' ? '粘贴 SKILL.md 内容，或加载完整 Skill 文件夹' : uploadForm.kind === 'swarm-template' ? 'Paste swarm-template manifest JSON' : '粘贴 Agent system prompt'}
+              placeholder={uploadForm.kind === 'skill' ? '粘贴 SKILL.md 内容，或加载完整 Skill 文件夹' : '粘贴 Agent system prompt'}
               rows={10}
               className="min-h-[220px] resize-y rounded border border-border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
             />

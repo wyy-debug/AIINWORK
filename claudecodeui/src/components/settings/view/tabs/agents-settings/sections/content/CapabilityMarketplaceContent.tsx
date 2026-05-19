@@ -21,7 +21,7 @@ import { cn } from '../../../../../../../lib/utils';
 import { api } from '../../../../../../../utils/api';
 import type { SettingsProject } from '../../../../../types/types';
 
-type CapabilityKind = 'all' | 'skill' | 'mcp-server' | 'recipe' | 'agent-template' | 'swarm-template';
+type CapabilityKind = 'all' | 'skill' | 'mcp-server' | 'recipe' | 'agent-template';
 type ConcreteCapabilityKind = Exclude<CapabilityKind, 'all'>;
 
 type CapabilityDependencyMap = {
@@ -77,7 +77,6 @@ const KIND_OPTIONS: Array<{ value: CapabilityKind; label: string }> = [
   { value: 'mcp-server', label: 'MCP' },
   { value: 'recipe', label: 'Recipes' },
   { value: 'agent-template', label: 'Agents' },
-  { value: 'swarm-template', label: 'Swarms' },
 ];
 
 function sanitizeSlug(value: string, fallback = 'capability') {
@@ -94,9 +93,8 @@ function normalizeKind(value?: string): ConcreteCapabilityKind {
   const kind = String(value || '').trim().toLowerCase();
   if (kind === 'mcp' || kind === 'mcp_server' || kind === 'mcp-server-template') return 'mcp-server';
   if (kind === 'agent' || kind === 'template') return 'agent-template';
-  if (kind === 'swarm') return 'swarm-template';
   if (kind === 'recipe') return 'recipe';
-  if (kind === 'agent-template' || kind === 'swarm-template' || kind === 'skill' || kind === 'mcp-server') return kind;
+  if (kind === 'agent-template' || kind === 'skill' || kind === 'mcp-server') return kind;
   return 'skill';
 }
 
@@ -151,7 +149,6 @@ function dependencyCount(dependencies?: CapabilityDependencyMap) {
 function kindLabel(kind: ConcreteCapabilityKind) {
   if (kind === 'mcp-server') return 'MCP';
   if (kind === 'agent-template') return 'Agent';
-  if (kind === 'swarm-template') return 'Swarm';
   if (kind === 'recipe') return 'Recipe';
   return 'Skill';
 }

@@ -117,7 +117,7 @@ test('Argus collaboration mode also follows persisted toolsSettings permissionMo
   assert.equal(command.options.codexStylePlanMode, true);
 });
 
-test('Argus collaboration mode appends subagent dispatch reminder only when explicitly requested', async () => {
+test('Argus collaboration mode ignores retired subagent dispatch options', async () => {
   const withoutButton = applyArgusCollaborationModeOptions({
     type: 'claude-command',
     command: 'do work',
@@ -130,12 +130,11 @@ test('Argus collaboration mode appends subagent dispatch reminder only when expl
   });
 
   assert.equal(withoutButton.options?.appendSystemPrompt, undefined);
-  assert.match(withButton.options.appendSystemPrompt, /user explicitly clicked the subagent dispatch button/i);
-  assert.match(withButton.options.appendSystemPrompt, /spawn_agent/);
-  assert.equal(withButton.options.coordinatorMode, true);
+  assert.equal(withButton.options?.appendSystemPrompt, undefined);
+  assert.equal(withButton.options.coordinatorMode, undefined);
 });
 
-test('Argus collaboration mode includes the approved subagent dispatch plan', async () => {
+test('Argus collaboration mode does not append approved subagent dispatch plans', async () => {
   const command = applyArgusCollaborationModeOptions({
     type: 'claude-command',
     command: 'dispatch the approved plan',
@@ -146,10 +145,8 @@ test('Argus collaboration mode includes the approved subagent dispatch plan', as
     },
   });
 
-  assert.match(command.options.appendSystemPrompt, /Approved subagent dispatch plan/i);
-  assert.match(command.options.appendSystemPrompt, /only dispatch the agents described/i);
-  assert.match(command.options.appendSystemPrompt, /Explore\/backend_review/);
-  assert.equal(command.options.coordinatorMode, true);
+  assert.equal(command.options.appendSystemPrompt, undefined);
+  assert.equal(command.options.coordinatorMode, undefined);
 });
 
 test('Codex-style plan mode allowed tools exclude legacy ExitPlanMode and TodoWrite', async () => {

@@ -28,8 +28,7 @@ const BUILT_IN: CommandItem[] = [
   { name: '/browser', description: 'Open local preview', tab: 'browser' },
   { name: '/results', description: 'Open saved results', tab: 'artifacts' },
   { name: '/artifacts', description: 'Open saved results', tab: 'artifacts' },
-  { name: '/subagents', description: 'Open Subagent workspace', tab: 'swarms' },
-  { name: '/swarms', description: 'Open Subagent workspace', tab: 'swarms' },
+  { name: '/subagents', description: 'Open Subagent workspace', tab: 'subagents' },
   { name: '/worktree', description: 'Open Worktree controls', tab: 'actions', mode: 'worktree' },
   { name: '/status', description: 'Show Argus status', tab: 'chat' },
   { name: '/mcp', description: 'Open MCP settings', tab: 'chat', mode: 'mcp' },
@@ -43,7 +42,7 @@ const iconFor = (name: string) => {
   if (name.includes('browser')) return Globe2;
   if (name.includes('preview')) return Globe2;
   if (name.includes('artifact') || name.includes('result')) return FileText;
-  if (name.includes('subagent') || name.includes('swarm')) return Network;
+  if (name.includes('subagent')) return Network;
   if (name.includes('action') || name.includes('worktree')) return Play;
   if (name.includes('run')) return Play;
   return Layers3;

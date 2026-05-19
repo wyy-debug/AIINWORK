@@ -4,8 +4,8 @@ import {
   applyArgusCollaborationModeOptions,
 } from '../argus-collaboration-mode-service.js';
 
-describe('argus-collaboration-mode-service approved subagent dispatch', () => {
-  it('includes the approved subagent dispatch plan in the runtime prompt', async () => {
+describe('argus-collaboration-mode-service', () => {
+  it('ignores retired subagent dispatch options', async () => {
     const command = applyArgusCollaborationModeOptions({
       type: 'claude-command',
       command: 'dispatch the approved plan',
@@ -29,15 +29,7 @@ describe('argus-collaboration-mode-service approved subagent dispatch', () => {
       },
     });
 
-    expect(command.options.appendSystemPrompt).toMatch(/Approved subagent dispatch plan/i);
-    expect(command.options.appendSystemPrompt).toMatch(/only dispatch the agents described/i);
-    expect(command.options.appendSystemPrompt).toContain('Explore/backend_review');
-    expect(command.options.appendSystemPrompt).toContain('Parent runtime snapshot');
-    expect(command.options.appendSystemPrompt).toContain('dispatch:review-agent:approved-plan');
-    expect(command.options.appendSystemPrompt).toContain('"allowedTools":["spawn_agent","Read"]');
-    expect(command.options.appendSystemPrompt).toMatch(/do not spawn the same approved role twice/i);
-    expect(command.options.appendSystemPrompt).toMatch(/append this instruction to every child agent task/i);
-    expect(command.options.appendSystemPrompt).toMatch(/Do not call spawn_agent/i);
-    expect(command.options.coordinatorMode).toBe(true);
+    expect(command.options.appendSystemPrompt).toBeUndefined();
+    expect(command.options.coordinatorMode).toBeUndefined();
   });
 });

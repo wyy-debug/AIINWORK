@@ -114,13 +114,13 @@ test('Argus direct close handling treats only explicit user abort as aborted', a
   assert.match(source, /Argus backend exited with signal/);
 });
 
-test('Argus coordinator dispatch enables native subagent tools for the spawned runtime', async () => {
+test('Argus runtime no longer injects retired coordinator dispatch environment', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');
 
-  assert.match(source, /options\.coordinatorMode === true/);
-  assert.match(source, /spawnEnv\.MTL_CODE_COORDINATOR_MODE = '1'/);
-  assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.subagentsEnabled\] = '1'/);
+  assert.doesNotMatch(source, /options\.coordinatorMode === true/);
+  assert.doesNotMatch(source, /MTL_CODE_COORDINATOR_MODE/);
+  assert.doesNotMatch(source, /MTL_CODE_SUBAGENTS_ENABLED/);
 });
 
 test('Claude native memory stays enabled without retired storage overrides', async () => {

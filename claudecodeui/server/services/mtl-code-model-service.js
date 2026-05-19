@@ -37,23 +37,11 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
-  coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
-  subagentsEnabled: 'MTL_CODE_SUBAGENTS_ENABLED',
-  subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
-  subagentMaxDepth: 'MTL_CODE_SUBAGENTS_MAX_DEPTH',
-  allowNestedSubagents: 'MTL_CODE_ALLOW_NESTED_SUBAGENTS',
   goalsEnabled: 'MTL_CODE_GOALS_ENABLED',
 };
 
 export const BRAIN_RUNTIME_SETTINGS_KEY = 'argusBrain';
-export const SUBAGENT_RUNTIME_SETTINGS_KEY = 'subagents';
 export const GOAL_RUNTIME_SETTINGS_KEY = 'goals';
-
-export const DEFAULT_SUBAGENT_RUNTIME_CONFIG = Object.freeze({
-  enabled: false,
-  maxConcurrentThreadsPerSession: 3,
-  maxDepth: 1,
-});
 
 export const DEFAULT_GOAL_RUNTIME_CONFIG = Object.freeze({
   enabled: false,
@@ -139,26 +127,6 @@ function normalizePositiveInteger(value, fallback, { min = 1, max = 1_000_000 } 
   return Math.min(Math.max(parsed, min), max);
 }
 
-function normalizeSubagentPositiveInteger(value, fallback, max = 16) {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback;
-  }
-  return Math.min(parsed, max);
-}
-
-export function normalizeSubagentRuntimeConfig(value, fallback = DEFAULT_SUBAGENT_RUNTIME_CONFIG) {
-  const data = readObjectRecord(value) ?? {};
-  return {
-    enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
-    maxConcurrentThreadsPerSession: normalizeSubagentPositiveInteger(
-      data.maxConcurrentThreadsPerSession,
-      fallback.maxConcurrentThreadsPerSession,
-    ),
-    maxDepth: normalizeSubagentPositiveInteger(data.maxDepth, fallback.maxDepth, 4),
-  };
-}
-
 export function normalizeGoalRuntimeConfig(value, fallback = DEFAULT_GOAL_RUNTIME_CONFIG) {
   const data = readObjectRecord(value) ?? {};
   return {
@@ -213,24 +181,6 @@ export function normalizeBrainRuntimeConfig(value, fallback = DEFAULT_BRAIN_RUNT
   };
 }
 
-export function readSubagentRuntimeConfig(settings = {}, env = {}) {
-  const envConfig = normalizeSubagentRuntimeConfig({
-    enabled: readBooleanEnv(env, MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled, DEFAULT_SUBAGENT_RUNTIME_CONFIG.enabled),
-    maxConcurrentThreadsPerSession: readPositiveIntegerEnv(
-      env,
-      MTL_CODE_MODEL_ENV_KEYS.subagentMaxConcurrentThreadsPerSession,
-    ) || DEFAULT_SUBAGENT_RUNTIME_CONFIG.maxConcurrentThreadsPerSession,
-    maxDepth: readPositiveIntegerEnv(
-      env,
-      MTL_CODE_MODEL_ENV_KEYS.subagentMaxDepth,
-    ) || DEFAULT_SUBAGENT_RUNTIME_CONFIG.maxDepth,
-  });
-  return normalizeSubagentRuntimeConfig(
-    settings?.[SUBAGENT_RUNTIME_SETTINGS_KEY],
-    envConfig,
-  );
-}
-
 export function readGoalRuntimeConfig(settings = {}, env = {}) {
   const envConfig = normalizeGoalRuntimeConfig({
     enabled: readBooleanEnv(
@@ -250,17 +200,6 @@ export function readBrainRuntimeConfig(settings = {}) {
     settings?.[BRAIN_RUNTIME_SETTINGS_KEY],
     DEFAULT_BRAIN_RUNTIME_CONFIG,
   );
-}
-
-export function applySubagentRuntimeToEnv(env, config) {
-  const normalized = normalizeSubagentRuntimeConfig(config);
-  env[MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled] = normalized.enabled ? '1' : '0';
-  env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxConcurrentThreadsPerSession] = String(
-    normalized.maxConcurrentThreadsPerSession,
-  );
-  env[MTL_CODE_MODEL_ENV_KEYS.subagentMaxDepth] = String(normalized.maxDepth);
-  env[MTL_CODE_MODEL_ENV_KEYS.allowNestedSubagents] = normalized.maxDepth > 1 ? '1' : '0';
-  return env;
 }
 
 export function applyGoalRuntimeToEnv(env, config) {
@@ -499,12 +438,6 @@ export async function readMtlCodeModelSettings(env = process.env) {
   return readJsonConfig(settingsPath);
 }
 
-export async function readResolvedSubagentRuntimeConfig(env = process.env) {
-  const settings = await readMtlCodeModelSettings(env);
-  const settingsEnv = readObjectRecord(settings.env) ?? {};
-  return readSubagentRuntimeConfig(settings, settingsEnv);
-}
-
 export async function readResolvedGoalRuntimeConfig(env = process.env) {
   const settings = await readMtlCodeModelSettings(env);
   const settingsEnv = readObjectRecord(settings.env) ?? {};
@@ -540,9 +473,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     : normalizeAnthropicBaseUrl(profile.baseUrl);
   const contextWindowTokens = resolveProfileContextWindow({ ...profile, model }, settingsEnv);
   const brainRuntime = readBrainRuntimeConfig(settings);
-  const subagents = readSubagentRuntimeConfig(settings, settingsEnv);
   const goals = readGoalRuntimeConfig(settings, settingsEnv);
-  const coordinatorModeEnabled = false;
   const claudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(profile);
   const runtimeEnv = {
     MTL_CODE_USE_OPENAI: usesOpenAI ? '1' : '0',
@@ -550,7 +481,6 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     [MTL_CODE_MODEL_ENV_KEYS.uiBareMode]: claudeNativeMemoryEnabled ? '0' : '1',
     [MTL_CODE_MODEL_ENV_KEYS.maxContextTokens]: String(contextWindowTokens),
     [MTL_CODE_MODEL_ENV_KEYS.uiContextWindow]: String(contextWindowTokens),
-    [MTL_CODE_MODEL_ENV_KEYS.coordinatorMode]: coordinatorModeEnabled ? '1' : '0',
   };
   if (claudeNativeMemoryEnabled) {
     runtimeEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled] = '1';
@@ -570,7 +500,6 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
       model: requestModel,
     });
   }
-  applySubagentRuntimeToEnv(runtimeEnv, subagents);
   applyGoalRuntimeToEnv(runtimeEnv, goals);
 
   if (profile.authToken) {
@@ -591,7 +520,6 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     env: Object.fromEntries(Object.entries(runtimeEnv).filter(([, value]) => Boolean(value))),
     contextWindowTokens,
     brainRuntime,
-    subagents,
     goals,
   };
 }

@@ -24,9 +24,7 @@ import {
   MTL_CODE_MODEL_ENV_KEYS,
   OPENAI_MODEL_ENV_KEYS,
   applyAnthropicRuntimeModelDefaults,
-  applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
-  readSubagentRuntimeConfig,
   repairAnthropicRuntimeModelEnv,
   resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
@@ -713,8 +711,6 @@ function buildMtlCodeRuntimeSignature({ cwd = '', cliArgs = [], env = {} } = {})
     MTL_CODE_MODEL_ENV_KEYS.maxContextTokens,
     MTL_CODE_MODEL_ENV_KEYS.uiContextWindow,
     MTL_CODE_MODEL_ENV_KEYS.effortLevel,
-    MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled,
-    MTL_CODE_MODEL_ENV_KEYS.coordinatorMode,
   ].filter(Boolean);
   const sensitiveEnvKeys = new Set([
     ANTHROPIC_MODEL_ENV_KEYS.authToken,
@@ -855,10 +851,6 @@ function buildPromptInjectionDebugPayload(options = {}, childEnv = process.env, 
       options.codexStylePlanMode
       || permissionMode === 'plan'
       || childEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE === '1'
-    ),
-    coordinatorMode: Boolean(
-      options.coordinatorMode === true
-      || childEnv.MTL_CODE_COORDINATOR_MODE === '1'
     ),
     claudeNativeMemoryEnabled: isClaudeNativeMemoryEnabled(childEnv),
     autoMemoryExtractionEnabled: childEnv[MTL_CODE_MODEL_ENV_KEYS.autoMemoryExtractionEnabled] === '1',
@@ -1054,12 +1046,7 @@ async function readMtlCodeSettingsEnv() {
     const settingsPath = path.join(getMtlCodeConfigDir(), 'settings.json');
     const settings = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
     if (!settings || typeof settings.env !== 'object' || Array.isArray(settings.env)) {
-      const runtimeEnv = {};
-      applySubagentRuntimeToEnv(
-        runtimeEnv,
-        readSubagentRuntimeConfig(settings || {}, runtimeEnv),
-      );
-      return runtimeEnv;
+      return {};
     }
 
     const env = Object.fromEntries(
@@ -1070,7 +1057,6 @@ async function readMtlCodeSettingsEnv() {
     if (env.MTL_CODE_USE_OPENAI !== '1') {
       repairAnthropicRuntimeModelEnv(env);
     }
-    applySubagentRuntimeToEnv(env, readSubagentRuntimeConfig(settings, env));
     return env;
   } catch {
     return {};
@@ -1104,19 +1090,11 @@ async function buildMtlCodeSpawnEnv(options = {}) {
   if (normalizePermissionMode(resolveArgusPermissionMode(options)) === 'plan') {
     spawnEnv.MTL_CODE_CODEX_STYLE_PLAN_MODE = '1';
   }
-  if (options.coordinatorMode === true) {
-    spawnEnv.MTL_CODE_COORDINATOR_MODE = '1';
-    spawnEnv[MTL_CODE_MODEL_ENV_KEYS.subagentsEnabled] = '1';
-  } else if (!Object.prototype.hasOwnProperty.call(spawnEnv, 'MTL_CODE_COORDINATOR_MODE')) {
-    spawnEnv.MTL_CODE_COORDINATOR_MODE = '0';
-  }
   for (const key of [
     ANTHROPIC_MODEL_ENV_KEYS.model,
     ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel,
     ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel,
     ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel,
-    'MTL_CODE_SUBAGENT_MODEL',
-    'CLAUDE_CODE_SUBAGENT_MODEL',
   ]) {
     if (spawnEnv[key]) {
       spawnEnv[key] = canonicalizeAnthropicModel(spawnEnv[key]);

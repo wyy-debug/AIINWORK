@@ -20,7 +20,7 @@ describe('useChatComposerState Agent Profile contract', () => {
     const source = readFileSync(resolve(currentDir, 'useChatComposerState.ts'), 'utf8');
 
     expect(source).toContain('const profilePermissionMode');
-    expect(source).toContain('(oneShotPermissionModeRef.current || profilePermissionMode || permissionMode)');
+    expect(source).toContain('const permissionModeForSend = oneShotPermissionModeRef.current || profilePermissionMode || permissionMode');
     expect(source).toContain('mergeAgentProfileSkillNames');
   });
 });

@@ -163,8 +163,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ projectPath }),
     }),
-  agents: (includePaused = true) =>
-    apiFetch(`/api/agents?includePaused=${includePaused ? 'true' : 'false'}`),
+  agents: (includePaused = true, mode = '') => {
+    const params = new URLSearchParams({ includePaused: includePaused ? 'true' : 'false' });
+    if (mode) params.set('mode', mode);
+    return apiFetch(`/api/agents?${params.toString()}`);
+  },
   installedAgentSkills: (workspacePath = '') => {
     const params = new URLSearchParams();
     if (workspacePath) params.set('workspacePath', workspacePath);
@@ -286,60 +289,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ permissionPreset, baseOptions }),
     }),
-  validateSwarmTemplate: (manifest) =>
-    apiFetch('/api/swarms/templates/validate', {
-      method: 'POST',
-      body: JSON.stringify({ manifest }),
-    }),
-  startSwarmRun: (payload = {}) =>
-    apiFetch('/api/swarms/runs', {
+  invokeAgent: (agentId, payload = {}) =>
+    apiFetch(`/api/agents/${encodeURIComponent(agentId)}/invoke`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  swarmRuns: ({ limit = 25, status = '', templateId = '' } = {}) => {
+  subagentRuns: ({ limit = 25, status = '', agentId = '' } = {}) => {
     const params = new URLSearchParams();
     if (limit) params.set('limit', String(limit));
     if (status) params.set('status', status);
-    if (templateId) params.set('templateId', templateId);
+    if (agentId) params.set('agentId', agentId);
     const query = params.toString();
-    return apiFetch(`/api/swarms/runs${query ? `?${query}` : ''}`);
+    return apiFetch(`/api/subagent-runs${query ? `?${query}` : ''}`);
   },
-  swarmRun: (runId) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}`),
-  swarmRunEvents: (runId) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/events`),
-  swarmMessageTrace: (runId, messageId) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/messages/${encodeURIComponent(messageId)}/trace`),
-  publishSwarmMessage: (runId, payload = {}) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/messages`, {
+  subagentRun: (runId) =>
+    apiFetch(`/api/subagent-runs/${encodeURIComponent(runId)}`),
+  controlSubagentRun: (runId, payload = {}) =>
+    apiFetch(`/api/subagent-runs/${encodeURIComponent(runId)}/control`, {
       method: 'POST',
       body: JSON.stringify(payload),
-    }),
-  replaySwarmMessages: (runId, payload = {}) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/messages/replay`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  controlSwarmRun: (runId, payload = {}) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/control`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  swarmMemory: (runId) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory`),
-  createSwarmMemory: (runId, payload = {}) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  updateSwarmMemory: (runId, memoryId, payload = {}) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory/${encodeURIComponent(memoryId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }),
-  deleteSwarmMemory: (runId, memoryId) =>
-    apiFetch(`/api/swarms/runs/${encodeURIComponent(runId)}/memory/${encodeURIComponent(memoryId)}`, {
-      method: 'DELETE',
     }),
   hubUsage: ({ days = 7, from = '', to = '' } = {}) => {
     const params = new URLSearchParams();
@@ -351,16 +319,6 @@ export const api = {
   },
   installAgentRepositoryItem: (payload = {}) =>
     apiFetch('/api/agent-repository/install', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  exportSwarmTemplatePackage: (payload = {}) =>
-    apiFetch('/api/agent-repository/swarm-template/export', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  importSwarmTemplatePackage: (payload = {}) =>
-    apiFetch('/api/agent-repository/swarm-template/import', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

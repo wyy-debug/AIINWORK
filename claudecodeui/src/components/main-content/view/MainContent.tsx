@@ -7,7 +7,7 @@ import ReviewPanel from '../../review/view/ReviewPanel';
 import ActionsPanel from '../../actions/view/ActionsPanel';
 import BrowserPanel from '../../browser/view/BrowserPanel';
 import ArtifactsPanel from '../../artifacts/view/ArtifactsPanel';
-import SwarmDashboard from '../../swarms/view/SwarmDashboard';
+import SubagentsWorkspace from '../../subagents/view/SubagentsWorkspace';
 import GlobalCommandMenu from '../../command-menu/view/GlobalCommandMenu';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
@@ -229,12 +229,11 @@ function MainContent({
             </div>
           )}
 
-          {visibleActiveTab === 'swarms' && (
+          {visibleActiveTab === 'subagents' && (
             <div className="h-full overflow-hidden">
-              <SwarmDashboard
+              <SubagentsWorkspace
                 selectedProject={selectedProject}
                 sessionId={selectedSession?.id || null}
-                latestMessage={latestMessage}
               />
             </div>
           )}

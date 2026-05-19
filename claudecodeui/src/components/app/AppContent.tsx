@@ -99,7 +99,7 @@ export default function AppContent() {
         || tab === 'actions'
         || tab === 'browser'
         || tab === 'artifacts'
-        || tab === 'swarms'
+        || tab === 'subagents'
       ) {
         setActiveTab(tab);
       }

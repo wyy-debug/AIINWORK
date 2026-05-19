@@ -15,21 +15,17 @@ import {
 import {
   BRAIN_RUNTIME_SETTINGS_KEY,
   GOAL_RUNTIME_SETTINGS_KEY,
-  SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyGoalRuntimeToEnv,
   applyOpenAIRuntimeModelDefaults,
-  applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
   isOpenAIModelProtocol,
   normalizeBrainRuntimeConfig,
   normalizeAnthropicBaseUrl,
   normalizeGoalRuntimeConfig,
   normalizeOpenAIBaseUrl,
-  normalizeSubagentRuntimeConfig,
   readBrainRuntimeConfig,
   readGoalRuntimeConfig,
-  readSubagentRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
 import {
   readRuntimePermissions,
@@ -53,11 +49,6 @@ const MTL_CODE_ENV_KEYS = {
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
-  coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
-  subagentsEnabled: 'MTL_CODE_SUBAGENTS_ENABLED',
-  subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
-  subagentMaxDepth: 'MTL_CODE_SUBAGENTS_MAX_DEPTH',
-  allowNestedSubagents: 'MTL_CODE_ALLOW_NESTED_SUBAGENTS',
   goalsEnabled: 'MTL_CODE_GOALS_ENABLED',
 };
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
@@ -149,11 +140,6 @@ const readStringEnv = (env, key) => readOptionalString(env?.[key]) || '';
 const readPositiveIntegerEnv = (env, key) => {
   const value = Number.parseInt(readStringEnv(env, key), 10);
   return Number.isFinite(value) && value > 0 ? value : null;
-};
-
-const readBooleanEnvDefaultTrue = (env, key) => {
-  const value = readStringEnv(env, key).toLowerCase();
-  return value !== '0' && value !== 'false' && value !== 'off';
 };
 
 const readBooleanEnv = (env, key, fallback) => {
@@ -336,10 +322,8 @@ const toMtlCodeModelConfig = (settings, filePath) => {
       claudeNativeMemoryEnabled: activeClaudeNativeMemoryEnabled,
       bareMode: !activeClaudeNativeMemoryEnabled,
       contextWindowTokens: activeContextWindowTokens,
-      coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
     },
     brainRuntime: readBrainRuntimeConfig(settings),
-    subagents: readSubagentRuntimeConfig(settings, env),
     goals: readGoalRuntimeConfig(settings, env),
   };
 };
@@ -434,9 +418,6 @@ const normalizeModelConfigInput = (body) => {
     runtime: {
       claudeNativeMemoryEnabled: runtimeClaudeNativeMemoryEnabled,
       bareMode: !runtimeClaudeNativeMemoryEnabled,
-      coordinatorMode: Object.prototype.hasOwnProperty.call(runtime, 'coordinatorMode')
-        ? runtime.coordinatorMode !== false
-        : undefined,
       contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
         ? contextWindowTokens
         : undefined,
@@ -574,24 +555,6 @@ const applyActiveProfileToEnv = (settings, env, profile) => {
   } else {
     delete settings.model;
   }
-};
-
-const readArgusRuntimeConfig = (settings) => {
-  const env = readObjectRecord(settings.env) ?? {};
-  return {
-    coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
-  };
-};
-
-const normalizeArgusRuntimeInput = (body) => ({
-  coordinatorMode: readObjectRecord(body)?.coordinatorMode !== false,
-});
-
-const applyArgusRuntimeToEnv = (env, runtime) => {
-  if (typeof runtime?.coordinatorMode !== 'boolean') {
-    return;
-  }
-  env[MTL_CODE_ENV_KEYS.coordinatorMode] = runtime.coordinatorMode !== false ? '1' : '0';
 };
 
 // ===============================
@@ -887,18 +850,11 @@ router.put('/mtl-code-model', async (req, res) => {
 
     const activeProfile = mergeAndStoreModelProfiles(settings, env, input);
     applyActiveProfileToEnv(settings, env, activeProfile);
-    applyArgusRuntimeToEnv(env, input.runtime);
     const brainRuntime = normalizeBrainRuntimeConfig(
       readObjectRecord(req.body?.brainRuntime),
       readBrainRuntimeConfig(settings),
     );
     settings[BRAIN_RUNTIME_SETTINGS_KEY] = brainRuntime;
-    const subagents = normalizeSubagentRuntimeConfig(
-      readObjectRecord(req.body?.subagents),
-      readSubagentRuntimeConfig(settings, env),
-    );
-    settings[SUBAGENT_RUNTIME_SETTINGS_KEY] = subagents;
-    applySubagentRuntimeToEnv(env, subagents);
     const goals = normalizeGoalRuntimeConfig(
       readObjectRecord(req.body?.goals),
       readGoalRuntimeConfig(settings, env),
@@ -915,43 +871,6 @@ router.put('/mtl-code-model', async (req, res) => {
   } catch (error) {
     console.error('Error saving Argus model settings:', error);
     res.status(500).json({ error: 'Failed to save Argus model settings' });
-  }
-});
-
-router.get('/argus-runtime', async (req, res) => {
-  try {
-    const { filePath, settings } = await readMtlCodeSettings();
-    res.json({
-      success: true,
-      runtime: {
-        ...readArgusRuntimeConfig(settings),
-        configPath: filePath,
-      },
-    });
-  } catch (error) {
-    console.error('Error reading Argus runtime settings:', error);
-    res.status(500).json({ error: 'Failed to read Argus runtime settings' });
-  }
-});
-
-router.put('/argus-runtime', async (req, res) => {
-  try {
-    const { filePath, settings } = await readMtlCodeSettings();
-    const env = readObjectRecord(settings.env) ?? {};
-    const runtime = normalizeArgusRuntimeInput(req.body);
-    applyArgusRuntimeToEnv(env, runtime);
-    settings.env = env;
-    await writeJsonConfig(filePath, settings);
-    res.json({
-      success: true,
-      runtime: {
-        ...readArgusRuntimeConfig(settings),
-        configPath: filePath,
-      },
-    });
-  } catch (error) {
-    console.error('Error saving Argus runtime settings:', error);
-    res.status(500).json({ error: 'Failed to save Argus runtime settings' });
   }
 });
 

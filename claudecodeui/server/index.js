@@ -67,7 +67,7 @@ import reviewFlowRoutes from './routes/review-flow.js';
 import sessionAgentRoutes from './routes/session-agents.js';
 import sessionTimelineRoutes from './routes/session-timeline.js';
 import settingsRoutes from './routes/settings.js';
-import swarmsRoutes from './routes/swarms.js';
+import subagentRunsRoutes from './routes/subagent-runs.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import triageRoutes from './routes/triage.js';
 import userRoutes from './routes/user.js';
@@ -86,7 +86,6 @@ import {
     applyArgusToolInspectionIntentToChatCommand,
 } from './services/argus-collaboration-mode-service.js';
 import { dispatchSubagentTaskControl } from './services/subagent-task-control-service.js';
-import { swarmEventBus } from './services/swarm-broadcast-service.js';
 import {
     buildContextBudgetFromFlatUsage,
     buildContextBudgetFromJsonlLines,
@@ -101,7 +100,6 @@ import {
 } from './services/file-mutation-service.js';
 import {
     readResolvedBrainRuntimeConfig,
-    readResolvedSubagentRuntimeConfig,
     resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
 import { brainCaptureService } from './services/brain-capture-service.js';
@@ -509,13 +507,11 @@ app.use('/api/agent-repository', authenticateToken, agentRepositoryRoutes);
 app.use('/api/agents', authenticateToken, agentsRoutes);
 app.use('/api/agent-profiles', authenticateToken, agentProfilesRoutes);
 app.use('/api/recipes', authenticateToken, recipesRoutes);
+app.use('/api/subagent-runs', authenticateToken, subagentRunsRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, sessionAgentRoutes);
 app.use('/api/sessions', authenticateToken, messagesRoutes);
-
-// Swarm orchestration routes (protected)
-app.use('/api/swarms', authenticateToken, swarmsRoutes);
 
 // Managed Git worktree dispatch routes (protected)
 app.use('/api', authenticateToken, worktreeRoutes);
@@ -2265,24 +2261,6 @@ async function runCommandWithCheckpoint({ data, commandData, writer, provider, e
     }
 }
 
-function broadcastSwarmEvent(eventRecord) {
-    const message = JSON.stringify({
-        type: 'swarm_event',
-        event: eventRecord.type,
-        runId: eventRecord.runId,
-        agentId: eventRecord.agentId || null,
-        messageId: eventRecord.messageId || null,
-        swarmEvent: eventRecord,
-    });
-    connectedClients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-        }
-    });
-}
-
-swarmEventBus.on('swarm_event', broadcastSwarmEvent);
-
 async function startCheckpointForChatCommand(data, provider) {
     const options = data?.options && typeof data.options === 'object' ? data.options : {};
     const projectPath = typeof options.projectPath === 'string' && options.projectPath.trim()
@@ -2785,12 +2763,6 @@ async function applyAgentRuntimeToChatCommand(data) {
             return null;
         })
         : null;
-    const subagentRuntime = provider === 'claude'
-        ? await readResolvedSubagentRuntimeConfig().catch((error) => {
-            console.warn('[Subagent Runtime] Failed to read settings:', error?.message || error);
-            return null;
-        })
-        : null;
     const concreteSessionId = getConcreteCommandSessionId(data);
     const allowSessionAgentBinding = data?.options?.allowSessionAgentBinding === true;
     const storedBinding = allowSessionAgentBinding && concreteSessionId
@@ -2912,7 +2884,6 @@ async function applyAgentRuntimeToChatCommand(data) {
                         sessionAgentPackage,
                         bareMode: sessionBareMode,
                         brainRuntime,
-                        subagents: subagentRuntime,
                     },
                 },
             };
@@ -2959,7 +2930,6 @@ async function applyAgentRuntimeToChatCommand(data) {
                 sessionAgentPackage,
                 bareMode: sessionBareMode,
                 brainRuntime,
-                subagents: subagentRuntime,
             },
         };
 
@@ -3028,7 +2998,6 @@ async function applyAgentRuntimeToChatCommand(data) {
                     sessionAgentPackage,
                     bareMode: sessionBareMode,
                     brainRuntime,
-                    subagents: subagentRuntime,
                 },
             };
 
@@ -3102,7 +3071,6 @@ async function applyAgentRuntimeToChatCommand(data) {
             sessionAgentPackage,
             bareMode: sessionBareMode,
             brainRuntime,
-            subagents: subagentRuntime,
         },
         contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
     };

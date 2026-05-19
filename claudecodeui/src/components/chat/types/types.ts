@@ -126,9 +126,6 @@ export interface SubagentRegistryRecord {
   blockers?: string;
   recentActions?: string[];
   events?: SubagentEventV1[];
-  swarmRunId?: string;
-  swarmAgentId?: string;
-  swarmRoleId?: string;
 }
 
 export interface SubagentActivityItem {
@@ -327,12 +324,6 @@ export interface BrainRuntimeDiagnostics {
   };
 }
 
-export interface SubagentRuntimeDiagnostics {
-  enabled?: boolean;
-  maxConcurrentThreadsPerSession?: number;
-  maxDepth?: number;
-}
-
 export interface PromptInjectionDebugPayload {
   appendSystemPrompt: string;
   appendSystemPromptLength: number;
@@ -344,7 +335,6 @@ export interface PromptInjectionDebugPayload {
   commandChanged?: boolean;
   permissionMode?: string;
   codexStylePlanMode?: boolean;
-  coordinatorMode?: boolean;
   claudeNativeMemoryEnabled?: boolean;
   autoMemoryExtractionEnabled?: boolean;
   bareMode?: boolean;
@@ -396,7 +386,6 @@ export interface AgentRuntimeDiagnostics {
   modelProfileId?: string;
   bareMode?: boolean;
   brainRuntime?: BrainRuntimeDiagnostics | null;
-  subagents?: SubagentRuntimeDiagnostics | null;
   contextWindowTokens?: number | null;
   projectPath?: string;
   sessionId?: string | null;

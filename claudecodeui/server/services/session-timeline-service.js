@@ -131,28 +131,6 @@ export function createSessionTimelineService({ db = defaultDb } = {}) {
       ));
     }
 
-    const swarmEvents = db.prepare(`
-      SELECT * FROM swarm_events
-      WHERE json_extract(COALESCE(payload_json, '{}'), '$.sessionId') = ?
-      ORDER BY created_at_ms ASC
-      LIMIT 200
-    `).all(sessionId);
-    for (const swarmEvent of swarmEvents) {
-      events.push(event(
-        swarmEvent.id,
-        'subagent',
-        `Subagent ${swarmEvent.type}`,
-        new Date(Number(swarmEvent.created_at_ms || Date.now())).toISOString(),
-        {
-          runId: swarmEvent.run_id,
-          agentId: swarmEvent.agent_id,
-          messageId: swarmEvent.message_id,
-          eventType: swarmEvent.type,
-          payload: safeJson(swarmEvent.payload_json, {}),
-        },
-      ));
-    }
-
     const brainEvents = listBrainEvents(db, { sessionId, provider });
     for (const brainEvent of brainEvents) {
       events.push(event(

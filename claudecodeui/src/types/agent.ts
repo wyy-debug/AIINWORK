@@ -102,6 +102,11 @@ export interface AgentConfig {
   name: string;
   shortName: string;
   description: string;
+  mode?: 'primary' | 'subagent' | 'all';
+  hidden?: boolean;
+  color?: string;
+  maxTurns?: number;
+  permission?: Record<string, unknown>;
   profileKind?: 'plan' | 'build' | 'explore' | 'review' | 'debug' | 'docs' | '';
   permissionPreset?: 'suggest' | 'auto-edit' | 'full-auto' | 'enterprise-safe' | '';
   modelProfileId?: string;

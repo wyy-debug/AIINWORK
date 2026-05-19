@@ -8,17 +8,26 @@ import {
 import { buildAgentSystemPrompt, findAgentMention, normalizeAgentConfig } from '../agent-config-service.js';
 
 describe('agent profile service', () => {
-  it('provides the six built-in work profiles with runtime metadata', () => {
+  it('provides built-in primary and subagent profiles with runtime metadata', () => {
     const profiles = getBuiltInAgentProfiles();
+    const primaryProfiles = profiles.filter((profile) => profile.mode === 'primary');
+    const subagentProfiles = profiles.filter((profile) => profile.mode === 'subagent');
 
     expect(profiles.map((profile) => profile.id)).toEqual(AGENT_PROFILE_IDS);
-    expect(profiles.map((profile) => profile.profileKind)).toEqual([
+    expect(primaryProfiles.map((profile) => profile.profileKind)).toEqual([
       'plan',
       'build',
       'explore',
       'review',
       'debug',
       'docs',
+    ]);
+    expect(subagentProfiles.map((profile) => profile.id)).toEqual([
+      'subagent-general',
+      'subagent-explore',
+      'subagent-scout',
+      'subagent-reviewer',
+      'subagent-debugger',
     ]);
     expect(profiles.every((profile) => profile.status === 'enabled')).toBe(true);
     expect(profiles.every((profile) => profile.permissionPreset)).toBe(true);

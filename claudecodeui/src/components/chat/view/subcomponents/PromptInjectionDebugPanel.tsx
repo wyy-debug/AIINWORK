@@ -154,7 +154,6 @@ export default function PromptInjectionDebugPanel({
             <DebugField label="permission" value={formatText(payload?.permissionMode)} />
             <DebugField label="length" value={promptLength.toLocaleString()} />
             <DebugField label="plan mode" value={formatBoolean(payload?.codexStylePlanMode)} />
-            <DebugField label="coordinator" value={formatBoolean(payload?.coordinatorMode)} />
             <DebugField label="native memory" value={formatBoolean(payload?.claudeNativeMemoryEnabled)} />
             <DebugField label="auto memory" value={formatBoolean(payload?.autoMemoryExtractionEnabled)} />
             <DebugField label="bare env" value={formatBoolean(payload?.bareMode)} />

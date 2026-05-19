@@ -392,26 +392,6 @@ function BrainWorkbenchSection({ inspector }: { inspector?: BrainInspector | nul
   );
 }
 
-function SubagentRuntimeSection({
-  subagents,
-}: {
-  subagents?: AgentRuntimeDiagnostics['subagents'];
-}) {
-  return (
-    <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-        <BotIcon className="h-4 w-4 text-primary" />
-        Subagents
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Enabled" value={subagents?.enabled ? 'true' : 'false'} />
-        <Field label="Max concurrent" value={formatNumber(subagents?.maxConcurrentThreadsPerSession)} />
-        <Field label="Max depth" value={formatNumber(subagents?.maxDepth)} />
-      </div>
-    </section>
-  );
-}
-
 export default function AgentRuntimeDiagnosticsPanel({
   diagnostics,
   contextBudget,
@@ -496,7 +476,7 @@ export default function AgentRuntimeDiagnosticsPanel({
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">Runtime Diagnostics</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Shows the last runtime payload, Argus Brain state, Subagents, permissions, and runtime timeline.
+              Shows the last runtime payload, Argus Brain state, permissions, and runtime timeline.
             </p>
           </div>
         </div>
@@ -535,7 +515,6 @@ export default function AgentRuntimeDiagnosticsPanel({
 
           <BrainRuntimeSection diagnostics={diagnostics} brain={brain} />
           <BrainWorkbenchSection inspector={brain?.inspector} />
-          <SubagentRuntimeSection subagents={diagnostics?.subagents} />
 
           <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">

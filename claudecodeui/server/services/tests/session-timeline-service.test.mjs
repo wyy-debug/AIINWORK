@@ -5,8 +5,6 @@ import {
   ARTIFACTS_TABLE_SQL,
   ARTIFACT_LINKS_TABLE_SQL,
   SESSION_CHECKPOINTS_TABLE_SQL,
-  SWARM_EVENTS_TABLE_SQL,
-  SWARM_RUNS_TABLE_SQL,
 } from '../../database/schema.js';
 import { createSessionTimelineService } from '../session-timeline-service.js';
 
@@ -24,13 +22,11 @@ describe('session timeline service', () => {
       ${SESSION_CHECKPOINTS_TABLE_SQL}
       ${ARTIFACTS_TABLE_SQL}
       ${ARTIFACT_LINKS_TABLE_SQL}
-      ${SWARM_RUNS_TABLE_SQL}
-      ${SWARM_EVENTS_TABLE_SQL}
     `);
     return db;
   }
 
-  it('aggregates checkpoints, artifacts, subagents, and redacts nested secrets', () => {
+  it('aggregates checkpoints and artifacts while redacting nested secrets', () => {
     const db = createDb();
     db.prepare(`
       INSERT INTO session_checkpoints (
@@ -65,23 +61,6 @@ describe('session timeline service', () => {
       JSON.stringify({ source: 'review-flow', secretKey: 'abc' }),
       '2026-05-18T01:02:00.000Z',
     );
-    db.prepare(`
-      INSERT INTO swarm_runs (id, template_id, status, created_at_ms, updated_at_ms)
-      VALUES (?, ?, ?, ?, ?)
-    `).run('run-1', 'review-swarm', 'running', Date.parse('2026-05-18T01:03:00.000Z'), Date.parse('2026-05-18T01:03:00.000Z'));
-    db.prepare(`
-      INSERT INTO swarm_events (id, run_id, agent_id, message_id, type, payload_json, created_at_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'swarm-event-1',
-      'run-1',
-      'agent-1',
-      'message-1',
-      'subagent_started',
-      JSON.stringify({ sessionId: 'session-1', promptText: 'do private thing' }),
-      Date.parse('2026-05-18T01:03:00.000Z'),
-    );
-
     const timeline = createSessionTimelineService({ db }).buildTimeline({
       sessionId: 'session-1',
       provider: 'claude',
@@ -92,10 +71,9 @@ describe('session timeline service', () => {
       'checkpoint',
       'permission_blocked',
       'artifact',
-      'subagent',
     ]));
     expect(timeline.events.find((event) => event.type === 'permission_blocked').payload.apiToken).toBe('[redacted]');
     expect(timeline.events.find((event) => event.type === 'artifact').payload.metadata.secretKey).toBe('[redacted]');
-    expect(timeline.events.find((event) => event.type === 'subagent').payload.payload.promptText).toBe('[redacted]');
+    expect(timeline.events.some((event) => event.type === 'subagent')).toBe(false);
   });
 });

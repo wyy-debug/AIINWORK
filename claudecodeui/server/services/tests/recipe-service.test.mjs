@@ -58,7 +58,6 @@ describe('recipe workflow packages', () => {
       'Recipes',
       'Skills',
       'MCP Servers',
-      'Swarms',
     ]);
     expect(validateRecipeManifest(getBuiltInRecipe('release-note')).valid).toBe(true);
 

@@ -47,19 +47,6 @@ import {
   ACTION_RUN_EVENTS_INDEX_SQL,
   HUB_USAGE_EVENTS_TABLE_SQL,
   HUB_USAGE_EVENTS_INDEX_SQL,
-  SWARM_DEFINITIONS_TABLE_SQL,
-  SWARM_RUNS_TABLE_SQL,
-  SWARM_AGENTS_TABLE_SQL,
-  SWARM_MESSAGES_TABLE_SQL,
-  SWARM_MESSAGES_RUN_INDEX_SQL,
-  SWARM_MESSAGES_IDEMPOTENCY_INDEX_SQL,
-  SWARM_EVENTS_TABLE_SQL,
-  SWARM_EVENTS_RUN_INDEX_SQL,
-  SWARM_DELIVERY_TRACE_TABLE_SQL,
-  SWARM_DELIVERY_TRACE_MESSAGE_INDEX_SQL,
-  SWARM_ARTIFACTS_TABLE_SQL,
-  SWARM_MEMORY_TABLE_SQL,
-  SWARM_MEMORY_RUN_INDEX_SQL,
   BRAIN_SESSIONS_TABLE_SQL,
   BRAIN_SESSIONS_LOOKUP_INDEX_SQL,
   BRAIN_SESSIONS_PROJECT_INDEX_SQL,
@@ -114,6 +101,17 @@ const c = {
 
 // Use DATABASE_PATH environment variable if set, otherwise use default location
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'auth.db');
+
+const LEGACY_SWARM_TABLES = [
+  'swarm_delivery_trace',
+  'swarm_memory',
+  'swarm_artifacts',
+  'swarm_events',
+  'swarm_messages',
+  'swarm_agents',
+  'swarm_runs',
+  'swarm_definitions',
+];
 
 // Ensure database directory exists if custom path is provided
 if (process.env.DATABASE_PATH) {
@@ -271,42 +269,9 @@ const runMigrations = () => {
     db.exec(ACTION_RUN_EVENTS_INDEX_SQL);
     db.exec(HUB_USAGE_EVENTS_TABLE_SQL);
     db.exec(HUB_USAGE_EVENTS_INDEX_SQL);
-    db.exec(SWARM_DEFINITIONS_TABLE_SQL);
-    db.exec(SWARM_RUNS_TABLE_SQL);
-    const swarmRunColumns = db.prepare("PRAGMA table_info(swarm_runs)").all();
-    const swarmRunColumnNames = swarmRunColumns.map(col => col.name);
-    for (const [columnName, columnSql] of [
-      ['runtime_mode', "ALTER TABLE swarm_runs ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'local-control-plane'"],
-      ['runtime_status', "ALTER TABLE swarm_runs ADD COLUMN runtime_status TEXT NOT NULL DEFAULT 'queued'"],
-      ['coordinator_session_id', 'ALTER TABLE swarm_runs ADD COLUMN coordinator_session_id TEXT'],
-    ]) {
-      if (!swarmRunColumnNames.includes(columnName)) {
-        console.log(`Running migration: Adding ${columnName} column to swarm_runs`);
-        db.exec(columnSql);
-      }
+    for (const tableName of LEGACY_SWARM_TABLES) {
+      db.exec(`DROP TABLE IF EXISTS ${tableName}`);
     }
-    db.exec(SWARM_AGENTS_TABLE_SQL);
-    db.exec(SWARM_MESSAGES_TABLE_SQL);
-    const swarmMessageColumns = db.prepare("PRAGMA table_info(swarm_messages)").all();
-    const swarmMessageColumnNames = swarmMessageColumns.map(col => col.name);
-    for (const [columnName, columnSql] of [
-      ['next_attempt_at_ms', 'ALTER TABLE swarm_messages ADD COLUMN next_attempt_at_ms INTEGER'],
-      ['delivery_mode', 'ALTER TABLE swarm_messages ADD COLUMN delivery_mode TEXT'],
-    ]) {
-      if (!swarmMessageColumnNames.includes(columnName)) {
-        console.log(`Running migration: Adding ${columnName} column to swarm_messages`);
-        db.exec(columnSql);
-      }
-    }
-    db.exec(SWARM_MESSAGES_RUN_INDEX_SQL);
-    db.exec(SWARM_MESSAGES_IDEMPOTENCY_INDEX_SQL);
-    db.exec(SWARM_EVENTS_TABLE_SQL);
-    db.exec(SWARM_EVENTS_RUN_INDEX_SQL);
-    db.exec(SWARM_DELIVERY_TRACE_TABLE_SQL);
-    db.exec(SWARM_DELIVERY_TRACE_MESSAGE_INDEX_SQL);
-    db.exec(SWARM_ARTIFACTS_TABLE_SQL);
-    db.exec(SWARM_MEMORY_TABLE_SQL);
-    db.exec(SWARM_MEMORY_RUN_INDEX_SQL);
     db.exec(CHECKPOINTS_TABLE_SQL);
     db.exec(CHECKPOINTS_SESSION_INDEX_SQL);
     db.exec(CHECKPOINTS_PROJECT_INDEX_SQL);

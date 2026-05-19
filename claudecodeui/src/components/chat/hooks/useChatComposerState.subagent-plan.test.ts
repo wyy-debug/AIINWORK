@@ -4,24 +4,18 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-describe('useChatComposerState subagent dispatch approval', () => {
-  it('requests a model-generated plan before sending subagentDispatch commands', () => {
+describe('useChatComposerState OpenCode-style subagent invocation', () => {
+  it('invokes selected subagent agents through the agent invoke API', () => {
     const currentDir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(resolve(currentDir, 'useChatComposerState.ts'), 'utf8');
 
-    expect(source).toContain('shouldRequestSubagentDispatchPlan');
-    expect(source).toContain('buildSubagentDispatchPlanRequest');
-    expect(source).toContain('buildSubagentRuntimeSnapshot');
-    expect(source).toContain('getSubagentRuntimeDispatchPlanId');
-    expect(source).toContain('oneShotSubagentDispatchRef');
-    expect(source).toContain('coordinatorMode: true');
-    expect(source).toContain('subagentRuntimeSnapshot');
-    expect(source).toContain('dispatchPlanId');
-    expect(source).toMatch(/permissionModeForSend = subagentPlanRequestActive\s*\?\s*'plan'/);
-    expect(source).toContain('pendingSubmitChatInputRef');
-    expect(source).toContain('isLoadingRef.current');
-    expect(source).toContain('submitProgrammaticChatInput');
-    expect(source).not.toContain('pendingSubagentDispatchPlan');
+    expect(source).toContain("activeAgent?.mode === 'subagent'");
+    expect(source).toContain('/api/agents/${encodeURIComponent(activeAgent.id)}/invoke');
+    expect(source).toContain("source: 'manual'");
+    expect(source).toContain("tab: 'subagents'");
+    expect(source).not.toContain('coordinatorMode: true');
+    expect(source).not.toContain('subagentRuntimeSnapshot');
+    expect(source).not.toContain('dispatchPlanId');
   });
 
   it('resumes the source session when proposed plan actions submit programmatically', () => {

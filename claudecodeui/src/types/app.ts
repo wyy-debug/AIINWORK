@@ -9,7 +9,7 @@ export type AppTab =
   | 'automations'
   | 'browser'
   | 'artifacts'
-  | 'swarms'
+  | 'subagents'
   | 'tasks'
   | 'preview'
   | 'agents'
