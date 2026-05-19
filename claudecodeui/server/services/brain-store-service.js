@@ -448,6 +448,32 @@ export function createBrainStore({ db = defaultDb } = {}) {
     `).all(sessionId, provider || 'claude', Number(afterMs) || 0, cappedLimit).map(mapEvent);
   };
 
+  const listRefs = ({ sessionId = '', provider = 'claude', projectName = '', includePruned = false, limit = 500 } = {}) => {
+    const clauses = ['provider = ?'];
+    const params = [provider || 'claude'];
+    if (readString(sessionId)) {
+      clauses.push('session_id = ?');
+      params.push(sessionId);
+    }
+    if (readString(projectName)) {
+      clauses.push('project_name = ?');
+      params.push(projectName);
+    }
+    if (!includePruned) {
+      clauses.push('pruned_at_ms IS NULL');
+    }
+    const cappedLimit = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+    return db.prepare(`
+      SELECT id, session_id, provider, project_name, event_id, checkpoint_id,
+             artifact_id, ref_type, ref_id, label, content,
+             metadata_json, size_bytes, created_at_ms, pruned_at_ms
+      FROM brain_refs
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY created_at_ms ASC
+      LIMIT ?
+    `).all(...params, cappedLimit).map(mapRef);
+  };
+
   const listProjectNodes = ({ projectName = '', provider = 'claude', types = [], limit = 20 } = {}) => {
     if (!readString(projectName)) {
       return [];
@@ -1188,6 +1214,7 @@ export function createBrainStore({ db = defaultDb } = {}) {
     inspectSession,
     listAtoms,
     listEvents,
+    listRefs,
     listRetrievalRuns,
     listProjectNodes,
     listScenarios,

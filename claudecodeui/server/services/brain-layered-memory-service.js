@@ -94,13 +94,105 @@ function buildProfileSummary(atoms = []) {
   ].filter(Boolean).join('\n');
 }
 
+function isPersonalPreferenceMemoryEvent(event = {}) {
+  const text = `${event.title || ''}\n${event.content || ''}`.toLowerCase();
+  const asksRememberForget = /\b(remember|forget)\b|记住|忘记|鍏ㄥ眬璁板繂|个人偏好/.test(text);
+  const personalSignal = /\b(my|me|i like|favorite|prefer|preference|persona)\b|我喜欢|我的|偏好/.test(text);
+  const projectSignal = /\b(project|repo|repository|code|test|build|architecture|constraint|command|file|api)\b|项目|代码|测试|架构/.test(text);
+  return asksRememberForget && personalSignal && !projectSignal;
+}
+
+function attachRefsToEvents(store, events = [], { sessionId = '', provider = 'claude', projectName = '' } = {}) {
+  const refs = typeof store.listRefs === 'function'
+    ? store.listRefs({ sessionId, provider, projectName, includePruned: true, limit: 2000 })
+    : [];
+  const refsByEvent = new Map();
+  for (const ref of refs) {
+    if (!ref.eventId) continue;
+    refsByEvent.set(ref.eventId, [...(refsByEvent.get(ref.eventId) || []), ref]);
+  }
+  return events.map((event) => ({
+    ...event,
+    refs: refsByEvent.get(event.id) || [],
+  }));
+}
+
+function getEvidenceSummary(store, atoms = [], { sessionId = '', provider = 'claude', projectName = '' } = {}) {
+  const refs = typeof store.listRefs === 'function'
+    ? store.listRefs({ sessionId, provider, projectName, includePruned: false, limit: 2000 })
+    : [];
+  const availableRefIds = new Set(refs.map((ref) => ref.id));
+  const expectedRefIds = atoms.flatMap((atom) => Array.isArray(atom.refIds) ? atom.refIds : []);
+  const missingRefIds = expectedRefIds.filter((refId) => !availableRefIds.has(refId));
+  return {
+    expectedRefCount: expectedRefIds.length,
+    availableRefCount: expectedRefIds.length - missingRefIds.length,
+    missingRefCount: missingRefIds.length,
+    missingRefIds,
+  };
+}
+
+function buildTopLayersFromAtoms(store, {
+  atoms = [],
+  sessionId = '',
+  provider = 'claude',
+  projectName = '',
+} = {}) {
+  if (atoms.length === 0) {
+    return { atoms, scenarios: [], projectProfile: null, evidence: getEvidenceSummary(store, atoms, { sessionId, provider, projectName }) };
+  }
+  const activeAtomIds = atoms.map((atom) => atom.id);
+  const effectiveProjectName = projectName || atoms.find((atom) => atom.projectName)?.projectName || '';
+  const scenario = store.upsertScenario({
+    sessionId,
+    provider,
+    projectName: effectiveProjectName,
+    scenarioKey: `session:${stableHash(sessionId)}`,
+    title: `Session working memory ${sessionId}`,
+    summary: compactText(atoms.map((atom) => `${atom.atomType}: ${atom.title}`).join('; '), 900),
+    atomIds: activeAtomIds,
+    metrics: {
+      atomCount: atoms.length,
+      decisionCount: atoms.filter((atom) => atom.atomType === 'decision').length,
+      riskCount: atoms.filter((atom) => ['error', 'blocker'].includes(atom.atomType)).length,
+      missingRefCount: getEvidenceSummary(store, atoms, { sessionId, provider, projectName: effectiveProjectName }).missingRefCount,
+    },
+  });
+  const projectAtoms = effectiveProjectName
+    ? store.listAtoms({ projectName: effectiveProjectName, provider, limit: 120 })
+    : atoms;
+  const projectProfile = effectiveProjectName
+    ? store.upsertProjectProfile({
+      projectName: effectiveProjectName,
+      provider,
+      profileType: 'working-memory',
+      summary: buildProfileSummary(projectAtoms),
+      content: {
+        decisions: projectAtoms.filter((atom) => atom.atomType === 'decision').slice(0, 12),
+        constraints: projectAtoms.filter((atom) => atom.atomType === 'constraint').slice(0, 12),
+        lessons: projectAtoms.filter((atom) => ['lesson', 'fix'].includes(atom.atomType)).slice(0, 12),
+        evidence: getEvidenceSummary(store, projectAtoms, { sessionId, provider, projectName: effectiveProjectName }),
+      },
+      sourceAtomIds: projectAtoms.map((atom) => atom.id).slice(0, 80),
+    })
+    : null;
+  return {
+    atoms,
+    scenarios: scenario ? [scenario] : [],
+    projectProfile,
+    evidence: getEvidenceSummary(store, atoms, { sessionId, provider, projectName: effectiveProjectName }),
+  };
+}
+
 export function createBrainLayeredMemoryService({ store = defaultBrainStore, logger = console } = {}) {
   const materializeSessionLayers = ({ sessionId = '', provider = 'claude', projectName = '', limit = 500 } = {}) => {
     if (!readString(sessionId)) {
-      return { atoms: [], scenarios: [], projectProfile: null };
+      return { atoms: [], scenarios: [], projectProfile: null, evidence: { expectedRefCount: 0, availableRefCount: 0, missingRefCount: 0, missingRefIds: [] } };
     }
     try {
-      const events = store.listEvents({ sessionId, provider, limit });
+      const rawEvents = store.listEvents({ sessionId, provider, limit });
+      const events = attachRefsToEvents(store, rawEvents, { sessionId, provider, projectName })
+        .filter((event) => !isPersonalPreferenceMemoryEvent(event));
       const atoms = events
         .map(buildAtomFromEvent)
         .filter((atom) => atom.title)
@@ -111,57 +203,46 @@ export function createBrainLayeredMemoryService({ store = defaultBrainStore, log
           projectName: projectName || events.find((event) => event.projectName)?.projectName || '',
         }))
         .filter(Boolean);
-      const activeAtomIds = atoms.map((atom) => atom.id);
-      const scenario = atoms.length
-        ? store.upsertScenario({
-          sessionId,
-          provider,
-          projectName: projectName || atoms.find((atom) => atom.projectName)?.projectName || '',
-          scenarioKey: `session:${stableHash(sessionId)}`,
-          title: `Session working memory ${sessionId}`,
-          summary: compactText(atoms.map((atom) => `${atom.atomType}: ${atom.title}`).join('; '), 900),
-          atomIds: activeAtomIds,
-          metrics: {
-            eventCount: events.length,
-            atomCount: atoms.length,
-            decisionCount: atoms.filter((atom) => atom.atomType === 'decision').length,
-            riskCount: atoms.filter((atom) => ['error', 'blocker'].includes(atom.atomType)).length,
-          },
-        })
-        : null;
-      const effectiveProjectName = projectName || atoms.find((atom) => atom.projectName)?.projectName || '';
-      const projectAtoms = effectiveProjectName
-        ? store.listAtoms({ projectName: effectiveProjectName, provider, limit: 120 })
-        : atoms;
-      const projectProfile = effectiveProjectName
-        ? store.upsertProjectProfile({
-          projectName: effectiveProjectName,
-          provider,
-          profileType: 'working-memory',
-          summary: buildProfileSummary(projectAtoms),
-          content: {
-            decisions: projectAtoms.filter((atom) => atom.atomType === 'decision').slice(0, 12),
-            constraints: projectAtoms.filter((atom) => atom.atomType === 'constraint').slice(0, 12),
-            lessons: projectAtoms.filter((atom) => ['lesson', 'fix'].includes(atom.atomType)).slice(0, 12),
-          },
-          sourceAtomIds: projectAtoms.map((atom) => atom.id).slice(0, 80),
-        })
-        : null;
-      return {
-        atoms,
-        scenarios: scenario ? [scenario] : [],
-        projectProfile,
-      };
+      return buildTopLayersFromAtoms(store, { atoms, sessionId, provider, projectName });
     } catch (error) {
       logger.warn?.('[Argus Brain] layered materialization failed:', error?.message || error);
-      return { atoms: [], scenarios: [], projectProfile: null, error: error?.message || String(error) };
+      return { atoms: [], scenarios: [], projectProfile: null, evidence: { expectedRefCount: 0, availableRefCount: 0, missingRefCount: 0, missingRefIds: [] }, error: error?.message || String(error) };
     }
+  };
+
+  const rebuildTopLayers = ({ sessionId = '', provider = 'claude', projectName = '', limit = 500 } = {}) => {
+    const atoms = store.listAtoms({ sessionId, provider, projectName, status: 'active', limit });
+    return buildTopLayersFromAtoms(store, { atoms, sessionId, provider, projectName });
+  };
+
+  const migrateLegacyNodesToLayers = ({ sessionId = '', provider = 'claude', projectName = '', limit = 200 } = {}) => {
+    const nodes = store.listProjectNodes({ projectName, provider, limit })
+      .filter((node) => !sessionId || node.sessionId === sessionId);
+    const atoms = nodes
+      .map((node) => store.upsertAtom({
+        sessionId: node.sessionId || sessionId,
+        provider,
+        projectName: node.projectName || projectName,
+        atomType: ATOM_TYPES.includes(node.nodeType) ? node.nodeType : 'decision',
+        title: node.title,
+        summary: node.summary || node.title,
+        status: node.status || 'active',
+        stableKey: `legacy-node:${node.id}`,
+        confidence: node.confidence || 0.7,
+        entities: extractBrainEntities(`${node.title}\n${node.summary}`),
+        sourceEventIds: node.sourceEventIds || [],
+        refIds: node.refIds || [],
+      }))
+      .filter(Boolean);
+    return buildTopLayersFromAtoms(store, { atoms, sessionId, provider, projectName });
   };
 
   return {
     classifyBrainEvent,
     extractBrainEntities,
     materializeSessionLayers,
+    migrateLegacyNodesToLayers,
+    rebuildTopLayers,
     tokenizeBrainText,
   };
 }

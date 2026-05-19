@@ -117,6 +117,7 @@ import {
 } from './services/mtl-code-model-service.js';
 import { brainCaptureService } from './services/brain-capture-service.js';
 import { brainCompactionService } from './services/brain-compaction-service.js';
+import { brainLayeredMemoryService } from './services/brain-layered-memory-service.js';
 import { brainRecallService } from './services/brain-recall-service.js';
 import { brainStore } from './services/brain-store-service.js';
 import { getRequestIpAddress } from './services/hub-usage-service.js';
@@ -2767,6 +2768,11 @@ async function finalizeBrainForChatCommand({ writer, data, provider, checkpoint 
         config,
     });
     const projectName = checkpoint?.projectName || data?.options?.projectName || data?.projectName || '';
+    const layered = brainLayeredMemoryService.materializeSessionLayers({
+        sessionId,
+        provider,
+        projectName,
+    });
     const compaction = brainCompactionService.compactSession({
         sessionId,
         provider,
@@ -2791,6 +2797,21 @@ async function finalizeBrainForChatCommand({ writer, data, provider, checkpoint 
                 compactionId: compaction.id,
                 currentGoal: compaction.currentGoal,
                 nextAction: compaction.nextAction,
+            },
+        }));
+    }
+    if (writer && layered?.atoms?.length) {
+        writer.send(createNormalizedMessage({
+            kind: 'status',
+            status: 'brain_layered_memory',
+            content: `Argus Brain materialized ${layered.atoms.length} atom(s) into layered memory.`,
+            sessionId,
+            provider,
+            brain: {
+                atomCount: layered.atoms.length,
+                scenarioCount: layered.scenarios?.length || 0,
+                hasProjectProfile: Boolean(layered.projectProfile),
+                missingRefCount: layered.evidence?.missingRefCount || 0,
             },
         }));
     }
