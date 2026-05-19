@@ -22,6 +22,23 @@ const COMMAND_FILES = [
   'Cargo.toml',
 ];
 
+function validateProjectPath(projectPath) {
+  const resolved = path.resolve(String(projectPath || '').trim());
+  if (!resolved || resolved === path.parse(resolved).root) {
+    throw new Error('Invalid project path');
+  }
+  return resolved;
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isRiskFile(filePath) {
   const lower = filePath.toLowerCase();
   return lower.includes('auth')
@@ -31,7 +48,9 @@ function isRiskFile(filePath) {
     || lower.includes('migration')
     || lower.includes('security')
     || lower.endsWith('.env')
-    || lower.endsWith('.env.example');
+    || lower.endsWith('.env.example')
+    || ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'dockerfile', 'docker-compose.yml', 'tsconfig.json']
+      .includes(path.basename(lower));
 }
 
 async function walkProject(root, dir = root, depth = 0, result = []) {
@@ -91,6 +110,16 @@ function buildModuleMap(entries) {
     .map(([name, stats]) => `- ${name}/ - ${stats.dirs} dirs, ${stats.files} files`);
 }
 
+function buildModuleObjects(moduleMap) {
+  return moduleMap.map((line) => {
+    const match = /^- ([^/]+)\/ - (.+)$/.exec(line);
+    return {
+      path: match?.[1] || line.replace(/^- /, ''),
+      description: match?.[2] || 'module',
+    };
+  });
+}
+
 function buildSimpleDiff(oldText, newText) {
   if (oldText === newText) return '';
   const oldLines = oldText.split('\n');
@@ -105,16 +134,16 @@ function buildSimpleDiff(oldText, newText) {
 }
 
 export async function scanProjectProfile(projectPath) {
-  const root = path.resolve(projectPath);
+  const root = validateProjectPath(projectPath);
+  if (!await pathExists(root)) {
+    throw new Error(`Project path not found: ${root}`);
+  }
   const entries = await walkProject(root);
   const packageJson = await readPackageJson(root);
   const existingCommandFiles = [];
   for (const file of COMMAND_FILES) {
-    try {
-      await fs.access(path.join(root, file));
+    if (await pathExists(path.join(root, file))) {
       existingCommandFiles.push(file);
-    } catch {
-      // absent
     }
   }
   const commands = [
@@ -127,14 +156,20 @@ export async function scanProjectProfile(projectPath) {
     .filter((entry) => entry.type === 'file' && isRiskFile(entry.path))
     .map((entry) => entry.path)
     .slice(0, 40);
+  const moduleMap = buildModuleMap(entries);
 
   return {
     root,
+    projectPath: root,
     packageName: packageJson?.name || path.basename(root),
-    moduleMap: buildModuleMap(entries),
+    moduleMap,
+    modules: buildModuleObjects(moduleMap),
     commands: commands.slice(0, 40),
     testCommands: testCommands.slice(0, 30),
+    testEntrypoints: testCommands.slice(0, 30),
     riskFiles,
+    generatedAt: new Date().toISOString(),
+    schemaVersion: 1,
     recommendedWorkflows: [
       '/review for local diffs',
       '/recipe code-impact-analysis for risky changes',
@@ -143,35 +178,52 @@ export async function scanProjectProfile(projectPath) {
   };
 }
 
+export async function analyzeProjectProfile({ projectPath }) {
+  return scanProjectProfile(projectPath);
+}
+
 export function buildProjectProfileMarkdown(profile) {
-  const now = new Date().toISOString();
+  const now = profile.generatedAt || new Date().toISOString();
+  const moduleMap = profile.moduleMap?.length
+    ? profile.moduleMap
+    : (profile.modules || []).map((module) => `- ${module.path}: ${module.description || 'module'}`);
+  const commands = (profile.commands || []).map((command) => {
+    if (typeof command === 'string') return command;
+    return command.command ? `${command.name}: ${command.command}` : command.name;
+  }).filter(Boolean);
+  const testCommands = profile.testCommands || profile.testEntrypoints || [];
+
   return [
     '# MTL Project Profile',
     '',
     `Generated: ${now}`,
     `Project: ${profile.packageName}`,
-    `Root: ${profile.root}`,
+    `Root: ${profile.root || profile.projectPath}`,
     '',
     '## Structure',
-    ...(profile.moduleMap.length ? profile.moduleMap : ['- No module map available.']),
+    ...(moduleMap.length ? moduleMap : ['- No module map available.']),
     '',
     '## Common Commands',
-    ...(profile.commands.length ? profile.commands.map((command) => `- \`${command}\``) : ['- No commands detected.']),
+    ...(commands.length ? commands.map((command) => `- \`${command}\``) : ['- No commands detected.']),
     '',
     '## Test Entrypoints',
-    ...(profile.testCommands.length ? profile.testCommands.map((command) => `- \`${command}\``) : ['- No test commands detected.']),
+    ...(testCommands.length ? testCommands.map((command) => `- \`${command}\``) : ['- No test commands detected.']),
     '',
     '## Risk Files',
-    ...(profile.riskFiles.length ? profile.riskFiles.map((file) => `- ${file}`) : ['- No obvious risk files detected.']),
+    ...(profile.riskFiles?.length ? profile.riskFiles.map((file) => `- ${file}`) : ['- No obvious risk files detected.']),
     '',
     '## Recommended Workflows',
-    ...profile.recommendedWorkflows.map((workflow) => `- ${workflow}`),
+    ...((profile.recommendedWorkflows || []).length ? profile.recommendedWorkflows.map((workflow) => `- ${workflow}`) : ['- /review for local diffs']),
     '',
     '## Maintenance Notes',
     '- Refresh this file when the project structure, commands, tests, or risk surface changes.',
     '- Treat this as project guidance, not a substitute for inspecting current code.',
     '',
   ].join('\n');
+}
+
+export function renderMtlProjectProfile(profile) {
+  return buildProjectProfileMarkdown(profile);
 }
 
 export async function createProjectProfileDraft({ projectPath }) {
@@ -200,6 +252,16 @@ export async function commitProjectProfileDraft({ projectPath, content }) {
   return {
     success: true,
     targetPath: draft.targetPath,
+    filePath: draft.targetPath,
     content: targetContent,
+    profile: draft.profile,
+  };
+}
+
+export async function writeMtlProjectProfile({ projectPath }) {
+  const result = await commitProjectProfileDraft({ projectPath });
+  return {
+    filePath: result.targetPath,
+    profile: result.profile,
   };
 }

@@ -5,12 +5,13 @@ import {
   Clipboard,
   ExternalLink,
   FileDiff,
-  FileText,
   GitBranch,
+  GitPullRequest,
   Minus,
   Plus,
   RefreshCw,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react';
 
 import { api, apiFetch } from '../../../utils/api';
@@ -54,6 +55,22 @@ type ReviewComment = {
   source: string;
   status: 'open' | 'closed';
   createdAt: string;
+};
+
+type ReviewFlowResult = {
+  hasChanges: boolean;
+  summary: string[];
+  risks: Array<{ title: string; files?: string[]; mitigation?: string }>;
+  tests: string[];
+  impact: string[];
+  commitMessage: string;
+  prBody: string;
+  content: string;
+};
+
+type ReviewFlowArtifact = {
+  id: string;
+  title?: string;
 };
 
 type SessionCheckpoint = {
@@ -239,7 +256,9 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
   const [commentLine, setCommentLine] = useState('');
   const [feedbackText, setFeedbackText] = useState('');
   const [reviewMessage, setReviewMessage] = useState('');
-  const [reviewFlowBusy, setReviewFlowBusy] = useState(false);
+  const [reviewFlow, setReviewFlow] = useState<ReviewFlowResult | null>(null);
+  const [reviewFlowArtifact, setReviewFlowArtifact] = useState<ReviewFlowArtifact | null>(null);
+  const [isGeneratingReviewFlow, setIsGeneratingReviewFlow] = useState(false);
 
   const changedFiles = useMemo(() => getChangedFiles(status), [status]);
   const selectedFile = changedFiles.find((file) => file.path === selectedFilePath) || null;
@@ -557,30 +576,31 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
     }
   };
 
-  const createReviewFlowArtifact = async () => {
-    setReviewFlowBusy(true);
-    setStatusError('');
+  const generateReviewFlow = async () => {
+    setIsGeneratingReviewFlow(true);
     setReviewMessage('');
+    setStatusError('');
     try {
-      const data = await parseJsonResponse<{ empty?: boolean; message?: string; artifact?: { id?: string; title?: string } }>(await apiFetch('/api/review-flow', {
-        method: 'POST',
-        body: JSON.stringify({
-          projectName: selectedProject.name,
-          projectPath: selectedProject.fullPath || selectedProject.path || '',
-        }),
-      }));
-      if (data.empty) {
-        setReviewMessage(data.message || 'No local diff is available for review.');
-        return;
-      }
-      setReviewMessage(`Review artifact saved: ${data.artifact?.title || data.artifact?.id || 'review-flow'}`);
+      const response = await api.generateGitReviewFlow({ project: selectedProject.name });
+      const data = await parseJsonResponse<{ review?: ReviewFlowResult; artifact?: ReviewFlowArtifact | null }>(response);
+      const nextReview = data.review || null;
+      setReviewFlow(nextReview);
+      setReviewFlowArtifact(data.artifact || null);
+      setReviewMessage(nextReview?.hasChanges
+        ? 'Review package generated and saved as an artifact.'
+        : 'No local diff found. Nothing to review yet.');
       window.dispatchEvent(new CustomEvent('argus-refresh-workflow-counts'));
-      window.dispatchEvent(new CustomEvent('argus-open-tab', { detail: { tab: 'artifacts' } }));
     } catch (error) {
-      setStatusError(error instanceof Error ? error.message : 'Failed to create review artifact');
+      setStatusError(error instanceof Error ? error.message : 'Failed to generate review package');
     } finally {
-      setReviewFlowBusy(false);
+      setIsGeneratingReviewFlow(false);
     }
+  };
+
+  const copyReviewFlowSection = async (value: string, label: string) => {
+    if (!value.trim()) return;
+    await navigator.clipboard?.writeText(value);
+    setReviewMessage(`${label} copied.`);
   };
 
   const openSelectedFile = async () => {
@@ -766,9 +786,9 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
               <Button variant="outline" size="sm" onClick={() => void copyReviewSummary(true)} disabled={totalChanges === 0 && comments.length === 0}>
                 Ask Argus
               </Button>
-              <Button variant="outline" size="sm" onClick={() => void createReviewFlowArtifact()} disabled={reviewFlowBusy}>
-                <FileText className="h-4 w-4" />
-                Review artifact
+              <Button variant="outline" size="sm" onClick={() => void generateReviewFlow()} disabled={isGeneratingReviewFlow}>
+                <Sparkles className={cn('h-4 w-4', isGeneratingReviewFlow && 'animate-spin')} />
+                Review changes
               </Button>
 	              <Button
                 variant="outline"
@@ -799,6 +819,57 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
               </Button>
             </div>
           </div>
+
+          {reviewFlow && (
+            <div className="border-b border-border/70 bg-background px-4 py-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <GitPullRequest className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-semibold text-foreground">Git-native review package</span>
+                  {reviewFlowArtifact && (
+                    <Badge variant="outline" className="text-xs">Artifact saved</Badge>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => copyReviewFlowSection(reviewFlow.commitMessage, 'Commit message')} disabled={!reviewFlow.commitMessage}>
+                    <Clipboard className="h-4 w-4" />
+                    Commit
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => copyReviewFlowSection(reviewFlow.prBody, 'PR description')} disabled={!reviewFlow.prBody}>
+                    <Clipboard className="h-4 w-4" />
+                    PR body
+                  </Button>
+                </div>
+              </div>
+
+              {!reviewFlow.hasChanges ? (
+                <div className="rounded-md border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+                  {reviewFlow.content}
+                </div>
+              ) : (
+                <div className="grid gap-3 lg:grid-cols-4">
+                  <div className="rounded-md border border-border/70 p-3 lg:col-span-2">
+                    <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Summary</div>
+                    <ul className="space-y-1 text-sm text-foreground">
+                      {reviewFlow.summary.map((item) => <li key={item}>- {item}</li>)}
+                    </ul>
+                  </div>
+                  <div className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Risks</div>
+                    <ul className="max-h-28 space-y-1 overflow-auto text-sm text-foreground">
+                      {reviewFlow.risks.length === 0 ? <li>No obvious risk detected.</li> : reviewFlow.risks.map((risk) => <li key={risk.title}>- {risk.title}</li>)}
+                    </ul>
+                  </div>
+                  <div className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Tests</div>
+                    <ul className="max-h-28 space-y-1 overflow-auto text-sm text-foreground">
+                      {reviewFlow.tests.map((test) => <li key={test}>- {test}</li>)}
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {selectedFile && diffHunks.length > 0 && (
             <div className="flex gap-2 overflow-x-auto border-b border-border/70 px-4 py-2">

@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { db } from '../database/db.js';
 import {
   getSessionCheckpoint,
   listSessionCheckpoints,
@@ -7,6 +8,15 @@ import {
 } from '../services/session-checkpoint-service.js';
 
 const router = express.Router();
+
+function sendCheckpointError(res, error, fallbackStatus = 500, fallbackMessage = 'Checkpoint request failed') {
+  console.error(fallbackMessage, error);
+  res.status(error?.statusCode || fallbackStatus).json({
+    success: false,
+    error: error?.message || fallbackMessage,
+    details: error?.details || null,
+  });
+}
 
 router.get('/', (req, res) => {
   try {
@@ -18,8 +28,7 @@ router.get('/', (req, res) => {
     });
     res.json({ success: true, checkpoints });
   } catch (error) {
-    console.error('Checkpoint list error:', error);
-    res.status(500).json({ error: error.message || 'Failed to list checkpoints' });
+    sendCheckpointError(res, error, 500, 'Failed to list checkpoints');
   }
 });
 
@@ -27,12 +36,29 @@ router.get('/:id', (req, res) => {
   try {
     const checkpoint = getSessionCheckpoint(req.params.id);
     if (!checkpoint) {
-      return res.status(404).json({ error: 'Checkpoint not found' });
+      return res.status(404).json({ success: false, error: 'Checkpoint not found' });
     }
     return res.json({ success: true, checkpoint });
   } catch (error) {
-    console.error('Checkpoint get error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to load checkpoint' });
+    return sendCheckpointError(res, error, 500, 'Failed to load checkpoint');
+  }
+});
+
+router.get('/:id/diff', (req, res) => {
+  try {
+    const checkpoint = getSessionCheckpoint(req.params.id);
+    if (!checkpoint) {
+      return res.status(404).json({ success: false, error: 'Checkpoint not found' });
+    }
+    return res.json({
+      success: true,
+      checkpointId: checkpoint.id,
+      diff: checkpoint.patch || '',
+      status: checkpoint.rollbackStatus || '',
+      checkpoint,
+    });
+  } catch (error) {
+    return sendCheckpointError(res, error, 500, 'Failed to load checkpoint diff');
   }
 });
 
@@ -41,12 +67,19 @@ router.post('/:id/rollback', async (req, res) => {
     const checkpoint = await rollbackSessionCheckpoint(req.params.id);
     res.json({ success: true, checkpoint });
   } catch (error) {
-    console.error('Checkpoint rollback error:', error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      error: error.message || 'Failed to roll back checkpoint',
-      details: error.details || null,
-    });
+    sendCheckpointError(res, error, 500, 'Failed to roll back checkpoint');
+  }
+});
+
+router.delete('/:id', (req, res) => {
+  try {
+    const result = db.prepare('DELETE FROM session_checkpoints WHERE id = ?').run(req.params.id);
+    if (result.changes === 0) {
+      return res.status(404).json({ success: false, error: 'Checkpoint not found' });
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    return sendCheckpointError(res, error, 500, 'Failed to delete checkpoint');
   }
 });
 

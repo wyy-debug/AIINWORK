@@ -164,6 +164,27 @@ router.post('/build-obsidian', async (req, res) => {
   }
 });
 
+router.post('/cancel', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const projectRoot = await resolveProjectRoot(body);
+    const projectName = readString(body.projectName || body.project) || projectRoot.split(/[\\/]/).pop() || '';
+    logCodeGraphDebugEvent(console, 'api_cancel_request', {
+      projectName,
+      projectRoot,
+    });
+    const result = codeGraphService.cancel(projectRoot);
+    logCodeGraphDebugEvent(console, 'api_cancel_response', {
+      projectName,
+      projectRoot,
+      result,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendError(res, error, 'Failed to cancel CodeGraph job');
+  }
+});
+
 router.post('/export-obsidian', async (req, res) => {
   try {
     const body = req.body || {};

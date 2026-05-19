@@ -1023,6 +1023,20 @@ const callBridge = async (path, options = {}, config, fetchImpl, {
   }
 };
 
+const withBridgeTimeout = (config = {}, timeoutMs = null) => {
+  const timeout = Number(timeoutMs);
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return config;
+  }
+  const currentTimeout = Number(config.timeoutMs);
+  return {
+    ...config,
+    timeoutMs: Number.isFinite(currentTimeout) && currentTimeout > 0
+      ? Math.min(currentTimeout, timeout)
+      : timeout,
+  };
+};
+
 export const sendObsidianDocument = async (payload, {
   fetchImpl = globalThis.fetch,
   repairBridgeConfig = repairObsidianBridgeConfigFromReachableVaults,
@@ -1199,6 +1213,9 @@ export const searchObsidianBridge = async (payload = {}, {
 
 export const buildObsidianContext = async (payload = {}, {
   fetchImpl = globalThis.fetch,
+  allowRepair = true,
+  timeoutMs = null,
+  logger = console,
 } = {}) => {
   if (typeof fetchImpl !== 'function') {
     throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
@@ -1207,11 +1224,18 @@ export const buildObsidianContext = async (payload = {}, {
     });
   }
 
-  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  const config = withBridgeTimeout(
+    getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId }),
+    timeoutMs,
+  );
   return callBridge('/argus/v1/context', {
     method: 'POST',
     body: JSON.stringify(normalizeObsidianSearchPayload(payload, config)),
-  }, config, fetchImpl);
+  }, config, fetchImpl, {
+    allowRepair,
+    payload,
+    logger,
+  });
 };
 
 export const searchObsidianSemanticIndex = async (payload = {}, {
@@ -1267,6 +1291,9 @@ const encodeBooleanParam = (value) => (value === false ? 'false' : 'true');
 
 export const getActiveObsidianNote = async (payload = {}, {
   fetchImpl = globalThis.fetch,
+  allowRepair = true,
+  timeoutMs = null,
+  logger = console,
 } = {}) => {
   if (typeof fetchImpl !== 'function') {
     throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
@@ -1275,14 +1302,21 @@ export const getActiveObsidianNote = async (payload = {}, {
     });
   }
 
-  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  const config = withBridgeTimeout(
+    getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId }),
+    timeoutMs,
+  );
   const params = new URLSearchParams({
     includeContent: encodeBooleanParam(payload.includeContent),
     includeSelection: encodeBooleanParam(payload.includeSelection),
   });
   return callBridge(`/argus/v1/active?${params.toString()}`, {
     method: 'GET',
-  }, config, fetchImpl);
+  }, config, fetchImpl, {
+    allowRepair,
+    payload,
+    logger,
+  });
 };
 
 export const patchObsidianNote = async (payload = {}, {
@@ -1334,6 +1368,8 @@ export const upsertObsidianMarkdownFile = async (payload = {}, {
 export const queryObsidianNotes = async (payload = {}, {
   fetchImpl = globalThis.fetch,
   logger = console,
+  allowRepair = true,
+  timeoutMs = null,
 } = {}) => {
   if (typeof fetchImpl !== 'function') {
     throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
@@ -1342,11 +1378,15 @@ export const queryObsidianNotes = async (payload = {}, {
     });
   }
 
-  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  const config = withBridgeTimeout(
+    getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId }),
+    timeoutMs,
+  );
   return callBridge('/argus/v1/query', {
     method: 'POST',
     body: JSON.stringify(normalizeObsidianSearchPayload(payload, config)),
   }, config, fetchImpl, {
+    allowRepair,
     payload,
     logger,
     payloadSummary: bridgePayloadSummary('/argus/v1/query', payload),

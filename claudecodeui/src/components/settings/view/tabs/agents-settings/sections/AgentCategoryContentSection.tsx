@@ -6,6 +6,7 @@ import PermissionsContent from './content/PermissionsContent';
 import RepositoryContent from './content/RepositoryContent';
 import HubUsageContent from './content/HubUsageContent';
 import SmallModelConfigContent from './content/SmallModelConfigContent';
+import CapabilityMarketplaceContent from './content/CapabilityMarketplaceContent';
 
 export default function AgentCategoryContentSection({
   selectedAgent,
@@ -81,6 +82,10 @@ export default function AgentCategoryContentSection({
           selectedProvider={selectedAgent}
           currentProjects={projects}
         />
+      )}
+
+      {selectedCategory === 'marketplace' && selectedAgent === 'claude' && (
+        <CapabilityMarketplaceContent projects={projects} />
       )}
 
       {selectedCategory === 'repository' && selectedAgent === 'claude' && (

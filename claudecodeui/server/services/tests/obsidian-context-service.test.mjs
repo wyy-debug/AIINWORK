@@ -262,6 +262,44 @@ describe('obsidian context service', () => {
     });
   });
 
+  it('skips Obsidian readback when it exceeds the chat-path budget', async () => {
+    const service = await import('../obsidian-context-service.js');
+    const input = {
+      type: 'claude-command',
+      command: 'Keep the chat responsive.',
+      options: { projectName: 'App' },
+    };
+
+    const result = await Promise.race([
+      service.applyObsidianContextToChatCommand(input, {
+        contextBudgetMs: 5,
+        buildObsidianContext: vi.fn(() => new Promise(() => {})),
+        queryObsidianNotes: vi.fn(() => new Promise(() => {})),
+        readObsidianBridgeConfig: () => ({
+          enabled: true,
+          wikiReadbackEnabled: true,
+          aiMemoryReadbackEnabled: true,
+          wikiReadbackMaxResults: 8,
+          aiMemoryMaxResults: 8,
+          wikiReadbackProjectScopeEnabled: true,
+          aiMemoryProjectScopeEnabled: true,
+        }),
+      }),
+      new Promise((resolve) => setTimeout(() => resolve('timed-out'), 50)),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    expect(result).toMatchObject({
+      command: 'Keep the chat responsive.',
+      options: expect.objectContaining({
+        obsidianContext: expect.objectContaining({
+          used: false,
+          skippedByBudget: true,
+        }),
+      }),
+    });
+  });
+
   it('can include active note and structured sources in readback metadata', async () => {
     const service = await import('../obsidian-context-service.js');
     const buildObsidianContext = vi.fn(async () => ({

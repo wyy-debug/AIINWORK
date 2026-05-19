@@ -201,4 +201,3 @@ export function createBrainCaptureService({ store = defaultBrainStore, logger = 
 }
 
 export const brainCaptureService = createBrainCaptureService();
-

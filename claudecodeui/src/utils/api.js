@@ -35,6 +35,14 @@ export const api = {
     const queryString = params.toString();
     return apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`);
   },
+  runtimeTimeline: (sessionId, provider = 'claude', { projectName = '', projectPath = '' } = {}) => {
+    const params = new URLSearchParams();
+    params.append('provider', provider);
+    if (projectName) params.append('projectName', projectName);
+    if (projectPath) params.append('projectPath', projectPath);
+    const queryString = params.toString();
+    return apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/timeline${queryString ? `?${queryString}` : ''}`);
+  },
   renameProject: (projectName, displayName) =>
     apiFetch(`/api/projects/${projectName}/rename`, {
       method: 'PUT',
@@ -56,6 +64,27 @@ export const api = {
     }),
   sessionGoal: (sessionId) =>
     apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/goal`),
+  /**
+   * @param {{ sessionId?: string | null; provider?: string; projectPath?: string; limit?: number }} [options]
+   */
+  checkpoints: ({ sessionId, provider, projectPath, limit = 50 } = {}) => {
+    const params = new URLSearchParams();
+    if (sessionId) params.set('sessionId', sessionId);
+    if (provider) params.set('provider', provider);
+    if (projectPath) params.set('projectPath', projectPath);
+    params.set('limit', String(limit));
+    return apiFetch(`/api/checkpoints?${params.toString()}`);
+  },
+  checkpointDiff: (checkpointId) =>
+    apiFetch(`/api/checkpoints/${encodeURIComponent(checkpointId)}/diff`),
+  rollbackCheckpoint: (checkpointId) =>
+    apiFetch(`/api/checkpoints/${encodeURIComponent(checkpointId)}/rollback`, {
+      method: 'POST',
+    }),
+  deleteCheckpoint: (checkpointId) =>
+    apiFetch(`/api/checkpoints/${encodeURIComponent(checkpointId)}`, {
+      method: 'DELETE',
+    }),
   setSessionGoal: (sessionId, payload) =>
     apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/goal`, {
       method: 'PUT',
@@ -78,7 +107,7 @@ export const api = {
     if (force) params.set('force', 'true');
     if (deleteData) params.set('deleteData', 'true');
     const qs = params.toString();
-    return apiFetch(`/api/projects/${projectName}${qs ? `?${qs}` : ''}`, {
+    return apiFetch(`/api/projects/${encodeURIComponent(projectName)}${qs ? `?${qs}` : ''}`, {
       method: 'DELETE',
     });
   },
@@ -123,6 +152,16 @@ export const api = {
     apiFetch('/api/projects/create-workspace', {
       method: 'POST',
       body: JSON.stringify(workspaceData),
+    }),
+  previewProjectProfile: (projectPath) =>
+    apiFetch('/api/project-profile/preview', {
+      method: 'POST',
+      body: JSON.stringify({ projectPath }),
+    }),
+  writeProjectProfile: (projectPath) =>
+    apiFetch('/api/project-profile/write', {
+      method: 'POST',
+      body: JSON.stringify({ projectPath }),
     }),
   agents: (includePaused = true) =>
     apiFetch(`/api/agents?includePaused=${includePaused ? 'true' : 'false'}`),
@@ -176,6 +215,22 @@ export const api = {
     if (workspacePath) params.set('workspacePath', workspacePath);
     return apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers?${params.toString()}`);
   },
+  capabilityMarketplace: (workspacePath = '') => {
+    const params = new URLSearchParams();
+    if (workspacePath) params.set('workspacePath', workspacePath);
+    const query = params.toString();
+    return apiFetch(`/api/capability-marketplace${query ? `?${query}` : ''}`);
+  },
+  setCapabilityMarketplaceEnabled: (itemId, enabled) =>
+    apiFetch(`/api/capability-marketplace/${encodeURIComponent(itemId)}/enabled`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+  generateGitReviewFlow: ({ project = '', checkpointId = '' } = {}) =>
+    apiFetch('/api/git/review-flow', {
+      method: 'POST',
+      body: JSON.stringify({ project, checkpointId }),
+    }),
   upsertMcpServer: (provider = 'claude', payload) =>
     apiFetch(`/api/providers/${encodeURIComponent(provider)}/mcp/servers`, {
       method: 'POST',
@@ -199,6 +254,33 @@ export const api = {
     });
   },
   agentRepositoryCatalog: () => apiFetch('/api/agent-repository/catalog'),
+  recipeCatalog: () => apiFetch('/api/recipes/catalog'),
+  validateRecipe: (recipe) =>
+    apiFetch('/api/recipes/validate', {
+      method: 'POST',
+      body: JSON.stringify({ recipe }),
+    }),
+  validateRecipePackage: (recipePackage) =>
+    apiFetch('/api/recipes/packages/validate', {
+      method: 'POST',
+      body: JSON.stringify({ package: recipePackage }),
+    }),
+  importRecipePackage: (recipePackage) =>
+    apiFetch('/api/recipes/packages/import', {
+      method: 'POST',
+      body: JSON.stringify({ package: recipePackage }),
+    }),
+  exportRecipePackage: (recipeIds = []) =>
+    apiFetch('/api/recipes/packages/export', {
+      method: 'POST',
+      body: JSON.stringify({ recipeIds }),
+    }),
+  permissionPresets: () => apiFetch('/api/permission-presets'),
+  resolvePermissionPreset: (permissionPreset, baseOptions = {}) =>
+    apiFetch('/api/permission-presets/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ permissionPreset, baseOptions }),
+    }),
   validateSwarmTemplate: (manifest) =>
     apiFetch('/api/swarms/templates/validate', {
       method: 'POST',

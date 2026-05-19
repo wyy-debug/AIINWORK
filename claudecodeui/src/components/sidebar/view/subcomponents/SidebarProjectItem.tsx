@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, GitBranch, Loader2, SquarePen, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ClipboardList, Edit3, Folder, FolderOpen, GitBranch, SquarePen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
@@ -144,13 +144,17 @@ export default function SidebarProjectItem({
     || (codeGraphBuildStatus?.state === 'queued' ? 'CodeGraph 已排队'
       : codeGraphBuildStatus?.state === 'syncing' ? '正在检查整个项目'
         : codeGraphBuildStatus?.state === 'success' ? 'CodeGraph 已写入 Obsidian'
-          : codeGraphBuildStatus?.state === 'error' ? codeGraphBuildStatus.lastError || 'CodeGraph 构建失败'
-            : '');
+          : codeGraphBuildStatus?.state === 'cancelling' ? '正在停止 CodeGraph'
+            : codeGraphBuildStatus?.state === 'cancelled' ? 'CodeGraph 已停止'
+              : codeGraphBuildStatus?.state === 'error' ? codeGraphBuildStatus.lastError || 'CodeGraph 构建失败'
+                : '');
   const showCodeGraphProgress = codeGraphBuildStatus !== null && (
     isBuildingCodeGraph
     || codeGraphBuildStatus.state === 'queued'
     || codeGraphBuildStatus.state === 'syncing'
+    || codeGraphBuildStatus.state === 'cancelling'
     || codeGraphBuildStatus.state === 'success'
+    || codeGraphBuildStatus.state === 'cancelled'
     || codeGraphBuildStatus.state === 'error'
   );
 
@@ -184,8 +188,16 @@ export default function SidebarProjectItem({
       const status = await readCodeGraphStatus().catch(() => null);
       if (status && mountedRef.current && codeGraphPollTokenRef.current === token) {
         setCodeGraphBuildStatus(status);
-        sawActiveState = sawActiveState || status.state === 'queued' || status.state === 'syncing';
-        if (status.state === 'success' || status.state === 'error' || (sawActiveState && status.state === 'idle')) {
+        sawActiveState = sawActiveState
+          || status.state === 'queued'
+          || status.state === 'syncing'
+          || status.state === 'cancelling';
+        if (
+          status.state === 'success'
+          || status.state === 'error'
+          || status.state === 'cancelled'
+          || (sawActiveState && status.state === 'idle')
+        ) {
           setIsBuildingCodeGraph(false);
           return;
         }
@@ -223,8 +235,38 @@ export default function SidebarProjectItem({
     return selectedPaths.length > 0 ? selectedPaths : null;
   };
 
+  const cancelCodeGraphBuild = async () => {
+    const token = codeGraphPollTokenRef.current + 1;
+    codeGraphPollTokenRef.current = token;
+    setCodeGraphBuildStatus((previous) => ({
+      ...(previous || {}),
+      state: 'cancelling',
+      progress: {
+        stage: 'cancelling',
+        percent: Math.max(1, Math.min(99, Number(previous?.progress?.percent) || 99)),
+        label: '正在停止 CodeGraph 构建...',
+      },
+    }));
+    try {
+      await apiFetch('/api/codegraph/cancel', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectName: project.name,
+          projectRoot,
+        }),
+      });
+      void pollCodeGraphStatus(token);
+    } catch (error) {
+      console.error('[CodeGraph] Failed to cancel build/import:', error);
+      setIsBuildingCodeGraph(false);
+    }
+  };
+
   const buildCodeGraphAndImportObsidian = async () => {
-    if (isBuildingCodeGraph) return;
+    if (isBuildingCodeGraph) {
+      await cancelCodeGraphBuild();
+      return;
+    }
     let scopePaths: string[] | null = null;
     try {
       scopePaths = await selectCodeGraphScopePaths();
@@ -420,16 +462,15 @@ export default function SidebarProjectItem({
                     </button>
 
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-500/10 active:scale-90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:bg-emerald-900/30"
-                      disabled={isBuildingCodeGraph}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-500/10 active:scale-90 dark:border-emerald-800 dark:bg-emerald-900/30"
                       onClick={(event) => {
                         event.stopPropagation();
                         void buildCodeGraphAndImportObsidian();
                       }}
-                      title="构建 CodeGraph 并导入 Obsidian"
+                      title={isBuildingCodeGraph ? '停止 CodeGraph 构建' : '构建 CodeGraph 并导入 Obsidian'}
                     >
                       {isBuildingCodeGraph ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-emerald-600 dark:text-emerald-300" />
+                        <X className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
                       ) : (
                         <GitBranch className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
                       )}
@@ -587,18 +628,15 @@ export default function SidebarProjectItem({
                   <SquarePen className="h-3.5 w-3.5" />
                 </div>
                 <div
-                  className={cn(
-                    'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-emerald-600 transition-all duration-150 hover:bg-emerald-500/10 hover:text-emerald-700',
-                    isBuildingCodeGraph && 'pointer-events-none opacity-60',
-                  )}
+                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-emerald-600 transition-all duration-150 hover:bg-emerald-500/10 hover:text-emerald-700"
                   onClick={(event) => {
                     event.stopPropagation();
                     void buildCodeGraphAndImportObsidian();
                   }}
-                  title="构建 CodeGraph 并导入 Obsidian"
+                  title={isBuildingCodeGraph ? '停止 CodeGraph 构建' : '构建 CodeGraph 并导入 Obsidian'}
                 >
                   {isBuildingCodeGraph ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <X className="h-3.5 w-3.5" />
                   ) : (
                     <GitBranch className="h-3.5 w-3.5" />
                   )}

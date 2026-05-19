@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
@@ -8,6 +8,7 @@ export interface MentionableFile {
   name: string;
   path: string;
   relativePath?: string;
+  type?: 'file' | 'directory';
 }
 
 interface UseFileMentionsOptions {
@@ -53,11 +54,13 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
   const [selectedFileIndex, setSelectedFileIndex] = useState(-1);
   const [cursorPosition, setCursorPosition] = useState(0);
   const [atSymbolPosition, setAtSymbolPosition] = useState(-1);
+  const searchRequestIdRef = useRef(0);
 
   useEffect(() => {
     const activeMention = getActiveMention(input, cursorPosition);
     const projectName = selectedProject?.name;
     if (!activeMention || !projectName) {
+      searchRequestIdRef.current += 1;
       setShowFileDropdown(false);
       setAtSymbolPosition(-1);
       setFilteredFiles([]);
@@ -67,6 +70,9 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     }
 
     const abortController = new AbortController();
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+    const isCurrentRequest = () => searchRequestIdRef.current === requestId && !abortController.signal.aborted;
     const debounce = window.setTimeout(async () => {
       setIsLoadingFileMentions(true);
       setFileMentionError(null);
@@ -80,17 +86,20 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
         }
 
         const data = (await response.json()) as { files?: MentionableFile[] };
+        if (!isCurrentRequest()) {
+          return;
+        }
         setFilteredFiles(Array.isArray(data.files) ? data.files : []);
         setSelectedFileIndex(0);
       } catch (error) {
-        if ((error as { name?: string })?.name === 'AbortError') {
+        if ((error as { name?: string })?.name === 'AbortError' || !isCurrentRequest()) {
           return;
         }
         console.error('Error searching project files:', error);
         setFilteredFiles([]);
         setFileMentionError(error instanceof Error ? error.message : 'File search failed');
       } finally {
-        if (!abortController.signal.aborted) {
+        if (isCurrentRequest()) {
           setIsLoadingFileMentions(false);
         }
       }

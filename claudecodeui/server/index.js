@@ -19,7 +19,7 @@ import { getConnectableHost } from '../shared/networkHosts.js';
 import { queryClaudeSDK, abortClaudeSDKSession, sendClaudeSDKGuidance, stopClaudeSDKTask, sendClaudeSDKTaskControl, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
-import { initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
+import { db, initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCustomSessionNames } from './database/db.js';
 import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
@@ -32,7 +32,9 @@ import {
     syncObsidianProjectInstructionFiles,
     ensureObsidianProjectInstructionFile,
 } from './services/obsidian-instruction-sync-service.js';
+import { findProjectPathsBySuffix, searchProjectMentionEntries } from './services/project-file-mention-service.js';
 import { applyCodeGraphRuntimeToChatCommand } from './services/codegraph-service.js';
+import { createCheckpointStore } from './services/checkpoint-service.js';
 import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
 import { applyExplicitWikiIntentToChatCommand } from './services/obsidian-memory-policy-service.js';
 import { ingestUploadedFilesToObsidian } from './services/obsidian-wiki-service.js';
@@ -54,6 +56,7 @@ import agentsRoutes from './routes/agents.js';
 import artifactsRoutes from './routes/artifacts.js';
 import authRoutes from './routes/auth.js';
 import automationsRoutes, { startAutomationScheduler } from './routes/automations.js';
+import capabilityMarketplaceRoutes from './routes/capability-marketplace.js';
 import brainRoutes from './routes/brain.js';
 import checkpointsRoutes from './routes/checkpoints.js';
 import codegraphRoutes from './routes/codegraph.js';
@@ -68,6 +71,7 @@ import mcpUtilsRoutes from './routes/mcp-utils.js';
 import messagesRoutes from './routes/messages.js';
 import obsidianBridgeRoutes from './routes/obsidian-bridge.js';
 import obsidianBridgeIngressRoutes from './routes/obsidian-bridge-ingress.js';
+import permissionPresetsRoutes from './routes/permission-presets.js';
 import pluginsRoutes from './routes/plugins.js';
 import projectActionsRoutes from './routes/project-actions.js';
 import projectProfileRoutes from './routes/project-profile.js';
@@ -207,6 +211,7 @@ const WATCHER_DEBOUNCE_MS = 300;
 let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
 const connectedClients = new Set();
+const chatCheckpointStore = createCheckpointStore(db);
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 const GOAL_EVENT_POLL_INTERVAL_MS = 500;
 let goalEventPoller = null;
@@ -472,12 +477,12 @@ app.use('/api/git', authenticateToken, gitRoutes);
 
 // Codex-style local productivity routes (protected)
 app.use('/api/project-actions', authenticateToken, projectActionsRoutes);
+app.use('/api/project-profile', authenticateToken, projectProfileRoutes);
 app.use('/api/automations', authenticateToken, automationsRoutes);
 app.use('/api/triage', authenticateToken, triageRoutes);
-app.use('/api/artifacts', authenticateToken, artifactsRoutes);
 app.use('/api/checkpoints', authenticateToken, checkpointsRoutes);
+app.use('/api/artifacts', authenticateToken, artifactsRoutes);
 app.use('/api/recipes', authenticateToken, recipesRoutes);
-app.use('/api/project-profile', authenticateToken, projectProfileRoutes);
 app.use('/api/session-timeline', authenticateToken, sessionTimelineRoutes);
 app.use('/api/brain', authenticateToken, brainRoutes);
 app.use('/api/review-flow', authenticateToken, reviewFlowRoutes);
@@ -493,12 +498,14 @@ app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);
 
 // MCP utilities
 app.use('/api/mcp-utils', authenticateToken, mcpUtilsRoutes);
+app.use('/api/capability-marketplace', authenticateToken, capabilityMarketplaceRoutes);
 
 // Commands API Routes (protected)
 app.use('/api/commands', authenticateToken, commandsRoutes);
 
 // Settings API Routes (protected)
 app.use('/api/settings', authenticateToken, settingsRoutes);
+app.use('/api/permission-presets', authenticateToken, permissionPresetsRoutes);
 
 // Hub usage routes (protected)
 app.use('/api/hub/usage', authenticateToken, hubUsageRoutes);
@@ -520,6 +527,7 @@ app.use('/api/agent-repository', authenticateToken, agentRepositoryRoutes);
 
 // Agent profile configuration routes (protected)
 app.use('/api/agents', authenticateToken, agentsRoutes);
+app.use('/api/recipes', authenticateToken, recipesRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, sessionAgentRoutes);
@@ -1025,135 +1033,6 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
     }
 });
 
-const FILE_MENTION_IGNORED_DIRECTORIES = new Set([
-    '.git',
-    '.hg',
-    '.svn',
-    '.next',
-    '.turbo',
-    '.vite',
-    '.cache',
-    '.gradle',
-    '.idea',
-    '.vs',
-    '.vscode',
-    'node_modules',
-    'dist',
-    'build',
-    'out',
-    'coverage',
-    'Library',
-    'Temp',
-    'Obj',
-    'Logs',
-]);
-const FILE_MENTION_MAX_VISITED_ENTRIES = 25000;
-
-function toProjectRelativePath(projectRoot, filePath) {
-    return path.relative(projectRoot, filePath).split(path.sep).join('/');
-}
-
-function scoreFileMention(relativePath, query, order) {
-    if (!query) {
-        return order;
-    }
-
-    const normalizedPath = relativePath.toLowerCase();
-    const fileName = path.basename(relativePath).toLowerCase();
-    const normalizedQuery = query.toLowerCase();
-    const queryParts = normalizedQuery.split(/[\\/._\-\s]+/).filter(Boolean);
-
-    if (fileName === normalizedQuery) return 0;
-    if (fileName.startsWith(normalizedQuery)) return 1;
-    if (normalizedPath.startsWith(normalizedQuery)) return 2;
-    if (fileName.includes(normalizedQuery)) return 3;
-    if (normalizedPath.includes(normalizedQuery)) return 4;
-    if (queryParts.length > 0 && queryParts.every((part) => normalizedPath.includes(part))) return 5;
-    return -1;
-}
-
-async function searchProjectMentionFiles(projectRoot, rawQuery, limit) {
-    const normalizedRoot = path.resolve(projectRoot);
-    const query = String(rawQuery || '').trim().replace(/^@+/, '').replace(/\\/g, '/');
-    const queue = [normalizedRoot];
-    const matches = [];
-    let visitedEntries = 0;
-    let order = 0;
-
-    while (queue.length > 0 && visitedEntries < FILE_MENTION_MAX_VISITED_ENTRIES) {
-        const currentDirectory = queue.shift();
-        let entries;
-
-        try {
-            entries = await fsPromises.readdir(currentDirectory, { withFileTypes: true });
-        } catch (error) {
-            if (error?.code !== 'EACCES' && error?.code !== 'EPERM') {
-                console.warn('[WARN] File mention search skipped directory:', currentDirectory, error?.message || error);
-            }
-            continue;
-        }
-
-        visitedEntries += entries.length;
-        const sortedEntries = entries.sort((left, right) => left.name.localeCompare(right.name));
-        const childDirectories = [];
-
-        for (const entry of sortedEntries) {
-            if (FILE_MENTION_IGNORED_DIRECTORIES.has(entry.name)) {
-                continue;
-            }
-
-            const entryPath = path.join(currentDirectory, entry.name);
-
-            if (entry.isDirectory()) {
-                childDirectories.push(entryPath);
-                continue;
-            }
-
-            if (!entry.isFile()) {
-                continue;
-            }
-
-            const relativePath = toProjectRelativePath(normalizedRoot, entryPath);
-            const score = scoreFileMention(relativePath, query, order);
-            order += 1;
-            if (score < 0) {
-                continue;
-            }
-
-            matches.push({
-                name: entry.name,
-                path: relativePath,
-                relativePath,
-                score,
-                order,
-            });
-
-            if (!query && matches.length >= limit) {
-                break;
-            }
-        }
-
-        if (!query && matches.length >= limit) {
-            break;
-        }
-
-        queue.push(...childDirectories);
-    }
-
-    return matches
-        .sort((left, right) => {
-            if (left.score !== right.score) return left.score - right.score;
-            if (left.path.length !== right.path.length) return left.path.length - right.path.length;
-            return left.path.localeCompare(right.path);
-        })
-        .slice(0, limit)
-        .map((file) => ({
-            name: file.name,
-            path: file.path,
-            relativePath: file.relativePath,
-        }));
-}
-
 app.get('/api/projects/:projectName/files/search', authenticateToken, async (req, res) => {
     try {
         const requestedLimit = parseInt(String(req.query.limit || '60'), 10);
@@ -1172,7 +1051,7 @@ app.get('/api/projects/:projectName/files/search', authenticateToken, async (req
             return res.status(404).json({ error: `Project path not found: ${projectRoot}` });
         }
 
-        const files = await searchProjectMentionFiles(projectRoot, req.query.q, limit);
+        const files = await searchProjectMentionEntries(projectRoot, req.query.q, limit);
         res.json({
             files,
             query: String(req.query.q || ''),
@@ -1400,6 +1279,49 @@ async function resolveReadableProjectPath(projectName, targetPath) {
     throw Object.assign(new Error(validation.error || 'Path must be under project root'), { statusCode: 403 });
 }
 
+async function resolveExistingReadableProjectPath(projectName, targetPath) {
+    const resolvedInfo = projectName
+        ? await resolveReadableProjectPath(projectName, targetPath)
+        : await resolvePathInRegisteredProjects(targetPath);
+
+    if (!resolvedInfo) {
+        return null;
+    }
+
+    try {
+        return {
+            ...resolvedInfo,
+            stats: await fsPromises.stat(resolvedInfo.resolved),
+        };
+    } catch (error) {
+        if (!projectName || path.isAbsolute(targetPath) || (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')) {
+            throw error;
+        }
+    }
+
+    const suffixMatches = await findProjectPathsBySuffix(resolvedInfo.projectRoot, targetPath, 2);
+    if (suffixMatches.length === 1) {
+        const match = suffixMatches[0];
+        const resolved = path.resolve(resolvedInfo.projectRoot, match.relativePath);
+        return {
+            ...resolvedInfo,
+            resolved,
+            source: 'current-project-suffix',
+            resolvedBySuffix: match.relativePath,
+            stats: await fsPromises.stat(resolved),
+        };
+    }
+
+    if (suffixMatches.length > 1) {
+        throw Object.assign(
+            new Error(`Path is ambiguous; matched multiple project files: ${suffixMatches.map((item) => item.relativePath).join(', ')}`),
+            { statusCode: 409 },
+        );
+    }
+
+    throw Object.assign(new Error('File not found'), { code: 'ENOENT', statusCode: 404 });
+}
+
 /**
  * Validate filename - check for invalid characters
  * @param {string} name - The filename to validate
@@ -1454,15 +1376,13 @@ app.post('/api/local-tools/open-file', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'tool must be an editor local tool' });
         }
 
-        const resolvedInfo = projectName
-            ? await resolveReadableProjectPath(projectName, filePath)
-            : await resolvePathInRegisteredProjects(filePath);
+        const resolvedInfo = await resolveExistingReadableProjectPath(projectName, filePath);
 
         if (!resolvedInfo) {
             return res.status(403).json({ error: 'File must be under a registered project root' });
         }
 
-        const stats = await fsPromises.stat(resolvedInfo.resolved);
+        const stats = resolvedInfo.stats;
         const diagnostics = await localToolService.getLocalToolDiagnostics();
         const selectedTool = diagnostics.tools.find((item) => item.id === targetTool);
 
@@ -1522,15 +1442,13 @@ app.post('/api/local-tools/open-terminal', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'tool must be a terminal local tool' });
         }
 
-        const resolvedInfo = projectName
-            ? await resolveReadableProjectPath(projectName, filePath)
-            : await resolvePathInRegisteredProjects(filePath);
+        const resolvedInfo = await resolveExistingReadableProjectPath(projectName, filePath);
 
         if (!resolvedInfo) {
             return res.status(403).json({ error: 'Path must be under a registered project root' });
         }
 
-        const stats = await fsPromises.stat(resolvedInfo.resolved);
+        const stats = resolvedInfo.stats;
         const cwd = stats.isDirectory() ? resolvedInfo.resolved : path.dirname(resolvedInfo.resolved);
         const diagnostics = await localToolService.getLocalToolDiagnostics();
         const selectedTool = diagnostics.tools.find((item) => item.id === targetTool);
@@ -1584,15 +1502,13 @@ app.post('/api/local-tools/open-path', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'filePath is required' });
         }
 
-        const resolvedInfo = projectName
-            ? await resolveReadableProjectPath(projectName, filePath)
-            : await resolvePathInRegisteredProjects(filePath);
+        const resolvedInfo = await resolveExistingReadableProjectPath(projectName, filePath);
 
         if (!resolvedInfo) {
             return res.status(403).json({ error: 'Path must be under a registered project root' });
         }
 
-        const stats = await fsPromises.stat(resolvedInfo.resolved);
+        const stats = resolvedInfo.stats;
         const platform = os.platform();
         let command;
         let args;
@@ -2300,6 +2216,121 @@ function setWriterAutoCaptureContext(writer, data, provider) {
     });
 }
 
+function getCommandProjectPath(data, commandData) {
+    return commandData?.options?.projectPath
+        || commandData?.options?.cwd
+        || data?.options?.projectPath
+        || data?.options?.cwd
+        || '';
+}
+
+function getCheckpointSessionId(data, commandData) {
+    return getConcreteCommandSessionId(commandData)
+        || getConcreteCommandSessionId(data)
+        || commandData?.options?.sessionId
+        || data?.options?.sessionId
+        || commandData?.sessionId
+        || data?.sessionId
+        || commandData?.clientMessageId
+        || data?.clientMessageId
+        || null;
+}
+
+function getCheckpointRuntimeContext(commandData) {
+    const diagnostics = commandData?.options?.runtimeDiagnostics || {};
+    return {
+        profileKind: diagnostics.profileKind || commandData?.agentProfile?.profileKind || null,
+        permissionPreset: diagnostics.permissionPreset || commandData?.agentProfile?.permissionPreset || null,
+    };
+}
+
+function sendCheckpointStatus(writer, checkpoint, phase) {
+    if (!checkpoint) return;
+    writer.send(createNormalizedMessage({
+        kind: 'status',
+        status: `checkpoint_${phase}`,
+        content: `Checkpoint ${phase} captured${checkpoint.hasChanges ? ' with workspace changes' : ''}.`,
+        sessionId: checkpoint.sessionId,
+        provider: checkpoint.provider,
+        checkpoint: {
+            id: checkpoint.id,
+            phase: checkpoint.phase,
+            beforeCheckpointId: checkpoint.beforeCheckpointId,
+            rollbackAvailable: checkpoint.rollbackAvailable,
+            hasChanges: checkpoint.hasChanges,
+            branch: checkpoint.branch,
+            headSha: checkpoint.headSha,
+        },
+    }));
+}
+
+async function runCommandWithCheckpoint({ data, commandData, writer, provider, execute }) {
+    const projectPath = getCommandProjectPath(data, commandData);
+    const sessionId = getCheckpointSessionId(data, commandData);
+    if (!projectPath || !sessionId) {
+        await execute();
+        return;
+    }
+
+    const turnId = commandData?.clientMessageId || data?.clientMessageId || `turn_${Date.now()}`;
+    const runtimeContext = getCheckpointRuntimeContext(commandData);
+    let beforeCheckpoint = null;
+    try {
+        beforeCheckpoint = await chatCheckpointStore.createCheckpoint({
+            sessionId,
+            provider,
+            projectPath,
+            phase: 'before',
+            turnId,
+            runtimeContext,
+            metadata: {
+                commandType: data?.type || null,
+                projectName: commandData?.options?.projectName || data?.options?.projectName || null,
+            },
+        });
+        sendCheckpointStatus(writer, beforeCheckpoint, 'before');
+    } catch (error) {
+        console.warn('[Checkpoint] Failed to capture before checkpoint:', error?.message || error);
+        writer.send(createNormalizedMessage({
+            kind: 'status',
+            status: 'checkpoint_before_failed',
+            content: `Checkpoint before capture failed: ${error?.message || 'unknown error'}`,
+            sessionId,
+            provider,
+        }));
+    }
+
+    try {
+        await execute();
+    } finally {
+        try {
+            const afterCheckpoint = await chatCheckpointStore.createCheckpoint({
+                sessionId,
+                provider,
+                projectPath,
+                phase: 'after',
+                turnId,
+                beforeCheckpointId: beforeCheckpoint?.id || null,
+                runtimeContext,
+                metadata: {
+                    commandType: data?.type || null,
+                    projectName: commandData?.options?.projectName || data?.options?.projectName || null,
+                },
+            });
+            sendCheckpointStatus(writer, afterCheckpoint, 'after');
+        } catch (error) {
+            console.warn('[Checkpoint] Failed to capture after checkpoint:', error?.message || error);
+            writer.send(createNormalizedMessage({
+                kind: 'status',
+                status: 'checkpoint_after_failed',
+                content: `Checkpoint after capture failed: ${error?.message || 'unknown error'}`,
+                sessionId,
+                provider,
+            }));
+        }
+    }
+}
+
 function broadcastSwarmEvent(eventRecord) {
     const message = JSON.stringify({
         type: 'swarm_event',
@@ -2419,14 +2450,35 @@ async function prepareProjectInstructionFilesBeforeChat(data, provider = 'claude
             provider,
             trigger: 'preflight_project_conversation',
         });
-        const syncResult = await syncObsidianProjectInstructionFiles({
+        void syncObsidianProjectInstructionFiles({
             projectPath,
             projectName,
             provider,
             sessionId: getConcreteCommandSessionId(data) || data?.sessionId || data?.options?.sessionId || '',
             trigger: 'preflight_project_conversation',
+        }).then((syncResult) => {
+            console.log('[Obsidian Wiki] instruction_preflight_background_complete', JSON.stringify({
+                projectPath,
+                projectName,
+                provider,
+                captured: syncResult?.captured ?? null,
+                reason: syncResult?.reason || '',
+            }));
+        }).catch((error) => {
+            console.warn('[Obsidian Wiki] instruction_preflight_background_failed', JSON.stringify({
+                projectPath,
+                projectName,
+                provider,
+                error: error?.message || String(error || 'Project instruction preflight failed.'),
+            }));
         });
-        return { ensureResult, syncResult };
+        return {
+            ensureResult,
+            syncResult: {
+                queued: true,
+                background: true,
+            },
+        };
     } catch (error) {
         console.warn('[Obsidian Wiki] instruction_preflight_failed', JSON.stringify({
             projectPath,
@@ -3118,6 +3170,8 @@ async function applyAgentRuntimeToChatCommand(data) {
     const runtime = await resolveAgentRuntime(agentId, {
         query: typeof data.command === 'string' ? data.command : '',
         sessionConfiguration,
+        permissionMode: data?.options?.permissionMode,
+        toolsSettings: data?.options?.toolsSettings,
         workspacePath: data?.options?.projectPath || data?.options?.cwd || '',
         contextWindowTokens: resolvedContextWindowTokens,
     });
@@ -3193,19 +3247,26 @@ async function applyAgentRuntimeToChatCommand(data) {
         runtime.agent.appBindings,
         data?.options?.projectPath || data?.options?.cwd || '',
     );
+    const profileRuntime = runtime.profileRuntime && typeof runtime.profileRuntime === 'object'
+        ? runtime.profileRuntime
+        : {};
     if (allowSessionAgentBinding && concreteSessionId) {
         sessionAgentBindingsDb.setAgent(concreteSessionId, provider, runtime.agent.id, sessionConfiguration);
     }
 
     const options = {
         ...(data.options || {}),
+        ...(profileRuntime.permissionMode ? { permissionMode: profileRuntime.permissionMode } : {}),
+        ...(profileRuntime.toolsSettings ? { toolsSettings: profileRuntime.toolsSettings, skipPermissions: profileRuntime.skipPermissions === true } : {}),
         ...(agentProfileKind ? { agentProfileKind } : {}),
-        modelProfileId: sessionModelProfileId || data?.options?.modelProfileId || '',
+        modelProfileId: sessionModelProfileId || profileRuntime.modelProfileId || data?.options?.modelProfileId || '',
         agentId: runtime.agent.id,
         agentRuntime: {
             id: runtime.agent.id,
             name: runtime.agent.name,
             version: runtime.agent.version,
+            profileKind: runtime.agent.profileKind || '',
+            permissionPreset: runtime.agent.permissionPreset || '',
         },
         runtimeDiagnostics: {
             type: 'agent',
@@ -3214,6 +3275,9 @@ async function applyAgentRuntimeToChatCommand(data) {
             allowSessionAgentBinding,
             agentId: runtime.agent.id,
             agentName: runtime.agent.name,
+            profileKind: runtime.agent.profileKind || '',
+            permissionPreset: runtime.agent.permissionPreset || '',
+            profilePermissionMode: profileRuntime.permissionMode || '',
             appBindings: runtime.agent.appBindings,
             mcpBindings: runtime.agent.appBindings.filter((binding) => String(binding?.app || '').startsWith('MCP: ')),
             mcpDiagnosticsSummary,
@@ -3224,7 +3288,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             appendSystemPromptLength: runtime.appendSystemPrompt.length,
             contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
             model: resolvedSessionModel || runtime.model || data?.options?.model || '',
-            modelProfileId: sessionModelProfileId || '',
+            modelProfileId: sessionModelProfileId || profileRuntime.modelProfileId || '',
             sessionAgentPackage,
             bareMode: sessionBareMode,
             brainRuntime,

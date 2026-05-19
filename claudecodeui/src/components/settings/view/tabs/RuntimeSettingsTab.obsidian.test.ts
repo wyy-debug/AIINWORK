@@ -79,6 +79,9 @@ describe('Runtime settings Obsidian bridge entry', () => {
     expect(source).toContain('codegraphStorageRoot');
     expect(source).toContain('selectDirectory');
     expect(source).toContain('handleSelectCodeGraphStorage');
+    expect(source).toContain('await save({ quiet: true, nextConfig })');
+    expect(source).toContain('resetCodeGraphStorageRoot');
+    expect(source).toContain('configuredCodegraphStorageRoot');
     expect(source).toContain('CodeGraph 集中存储目录');
     expect(source).toContain('选择目录');
     expect(source).toContain('恢复默认目录');

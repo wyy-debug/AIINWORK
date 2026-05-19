@@ -622,11 +622,14 @@ export default function ObsidianBridgeSettingsContent({
         throw new Error(result.error);
       }
       if (!result.canceled && result.path) {
-        setConfig((previous) => ({
-          ...previous,
+        const nextConfig = {
+          ...config,
           codegraphStorageRoot: result.path || '',
-        }));
-        setMessage('已选择 CodeGraph 集中存储目录，保存后生效。');
+        };
+        setConfig(nextConfig);
+        await save({ quiet: true, nextConfig });
+        await loadCodeGraphStatus({ quiet: true, showSpinner: false });
+        setMessage('已保存 CodeGraph 集中存储目录。');
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '打开原生目录选择器失败。');
@@ -770,6 +773,21 @@ export default function ObsidianBridgeSettingsContent({
         </div>
       </section>
     );
+  };
+
+  const resetCodeGraphStorageRoot = async () => {
+    try {
+      const nextConfig = {
+        ...config,
+        codegraphStorageRoot: '',
+      };
+      setConfig(nextConfig);
+      await save({ quiet: true, nextConfig });
+      await loadCodeGraphStatus({ quiet: true, showSpinner: false });
+      setMessage('已恢复 CodeGraph 默认集中目录。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '恢复 CodeGraph 默认集中目录失败。');
+    }
   };
 
   const renderConnectionSection = () => (
@@ -988,7 +1006,7 @@ export default function ObsidianBridgeSettingsContent({
           <Button
             type="button"
             variant="outline"
-            onClick={() => setConfig((previous) => ({ ...previous, codegraphStorageRoot: '' }))}
+            onClick={() => void resetCodeGraphStorageRoot()}
           >
             恢复默认目录
           </Button>

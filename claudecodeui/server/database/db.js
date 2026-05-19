@@ -4,6 +4,11 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
+import {
+  CHECKPOINTS_PROJECT_INDEX_SQL,
+  CHECKPOINTS_SESSION_INDEX_SQL,
+  CHECKPOINTS_TABLE_SQL
+} from '../services/checkpoint-service.js';
 import { createHubUsageStore } from '../services/hub-usage-service.js';
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
@@ -306,6 +311,9 @@ const runMigrations = () => {
     db.exec(SWARM_ARTIFACTS_TABLE_SQL);
     db.exec(SWARM_MEMORY_TABLE_SQL);
     db.exec(SWARM_MEMORY_RUN_INDEX_SQL);
+    db.exec(CHECKPOINTS_TABLE_SQL);
+    db.exec(CHECKPOINTS_SESSION_INDEX_SQL);
+    db.exec(CHECKPOINTS_PROJECT_INDEX_SQL);
     db.exec(BRAIN_SESSIONS_TABLE_SQL);
     db.exec(BRAIN_SESSIONS_LOOKUP_INDEX_SQL);
     db.exec(BRAIN_SESSIONS_PROJECT_INDEX_SQL);

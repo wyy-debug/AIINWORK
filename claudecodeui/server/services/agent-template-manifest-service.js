@@ -306,6 +306,8 @@ function normalizeRuntime(value = {}) {
   const runtime = value && typeof value === 'object' ? value : {};
   return {
     tools: normalizeStringArray(runtime.tools, 80, 120),
+    allowedTools: normalizeStringArray(runtime.allowedTools, 80, 120),
+    disallowedTools: normalizeStringArray(runtime.disallowedTools, 80, 120),
     model: normalizeString(runtime.model, '', 160),
     permissionMode: normalizeString(runtime.permissionMode, '', 80),
     ...(runtime.mcpServers && typeof runtime.mcpServers === 'object' ? { mcpServers: runtime.mcpServers } : {}),

@@ -119,7 +119,6 @@ function Field({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
 function StringBadges({
   values,
   emptyText = EMPTY_TEXT,
@@ -559,4 +558,3 @@ export default function AgentRuntimeDiagnosticsPanel({
     </div>
   );
 }
-

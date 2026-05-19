@@ -240,4 +240,3 @@ export function createBrainCompactionService({ store = defaultBrainStore, logger
 }
 
 export const brainCompactionService = createBrainCompactionService();
-

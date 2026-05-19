@@ -32,9 +32,35 @@ function stripWrappingQuotes(value: string) {
   if (trimmed.length < 2) return trimmed;
   const first = trimmed[0];
   const last = trimmed[trimmed.length - 1];
-  return (first === last && (first === '"' || first === '\'' || first === '`'))
+  const inner = trimmed.slice(1, -1);
+  return (first === last && (first === '"' || first === '\'' || first === '`') && !inner.includes(first))
     ? trimmed.slice(1, -1).trim()
     : trimmed;
+}
+
+function stripTrailingInlinePunctuation(value: string) {
+  return value.trim().replace(/[;,]+$/g, '').trim();
+}
+
+function extractAssignmentPathCandidate(value: string) {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    return value;
+  }
+  if (WINDOWS_DRIVE_PATH_RE.test(value)) {
+    return value;
+  }
+
+  const assignmentMatch = value.match(/^\s*[^=:\r\n]{1,100}\s*=\s*(.+)$/);
+  if (assignmentMatch?.[1] && /[\\/]/.test(assignmentMatch[1])) {
+    return stripWrappingQuotes(stripTrailingInlinePunctuation(assignmentMatch[1]));
+  }
+
+  const propertyMatch = value.match(/^\s*["'`]?[A-Za-z0-9_. -]{1,100}["'`]?\s*:\s*(.+)$/);
+  if (propertyMatch?.[1] && /[\\/]/.test(propertyMatch[1])) {
+    return stripWrappingQuotes(stripTrailingInlinePunctuation(propertyMatch[1]));
+  }
+
+  return value;
 }
 
 function hasFileLikeBasename(filePath: string) {
@@ -57,12 +83,27 @@ function getBasename(filePath: string) {
   return filePath.split(/[\\/]/).pop() || filePath;
 }
 
-export function formatInlineFileReferenceLabel(reference: InlineFileReference) {
-  const basename = getBasename(reference.path);
-  if (reference.line) {
-    return `${basename}:${reference.line}${reference.column ? `:${reference.column}` : ''}`;
+function formatPathWithContext(filePath: string, maxSegments = 3) {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  const hasSeparator = normalizedPath.includes('/');
+  if (!hasSeparator) {
+    return getBasename(filePath);
   }
-  return basename;
+
+  const segments = normalizedPath.split('/').filter(Boolean);
+  if (segments.length <= maxSegments + 1) {
+    return normalizedPath;
+  }
+
+  return `.../${segments.slice(-maxSegments).join('/')}`;
+}
+
+export function formatInlineFileReferenceLabel(reference: InlineFileReference) {
+  const label = formatPathWithContext(reference.path);
+  if (reference.line) {
+    return `${label}:${reference.line}${reference.column ? `:${reference.column}` : ''}`;
+  }
+  return label;
 }
 
 export function selectDefaultFileOpenTool(tools: LocalFileOpenToolStatus[] = []): FileOpenToolId {
@@ -80,7 +121,7 @@ export function selectDefaultFileOpenTool(tools: LocalFileOpenToolStatus[] = [])
 }
 
 export function parseInlineFileReference(rawValue: string): InlineFileReference | null {
-  const value = repairDecodedWindowsPathEscapes(stripWrappingQuotes(rawValue));
+  const value = repairDecodedWindowsPathEscapes(extractAssignmentPathCandidate(stripWrappingQuotes(rawValue)));
   if (!value || /[\r\n]/.test(value)) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return null;
   if (/[(){}[\]]/.test(value)) return null;

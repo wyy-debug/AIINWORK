@@ -752,6 +752,247 @@ describe('codegraph service', () => {
     await idle;
   });
 
+  it('streams CodeGraph notes to Obsidian file-by-file instead of collecting the whole graph first', async () => {
+    const service = await import('../codegraph-service.js');
+    const events = [];
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), 'argus-codegraph-stream-cache-'));
+    const upsertMarkdown = vi.fn(async ({ path: documentPath }) => {
+      events.push(`write:${documentPath}`);
+      return {};
+    });
+    const cg = {
+      getFiles: vi.fn(() => [
+        { path: 'Assets/Scripts/Auth/AFirst.cs', language: 'csharp' },
+        { path: 'Assets/Scripts/Auth/ZSecond.cs', language: 'csharp' },
+      ]),
+      getNodesInFile: vi.fn((filePath) => {
+        events.push(`nodes:${filePath}`);
+        if (filePath === 'Assets/Scripts/Auth/ZSecond.cs') {
+          expect(events.some((event) => event.startsWith('write:'))).toBe(true);
+        }
+        return [{
+          id: `class:${filePath}`,
+          kind: 'class',
+          name: filePath.includes('AFirst') ? 'AFirst' : 'ZSecond',
+          filePath,
+          visibility: 'public',
+          startLine: 1,
+          endLine: 12,
+        }];
+      }),
+      getIncomingEdges: vi.fn(() => []),
+      getOutgoingEdges: vi.fn(() => []),
+      getFileDependencies: vi.fn(() => []),
+      getFileDependents: vi.fn(() => []),
+      getStats: vi.fn(() => ({ fileCount: 2, nodeCount: 2 })),
+      close: vi.fn(),
+    };
+
+    const result = await service.exportCodeGraphSummariesToObsidianStreaming({
+      projectName: 'Soc',
+      projectRoot: 'E:/work/Soc',
+      codeGraphPackage: { CodeGraph: {}, mod: { version: '0.7.6' } },
+      openGraph: vi.fn(async () => cg),
+      exportCachePath: path.join(cacheDir, 'obsidian-export-cache.json'),
+      upsertMarkdown,
+      queryNotes: vi.fn(async () => ({ results: [] })),
+      onProgress: vi.fn(),
+    });
+
+    expect(result.streaming).toBe(true);
+    expect(cg.getNodesInFile).toHaveBeenCalledTimes(2);
+    expect(upsertMarkdown).toHaveBeenCalled();
+    expect(events.indexOf('nodes:Assets/Scripts/Auth/AFirst.cs')).toBeLessThan(
+      events.findIndex((event) => event.startsWith('write:')),
+    );
+    expect(events.findIndex((event) => event.startsWith('write:'))).toBeLessThan(
+      events.indexOf('nodes:Assets/Scripts/Auth/ZSecond.cs'),
+    );
+  });
+
+  it('fails streaming export instead of hanging forever when an Obsidian note write stalls', async () => {
+    const service = await import('../codegraph-service.js');
+    const cg = {
+      getFiles: vi.fn(() => [{ path: 'Assets/Scripts/Auth/AuthManager.cs', language: 'csharp' }]),
+      getNodesInFile: vi.fn(() => [{
+        id: 'class:AuthManager',
+        kind: 'class',
+        name: 'AuthManager',
+        filePath: 'Assets/Scripts/Auth/AuthManager.cs',
+        visibility: 'public',
+        startLine: 1,
+        endLine: 12,
+      }]),
+      getIncomingEdges: vi.fn(() => []),
+      getOutgoingEdges: vi.fn(() => []),
+      getFileDependencies: vi.fn(() => []),
+      getFileDependents: vi.fn(() => []),
+      getStats: vi.fn(() => ({ fileCount: 1, nodeCount: 1 })),
+      close: vi.fn(),
+    };
+    const stalledUpsert = vi.fn(() => new Promise(() => {}));
+
+    await expect(service.exportCodeGraphSummariesToObsidianStreaming({
+      projectName: 'Soc',
+      projectRoot: 'E:/work/Soc',
+      codeGraphPackage: { CodeGraph: {}, mod: { version: '0.7.6' } },
+      openGraph: vi.fn(async () => cg),
+      upsertMarkdown: stalledUpsert,
+      queryNotes: vi.fn(async () => ({ results: [] })),
+      noteWriteTimeoutMs: 5,
+    })).rejects.toMatchObject({
+      code: 'CODEGRAPH_OPERATION_TIMEOUT',
+    });
+
+    expect(stalledUpsert).toHaveBeenCalled();
+    expect(cg.close).toHaveBeenCalled();
+  });
+
+  it('yields between note writes for a large single-file streaming export', async () => {
+    const service = await import('../codegraph-service.js');
+    const events = [];
+    const yieldToEventLoop = vi.fn(async () => {
+      events.push('yield');
+    });
+    const cg = {
+      getFiles: vi.fn(() => [{ path: 'Assets/Scripts/GodFile.cs', language: 'csharp' }]),
+      getNodesInFile: vi.fn(() => Array.from({ length: 5 }, (_, index) => ({
+        id: `class:GodFile:${index}`,
+        kind: 'class',
+        name: `GodFilePart${index}`,
+        filePath: 'Assets/Scripts/GodFile.cs',
+        visibility: 'public',
+        startLine: index + 1,
+        endLine: index + 10,
+      }))),
+      getIncomingEdges: vi.fn(() => []),
+      getOutgoingEdges: vi.fn(() => []),
+      getFileDependencies: vi.fn(() => []),
+      getFileDependents: vi.fn(() => []),
+      getStats: vi.fn(() => ({ fileCount: 1, nodeCount: 5 })),
+      close: vi.fn(),
+    };
+    const upsertMarkdown = vi.fn(async ({ path: documentPath }) => {
+      events.push(`write:${documentPath}`);
+      return {};
+    });
+
+    await service.exportCodeGraphSummariesToObsidianStreaming({
+      projectName: 'Soc',
+      projectRoot: 'E:/work/Soc',
+      codeGraphPackage: { CodeGraph: {}, mod: { version: '0.7.6' } },
+      openGraph: vi.fn(async () => cg),
+      upsertMarkdown,
+      queryNotes: vi.fn(async () => ({ results: [] })),
+      yieldToEventLoop,
+      documentYieldEvery: 1,
+    });
+
+    expect(upsertMarkdown).toHaveBeenCalled();
+    expect(yieldToEventLoop).toHaveBeenCalled();
+    expect(events.some((event, index) => (
+      event.startsWith('write:')
+      && events[index + 1] === 'yield'
+    ))).toBe(true);
+  });
+
+  it('skips unchanged files from the streaming export cache before reading nodes again', async () => {
+    const service = await import('../codegraph-service.js');
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), 'argus-codegraph-export-cache-'));
+    const exportCachePath = path.join(cacheDir, 'obsidian-export-cache.json');
+    const cg = {
+      getFiles: vi.fn(() => [
+        {
+          path: 'Assets/Scripts/Auth/AuthManager.cs',
+          language: 'csharp',
+          contentHash: 'file-hash-1',
+        },
+      ]),
+      getNodesInFile: vi.fn(() => [{
+        id: 'class:AuthManager',
+        kind: 'class',
+        name: 'AuthManager',
+        filePath: 'Assets/Scripts/Auth/AuthManager.cs',
+        visibility: 'public',
+        startLine: 1,
+        endLine: 12,
+      }]),
+      getIncomingEdges: vi.fn(() => []),
+      getOutgoingEdges: vi.fn(() => []),
+      getFileDependencies: vi.fn(() => []),
+      getFileDependents: vi.fn(() => []),
+      getStats: vi.fn(() => ({ fileCount: 1, nodeCount: 1 })),
+      close: vi.fn(),
+    };
+    const openGraph = vi.fn(async () => cg);
+
+    await service.exportCodeGraphSummariesToObsidianStreaming({
+      projectName: 'Soc',
+      projectRoot: 'E:/work/Soc',
+      codeGraphPackage: { CodeGraph: {}, mod: { version: '0.7.6' } },
+      openGraph,
+      exportCachePath,
+      upsertMarkdown: vi.fn(async () => ({})),
+      queryNotes: vi.fn(async () => ({ results: [] })),
+    });
+    const second = await service.exportCodeGraphSummariesToObsidianStreaming({
+      projectName: 'Soc',
+      projectRoot: 'E:/work/Soc',
+      codeGraphPackage: { CodeGraph: {}, mod: { version: '0.7.6' } },
+      openGraph,
+      exportCachePath,
+      upsertMarkdown: vi.fn(async () => ({})),
+      queryNotes: vi.fn(async () => ({ results: [] })),
+    });
+
+    expect(cg.getNodesInFile).toHaveBeenCalledTimes(1);
+    expect(second.diffSkippedFiles).toBe(1);
+    expect(second.paths.some((entry) => (
+      /^Argus\/Wiki\/Soc\/CodeGraph\/Symbols\/class\/AuthManager-[a-f0-9]{12}\.md$/.test(entry)
+    ))).toBe(true);
+  });
+
+  it('cancels a running manual CodeGraph build without waiting for export to finish', async () => {
+    const service = await import('../codegraph-service.js');
+    let exportStarted;
+    const exportStartedPromise = new Promise((resolve) => {
+      exportStarted = resolve;
+    });
+    const codegraph = service.createCodeGraphService({
+      initialize: vi.fn(async () => ({ initialized: true })),
+      sync: vi.fn(async () => ({ filesAdded: 0 })),
+      exportObsidian: vi.fn(async ({ cancelSignal }) => {
+        exportStarted();
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          if (cancelSignal?.cancelled) {
+            throw new service.CodeGraphCancelledError('CodeGraph build cancelled.');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        return { documents: 1 };
+      }),
+      retryDelayMs: 1,
+      maxRetries: 0,
+    });
+
+    codegraph.enqueueObsidianBuild({
+      projectName: 'App',
+      projectRoot: 'E:/work/app',
+    });
+    await exportStartedPromise;
+    const cancelResult = codegraph.cancel('E:/work/app');
+    await codegraph.waitForIdle('E:/work/app');
+
+    expect(cancelResult).toMatchObject({ cancelled: true });
+    expect(codegraph.getStatus('E:/work/app')).toMatchObject({
+      state: 'cancelled',
+      progress: {
+        stage: 'cancelled',
+        percent: 100,
+      },
+    });
+  });
+
   it('keeps progress in the collecting stage before Obsidian writes begin', async () => {
     const service = await import('../codegraph-service.js');
     const progressEvents = [];
@@ -979,6 +1220,40 @@ describe('codegraph service', () => {
       projectName: 'App',
       projectRoot: 'E:/work/app',
     });
+  });
+
+  it('does not inject CodeGraph runtime guidance when the saved global switch is off', async () => {
+    const service = await import('../codegraph-service.js');
+    const bridgeService = await import('../obsidian-bridge-service.js');
+    let stored = null;
+    bridgeService.setObsidianBridgeConfigStoreForTests({
+      get: vi.fn(() => stored),
+      set: vi.fn((_key, nextValue) => {
+        stored = nextValue;
+      }),
+    });
+    bridgeService.saveObsidianBridgeConfig({
+      codegraphEnabled: false,
+    });
+    const ensureMcpConfig = vi.fn(async () => ({ configPath: 'E:/work/app/.mcp.json' }));
+
+    const input = {
+      type: 'claude-command',
+      command: 'Find renderer code.',
+      options: {
+        projectName: 'App',
+        projectPath: 'E:/work/app',
+        appendSystemPrompt: 'Existing prompt.',
+      },
+    };
+    const result = await service.applyCodeGraphRuntimeToChatCommand(input, {
+      ensureMcpConfig,
+    });
+
+    expect(result).toBe(input);
+    expect(ensureMcpConfig).not.toHaveBeenCalled();
+    expect(result.options.appendSystemPrompt).toBe('Existing prompt.');
+    expect(result.options.codegraphContext).toBeUndefined();
   });
 
   it('does not block chat when automatic CodeGraph MCP config provisioning fails', async () => {

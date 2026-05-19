@@ -343,9 +343,10 @@ export function useChatComposerState({
   onPermissionDecisionApplied,
   setPromptInjectionDebug,
 }: UseChatComposerStateArgs) {
+  const selectedProjectName = selectedProject?.name || '';
   const [input, setInput] = useState(() => {
-    if (typeof window !== 'undefined' && selectedProject) {
-      return safeLocalStorage.getItem(`draft_input_${selectedProject.name}`) || '';
+    if (typeof window !== 'undefined' && selectedProjectName) {
+      return safeLocalStorage.getItem(`draft_input_${selectedProjectName}`) || '';
     }
     return '';
   });
@@ -372,6 +373,8 @@ export function useChatComposerState({
   const oneShotSourceSessionIdRef = useRef<string | null>(null);
   const approvedSubagentDispatchPlanRef = useRef('');
   const inputValueRef = useRef(input);
+  const draftInputProjectNameRef = useRef(selectedProjectName);
+  const pendingDraftRestoreRef = useRef<{ projectName: string; input: string } | null>(null);
   const launchDialogApprovalRef = useRef<LaunchDialogApproval | null>(null);
   const pendingSubmitChatInputRef = useRef<ProgrammaticChatSubmit | null>(null);
   const isLoadingRef = useRef(isLoading);
@@ -1518,27 +1521,48 @@ export function useChatComposerState({
   }, [input]);
 
   useEffect(() => {
-    if (!selectedProject) {
+    if (!selectedProjectName) {
+      draftInputProjectNameRef.current = '';
+      pendingDraftRestoreRef.current = null;
       return;
     }
-    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProject.name}`) || '';
+    if (draftInputProjectNameRef.current === selectedProjectName) {
+      return;
+    }
+
+    const savedInput = safeLocalStorage.getItem(`draft_input_${selectedProjectName}`) || '';
+    pendingDraftRestoreRef.current = {
+      projectName: selectedProjectName,
+      input: savedInput,
+    };
     setInput((previous) => {
       const next = previous === savedInput ? previous : savedInput;
       inputValueRef.current = next;
       return next;
     });
-  }, [selectedProject]);
+  }, [selectedProjectName]);
 
   useEffect(() => {
-    if (!selectedProject) {
+    if (!selectedProjectName) {
+      return;
+    }
+    const pendingRestore = pendingDraftRestoreRef.current;
+    if (pendingRestore?.projectName === selectedProjectName) {
+      if (input !== pendingRestore.input) {
+        return;
+      }
+      pendingDraftRestoreRef.current = null;
+      draftInputProjectNameRef.current = selectedProjectName;
+    }
+    if (draftInputProjectNameRef.current !== selectedProjectName) {
       return;
     }
     if (input !== '') {
-      safeLocalStorage.setItem(`draft_input_${selectedProject.name}`, input);
+      safeLocalStorage.setItem(`draft_input_${selectedProjectName}`, input);
     } else {
-      safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
+      safeLocalStorage.removeItem(`draft_input_${selectedProjectName}`);
     }
-  }, [input, selectedProject]);
+  }, [input, selectedProjectName]);
 
   useEffect(() => {
     if (!textareaRef.current) {

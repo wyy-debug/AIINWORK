@@ -31,6 +31,20 @@ describe('parseInlineFileReference', () => {
     });
   });
 
+  it('extracts the path value from simple assignment-like inline snippets', () => {
+    expect(parseInlineFileReference('AdsChangeMaterial = Weapon/Accessory/Scope/AIM_Universal_LV1_HS/Materials/M_AIM_Sight_lenses_HS_Adson.mat')).toEqual({
+      path: 'Weapon/Accessory/Scope/AIM_Universal_LV1_HS/Materials/M_AIM_Sight_lenses_HS_Adson.mat',
+      line: null,
+      column: null,
+    });
+
+    expect(parseInlineFileReference('"AdsChangeMaterial": "Weapon/Accessory/Scope/AIM_Universal_LV1_HS/Materials/M_AIM_Sight_lenses_HS_Adson.mat"')).toEqual({
+      path: 'Weapon/Accessory/Scope/AIM_Universal_LV1_HS/Materials/M_AIM_Sight_lenses_HS_Adson.mat',
+      line: null,
+      column: null,
+    });
+  });
+
   it('does not treat function calls or identifiers as file references', () => {
     expect(parseInlineFileReference('getSystemPrompt()')).toBeNull();
     expect(parseInlineFileReference('systemPrompt')).toBeNull();
@@ -52,24 +66,38 @@ describe('parseInlineFileReference', () => {
 });
 
 describe('formatInlineFileReferenceLabel', () => {
-  it('renders file references as compact basename labels with location suffixes', () => {
+  it('renders plain file references as compact basename labels with location suffixes', () => {
     expect(formatInlineFileReferenceLabel({
       path: 'claude-code/packages/builtin-tools/src/tools/FileReadTool/prompt.ts',
       line: 27,
       column: null,
-    })).toBe('prompt.ts:27');
+    })).toBe('.../tools/FileReadTool/prompt.ts:27');
 
     expect(formatInlineFileReferenceLabel({
       path: 'src/components/main-content/view/MainContent.tsx',
       line: null,
       column: null,
-    })).toBe('MainContent.tsx');
+    })).toBe('.../main-content/view/MainContent.tsx');
 
     expect(formatInlineFileReferenceLabel({
       path: 'claudecodeui/server/services/argus-collaboration-mode-service.js',
       line: 3,
       column: null,
-    })).toBe('argus-collaboration-mode-service.js:3');
+    })).toBe('claudecodeui/server/services/argus-collaboration-mode-service.js:3');
+  });
+
+  it('keeps Unity/Addressables-style asset paths readable instead of collapsing to basename', () => {
+    expect(formatInlineFileReferenceLabel({
+      path: 'Weapon/Accessory/Scope/AIM_Universal_LV1_HS/Materials/M_AIM_Sight_lenses_HS_Adson.mat',
+      line: null,
+      column: null,
+    })).toBe('.../AIM_Universal_LV1_HS/Materials/M_AIM_Sight_lenses_HS_Adson.mat');
+
+    expect(formatInlineFileReferenceLabel({
+      path: 'M_AIM_Sight_lenses_HS_Adson.mat',
+      line: null,
+      column: null,
+    })).toBe('M_AIM_Sight_lenses_HS_Adson.mat');
   });
 });
 
