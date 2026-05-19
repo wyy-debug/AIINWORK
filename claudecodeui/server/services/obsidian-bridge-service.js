@@ -13,6 +13,10 @@ import {
   normalizeReadOnlyObsidianProviderConfig,
   queryReadOnlyObsidianProvider,
 } from './obsidian-readonly-provider-service.js';
+import {
+  DEFAULT_OBSIDIAN_READABLE_FOLDERS,
+  validateObsidianFolderPolicy,
+} from './obsidian-folder-policy-service.js';
 
 const CONFIG_KEY = 'obsidian_bridge';
 const DEFAULT_PORT = '27177';
@@ -34,14 +38,14 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   timeoutMs: 5000,
   autoExportKnowledgeArtifacts: false,
   autoExportKnowledgeArtifactsOptIn: false,
-  readableVaultFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
+  readableVaultFolders: DEFAULT_OBSIDIAN_READABLE_FOLDERS,
   fallbackToProjectKnowledge: true,
   lastConnection: '',
   lastQuery: '',
   lastWrite: '',
   lastError: '',
   pluginVersion: '',
-  aiMemoryReadbackEnabled: true,
+  aiMemoryReadbackEnabled: false,
   aiMemoryMaxResults: 8,
   aiMemoryProjectScopeEnabled: true,
   activeVaultId: DEFAULT_VAULT_ID,
@@ -192,7 +196,7 @@ const normalizeCodeGraphStorageRoot = (value) => (
   readString(value).replace(/[<>|?*\x00-\x1f]/g, '').trim()
 );
 
-const REQUIRED_WIKI_READABLE_FOLDERS = ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'];
+const REQUIRED_WIKI_READABLE_FOLDERS = DEFAULT_OBSIDIAN_READABLE_FOLDERS;
 
 const normalizeVaultFolders = (value) => {
   const source = Array.isArray(value) ? value : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.readableVaultFolders;
@@ -476,6 +480,7 @@ export const getObsidianBridgeHealth = () => {
   const config = readObsidianBridgeConfig({ includeToken: true });
   const activeVault = activeVaultFromConfig(config);
   const semanticIndex = getObsidianSemanticIndexState();
+  const folderPolicy = validateObsidianFolderPolicy(config);
   const lastError = readString(config.lastError || activeVault?.lastError);
   const tokenConfigured = Boolean(config.token || activeVault?.token);
   const pluginVersion = readString(config.pluginVersion || activeVault?.pluginVersion);
@@ -534,6 +539,7 @@ export const getObsidianBridgeHealth = () => {
       pluginVersion,
     },
     semanticIndex,
+    folderPolicy,
     repairActions: buildBridgeRepairActions(),
     actions,
     safeLogs: [

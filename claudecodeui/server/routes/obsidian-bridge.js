@@ -59,6 +59,10 @@ import {
   ingestUploadedFilesToObsidian,
   lintWiki,
 } from '../services/obsidian-wiki-service.js';
+import {
+  buildObsidianFolderPolicy,
+  previewObsidianLegacyMigration,
+} from '../services/obsidian-folder-policy-service.js';
 import { refineWikiReadbackContext } from '../services/small-model-service.js';
 
 const router = express.Router();
@@ -304,6 +308,28 @@ router.get('/wiki/candidates', async (_req, res) => {
     res.json(listWikiCandidates());
   } catch (error) {
     sendBridgeError(res, error, 'Failed to list Obsidian Wiki candidates');
+  }
+});
+
+router.get('/wiki/folder-policy', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      folderPolicy: buildObsidianFolderPolicy({ projectName: req.query?.projectName || '' }),
+    });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to read Obsidian folder policy');
+  }
+});
+
+router.post('/wiki/migration-preview', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      preview: previewObsidianLegacyMigration(req.body || {}),
+    });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to preview Obsidian legacy migration');
   }
 });
 

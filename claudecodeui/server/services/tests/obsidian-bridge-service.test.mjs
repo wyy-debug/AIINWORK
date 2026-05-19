@@ -20,14 +20,14 @@ describe('obsidian bridge service', () => {
     service.setObsidianBridgeConfigStoreForTests(store);
   });
 
-  it('returns an enabled disconnected bridge by default while Memory and CodeGraph are globally enabled', () => {
+  it('returns an enabled disconnected bridge by default while Wiki and CodeGraph are globally enabled', () => {
     const config = service.readObsidianBridgeConfig();
 
     expect(config).toMatchObject({
       enabled: true,
       endpoint: 'http://127.0.0.1:27177',
       defaultMode: 'project-knowledge',
-      aiMemoryReadbackEnabled: true,
+      aiMemoryReadbackEnabled: false,
       wikiPrimaryEnabled: true,
       wikiReadbackEnabled: true,
       wikiReadbackIncludeRaw: false,
@@ -35,7 +35,7 @@ describe('obsidian bridge service', () => {
       aiMemoryMaxResults: 8,
       aiMemoryProjectScopeEnabled: true,
       autoExportKnowledgeArtifacts: false,
-      readableVaultFolders: expect.arrayContaining(['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory']),
+      readableVaultFolders: expect.arrayContaining(['Argus/Wiki', 'Argus/_Indexes']),
       codegraphEnabled: true,
       codegraphBackgroundSyncEnabled: true,
       codegraphWriteObsidianSummaries: true,
@@ -88,7 +88,7 @@ describe('obsidian bridge service', () => {
     expect(service.readObsidianBridgeConfig()).toMatchObject({
       enabled: true,
       wikiReadbackEnabled: true,
-      aiMemoryReadbackEnabled: true,
+      aiMemoryReadbackEnabled: false,
       codegraphEnabled: true,
     });
   });
@@ -597,7 +597,7 @@ describe('obsidian bridge service', () => {
         name: 'Self',
         endpoint: 'http://127.0.0.1:27179',
         tokenConfigured: true,
-        readableFolders: ['Argus/Projects', 'Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
+        readableFolders: ['Argus/Projects', 'Argus/Wiki', 'Argus/_Indexes'],
         writeBaseFolder: 'Argus',
       }),
     ]);

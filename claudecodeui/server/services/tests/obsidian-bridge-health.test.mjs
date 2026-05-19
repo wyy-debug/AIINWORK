@@ -72,7 +72,7 @@ describe('Obsidian bridge health contract', () => {
       tokenStatus: 'stale',
       pluginStatus: 'not-installed',
       writableFolders: [],
-      readableFolders: ['Argus/Wiki', 'Argus/_Indexes', 'Argus/AIMemory'],
+      readableFolders: ['Argus/Wiki', 'Argus/_Indexes'],
       lastError: '401 stale token write failed',
     });
     expect(JSON.stringify(health)).not.toContain('secret-token');
