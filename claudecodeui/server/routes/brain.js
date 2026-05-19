@@ -5,6 +5,7 @@ import {
   formatBrainQualityReport,
 } from '../services/brain-quality-baseline-service.js';
 import { brainInspectorService } from '../services/brain-inspector-service.js';
+import { brainMaintenanceService } from '../services/brain-maintenance-service.js';
 import { brainPostTurnExtractionService } from '../services/brain-post-turn-extraction-service.js';
 import { brainSymbolicCanvasService } from '../services/brain-symbolic-canvas-service.js';
 import { brainStore } from '../services/brain-store-service.js';
@@ -13,6 +14,7 @@ import { readResolvedBrainRuntimeConfig } from '../services/mtl-code-model-servi
 export function createBrainRouter({
   store = brainStore,
   brainInspectorService: inspectorService = brainInspectorService,
+  brainMaintenanceService: maintenanceService = brainMaintenanceService,
   qualityBaselineService = brainQualityBaselineService,
   postTurnExtractionService = brainPostTurnExtractionService,
   symbolicCanvasService = brainSymbolicCanvasService,
@@ -37,6 +39,23 @@ export function createBrainRouter({
     } catch (error) {
       console.error('Brain quality report error:', error);
       res.status(500).json({ error: error.message || 'Failed to render Brain quality report' });
+    }
+  });
+
+  router.post('/import', async (req, res) => {
+    try {
+      const result = maintenanceService.importPackage({
+        packageData: req.body?.packageData,
+        overwrite: req.body?.overwrite === true,
+      });
+      if (!result.imported) {
+        res.status(400).json({ success: false, result });
+        return;
+      }
+      res.json({ success: true, result });
+    } catch (error) {
+      console.error('Brain import error:', error);
+      res.status(500).json({ error: error.message || 'Failed to import Brain package' });
     }
   });
 
@@ -127,6 +146,53 @@ export function createBrainRouter({
     } catch (error) {
       console.error('Brain inspector report error:', error);
       res.status(500).json({ error: error.message || 'Failed to export Brain inspector report' });
+    }
+  });
+
+  router.get('/session/:sessionId/export', async (req, res) => {
+    try {
+      const packageData = maintenanceService.exportPackage({
+        sessionId: req.params.sessionId,
+        provider: String(req.query.provider || 'claude'),
+        projectName: String(req.query.projectName || ''),
+      });
+      res.json({ success: true, packageData });
+    } catch (error) {
+      console.error('Brain export error:', error);
+      res.status(500).json({ error: error.message || 'Failed to export Brain package' });
+    }
+  });
+
+  router.get('/session/:sessionId/retention-preview', async (req, res) => {
+    try {
+      const preview = maintenanceService.previewLayerRetention({
+        sessionId: req.params.sessionId,
+        provider: String(req.query.provider || 'claude'),
+        projectName: String(req.query.projectName || ''),
+        perSessionMaxEvents: Number(req.query.perSessionMaxEvents || 1000),
+        rawRefsMaxSizeBytes: Number(req.query.rawRefsMaxSizeBytes || 5_000_000),
+        maxAtoms: Number(req.query.maxAtoms || 1000),
+        maxScenarios: Number(req.query.maxScenarios || 200),
+        maxCompactions: Number(req.query.maxCompactions || 80),
+      });
+      res.json({ success: true, preview });
+    } catch (error) {
+      console.error('Brain retention preview error:', error);
+      res.status(500).json({ error: error.message || 'Failed to preview Brain retention' });
+    }
+  });
+
+  router.post('/session/:sessionId/repair', async (req, res) => {
+    try {
+      const report = maintenanceService.repairAndReport({
+        sessionId: req.params.sessionId,
+        provider: String(req.query.provider || req.body?.provider || 'claude'),
+        projectName: String(req.query.projectName || req.body?.projectName || ''),
+      });
+      res.json({ success: true, report });
+    } catch (error) {
+      console.error('Brain repair error:', error);
+      res.status(500).json({ error: error.message || 'Failed to repair Brain session' });
     }
   });
 
