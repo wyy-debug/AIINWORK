@@ -104,9 +104,7 @@ interface UseChatComposerStateArgs {
   getSelectedSkillNames?: () => string[];
   agentProfileKind?: string;
   modelProfileId?: string;
-  obsidianBridgeEnabled?: boolean;
   allowSessionAgentBinding?: boolean;
-  recentMessages?: ChatMessage[];
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -220,40 +218,6 @@ function buildPendingPromptInjectionDebug({
 
 const normalizeAgentToken = (value: string) => value.trim().toLowerCase();
 
-const isReferentialWikiCommand = (value: string) => {
-  const text = value.trim();
-  if (!text) return false;
-  return /^(?:save|add|write|persist|document)\s+(?:this|that|the above|that answer|this answer)\s+(?:to|into)\s+(?:obsidian|wiki|knowledge\s*base|kb)\s*[.!?]*$/i.test(text)
-    || /^(?:save|add|write|persist|document)\s+(?:to|into)\s+(?:obsidian|wiki|knowledge\s*base|kb)\s*[.!?]*$/i.test(text)
-    || /^(?:\u4fdd\u5b58\u5230|\u5b58\u5230|\u5199\u5165|\u5199\u5230|\u52a0\u5165|\u6dfb\u52a0\u5230|\u6c89\u6dc0\u5230|\u8bb0\u5f55\u5230)\s*(?:Obsidian|Wiki|\u77e5\u8bc6\u5e93|\u9879\u76ee\u77e5\u8bc6\u5e93)\s*(?:\u8fd9\u4e2a|\u8fd9\u6761|\u8fd9\u4ef6\u4e8b|\u8fd9\u6bb5|\u521a\u624d\u90a3\u4e2a|\u4e0a\u9762|\u4ee5\u4e0a)?\s*[.!?\u3002\uFF01\uFF1F]*$/i.test(text)
-    || /^(?:\u8fd9\u4e2a|\u8fd9\u6761|\u8fd9\u4ef6\u4e8b|\u8fd9\u6bb5|\u521a\u624d\u90a3\u4e2a|\u4e0a\u9762|\u4ee5\u4e0a)\s*(?:\u4fdd\u5b58\u5230|\u5b58\u5230|\u5199\u5165|\u5199\u5230|\u52a0\u5165|\u6dfb\u52a0\u5230|\u6c89\u6dc0\u5230|\u8bb0\u5f55\u5230)\s*(?:Obsidian|Wiki|\u77e5\u8bc6\u5e93|\u9879\u76ee\u77e5\u8bc6\u5e93)\s*[.!?\u3002\uFF01\uFF1F]*$/i.test(text);
-};
-
-const buildExplicitWikiContext = (input: string, messages: ChatMessage[] = []) => {
-  if (!isReferentialWikiCommand(input)) {
-    return undefined;
-  }
-
-  const candidate = [...messages].reverse().find((message) => {
-    const content = typeof message.content === 'string' ? message.content.trim() : '';
-    return content
-      && !message.isThinking
-      && !message.isToolUse
-      && !message.isContextCompaction
-      && !['error', 'status', 'system'].includes(String(message.type || '').toLowerCase());
-  });
-
-  if (!candidate || typeof candidate.content !== 'string') {
-    return undefined;
-  }
-
-  return {
-    text: candidate.content.trim().slice(0, 4000),
-    messageId: typeof candidate.id === 'string' ? candidate.id : '',
-    messageType: String(candidate.type || ''),
-  };
-};
-
 const resolveAgentInvocation = (
   rawInput: string,
   agents: AgentConfig[] = [],
@@ -294,7 +258,6 @@ const resolveAgentInvocation = (
   };
 };
 
-
 export function useChatComposerState({
   selectedProject,
   selectedSession,
@@ -316,9 +279,7 @@ export function useChatComposerState({
   getSelectedSkillNames,
   agentProfileKind = DEFAULT_AGENT_PROFILE_KIND,
   modelProfileId = '',
-  obsidianBridgeEnabled = false,
   allowSessionAgentBinding = false,
-  recentMessages = [],
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -355,7 +316,6 @@ export function useChatComposerState({
   const [uploadingImages, setUploadingImages] = useState<Map<string, number>>(new Map());
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
   const [fileAttachmentErrors, setFileAttachmentErrors] = useState<Map<string, string>>(new Map());
-  const [ingestAttachmentsToObsidian, setIngestAttachmentsToObsidian] = useState(true);
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
   const [subagentDispatchRequested, setSubagentDispatchRequested] = useState(false);
@@ -1017,7 +977,6 @@ export function useChatComposerState({
         attachedFiles.forEach((file) => {
           formData.append('files', file);
         });
-        formData.append('obsidianIngest', obsidianBridgeEnabled && ingestAttachmentsToObsidian ? 'true' : 'false');
         const uploadSessionId = currentSessionId || selectedSession?.id || '';
         if (uploadSessionId && !isTemporarySessionId(uploadSessionId)) {
           formData.append('sessionId', uploadSessionId);
@@ -1071,7 +1030,6 @@ export function useChatComposerState({
         effectiveSessionId && !isTemporarySessionId(effectiveSessionId) ? effectiveSessionId : null;
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
       const clientMessageId = createClientUserMessageId();
-      const explicitWikiContext = buildExplicitWikiContext(currentInput, recentMessages);
       const displayUserText = oneShotDisplayTextRef.current;
       oneShotDisplayTextRef.current = null;
 
@@ -1228,7 +1186,6 @@ export function useChatComposerState({
             toolsSettings,
             files: uploadedFiles,
             clientMessageId,
-            ...(explicitWikiContext ? { explicitWikiContext } : {}),
           },
         });
       } else if (provider === 'codex') {
@@ -1262,7 +1219,6 @@ export function useChatComposerState({
             permissionMode: permissionModeForSend === 'plan' ? 'default' : permissionModeForSend,
             files: uploadedFiles,
             clientMessageId,
-            ...(explicitWikiContext ? { explicitWikiContext } : {}),
           },
         });
       } else if (provider === 'gemini') {
@@ -1298,7 +1254,6 @@ export function useChatComposerState({
             toolsSettings,
             files: uploadedFiles,
             clientMessageId,
-            ...(explicitWikiContext ? { explicitWikiContext } : {}),
           },
         });
       } else {
@@ -1336,7 +1291,6 @@ export function useChatComposerState({
             clientMessageId,
             clientSessionId: sessionToActivate,
             ...(debugPromptInjection ? { debugPromptInjection: true } : {}),
-            ...(explicitWikiContext ? { explicitWikiContext } : {}),
             ...(shouldSendSubagentDispatch
               ? {
                 coordinatorMode: true,
@@ -1381,8 +1335,6 @@ export function useChatComposerState({
       selectedSession,
       attachedImages,
       attachedFiles,
-      ingestAttachmentsToObsidian,
-      obsidianBridgeEnabled,
       claudeModel,
       codexModel,
       currentSessionId,
@@ -1394,7 +1346,6 @@ export function useChatComposerState({
       onSessionProcessing,
       pendingViewSessionRef,
       permissionMode,
-      recentMessages,
       provider,
       resetCommandMenuState,
       scrollToBottom,
@@ -1838,8 +1789,6 @@ export function useChatComposerState({
     uploadingImages,
     imageErrors,
     fileAttachmentErrors,
-    ingestAttachmentsToObsidian,
-    setIngestAttachmentsToObsidian,
     handleAttachmentFiles,
     getRootProps,
     getInputProps,

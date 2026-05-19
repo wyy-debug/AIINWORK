@@ -248,9 +248,6 @@ interface ChatComposerProps {
   uploadingImages: Map<string, number>;
   imageErrors: Map<string, string>;
   fileAttachmentErrors: Map<string, string>;
-  obsidianBridgeEnabled?: boolean;
-  ingestAttachmentsToObsidian: boolean;
-  onIngestAttachmentsToObsidianChange: (value: boolean) => void;
   showFileDropdown: boolean;
   filteredFiles: MentionableFile[];
   fileMentionQuery: string;
@@ -344,9 +341,6 @@ export default function ChatComposer({
   uploadingImages,
   imageErrors,
   fileAttachmentErrors,
-  obsidianBridgeEnabled = false,
-  ingestAttachmentsToObsidian,
-  onIngestAttachmentsToObsidianChange,
   showFileDropdown,
   filteredFiles,
   fileMentionQuery,
@@ -1321,17 +1315,6 @@ export default function ChatComposer({
                     />
                   ))}
                 </div>
-                {obsidianBridgeEnabled && attachedFiles.length > 0 && (
-                  <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 rounded border-border"
-                      checked={ingestAttachmentsToObsidian}
-                      onChange={(event) => onIngestAttachmentsToObsidianChange(event.target.checked)}
-                    />
-                    同时落库到 Obsidian
-                  </label>
-                )}
               </div>
             </PromptInputHeader>
           )}

@@ -15,7 +15,6 @@ import {
 import {
   BRAIN_RUNTIME_SETTINGS_KEY,
   GOAL_RUNTIME_SETTINGS_KEY,
-  SMALL_MODEL_RUNTIME_SETTINGS_KEY,
   SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyGoalRuntimeToEnv,
@@ -27,23 +26,15 @@ import {
   normalizeAnthropicBaseUrl,
   normalizeGoalRuntimeConfig,
   normalizeOpenAIBaseUrl,
-  normalizeSmallModelRuntimeConfig,
   normalizeSubagentRuntimeConfig,
   readBrainRuntimeConfig,
   readGoalRuntimeConfig,
-  readSmallModelRuntimeConfig,
   readSubagentRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
-import { testSmallModelRuntime } from '../services/small-model-service.js';
 import {
   readRuntimePermissions,
   saveRuntimePermissions,
 } from '../services/runtime-permission-service.js';
-import {
-  ObsidianBridgeError,
-  readObsidianBridgeConfig,
-  saveObsidianBridgeConfig,
-} from '../services/obsidian-bridge-service.js';
 
 const router = express.Router();
 const ANTHROPIC_ENV_KEYS = {
@@ -62,8 +53,6 @@ const MTL_CODE_ENV_KEYS = {
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
-  subagentModel: 'MTL_CODE_SUBAGENT_MODEL',
-  legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
   coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
   subagentsEnabled: 'MTL_CODE_SUBAGENTS_ENABLED',
   subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
@@ -321,28 +310,12 @@ const resolveActiveModelProfile = (settings, profiles) => {
   return profiles.find((profile) => profile.id === activeId) || profiles[0];
 };
 
-const hasSmallModelHint = (profile = {}) => {
-  const haystack = [profile.id, profile.name, profile.model]
-    .map((value) => readOptionalString(value).toLowerCase())
-    .join(' ');
-  return ['flash', 'haiku', 'mini', 'small', 'lite'].some((hint) => haystack.includes(hint));
-};
-
-const resolveSmallModelProfile = (smallModelRuntime, profiles, activeProfile) => {
-  if (smallModelRuntime.profileId && smallModelRuntime.profileId !== 'auto') {
-    return profiles.find((profile) => profile.id === smallModelRuntime.profileId) || activeProfile || profiles[0] || null;
-  }
-  return profiles.find(hasSmallModelHint) || activeProfile || profiles[0] || null;
-};
-
 const toMtlCodeModelConfig = (settings, filePath) => {
   const env = readObjectRecord(settings.env) ?? {};
   const profiles = readStoredModelProfiles(settings, env);
   const activeProfile = resolveActiveModelProfile(settings, profiles);
   const activeContextWindowTokens = resolveProfileContextWindow(activeProfile, env);
   const activeClaudeNativeMemoryEnabled = resolveClaudeNativeMemoryEnabled(activeProfile);
-  const smallModelRuntime = readSmallModelRuntimeConfig(settings, env);
-  const smallModelProfile = resolveSmallModelProfile(smallModelRuntime, profiles, activeProfile);
 
   return {
     provider: 'anthropic',
@@ -368,19 +341,6 @@ const toMtlCodeModelConfig = (settings, filePath) => {
     brainRuntime: readBrainRuntimeConfig(settings),
     subagents: readSubagentRuntimeConfig(settings, env),
     goals: readGoalRuntimeConfig(settings, env),
-    smallModelRuntime: {
-      ...smallModelRuntime,
-      resolvedProfile: smallModelProfile
-        ? {
-          id: smallModelProfile.id,
-          name: smallModelProfile.name,
-          provider: smallModelProfile.provider,
-          baseUrl: smallModelProfile.baseUrl,
-          model: smallModelProfile.model,
-          tokenConfigured: Boolean(smallModelProfile.authToken),
-        }
-        : null,
-    },
   };
 };
 
@@ -944,11 +904,6 @@ router.put('/mtl-code-model', async (req, res) => {
       readGoalRuntimeConfig(settings, env),
     );
     settings[GOAL_RUNTIME_SETTINGS_KEY] = goals;
-    const smallModelRuntime = normalizeSmallModelRuntimeConfig(
-      readObjectRecord(req.body?.smallModelRuntime),
-      readSmallModelRuntimeConfig(settings, env),
-    );
-    settings[SMALL_MODEL_RUNTIME_SETTINGS_KEY] = smallModelRuntime;
     applyGoalRuntimeToEnv(env, goals);
     settings.env = env;
     await writeJsonConfig(filePath, settings);
@@ -1016,50 +971,6 @@ router.put('/runtime-permissions', async (req, res) => {
   } catch (error) {
     console.error('Error saving runtime permissions:', error);
     res.status(500).json({ error: 'Failed to save runtime permissions' });
-  }
-});
-
-router.post('/small-model/test', async (req, res) => {
-  try {
-    const result = await testSmallModelRuntime({
-      prompt: readOptionalString(req.body?.prompt) || '',
-      readMtlCodeModelSettings: async () => {
-        const { settings } = await readMtlCodeSettings();
-        return settings;
-      },
-    });
-    res.json({
-      success: result.success,
-      ...result,
-    });
-  } catch (error) {
-    console.error('Error testing small model:', error);
-    res.status(500).json({ error: 'Failed to test small model' });
-  }
-});
-
-router.get('/obsidian-bridge', async (_req, res) => {
-  try {
-    res.json({ success: true, config: readObsidianBridgeConfig() });
-  } catch (error) {
-    console.error('Error reading Obsidian bridge settings:', error);
-    res.status(500).json({ error: 'Failed to read Obsidian bridge settings' });
-  }
-});
-
-router.put('/obsidian-bridge', async (req, res) => {
-  try {
-    res.json({ success: true, config: saveObsidianBridgeConfig(req.body || {}) });
-  } catch (error) {
-    if (error instanceof ObsidianBridgeError) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: error.message,
-        code: error.code,
-      });
-    }
-    console.error('Error saving Obsidian bridge settings:', error);
-    return res.status(500).json({ error: 'Failed to save Obsidian bridge settings' });
   }
 });
 

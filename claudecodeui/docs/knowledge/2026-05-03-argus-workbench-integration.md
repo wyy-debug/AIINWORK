@@ -21,7 +21,7 @@ Automations stay implemented in backend/API storage but are hidden from default 
 - `src/components/actions` is branded as Run, auto-detects package scripts, streams logs, and opens Preview when a localhost URL appears.
 - `src/components/browser` is branded as Preview and supports screenshot plus point/area visual comments.
 - `src/components/artifacts` is branded as Results while keeping the `/api/artifacts` contract.
-- `src/components/settings` exposes Model / Hub, Runtime, and Appearance. Model / Hub keeps model, permissions, MCP, and repository/Hub configuration. Runtime owns Argus Brain, Obsidian, CodeGraph, Subagents, and local execution permissions.
+- `src/components/settings` exposes Model / Hub, Runtime, and Appearance. Model / Hub keeps model, permissions, MCP, and repository/Hub configuration. Runtime owns Argus Brain, Subagents, and local execution permissions.
 
 ## Runtime Contracts
 
@@ -45,7 +45,7 @@ Automations stay implemented in backend/API storage but are hidden from default 
 ## Argus Core Contract
 
 - `claude-code/scripts/defines.ts` compiles in `COORDINATOR_MODE`; actual activation is runtime-gated by `MTL_CODE_COORDINATOR_MODE`.
-- Historical OpenMythos notes are migration context only; current expert routing should use explicit Argus Brain, CodeGraph, Obsidian, or Subagent surfaces.
+- Historical OpenMythos notes are migration context only; current expert routing should use explicit Argus Brain, MCP/Profile, Skill, or Subagent surfaces.
 - Subagent execution is Codex-style collaborative tooling: `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `list_agents`, and `close_agent`.
 - Subagent tools are feature-gated separately and are only exposed in new sessions after the setting is enabled.
 - `TaskStop` is idempotent for terminal tasks. Calling it on a completed, failed, or killed task returns a no-op success instead of a tool error.

@@ -4,8 +4,6 @@ import {
   createArtifact,
   createArtifactLink,
   deleteArtifact,
-  exportArtifactToObsidian,
-  exportArtifactToObsidianModes,
   getArtifact,
   listArtifacts,
 } from '../services/artifact-service.js';
@@ -48,7 +46,6 @@ router.post('/', async (req, res) => {
     res.json({
       success: true,
       artifact: result.artifact,
-      obsidianBridge: result.obsidianBridge,
     });
   } catch (error) {
     console.error('Artifact create error:', error);
@@ -83,40 +80,6 @@ router.post('/:id/attach-to-session', async (req, res) => {
   } catch (error) {
     console.error('Artifact attach error:', error);
     res.status(500).json({ error: error.message || 'Failed to attach artifact' });
-  }
-});
-
-router.post('/:id/send-to-obsidian', async (req, res) => {
-  try {
-    const artifact = await getArtifact(req.params.id, { includeContent: true });
-    if (!artifact) {
-      return res.status(404).json({ error: 'Artifact not found' });
-    }
-    const requestedMode = typeof req.body?.mode === 'string' ? req.body.mode : 'auto';
-    const summaryType = typeof req.body?.summaryType === 'string' ? req.body.summaryType : 'auto';
-    const obsidianBridge = requestedMode === 'auto'
-      ? await exportArtifactToObsidianModes(artifact, {
-        automatic: false,
-        summaryType,
-      })
-      : await exportArtifactToObsidian(artifact, {
-        mode: requestedMode,
-        automatic: false,
-        summaryType,
-      });
-    const updated = await getArtifact(req.params.id, { includeContent: true });
-    return res.json({
-      success: true,
-      artifact: updated,
-      obsidianBridge,
-    });
-  } catch (error) {
-    console.error('Artifact Obsidian export error:', error);
-    return res.status(error?.statusCode || 500).json({
-      success: false,
-      error: error.message || 'Failed to send artifact to Obsidian',
-      code: error?.code || 'OBSIDIAN_ARTIFACT_EXPORT_FAILED',
-    });
   }
 });
 

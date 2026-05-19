@@ -147,45 +147,6 @@ ipcMain.handle('dialog:select-directory', async (event, options = {}) => {
   };
 });
 
-ipcMain.handle('dialog:select-codegraph-scope', async (event, options = {}) => {
-  if (!isTrustedRenderer(event)) {
-    return { canceled: true, error: 'Untrusted renderer' };
-  }
-
-  const title = typeof options?.title === 'string' && options.title.trim()
-    ? options.title.trim()
-    : 'Select CodeGraph scripts';
-  const buttonLabel = typeof options?.buttonLabel === 'string' && options.buttonLabel.trim()
-    ? options.buttonLabel.trim()
-    : undefined;
-  const dialogOptions = {
-    title,
-    defaultPath: resolveDialogDefaultPath(options?.defaultPath),
-    properties: ['openFile', 'openDirectory', 'multiSelections'],
-    filters: [
-      { name: 'C# scripts', extensions: ['cs'] },
-      { name: 'All files', extensions: ['*'] },
-    ],
-    ...(buttonLabel ? { buttonLabel } : {}),
-  };
-
-  const ownerWindow =
-    mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getFocusedWindow();
-  const result = ownerWindow
-    ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
-    : await dialog.showOpenDialog(dialogOptions);
-
-  if (result.canceled || !result.filePaths?.length) {
-    return { canceled: true };
-  }
-
-  return {
-    canceled: false,
-    path: result.filePaths[0],
-    paths: result.filePaths,
-  };
-});
-
 const normalizeNotificationText = (value, fallback = '') => {
   if (typeof value !== 'string') {
     return fallback;

@@ -66,7 +66,6 @@ interface ChatMessagesPaneProps {
   onSelectConversationAgent?: (agentId: string) => void;
   selectedModelProfileId?: string;
   onModelProfileChange?: (profileId: string) => void;
-  obsidianBridgeEnabled?: boolean;
   onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 }
 
@@ -86,7 +85,6 @@ type ProcessTraceGroupProps = {
   provider: LLMProvider;
   getMessageKey: (message: ChatMessage) => string;
   onPreserveScrollForLayoutChange?: () => void;
-  obsidianBridgeEnabled?: boolean;
   onControlSubagent?: (action: SubagentControlAction, taskId: string, content?: string) => void;
 };
 
@@ -138,7 +136,6 @@ function areProcessTraceGroupPropsEqual(
     previous.provider === next.provider &&
     previous.getMessageKey === next.getMessageKey &&
     previous.onPreserveScrollForLayoutChange === next.onPreserveScrollForLayoutChange &&
-    previous.obsidianBridgeEnabled === next.obsidianBridgeEnabled &&
     previous.onControlSubagent === next.onControlSubagent
   );
 }
@@ -159,7 +156,6 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
   provider,
   getMessageKey,
   onPreserveScrollForLayoutChange,
-  obsidianBridgeEnabled = false,
   onControlSubagent,
 }: ProcessTraceGroupProps) {
   const [open, setOpen] = useState(active);
@@ -265,7 +261,6 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
                   sessionId={sessionId}
                   provider={provider}
                   getMessageKey={getMessageKey}
-                  obsidianBridgeEnabled={obsidianBridgeEnabled}
                 />
               )}
               {detailMessages.map((message, index) => (
@@ -284,7 +279,6 @@ const ProcessTraceGroup = memo(function ProcessTraceGroup({
                   selectedProject={selectedProject}
                   sessionId={sessionId}
                   provider={provider}
-                  obsidianBridgeEnabled={obsidianBridgeEnabled}
                   isLatestAssistantReply={false}
                   onControlSubagent={onControlSubagent}
                 />
@@ -350,7 +344,6 @@ export default function ChatMessagesPane({
   onSelectConversationAgent,
   selectedModelProfileId,
   onModelProfileChange,
-  obsidianBridgeEnabled = false,
   onControlSubagent,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
@@ -578,7 +571,6 @@ export default function ChatMessagesPane({
                   provider={provider}
                   getMessageKey={getMessageKey}
                   onPreserveScrollForLayoutChange={onPreserveScrollForLayoutChange}
-                  obsidianBridgeEnabled={obsidianBridgeEnabled}
                   onControlSubagent={onControlSubagent}
                 />
               );
@@ -601,7 +593,6 @@ export default function ChatMessagesPane({
                 selectedProject={selectedProject}
                 sessionId={currentSessionId}
                 provider={provider}
-                obsidianBridgeEnabled={obsidianBridgeEnabled}
                 isLatestAssistantReply={!isSessionRunning && messageKey === latestAssistantReplyKey}
                 onControlSubagent={onControlSubagent}
               />

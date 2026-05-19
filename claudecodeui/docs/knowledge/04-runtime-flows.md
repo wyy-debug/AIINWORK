@@ -89,10 +89,10 @@ sequenceDiagram
 Argus Brain / Subagent current runtime
 
 1. Settings reads `argusBrain` and `subagents` from `~/.mtl-code/settings.json`. Legacy `openMythosRuntime` is ignored.
-2. Obsidian Wiki and CodeGraph context are applied first, then Brain recall may append a short `Argus Brain Recall Pack` block.
+2. Agent Profile runtime settings, uploaded files, MCP/Skill bindings, and Brain recall are applied before the provider command is dispatched.
 3. Brain captures command, runtime event, checkpoint, artifact, assistant summary, error, and permission events without blocking chat.
 4. Brain compacts long task state into a Mermaid canvas with refs; Subagent execution remains controlled only by `subagents.enabled`.
-5. `agent_runtime_debug` exposes Brain diagnostics, context fusion diagnostics, and Subagent gates; it no longer exposes an OpenMythos card.
+5. `agent_runtime_debug` exposes Brain diagnostics, runtime timeline data, token use, permission blocks, and Subagent gates; it no longer exposes an OpenMythos card.
 
 `server/index.js` 当前主路径处理 `claude-command`，它是 Argus 的 compatibility message type。以下其他 command types 可能仍在旧代码中存在，但属于 legacy hidden Provider surface：
 
@@ -450,17 +450,17 @@ DeepSeek Anthropic adapter invariant:
 2. `server/claude-sdk.js` merges `~/.mtl-code/settings.json.env` into the spawned Argus child process so model/base URL/token/effort settings are active even when the UI server itself was started without those env vars.
 3. UI-spawned Argus now exposes `runtime.claudeNativeMemoryEnabled` from `/api/settings/mtl-code-model`, defaulting to `true`. When enabled, `server/claude-sdk.js` forces `MTL_CODE_UI_BARE=0`, does not pass `--bare`, and clears `MTL_CODE_SIMPLE` / `MTL_CODE_DISABLE_AUTO_MEMORY` so Claude native memory, CLAUDE.md discovery, and topic recall can run.
 4. `runtime.bareMode` remains the explicit lightweight startup switch. When enabled, `MTL_CODE_UI_BARE=1`, `--bare` is passed, and Claude native memory is unavailable for that session.
-5. When the endpoint or model is DeepSeek, the spawn env supplies both `MTL_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EFFORT_LEVEL` with a default of `high`, plus `MTL_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` from the configured Haiku/small model.
+5. When the endpoint or model is DeepSeek, the spawn env supplies both `MTL_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EFFORT_LEVEL` with a default of `high`. Subagents and workflows use their Agent Profile model binding instead of a dedicated secondary runtime env.
 6. The Argus backend treats DeepSeek as Anthropic-compatible but suppresses Anthropic `thinking.budget_tokens`; DeepSeek thinking strength is controlled through `output_config.effort`.
 7. Context window length is part of the same saved settings flow. The UI writes `runtime.contextWindowTokens`; `server/routes/settings.js` persists it as `MTL_CODE_MAX_CONTEXT_TOKENS` and `CONTEXT_WINDOW`; `server/claude-sdk.js` passes it to the spawned Argus child process. DeepSeek 1M endpoints should be set explicitly to `1000000`; there is no provider-specific automatic context-window override.
 8. A high `cache_read_input_tokens` number on a simple prompt is usually the coding-agent prompt/tool/project context being read from provider cache, not the literal user prompt size. `--bare` reduces avoidable auto-context, but agent tool schemas still cost context.
 
-Obsidian Wiki readback invariant:
+Brain + MCP boundary invariant:
 
-1. Obsidian is treated as a Wiki/knowledge-base readback source, not the Claude personal memory store.
-2. `applyObsidianContextToChatCommand()` defaults to `Argus/Wiki/<project>` plus `Argus/_Indexes`; it does not query `Argus/AIMemory/<project>` for every turn.
-3. Ordinary `remember` / `forget` commands are left for Claude native memory. Only explicit `save to Obsidian`, `write to Wiki`, or `save to knowledge base` commands create auditable Obsidian candidates.
-4. The injected `Obsidian Wiki Policy` tells the model to verify historical Wiki context against current files, settings, and runtime state before acting on it.
+1. Argus Brain is the only built-in project memory surface.
+2. External knowledge, code search, impact analysis, and enterprise systems are connected through MCP servers, Skills, and Agent Profiles.
+3. Ordinary `remember` / `forget` commands are left for Claude native memory.
+4. Brain recall tells the model to verify historical task state against current files, settings, and runtime state before acting on it.
 
 Project session discovery invariant:
 

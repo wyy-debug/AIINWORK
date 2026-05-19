@@ -267,94 +267,6 @@ function toSubagentControlEvent(value: unknown): Pick<SubagentEventEnvelope, 'ty
   };
 }
 
-function isObsidianAutoCaptureStatus(message: NormalizedMessage): boolean {
-  const event = (message as any).event;
-  return message.kind === 'status'
-    && (
-      message.text === 'obsidian_auto_capture_result'
-      || event === 'obsidian_auto_capture_result'
-      || message.text === 'obsidian_wiki_result'
-      || event === 'obsidian_wiki_result'
-    );
-}
-
-function isObsidianContextStatus(message: NormalizedMessage): boolean {
-  const event = (message as any).event;
-  return message.kind === 'status'
-    && (message.text === 'obsidian_context_result' || event === 'obsidian_context_result');
-}
-
-function statusPayloadForObsidianCapture(message: NormalizedMessage): Record<string, unknown> {
-  const record = message as any;
-  const wiki = record.obsidianWiki && typeof record.obsidianWiki === 'object' ? record.obsidianWiki : null;
-  if (wiki) {
-    return {
-      ...wiki,
-      status: wiki.status,
-      candidateIds: wiki.candidateIds,
-      candidates: wiki.candidates,
-      error: wiki.error,
-    };
-  }
-  return {
-    status: record.status,
-    captured: record.captured,
-    mode: record.mode,
-    routingMode: record.routingMode,
-    routingModes: record.routingModes,
-    routingReason: record.routingReason,
-    routingSignals: record.routingSignals,
-    confidence: record.confidence,
-    artifactId: record.artifactId,
-    obsidianPath: record.obsidianPath,
-    obsidianTargets: record.obsidianTargets,
-    obsidianPaths: record.obsidianPaths,
-    fallbackPath: record.fallbackPath,
-    error: record.error,
-  };
-}
-
-function statusPayloadForObsidianContext(message: NormalizedMessage): Record<string, unknown> {
-  const record = message as any;
-  const context = record.obsidianContext && typeof record.obsidianContext === 'object'
-    ? record.obsidianContext
-    : record;
-  return {
-    used: context.used,
-    resultCount: context.resultCount,
-    projectName: context.projectName,
-    vaultName: context.vaultName,
-    source: context.source,
-    refined: context.refined,
-    refinementModel: context.refinementModel,
-    reranked: context.reranked,
-    rerankModel: context.rerankModel,
-    tokenBudgetUsed: context.tokenBudgetUsed,
-    sources: context.sources,
-    error: context.error,
-  };
-}
-
-function nearestAssistantMessageId(messages: NormalizedMessage[], beforeIndex: number): string {
-  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
-    const candidate = messages[index];
-    if (candidate?.kind === 'text' && candidate.role === 'assistant' && candidate.id) {
-      return candidate.id;
-    }
-  }
-  return '';
-}
-
-function nearestUserMessageId(messages: NormalizedMessage[], beforeIndex: number): string {
-  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
-    const candidate = messages[index];
-    if (candidate?.kind === 'text' && candidate.role === 'user' && candidate.id) {
-      return candidate.id;
-    }
-  }
-  return '';
-}
-
 function normalizedMessageTextForDuplicateCollapse(message: ChatMessage | null | undefined): string | null {
   if (!message || message.type !== 'assistant' || message.isToolUse || message.isThinking || message.isStreaming) {
     return null;
@@ -391,34 +303,6 @@ function shouldCollapseAdjacentAssistantDuplicate(
  */
 export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
   const converted: ChatMessage[] = [];
-  const obsidianCaptureStatusByMessageId = new Map<string, Record<string, unknown>>();
-  const obsidianContextStatusByMessageId = new Map<string, Record<string, unknown>>();
-
-  messages.forEach((msg, index) => {
-    if (!isObsidianAutoCaptureStatus(msg)) return;
-    const record = msg as any;
-    const payload = statusPayloadForObsidianCapture(msg);
-    const explicitMessageId = typeof record.messageId === 'string' ? record.messageId : '';
-    const targetMessageId = explicitMessageId && explicitMessageId !== 'stream'
-      ? explicitMessageId
-      : nearestAssistantMessageId(messages, index);
-    if (targetMessageId) {
-      obsidianCaptureStatusByMessageId.set(targetMessageId, payload);
-    }
-  });
-
-  messages.forEach((msg, index) => {
-    if (!isObsidianContextStatus(msg)) return;
-    const record = msg as any;
-    const payload = statusPayloadForObsidianContext(msg);
-    const explicitMessageId = typeof record.messageId === 'string' ? record.messageId : '';
-    const targetMessageId = explicitMessageId && explicitMessageId !== 'stream'
-      ? explicitMessageId
-      : nearestUserMessageId(messages, index);
-    if (targetMessageId) {
-      obsidianContextStatusByMessageId.set(targetMessageId, payload);
-    }
-  });
 
   // First pass: collect tool results for attachment
   const toolResultMap = new Map<string, NormalizedMessage>();
@@ -530,7 +414,6 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             type: 'user',
             content: unescapeWithMathProtection(decodeHtmlEntities(content)),
             timestamp: msg.timestamp,
-            obsidianContextStatus: msg.id ? obsidianContextStatusByMessageId.get(msg.id) : undefined,
           });
         } else {
           let text = decodeHtmlEntities(content);
@@ -547,7 +430,6 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               type: 'assistant',
               content: proposedPlan.text,
               timestamp: msg.timestamp,
-              obsidianCaptureStatus: msg.id ? obsidianCaptureStatusByMessageId.get(msg.id) : undefined,
             });
           }
           proposedPlan.plans.forEach((plan, index) => {

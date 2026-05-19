@@ -147,19 +147,6 @@ export default function AppContent() {
     };
   }, [navigate, refreshProjectsSilently, setActiveTab, setSidebarOpen]);
 
-  useEffect(() => {
-    if (latestMessage?.type !== 'obsidian_inbox_item') {
-      return;
-    }
-    const appendText = typeof latestMessage.appendText === 'string' ? latestMessage.appendText : '';
-    if (appendText.trim()) {
-      window.dispatchEvent(new CustomEvent('argus-append-chat-input', {
-        detail: { text: appendText },
-      }));
-      setActiveTab('chat');
-    }
-  }, [latestMessage, setActiveTab]);
-
   // Permission recovery: query pending permissions on WebSocket reconnect or session change
   useEffect(() => {
     const isReconnect = isConnected && !wasConnectedRef.current;

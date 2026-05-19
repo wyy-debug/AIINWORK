@@ -197,19 +197,6 @@ export const SESSION_CHECKPOINTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session
 
 export const SESSION_CHECKPOINTS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session ON session_checkpoints(session_id, provider, created_at);`;
 
-export const OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS obsidian_auto_capture_keys (
-  idempotency_key TEXT PRIMARY KEY,
-  source_id TEXT UNIQUE,
-  content_hash TEXT UNIQUE,
-  artifact_id TEXT,
-  status TEXT NOT NULL DEFAULT 'in_progress',
-  error_json TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);`;
-
-export const OBSIDIAN_AUTO_CAPTURE_KEYS_SOURCE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_obsidian_auto_capture_keys_source ON obsidian_auto_capture_keys(source_id);`;
-
 export const REVIEW_COMMENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS review_comments (
   id TEXT PRIMARY KEY,
   project_name TEXT NOT NULL,
@@ -676,10 +663,6 @@ ${ARTIFACT_LINKS_INDEX_SQL}
 ${SESSION_CHECKPOINTS_TABLE_SQL}
 
 ${SESSION_CHECKPOINTS_INDEX_SQL}
-
-${OBSIDIAN_AUTO_CAPTURE_KEYS_TABLE_SQL}
-
-${OBSIDIAN_AUTO_CAPTURE_KEYS_SOURCE_INDEX_SQL}
 
 ${REVIEW_COMMENTS_TABLE_SQL}
 

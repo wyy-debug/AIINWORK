@@ -55,14 +55,14 @@ describe('Brain post-turn extraction', () => {
       projectName: 'Argus',
       eventType: 'tool_result',
       title: 'Decision: use polling for bridge health',
-      content: 'Decision: use polling for bridge health in obsidian bridge.',
+      content: 'Decision: use polling for integration bridge health.',
     });
     const newDecision = store.addEvent({
       sessionId: 'conflict-1',
       projectName: 'Argus',
       eventType: 'tool_result',
       title: 'Decision: replace polling with event stream for bridge health',
-      content: 'Replace polling with event stream for obsidian bridge health diagnostics.',
+      content: 'Replace polling with event stream for integration bridge health diagnostics.',
     });
 
     extraction.extractPostTurn({ sessionId: 'conflict-1', projectName: 'Argus', events: [oldDecision] });

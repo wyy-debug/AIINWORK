@@ -1,6 +1,6 @@
 # Argus Five-Layer Knowledge Architecture
 
-Updated: 2026-05-18
+Updated: 2026-05-19
 
 This directory is the development entry point for `claudecodeui`, now branded as Argus. Use it to answer five practical questions before changing code: what domain concept is involved, which system boundary owns it, which module should change, which runtime flow is affected, and how to verify the result.
 
@@ -16,9 +16,8 @@ This directory is the development entry point for `claudecodeui`, now branded as
 
 ## Current Notes
 
-- [2026-05-19-brain-obsidian-context-guide.md](2026-05-19-brain-obsidian-context-guide.md): User-facing guide for Claude native memory vs Argus Brain vs Obsidian Wiki, semantic readback, runtime order, troubleshooting playbooks, migration, and route anchors.
-- [2026-05-18-argus-brain-runtime.md](2026-05-18-argus-brain-runtime.md): Argus Brain storage, capture, compaction, recall, diagnostics, and boundaries with Claude native memory and Obsidian Wiki. OpenMythos is removed from the active runtime surface.
-- [2026-05-07-obsidian-bridge-user-guide.md](2026-05-07-obsidian-bridge-user-guide.md): Argus Bridge for Obsidian installation, pairing, three write modes, chat auto-capture, Results manual export, AI readback, fallback, packaging, smoke, and troubleshooting guide.
+- [2026-05-19-brain-mcp-runtime.md](2026-05-19-brain-mcp-runtime.md): User-facing guide for Argus Brain as the only built-in memory surface, MCP/Profile boundaries, legacy knowledge migration, and current route anchors.
+- [2026-05-18-argus-brain-runtime.md](2026-05-18-argus-brain-runtime.md): Argus Brain storage, capture, compaction, recall, diagnostics, and boundaries with MCP/Profile tools. OpenMythos is removed from the active runtime surface.
 - [2026-05-07-codex-goal-alignment.md](2026-05-07-codex-goal-alignment.md): Codex `/goal` call logic, persisted thread-goal state machine, model tool guardrails, runtime continuation, and the minimal Argus alignment plan.
 - [2026-05-05-codex-subagent-source-migration.md](2026-05-05-codex-subagent-source-migration.md): Codex-style Subagent migration, `spawn_agent` tool protocol, feature gate, thread graph metadata, historical strategy-layer notes, and UI noise filtering.
 - [2026-05-04-repository-update-summary.md](2026-05-04-repository-update-summary.md): repository update from `2d96cbc` to `4785f3d`, Argus Workbench/API/runtime changes, ContextBudget/RAG removal notes, and verification checklist.

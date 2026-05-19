@@ -74,7 +74,6 @@ export function detectRecallPackMode(command = '') {
   if (/review|diff|pr|risk/.test(text)) return 'review';
   if (/explain|why|how/.test(text)) return 'explain';
   if (/research|investigate|lookup|search/.test(text)) return 'research';
-  if (/wiki|obsidian|note/.test(text)) return 'wiki-lookup';
   return 'resume';
 }
 

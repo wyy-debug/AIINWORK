@@ -6,7 +6,6 @@ import { apiFetch } from '../../../../utils/api';
 import type { SettingsProject } from '../../types/types';
 
 import BrainRuntimeContent from './runtime-settings/BrainRuntimeContent';
-import ObsidianBridgeSettingsContent from './runtime-settings/ObsidianBridgeSettingsContent';
 
 type RuntimePermissions = {
   terminal: string;
@@ -37,10 +36,9 @@ const parseJson = async <T,>(response: Response): Promise<T> => {
 type RuntimeSettingsTabProps = {
   projects?: SettingsProject[];
   selectedProject?: SettingsProject | null;
-  onOpenSmallModelSettings?: () => void;
 };
 
-type RuntimeSettingsSection = 'local-permissions' | 'obsidian' | 'brain';
+type RuntimeSettingsSection = 'local-permissions' | 'brain';
 
 const RUNTIME_SETTINGS_TABS: Array<{
   id: RuntimeSettingsSection;
@@ -53,11 +51,6 @@ const RUNTIME_SETTINGS_TABS: Array<{
     description: 'Terminal, shell safety, and allowed local paths.',
   },
   {
-    id: 'obsidian',
-    label: 'Obsidian Wiki',
-    description: 'Bridge connection, Wiki ingestion, and readback.',
-  },
-  {
     id: 'brain',
     label: 'Argus Brain',
     description: 'Task memory, context compaction, and work restore.',
@@ -65,7 +58,6 @@ const RUNTIME_SETTINGS_TABS: Array<{
 ];
 
 export default function RuntimeSettingsTab({
-  projects = [],
   selectedProject = null,
 }: RuntimeSettingsTabProps) {
   const [permissions, setPermissions] = useState<RuntimePermissions>(DEFAULT_PERMISSIONS);
@@ -211,13 +203,6 @@ export default function RuntimeSettingsTab({
     </div>
   );
 
-  const renderObsidianTab = () => (
-    <ObsidianBridgeSettingsContent
-      projects={projects}
-      selectedProject={selectedProject}
-    />
-  );
-
   const renderBrainTab = () => <BrainRuntimeContent selectedProject={selectedProject} />;
 
   return (
@@ -229,7 +214,7 @@ export default function RuntimeSettingsTab({
         </div>
         <h3 className="mt-1 text-xl font-semibold text-foreground">Argus Runtime</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Manage local execution permissions, Obsidian Wiki readback, and Argus Brain task memory.
+          Manage local execution permissions and Argus Brain task memory.
         </p>
       </div>
 
@@ -266,7 +251,6 @@ export default function RuntimeSettingsTab({
       </div>
 
       {selectedRuntimeTab === 'local-permissions' && renderLocalPermissionsTab()}
-      {selectedRuntimeTab === 'obsidian' && renderObsidianTab()}
       {selectedRuntimeTab === 'brain' && renderBrainTab()}
     </div>
   );

@@ -24,7 +24,7 @@ Argus UI is a local-first Electron workspace for Chat, Changes, Run, Preview, Re
 
 ## Historical OpenMythos And Subagents
 
-OpenMythos is historical migration context only. Current runtime hints, task memory, and context diagnostics should use Argus Brain, CodeGraph, Obsidian Wiki, and explicit Subagents controls. Legacy OpenMythos-shaped settings no longer create worker plans, dispatch tickets, or auto-dispatch environment variables.
+OpenMythos is historical migration context only. Current runtime hints, task memory, and context diagnostics should use Argus Brain, MCP/Profile tools, and explicit Subagents controls. Legacy OpenMythos-shaped settings no longer create worker plans, dispatch tickets, or auto-dispatch environment variables.
 
 Subagent execution follows the Codex collaborative tool protocol:
 

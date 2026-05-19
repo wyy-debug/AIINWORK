@@ -37,7 +37,6 @@ type ChatMultiAgentCollaborationPanelProps = {
   sessionId?: string | null;
   provider?: LLMProvider | string;
   getMessageKey?: (message: ChatMessage) => string;
-  obsidianBridgeEnabled?: boolean;
 };
 
 const emptyDiff = () => [];
@@ -168,7 +167,6 @@ export const ChatMultiAgentCollaborationPanel = memo(function ChatMultiAgentColl
   sessionId = null,
   provider = 'claude',
   getMessageKey,
-  obsidianBridgeEnabled = false,
 }: ChatMultiAgentCollaborationPanelProps) {
   const view = useMemo(() => buildChatMultiAgentCollaborationView(messages), [messages]);
 
@@ -269,7 +267,6 @@ export const ChatMultiAgentCollaborationPanel = memo(function ChatMultiAgentColl
                               selectedProject={selectedProject}
                               sessionId={sessionId}
                               provider={provider}
-                              obsidianBridgeEnabled={obsidianBridgeEnabled}
                               isLatestAssistantReply={false}
                               onControlSubagent={onControlSubagent}
                             />

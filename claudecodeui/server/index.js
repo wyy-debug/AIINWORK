@@ -23,21 +23,8 @@ import { db, initializeDatabase, sessionNamesDb, sessionAgentBindingsDb, applyCu
 import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
-import {
-    createObsidianAutoCaptureOrchestrator,
-    createObsidianAutoCaptureStatusMessage,
-} from './services/obsidian-auto-capture-orchestrator.js';
-import {
-    syncObsidianInstructionFile,
-    syncObsidianProjectInstructionFiles,
-    ensureObsidianProjectInstructionFile,
-} from './services/obsidian-instruction-sync-service.js';
 import { findProjectPathsBySuffix, searchProjectMentionEntries } from './services/project-file-mention-service.js';
-import { applyCodeGraphRuntimeToChatCommand } from './services/codegraph-service.js';
 import { createCheckpointStore } from './services/checkpoint-service.js';
-import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
-import { applyExplicitWikiIntentToChatCommand } from './services/obsidian-memory-policy-service.js';
-import { ingestUploadedFilesToObsidian } from './services/obsidian-wiki-service.js';
 import {
     getProjects,
     getSessions,
@@ -59,7 +46,6 @@ import automationsRoutes, { startAutomationScheduler } from './routes/automation
 import capabilityMarketplaceRoutes from './routes/capability-marketplace.js';
 import brainRoutes from './routes/brain.js';
 import checkpointsRoutes from './routes/checkpoints.js';
-import codegraphRoutes from './routes/codegraph.js';
 import codexRoutes from './routes/codex.js';
 import commandsRoutes from './routes/commands.js';
 import cursorRoutes from './routes/cursor.js';
@@ -69,8 +55,6 @@ import hubUsageRoutes from './routes/hub-usage.js';
 import ideBridgeRoutes from './routes/ide-bridge.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
 import messagesRoutes from './routes/messages.js';
-import obsidianBridgeRoutes from './routes/obsidian-bridge.js';
-import obsidianBridgeIngressRoutes from './routes/obsidian-bridge-ingress.js';
 import permissionPresetsRoutes from './routes/permission-presets.js';
 import pluginsRoutes from './routes/plugins.js';
 import projectActionsRoutes from './routes/project-actions.js';
@@ -460,9 +444,6 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Local Obsidian plugin ingress uses the bridge pairing token, not Argus JWT/API keys.
-app.use('/api/obsidian-bridge-ingress', obsidianBridgeIngressRoutes);
-
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
 
@@ -487,8 +468,6 @@ app.use('/api/session-timeline', authenticateToken, sessionTimelineRoutes);
 app.use('/api/brain', authenticateToken, brainRoutes);
 app.use('/api/review-flow', authenticateToken, reviewFlowRoutes);
 app.use('/api/ide-bridge', authenticateToken, ideBridgeRoutes);
-app.use('/api/codegraph', authenticateToken, codegraphRoutes);
-app.use('/api/obsidian-bridge', authenticateToken, obsidianBridgeRoutes);
 
 // Cursor API Routes (protected)
 app.use('/api/cursor', authenticateToken, cursorRoutes);
@@ -2052,16 +2031,10 @@ class WebSocketWriter {
         this.userId = userId;
         this.ipAddress = ipAddress;
         this.isWebSocketWriter = true;  // Marker for transport detection
-        this.pendingAutoCaptureContext = null;
         this.pendingBrainSessionId = null;
         this.pendingBrainProvider = 'claude';
         this.runtimeEventCapture = null;
         this.runtimeAssistantText = '';
-        this.autoCapture = createObsidianAutoCaptureOrchestrator({
-            syncInstructionFile: syncObsidianInstructionFile,
-            syncProjectInstructionFiles: syncObsidianProjectInstructionFiles,
-            broadcast: (event) => this.send(createObsidianAutoCaptureStatusMessage(event)),
-        });
     }
 
     send(data) {
@@ -2070,12 +2043,6 @@ class WebSocketWriter {
         }
         if (this.ws.readyState === 1) { // WebSocket.OPEN
             this.ws.send(JSON.stringify(data));
-        }
-        if (data?.kind === 'session_created' && data.newSessionId && this.pendingAutoCaptureContext) {
-            this.setAutoCaptureContext({
-                ...this.pendingAutoCaptureContext,
-                sessionId: data.newSessionId,
-            });
         }
         if (data?.kind === 'session_created' && data.newSessionId && this.pendingBrainSessionId) {
             try {
@@ -2089,17 +2056,6 @@ class WebSocketWriter {
             }
             this.pendingBrainSessionId = data.newSessionId;
         }
-        void this.autoCapture.observeMessage(data).catch((error) => {
-            console.warn('[Obsidian Bridge] Server-side auto-capture failed:', error?.message || error);
-        });
-    }
-
-    waitForPendingObsidianCapture({ provider = 'claude', sessionId = '', timeoutMs = 1500 } = {}) {
-        return this.autoCapture.waitForPendingCapture({ provider, sessionId, timeoutMs });
-    }
-
-    flushPendingObsidianCapture({ provider = 'claude', sessionId = '', reason = 'manual_flush' } = {}) {
-        return this.autoCapture.flushPendingCaptures({ provider, sessionId, reason });
     }
 
     updateWebSocket(newRawWs) {
@@ -2112,19 +2068,6 @@ class WebSocketWriter {
 
     getSessionId() {
         return this.sessionId;
-    }
-
-    setAutoCaptureContext(context = {}) {
-        const provider = context.provider || 'claude';
-        const sessionId = context.sessionId || this.sessionId || null;
-        this.pendingAutoCaptureContext = {
-            ...context,
-            provider,
-            sessionId,
-        };
-        if (sessionId) {
-            this.autoCapture.setContext(this.pendingAutoCaptureContext);
-        }
     }
 
     beginRuntimeEventCapture() {
@@ -2203,17 +2146,6 @@ function appendChatSystemPrompt(existing, addition) {
         return next;
     }
     return `${current}\n\n${next}`;
-}
-
-function setWriterAutoCaptureContext(writer, data, provider) {
-    writer.setAutoCaptureContext({
-        provider,
-        sessionId: getConcreteCommandSessionId(data) || data?.sessionId || data?.options?.sessionId || null,
-        projectName: data?.options?.projectName || data?.projectName || '',
-        projectPath: data?.options?.projectPath || data?.options?.cwd || '',
-        userPrompt: typeof data?.command === 'string' ? data.command : '',
-        timestamp: new Date().toISOString(),
-    });
 }
 
 function getCommandProjectPath(data, commandData) {
@@ -2349,16 +2281,6 @@ function broadcastSwarmEvent(eventRecord) {
 
 swarmEventBus.on('swarm_event', broadcastSwarmEvent);
 
-async function waitForWriterAutoCaptureBarrier(writer, data, provider) {
-    const sessionId = getConcreteCommandSessionId(data);
-    if (!sessionId) return;
-    await writer.waitForPendingObsidianCapture({
-        provider,
-        sessionId,
-        timeoutMs: 1500,
-    });
-}
-
 async function startCheckpointForChatCommand(data, provider) {
     const options = data?.options && typeof data.options === 'object' ? data.options : {};
     const projectPath = typeof options.projectPath === 'string' && options.projectPath.trim()
@@ -2423,69 +2345,6 @@ async function completeCheckpointForChatCommand(checkpoint, writer, data, provid
     } catch (error) {
         console.warn('[checkpoint] complete failed:', error?.message || error);
         await finalizeBrainForChatCommand({ writer, data, provider, checkpoint, runtimeEvents });
-        return null;
-    }
-}
-
-async function prepareProjectInstructionFilesBeforeChat(data, provider = 'claude') {
-    if (provider !== 'claude') return null;
-
-    const projectPath = typeof data?.options?.projectPath === 'string' && data.options.projectPath.trim()
-        ? data.options.projectPath.trim()
-        : typeof data?.options?.cwd === 'string' && data.options.cwd.trim()
-            ? data.options.cwd.trim()
-            : '';
-    if (!projectPath) return null;
-
-    const projectName = typeof data?.options?.projectName === 'string' && data.options.projectName.trim()
-        ? data.options.projectName.trim()
-        : typeof data?.projectName === 'string' && data.projectName.trim()
-            ? data.projectName.trim()
-            : path.basename(projectPath);
-
-    try {
-        const ensureResult = await ensureObsidianProjectInstructionFile({
-            projectPath,
-            projectName,
-            provider,
-            trigger: 'preflight_project_conversation',
-        });
-        void syncObsidianProjectInstructionFiles({
-            projectPath,
-            projectName,
-            provider,
-            sessionId: getConcreteCommandSessionId(data) || data?.sessionId || data?.options?.sessionId || '',
-            trigger: 'preflight_project_conversation',
-        }).then((syncResult) => {
-            console.log('[Obsidian Wiki] instruction_preflight_background_complete', JSON.stringify({
-                projectPath,
-                projectName,
-                provider,
-                captured: syncResult?.captured ?? null,
-                reason: syncResult?.reason || '',
-            }));
-        }).catch((error) => {
-            console.warn('[Obsidian Wiki] instruction_preflight_background_failed', JSON.stringify({
-                projectPath,
-                projectName,
-                provider,
-                error: error?.message || String(error || 'Project instruction preflight failed.'),
-            }));
-        });
-        return {
-            ensureResult,
-            syncResult: {
-                queued: true,
-                background: true,
-            },
-        };
-    } catch (error) {
-        console.warn('[Obsidian Wiki] instruction_preflight_failed', JSON.stringify({
-            projectPath,
-            projectName,
-            provider,
-            error: error?.message || String(error || 'Project instruction preflight failed.'),
-        }));
         return null;
     }
 }
@@ -2715,57 +2574,6 @@ function emitRuntimeDiagnostics(writer, data) {
         sessionId: payload.sessionId || null,
         agentRuntime: payload,
     }));
-}
-
-function emitObsidianContextResult(writer, data) {
-    const context = data?.options?.obsidianContext;
-    if (!context || typeof context !== 'object') {
-        return;
-    }
-    writer.send(createNormalizedMessage({
-        kind: 'status',
-        text: '',
-        event: 'obsidian_context_result',
-        provider: getProviderFromCommandType(data?.type),
-        sessionId: data?.options?.sessionId || data?.sessionId || null,
-        messageId: data?.options?.clientMessageId || data?.clientMessageId || null,
-        obsidianContext: context,
-        used: context.used,
-        resultCount: context.resultCount,
-        reranked: context.reranked,
-        rerankModel: context.rerankModel,
-        tokenBudgetUsed: context.tokenBudgetUsed,
-        sources: context.sources,
-        error: context.error,
-    }));
-}
-
-function emitObsidianWikiResult(writer, data) {
-    const wiki = data?.options?.obsidianWiki;
-    if (!wiki || typeof wiki !== 'object') {
-        return;
-    }
-    writer.send(createNormalizedMessage({
-        kind: 'status',
-        text: '',
-        event: 'obsidian_wiki_result',
-        provider: getProviderFromCommandType(data?.type),
-        sessionId: data?.options?.sessionId || data?.sessionId || null,
-        messageId: data?.options?.clientMessageId || data?.clientMessageId || null,
-        obsidianWiki: wiki,
-        intent: wiki.intent,
-        status: wiki.status,
-        candidateIds: wiki.candidateIds,
-        error: wiki.error,
-    }));
-}
-
-async function applyObsidianKnowledgeRuntimeToChatCommand(data) {
-    const withWikiIntent = await applyExplicitWikiIntentToChatCommand(data);
-    const withContext = await applyCodeGraphRuntimeToChatCommand(
-        await applyObsidianContextToChatCommand(withWikiIntent),
-    );
-    return withContext;
 }
 
 async function applyBrainRuntimeToChatCommand(data, provider = getProviderFromCommandType(data?.type)) {
@@ -3362,16 +3170,13 @@ function handleChatConnection(ws, request) {
             const data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
-                setWriterAutoCaptureContext(writer, data, 'claude');
-                await waitForWriterAutoCaptureBarrier(writer, data, 'claude');
                 const commandWithIntent = applyArgusToolInspectionIntentToChatCommand(
                     applyArgusCodeReviewIntentToChatCommand(data),
                 );
                 const commandWithProfile = applyAgentProfileRuntimeToChatCommand(commandWithIntent);
-                await prepareProjectInstructionFilesBeforeChat(commandWithProfile, 'claude');
-                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithProfile)),
-                )));
+                ));
                 if (commandData?.options?.debugPromptInjection === true) {
                     commandData.options = {
                         ...(commandData.options || {}),
@@ -3380,8 +3185,6 @@ function handleChatConnection(ws, request) {
                 }
                 captureBrainCommandForChat(writer, commandData, 'claude');
                 emitRuntimeDiagnostics(writer, commandData);
-                emitObsidianContextResult(writer, commandData);
-                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3505,17 +3308,14 @@ function handleChatConnection(ws, request) {
                     }
                 }
             } else if (data.type === 'cursor-command') {
-                setWriterAutoCaptureContext(writer, data, 'cursor');
-                await waitForWriterAutoCaptureBarrier(writer, data, 'cursor');
-                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(
                         await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
-                    )
-                ), 'cursor');
+                    ),
+                    'cursor',
+                );
                 captureBrainCommandForChat(writer, commandData, 'cursor');
                 emitRuntimeDiagnostics(writer, commandData);
-                emitObsidianContextResult(writer, commandData);
-                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3528,17 +3328,14 @@ function handleChatConnection(ws, request) {
                     await completeCheckpointForChatCommand(checkpoint, writer, commandData, 'cursor');
                 }
             } else if (data.type === 'codex-command') {
-                setWriterAutoCaptureContext(writer, data, 'codex');
-                await waitForWriterAutoCaptureBarrier(writer, data, 'codex');
-                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(
                         await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
-                    )
-                ), 'codex');
+                    ),
+                    'codex',
+                );
                 captureBrainCommandForChat(writer, commandData, 'codex');
                 emitRuntimeDiagnostics(writer, commandData);
-                emitObsidianContextResult(writer, commandData);
-                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -3551,17 +3348,14 @@ function handleChatConnection(ws, request) {
                     await completeCheckpointForChatCommand(checkpoint, writer, commandData, 'codex');
                 }
             } else if (data.type === 'gemini-command') {
-                setWriterAutoCaptureContext(writer, data, 'gemini');
-                await waitForWriterAutoCaptureBarrier(writer, data, 'gemini');
-                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(
                         await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
-                    )
-                ), 'gemini');
+                    ),
+                    'gemini',
+                );
                 captureBrainCommandForChat(writer, commandData, 'gemini');
                 emitRuntimeDiagnostics(writer, commandData);
-                emitObsidianContextResult(writer, commandData);
-                emitObsidianWikiResult(writer, commandData);
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -4231,27 +4025,9 @@ app.post('/api/projects/:projectName/upload-files', authenticateToken, async (re
                     });
                 }
 
-                let obsidianWiki = null;
-                if (String(req.body?.obsidianIngest || 'true') !== 'false') {
-                    try {
-                        obsidianWiki = await ingestUploadedFilesToObsidian({
-                            files: savedFiles,
-                            projectName: req.params.projectName,
-                            sessionId: String(req.body?.sessionId || ''),
-                            batchId: String(req.body?.batchId || `chat-${batchId}`),
-                        });
-                    } catch (obsidianError) {
-                        obsidianWiki = {
-                            success: false,
-                            error: obsidianError?.message || 'Failed to ingest attachments into Obsidian wiki',
-                        };
-                    }
-                }
-
                 res.json({
                     success: true,
                     files: savedFiles,
-                    obsidianWiki,
                     message: `Uploaded ${savedFiles.length} file(s) successfully`
                 });
             } catch (error) {

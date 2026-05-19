@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, vi } from 'vitest';
 
-test('resolveMtlCodeModelRuntime makes subagents inherit the selected session model profile', async () => {
+test('resolveMtlCodeModelRuntime does not inject dedicated subagent model env', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mtl-model-runtime-'));
   const configRoot = path.join(tempRoot, '.mtl-code');
   await fs.mkdir(configRoot, { recursive: true });
@@ -36,8 +36,8 @@ test('resolveMtlCodeModelRuntime makes subagents inherit the selected session mo
 
     assert.equal(runtime?.env.ANTHROPIC_MODEL, 'mimo-v2.5');
     assert.equal(runtime?.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'mimo-v2.5');
-    assert.equal(runtime?.env.MTL_CODE_SUBAGENT_MODEL, 'mimo-v2.5');
-    assert.equal(runtime?.env.CLAUDE_CODE_SUBAGENT_MODEL, 'mimo-v2.5');
+    assert.equal(runtime?.env.MTL_CODE_SUBAGENT_MODEL, undefined);
+    assert.equal(runtime?.env.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
   } finally {
     if (previousConfigRoot === undefined) {
       delete process.env.MTL_CODE_CONFIG_DIR;
@@ -60,7 +60,7 @@ test('resolveMtlCodeModelRuntime uses request model override for Anthropic relay
         name: 'Relay GPT Mini',
         baseUrl: 'http://token.wd.com',
         model: 'gpt-5.4-mini',
-        requestModel: 'obsidian-small-anthropic',
+        requestModel: 'relay-anthropic-model',
         authToken: 'test-token',
         contextWindowTokens: 200000,
       },
@@ -76,10 +76,11 @@ test('resolveMtlCodeModelRuntime uses request model override for Anthropic relay
     const runtime = await resolveMtlCodeModelRuntime('relay-gpt-mini');
 
     assert.equal(runtime?.profile.model, 'gpt-5.4-mini');
-    assert.equal(runtime?.profile.requestModel, 'obsidian-small-anthropic');
-    assert.equal(runtime?.env.ANTHROPIC_MODEL, 'obsidian-small-anthropic');
-    assert.equal(runtime?.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'obsidian-small-anthropic');
-    assert.equal(runtime?.env.MTL_CODE_SUBAGENT_MODEL, 'obsidian-small-anthropic');
+    assert.equal(runtime?.profile.requestModel, 'relay-anthropic-model');
+    assert.equal(runtime?.env.ANTHROPIC_MODEL, 'relay-anthropic-model');
+    assert.equal(runtime?.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'relay-anthropic-model');
+    assert.equal(runtime?.env.MTL_CODE_SUBAGENT_MODEL, undefined);
+    assert.equal(runtime?.env.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
   } finally {
     if (previousConfigRoot === undefined) {
       delete process.env.MTL_CODE_CONFIG_DIR;

@@ -238,11 +238,11 @@ Argus Brain is the current long-task working-memory layer. It captures local tas
 Boundaries:
 
 - Claude native memory handles user preferences and ordinary remember or forget requests.
-- Obsidian is a Wiki and knowledge base. It is used for historical readback and explicit save-to-Wiki actions.
-- Argus Brain handles task state only. It does not write Obsidian and does not override Claude native memory storage.
-- Context diagnostics show which source injected Wiki, CodeGraph, or Brain context and how many tokens each source contributed.
+- Argus Brain handles task state only. It does not scan external stores and does not override Claude native memory storage.
+- MCP servers, Skills, and Agent Profiles handle optional external knowledge, code search, impact analysis, and enterprise systems.
+- Runtime diagnostics show Brain recall, tool calls, token use, permission blocks, retries, and agent timeline events.
 
-For troubleshooting and migration, see [2026-05-19-brain-obsidian-context-guide.md](2026-05-19-brain-obsidian-context-guide.md).
+For runtime boundaries and legacy migration, see [2026-05-19-brain-mcp-runtime.md](2026-05-19-brain-mcp-runtime.md).
 
 OpenMythos Runtime has been removed from the active product surface. Historical notes remain only for migration context.
 

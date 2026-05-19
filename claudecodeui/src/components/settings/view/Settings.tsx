@@ -105,10 +105,6 @@ function Settings({ isOpen, onClose, projects = [], selectedProject = null, init
                 <RuntimeSettingsTab
                   projects={projects}
                   selectedProject={selectedProject}
-                  onOpenSmallModelSettings={() => {
-                    setAgentInitialCategory('small-model');
-                    setActiveTab('agents');
-                  }}
                 />
               )}
 

@@ -36,7 +36,6 @@ type ModelConfig = {
   runtime?: Record<string, unknown>;
   subagents?: Record<string, unknown>;
   goals?: Record<string, unknown>;
-  smallModelRuntime?: Record<string, unknown>;
   brainRuntime: BrainRuntimeConfig;
 };
 
@@ -85,7 +84,6 @@ const normalizeConfig = (value?: Partial<ModelConfig>): ModelConfig => ({
   runtime: value?.runtime || {},
   subagents: value?.subagents || {},
   goals: value?.goals || {},
-  smallModelRuntime: value?.smallModelRuntime || {},
   brainRuntime: normalizeBrainRuntime(value?.brainRuntime),
 });
 
@@ -178,7 +176,6 @@ export default function BrainRuntimeContent({
           runtime: config.runtime,
           subagents: config.subagents,
           goals: config.goals,
-          smallModelRuntime: config.smallModelRuntime,
           brainRuntime: config.brainRuntime,
         }),
       });
@@ -270,10 +267,10 @@ export default function BrainRuntimeContent({
         <div className="rounded-lg border border-border/70 bg-card p-4">
           <div className="flex items-start gap-2 text-sm font-medium text-foreground">
             <ShieldCheck className="mt-0.5 h-4 w-4 text-primary" />
-            Brain is separate from Claude memory and Obsidian Wiki
+            Brain is separate from model memory
           </div>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            Claude native memory handles preferences. Obsidian remains a Wiki. Brain only remembers local task state and asks the model to verify current files before acting.
+            Native model memory handles preferences. Brain remembers local task state and asks the model to verify current files before acting.
           </p>
         </div>
       </div>

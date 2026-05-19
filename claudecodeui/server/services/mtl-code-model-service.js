@@ -37,8 +37,6 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
   uiContextWindow: 'CONTEXT_WINDOW',
   effortLevel: 'MTL_CODE_EFFORT_LEVEL',
   legacyEffortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
-  subagentModel: 'MTL_CODE_SUBAGENT_MODEL',
-  legacySubagentModel: 'CLAUDE_CODE_SUBAGENT_MODEL',
   coordinatorMode: 'MTL_CODE_COORDINATOR_MODE',
   subagentsEnabled: 'MTL_CODE_SUBAGENTS_ENABLED',
   subagentMaxConcurrentThreadsPerSession: 'MTL_CODE_SESSION_SUBAGENT_MAX_ACTIVE',
@@ -50,7 +48,6 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
 export const BRAIN_RUNTIME_SETTINGS_KEY = 'argusBrain';
 export const SUBAGENT_RUNTIME_SETTINGS_KEY = 'subagents';
 export const GOAL_RUNTIME_SETTINGS_KEY = 'goals';
-export const SMALL_MODEL_RUNTIME_SETTINGS_KEY = 'smallModelRuntime';
 
 export const DEFAULT_SUBAGENT_RUNTIME_CONFIG = Object.freeze({
   enabled: false,
@@ -60,16 +57,6 @@ export const DEFAULT_SUBAGENT_RUNTIME_CONFIG = Object.freeze({
 
 export const DEFAULT_GOAL_RUNTIME_CONFIG = Object.freeze({
   enabled: false,
-});
-
-export const DEFAULT_SMALL_MODEL_RUNTIME_CONFIG = Object.freeze({
-  enabled: true,
-  profileId: 'auto',
-  protocol: 'anthropic',
-  requestModel: '',
-  timeoutMs: 2500,
-  useForWikiRouting: true,
-  useForWikiReadback: true,
 });
 
 export const DEFAULT_BRAIN_RUNTIME_CONFIG = Object.freeze({
@@ -160,22 +147,6 @@ function normalizeSubagentPositiveInteger(value, fallback, max = 16) {
   return Math.min(parsed, max);
 }
 
-function normalizeTimeoutMs(value, fallback, min = 1000, max = 15000) {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.min(Math.max(parsed, min), max);
-}
-
-function normalizeSmallModelProtocol(value, fallback = 'anthropic') {
-  const normalized = (readOptionalString(value) || '').toLowerCase();
-  if (normalized === 'anthropic' || normalized === 'openai-compatible') {
-    return normalized;
-  }
-  return fallback === 'openai-compatible' ? fallback : 'anthropic';
-}
-
 export function normalizeSubagentRuntimeConfig(value, fallback = DEFAULT_SUBAGENT_RUNTIME_CONFIG) {
   const data = readObjectRecord(value) ?? {};
   return {
@@ -192,23 +163,6 @@ export function normalizeGoalRuntimeConfig(value, fallback = DEFAULT_GOAL_RUNTIM
   const data = readObjectRecord(value) ?? {};
   return {
     enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
-  };
-}
-
-export function normalizeSmallModelRuntimeConfig(value, fallback = DEFAULT_SMALL_MODEL_RUNTIME_CONFIG) {
-  const data = readObjectRecord(value) ?? {};
-  const profileId = readOptionalString(data.profileId) || fallback.profileId || 'auto';
-  const requestModel = Object.prototype.hasOwnProperty.call(data, 'requestModel')
-    ? readOptionalString(data.requestModel) || ''
-    : fallback.requestModel || '';
-  return {
-    enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
-    profileId,
-    protocol: normalizeSmallModelProtocol(data.protocol, fallback.protocol),
-    requestModel,
-    timeoutMs: normalizeTimeoutMs(data.timeoutMs, fallback.timeoutMs),
-    useForWikiRouting: normalizeRuntimeBoolean(data.useForWikiRouting, fallback.useForWikiRouting),
-    useForWikiReadback: normalizeRuntimeBoolean(data.useForWikiReadback, fallback.useForWikiReadback),
   };
 }
 
@@ -291,13 +245,6 @@ export function readGoalRuntimeConfig(settings = {}, env = {}) {
   );
 }
 
-export function readSmallModelRuntimeConfig(settings = {}) {
-  return normalizeSmallModelRuntimeConfig(
-    settings?.[SMALL_MODEL_RUNTIME_SETTINGS_KEY],
-    DEFAULT_SMALL_MODEL_RUNTIME_CONFIG,
-  );
-}
-
 export function readBrainRuntimeConfig(settings = {}) {
   return normalizeBrainRuntimeConfig(
     settings?.[BRAIN_RUNTIME_SETTINGS_KEY],
@@ -352,8 +299,6 @@ export function applyAnthropicRuntimeModelDefaults(env, { baseUrl = '', model = 
   env[ANTHROPIC_MODEL_ENV_KEYS.defaultHaikuModel] = configuredModel;
   env[ANTHROPIC_MODEL_ENV_KEYS.defaultSonnetModel] = configuredModel;
   env[ANTHROPIC_MODEL_ENV_KEYS.defaultOpusModel] = configuredModel;
-  env[MTL_CODE_MODEL_ENV_KEYS.subagentModel] = configuredModel;
-  env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel] = configuredModel;
 
   if (isDeepSeekAnthropicRuntime(baseUrl, configuredModel)) {
     const effortLevel = env[MTL_CODE_MODEL_ENV_KEYS.effortLevel]
@@ -378,8 +323,6 @@ export function applyOpenAIRuntimeModelDefaults(env, { model = '' } = {}) {
   env[OPENAI_MODEL_ENV_KEYS.defaultHaikuModel] = configuredModel;
   env[OPENAI_MODEL_ENV_KEYS.defaultSonnetModel] = configuredModel;
   env[OPENAI_MODEL_ENV_KEYS.defaultOpusModel] = configuredModel;
-  env[MTL_CODE_MODEL_ENV_KEYS.subagentModel] = configuredModel;
-  env[MTL_CODE_MODEL_ENV_KEYS.legacySubagentModel] = configuredModel;
   return env;
 }
 

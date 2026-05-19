@@ -15,7 +15,7 @@ export const SETTINGS_MAIN_TABS: SettingsMainTab[] = [
 ];
 
 export const AGENT_PROVIDERS: AgentProvider[] = ['claude'];
-export const AGENT_CATEGORIES: AgentCategory[] = ['model', 'small-model', 'permissions', 'mcp', 'marketplace', 'repository', 'usage'];
+export const AGENT_CATEGORIES: AgentCategory[] = ['model', 'permissions', 'mcp', 'marketplace', 'repository', 'usage'];
 
 export const DEFAULT_PROJECT_SORT_ORDER: ProjectSortOrder = 'name';
 export const DEFAULT_SAVE_STATUS = null;

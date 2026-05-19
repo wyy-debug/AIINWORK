@@ -35,8 +35,6 @@ contextBridge.exposeInMainWorld('argusDesktop', {
     ipcRenderer.invoke('dialog:select-project-root', normalizeOptions(options)),
   selectDirectory: (options) =>
     ipcRenderer.invoke('dialog:select-directory', normalizeOptions(options)),
-  selectCodeGraphScope: (options) =>
-    ipcRenderer.invoke('dialog:select-codegraph-scope', normalizeOptions(options)),
   browserAttach: (options) =>
     ipcRenderer.invoke('browser:attach', normalizeBrowserAttachOptions(options)),
   browserResize: (options) =>

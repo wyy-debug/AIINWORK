@@ -86,7 +86,6 @@ const INTERACTIVE_PERMISSION_TOOLS = new Set([
 const MAX_RUNTIME_DIAGNOSTICS_CACHE_SIZE = 100;
 const MAX_PROMPT_INJECTION_DEBUG_CACHE_SIZE = 100;
 const SUBAGENT_UI_HARD_DISABLED = true;
-const OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT = 'argusObsidianBridgeSettingsChanged';
 const runtimeDiagnosticsBySessionCache = new Map<string, AgentRuntimeDiagnostics>();
 const promptInjectionDebugBySessionCache = new Map<string, PromptInjectionDebugPayload>();
 
@@ -238,7 +237,6 @@ function ChatInterface({
   const [selectedAgentProfileKind, setSelectedAgentProfileKind] = useState(DEFAULT_AGENT_PROFILE_KIND);
   const selectedAgentProfileKindRef = useRef(DEFAULT_AGENT_PROFILE_KIND);
   const [subagentsEnabled, setSubagentsEnabled] = useState(false);
-  const [obsidianBridgeEnabled, setObsidianBridgeEnabled] = useState(false);
   const [goalsEnabled, setGoalsEnabled] = useState(false);
   const [sessionGoal, setSessionGoal] = useState<SessionGoal | null>(null);
   const [draftSessionGoal, setDraftSessionGoal] = useState<DraftSessionGoal | null>(null);
@@ -857,35 +855,6 @@ function ChatInterface({
       window.removeEventListener(ARGUS_WEBSOCKET_MESSAGE_EVENT, handleWebSocketMessageEvent);
     };
   }, [applyPromptInjectionDebugPayload, currentSessionId, selectedSession?.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadObsidianBridgeSettings = async () => {
-      try {
-        const response = await api.get('/settings/obsidian-bridge');
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data?.error || 'Failed to load Obsidian bridge settings');
-        }
-        if (!cancelled) {
-          setObsidianBridgeEnabled(Boolean(data?.config?.enabled));
-        }
-      } catch (error) {
-        console.warn('Failed to load Obsidian bridge settings:', error);
-        if (!cancelled) {
-          setObsidianBridgeEnabled(false);
-        }
-      }
-    };
-
-    void loadObsidianBridgeSettings();
-    window.addEventListener(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT, loadObsidianBridgeSettings);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(OBSIDIAN_BRIDGE_SETTINGS_CHANGED_EVENT, loadObsidianBridgeSettings);
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1759,8 +1728,6 @@ function ChatInterface({
     uploadingImages,
     imageErrors,
     fileAttachmentErrors,
-    ingestAttachmentsToObsidian,
-    setIngestAttachmentsToObsidian,
     handleAttachmentFiles,
     getRootProps,
     getInputProps,
@@ -1809,8 +1776,6 @@ function ChatInterface({
       || activeSkillNames.length > 0
       || Boolean(selectedModelProfileId)
       || selectedAgentProfileKind !== DEFAULT_AGENT_PROFILE_KIND,
-    obsidianBridgeEnabled,
-    recentMessages: chatMessages,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -2106,7 +2071,6 @@ function ChatInterface({
               onSelectConversationAgent={selectAgentForConversation}
               selectedModelProfileId={selectedModelProfileId}
               onModelProfileChange={setSelectedModelProfileId}
-              obsidianBridgeEnabled={obsidianBridgeEnabled}
               onControlSubagent={handleControlSubagent}
             />
           </div>
@@ -2214,9 +2178,6 @@ function ChatInterface({
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
           fileAttachmentErrors={fileAttachmentErrors}
-          obsidianBridgeEnabled={obsidianBridgeEnabled}
-          ingestAttachmentsToObsidian={ingestAttachmentsToObsidian}
-          onIngestAttachmentsToObsidianChange={setIngestAttachmentsToObsidian}
           showFileDropdown={showFileDropdown}
           filteredFiles={filteredFiles}
           fileMentionQuery={fileMentionQuery}

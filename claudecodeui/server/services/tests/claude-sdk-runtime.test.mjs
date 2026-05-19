@@ -123,7 +123,7 @@ test('Argus coordinator dispatch enables native subagent tools for the spawned r
   assert.match(source, /spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.subagentsEnabled\] = '1'/);
 });
 
-test('Claude native memory stays enabled without Obsidian storage override', async () => {
+test('Claude native memory stays enabled without retired storage overrides', async () => {
   const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../claude-sdk.js');
   const source = await fs.readFile(sourcePath, 'utf8');
 
@@ -135,11 +135,9 @@ test('Claude native memory stays enabled without Obsidian storage override', asy
   assert.match(source, /delete spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY/);
   assert.match(source, /delete spawnEnv\[MTL_CODE_MODEL_ENV_KEYS\.autoMemoryExtractionEnabled\]/);
   assert.match(source, /spawnEnv\.MTL_CODE_DISABLE_AUTO_MEMORY = '1'/);
-  assert.doesNotMatch(source, /function applyObsidianTemplateOnlyMemoryEnv/);
-  assert.doesNotMatch(source, /function applyObsidianNativeMemorySyncEnv/);
-  assert.doesNotMatch(source, /MTL_CODE_OBSIDIAN_NATIVE_MEMORY_SYNC/);
+  assert.doesNotMatch(source, /function apply.*TemplateOnlyMemoryEnv/);
+  assert.doesNotMatch(source, /function apply.*NativeMemorySyncEnv/);
   assert.doesNotMatch(source, /CLAUDE_COWORK_MEMORY_PATH_OVERRIDE/);
-  assert.doesNotMatch(source, /MTL_CODE_OBSIDIAN_MEMORY_PRIMARY/);
 });
 
 test('Argus emits prompt injection debug payload from final spawn env and CLI args', async () => {

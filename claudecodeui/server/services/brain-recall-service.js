@@ -2,10 +2,7 @@ import { readResolvedBrainRuntimeConfig } from './mtl-code-model-service.js';
 import { createBrainHybridRetrievalService } from './brain-hybrid-retrieval-service.js';
 import { buildBrainRecallPack } from './brain-recall-pack-service.js';
 import { brainStore as defaultBrainStore } from './brain-store-service.js';
-import {
-  applyContextFusionGuardrailsToChatCommand,
-  filterBrainRecallHitsAgainstObsidian,
-} from './context-fusion-guardrail-service.js';
+import { applyContextFusionGuardrailsToChatCommand } from './context-fusion-guardrail-service.js';
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 const compactLine = (value = '', max = 220) => {
@@ -142,11 +139,7 @@ export function createBrainRecallService({
           limit: config?.hybridRetrieval?.limit || 8,
           vectorTimeoutMs: config?.hybridRetrieval?.vectorTimeoutMs || 80,
         });
-      const dedupedRetrieval = filterBrainRecallHitsAgainstObsidian(
-        retrieval.hits,
-        data?.options?.obsidianContext?.sources || [],
-      );
-      const retrievalHits = dedupedRetrieval.hits;
+      const retrievalHits = Array.isArray(retrieval.hits) ? retrieval.hits : [];
       const legacyPrompt = buildArgusBrainContextPrompt({
         compaction,
         projectNodes,
@@ -173,7 +166,6 @@ export function createBrainRecallService({
           ...projectNodes.map((node) => ({ kind: 'project-node', id: node.id, type: node.nodeType })),
           ...matchedNodes.map((node) => ({ kind: 'keyword-node', id: node.id, type: node.nodeType })),
         ].slice(0, 20),
-        dedupedAgainstObsidian: dedupedRetrieval.removed,
         recallPack: recallPack.diagnostics,
         retrieval: retrieval.diagnostics,
         currentGoal: compaction?.currentGoal || '',

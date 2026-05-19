@@ -542,7 +542,7 @@ export default function ModelConfigContent() {
               <Input
                 value={selectedProfile.requestModel}
                 onChange={(event) => updateProfile(selectedProfile.id, { requestModel: event.target.value })}
-                placeholder={selectedProfile.model || '例如 obsidian-small-anthropic'}
+                placeholder={selectedProfile.model || '例如 gpt-5.4-mini'}
                 disabled={isLoading || isSaving}
               />
               <p className="text-xs text-muted-foreground">

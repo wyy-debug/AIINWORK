@@ -347,51 +347,6 @@ describe('normalizedToChatMessages subagent handling', () => {
     expect(subagents[1]?.subagentState?.childTools.map((tool) => tool.toolId)).toEqual(['tool-child-b-read']);
   });
 
-  it('attaches Obsidian Wiki context status to the triggering user message', () => {
-    const [userMessage] = normalizedToChatMessages([
-      message({
-        id: 'user-1',
-        kind: 'text',
-        role: 'user',
-        content: 'GPUScene 后续怎么优化？',
-      }),
-      message({
-        id: 'status-1',
-        kind: 'status',
-        event: 'obsidian_context_result',
-        messageId: 'user-1',
-        obsidianContext: {
-          used: true,
-          resultCount: 2,
-          reranked: true,
-          rerankModel: 'gpt-5.4-mini',
-          tokenBudgetUsed: 256,
-          sources: [{
-            path: 'Argus/Wiki/App/GPUScene.md',
-            title: 'GPUScene',
-            snippet: 'GPUScene review snippet.',
-            hitReason: 'title match',
-          }],
-        },
-      } as Partial<NormalizedMessage>),
-    ]);
-
-    expect(userMessage?.obsidianContextStatus).toMatchObject({
-      used: true,
-      resultCount: 2,
-      reranked: true,
-      rerankModel: 'gpt-5.4-mini',
-      tokenBudgetUsed: 256,
-      sources: [
-        expect.objectContaining({
-          path: 'Argus/Wiki/App/GPUScene.md',
-          snippet: 'GPUScene review snippet.',
-          hitReason: 'title match',
-        }),
-      ],
-    });
-  });
-
   it('adds a visible reminder event before a context compaction card', () => {
     const messages = [
       message({

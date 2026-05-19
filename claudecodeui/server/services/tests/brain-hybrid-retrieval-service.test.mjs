@@ -188,21 +188,21 @@ describe('Brain hybrid retrieval', () => {
     expect(result.options.appendSystemPrompt).toContain('### Relevant memory');
   });
 
-  it('deduplicates Brain recall memory already supplied by Obsidian context before building the recall pack', async () => {
+  it('builds Brain recall without retired external-source dedupe diagnostics', async () => {
     const store = createStore();
     store.upsertAtom({
-      id: 'wiki-duplicate-atom',
-      sessionId: 'recall-dedup-1',
+      id: 'checkout-flow-atom',
+      sessionId: 'recall-boundary-1',
       projectName: 'Argus',
       atomType: 'decision',
-      title: 'Checkout wiki duplicate',
-      summary: 'Use the exact checkout flow described by the Wiki note.',
-      stableKey: 'decision:checkout-wiki-duplicate',
-      entities: ['Argus/Wiki/Argus/Checkout.md'],
+      title: 'Checkout flow decision',
+      summary: 'Use the exact checkout flow described by the prior task state.',
+      stableKey: 'decision:checkout-flow',
+      entities: ['checkout-flow'],
     });
     store.upsertAtom({
       id: 'brain-only-atom',
-      sessionId: 'recall-dedup-1',
+      sessionId: 'recall-boundary-1',
       projectName: 'Argus',
       atomType: 'lesson',
       title: 'Brain-only deployment lesson',
@@ -216,25 +216,18 @@ describe('Brain hybrid retrieval', () => {
     });
 
     const result = await recall.applyToChatCommand({
-      command: 'checkout wiki deployment',
+      command: 'checkout deployment',
       options: {
-        sessionId: 'recall-dedup-1',
+        sessionId: 'recall-boundary-1',
         projectName: 'Argus',
-        obsidianContext: {
-          used: true,
-          sources: [{ path: 'argus/wiki/argus/checkout.md', title: 'Checkout Wiki' }],
-        },
       },
     }, 'claude');
 
-    expect(result.options.appendSystemPrompt).not.toContain('Checkout wiki duplicate');
+    expect(result.options.appendSystemPrompt).toContain('Checkout flow decision');
     expect(result.options.appendSystemPrompt).toContain('Brain-only deployment lesson');
-    expect(result.options.brainRecall.dedupedAgainstObsidian).toEqual([
-      expect.objectContaining({ id: 'wiki-duplicate-atom', reason: 'duplicate-path' }),
-    ]);
-    expect(result.options.contextFusion.deduped.brainAgainstObsidian).toEqual([
-      expect.objectContaining({ id: 'wiki-duplicate-atom', reason: 'duplicate-path' }),
-    ]);
+    expect(result.options.brainRecall).not.toHaveProperty('dedupedAgainstObsidian');
+    expect(result.options.contextFusion.sources).not.toHaveProperty('obsidian');
+    expect(result.options.contextFusion.sources).not.toHaveProperty('codegraph');
   });
 });
 

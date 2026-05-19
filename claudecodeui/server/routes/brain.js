@@ -5,6 +5,7 @@ import {
   formatBrainQualityReport,
 } from '../services/brain-quality-baseline-service.js';
 import { brainInspectorService } from '../services/brain-inspector-service.js';
+import { brainLegacyKnowledgeMigrationService } from '../services/brain-legacy-knowledge-migration-service.js';
 import { brainMaintenanceService } from '../services/brain-maintenance-service.js';
 import { brainPostTurnExtractionService } from '../services/brain-post-turn-extraction-service.js';
 import { brainSymbolicCanvasService } from '../services/brain-symbolic-canvas-service.js';
@@ -15,6 +16,7 @@ export function createBrainRouter({
   store = brainStore,
   brainInspectorService: inspectorService = brainInspectorService,
   brainMaintenanceService: maintenanceService = brainMaintenanceService,
+  brainLegacyKnowledgeMigrationService: legacyKnowledgeMigrationService = brainLegacyKnowledgeMigrationService,
   qualityBaselineService = brainQualityBaselineService,
   postTurnExtractionService = brainPostTurnExtractionService,
   symbolicCanvasService = brainSymbolicCanvasService,
@@ -56,6 +58,34 @@ export function createBrainRouter({
     } catch (error) {
       console.error('Brain import error:', error);
       res.status(500).json({ error: error.message || 'Failed to import Brain package' });
+    }
+  });
+
+  router.get('/legacy-knowledge/preview', async (req, res) => {
+    try {
+      const preview = await legacyKnowledgeMigrationService.preview({
+        projectName: String(req.query.projectName || ''),
+        provider: String(req.query.provider || 'claude'),
+        sessionId: String(req.query.sessionId || 'legacy-knowledge'),
+      });
+      res.json({ success: true, preview });
+    } catch (error) {
+      console.error('Brain legacy knowledge preview error:', error);
+      res.status(500).json({ error: error.message || 'Failed to preview legacy knowledge migration' });
+    }
+  });
+
+  router.post('/legacy-knowledge/import', async (req, res) => {
+    try {
+      const result = await legacyKnowledgeMigrationService.importKnowledge({
+        projectName: String(req.query.projectName || req.body?.projectName || ''),
+        provider: String(req.query.provider || req.body?.provider || 'claude'),
+        sessionId: String(req.query.sessionId || req.body?.sessionId || 'legacy-knowledge'),
+      });
+      res.json({ success: true, result });
+    } catch (error) {
+      console.error('Brain legacy knowledge import error:', error);
+      res.status(500).json({ error: error.message || 'Failed to import legacy knowledge into Brain' });
     }
   });
 

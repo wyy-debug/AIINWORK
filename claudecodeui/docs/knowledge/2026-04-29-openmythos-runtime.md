@@ -10,8 +10,8 @@ OpenMythos was an Argus strategy-layer experiment. It could provide task-card ge
 Use current replacements instead:
 
 - Argus Brain for local task working memory.
-- CodeGraph for code-structure context.
-- Obsidian Wiki for durable project knowledge.
+- MCP/Profile tools for code-structure context and external project knowledge.
+- Argus Brain for durable local task state.
 - Explicit Subagents controls for subagent execution.
 
 Subagent execution uses Codex-style collaborative tools: `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `list_agents`, and `close_agent`. The model may use these tools only when the user explicitly asks for subagents, delegation, or parallel agent work.

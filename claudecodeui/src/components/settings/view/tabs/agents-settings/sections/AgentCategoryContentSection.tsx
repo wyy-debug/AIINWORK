@@ -5,7 +5,6 @@ import ModelConfigContent from './content/ModelConfigContent';
 import PermissionsContent from './content/PermissionsContent';
 import RepositoryContent from './content/RepositoryContent';
 import HubUsageContent from './content/HubUsageContent';
-import SmallModelConfigContent from './content/SmallModelConfigContent';
 import CapabilityMarketplaceContent from './content/CapabilityMarketplaceContent';
 
 export default function AgentCategoryContentSection({
@@ -23,10 +22,6 @@ export default function AgentCategoryContentSection({
     <div className="min-w-0 flex-1 overflow-y-auto p-4 md:p-5 xl:p-6">
       {selectedCategory === 'model' && selectedAgent === 'claude' && (
         <ModelConfigContent />
-      )}
-
-      {selectedCategory === 'small-model' && selectedAgent === 'claude' && (
-        <SmallModelConfigContent />
       )}
 
       {selectedCategory === 'permissions' && selectedAgent === 'claude' && (
