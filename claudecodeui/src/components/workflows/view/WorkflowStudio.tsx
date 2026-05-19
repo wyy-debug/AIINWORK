@@ -124,6 +124,8 @@ const edgeRouteStyles: WorkflowEdgeRouteStyle[] = ['smoothstep', 'straight', 'st
 const minimapFilters: WorkflowMinimapFilter[] = ['all', 'status', 'type', 'risk'];
 const favoriteStorageKey = 'workflowStudio.favoriteWorkflowIds';
 const recentStorageKey = 'workflowStudio.recentWorkflowIds';
+const nodePresetStorageKey = 'workflowStudio.nodeConfigPresets';
+const transformFunctions = ['default(value)', 'join(list, ", ")', 'pick(object, "field")', 'truncate(text, 400)'];
 
 const statusTaxonomy = [
   { status: 'queued', label: 'Queued', description: 'Waiting for a worker lease.' },
@@ -217,6 +219,21 @@ function writeStoredIds(key: string, value: string[]) {
   window.localStorage.setItem(key, JSON.stringify([...new Set(value)].slice(0, 12)));
 }
 
+function readNodeConfigPresets() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(nodePresetStorageKey) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item): item is { id: string; label: string; type: WorkflowNodeType; config: Partial<WorkflowNode> } => Boolean(item?.id && item?.type)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeNodeConfigPresets(value: Array<{ id: string; label: string; type: WorkflowNodeType; config: Partial<WorkflowNode> }>) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(nodePresetStorageKey, JSON.stringify(value.slice(0, 24)));
+}
+
 function createBlankWorkflow(project: Project): WorkflowDefinition {
   return {
     id: `workflow-${Date.now()}`,
@@ -239,6 +256,20 @@ function describePermissionSource(workflow: WorkflowDefinition, node: WorkflowNo
   if (workflow.permissionPreset === 'enterprise-safe' && riskyNodeTypes.has(node.type)) return 'Profile baseline: enterprise-safe denies risky nodes';
   if (workflow.permissionPreset === 'suggest' && riskyNodeTypes.has(node.type)) return 'Profile baseline: suggest asks before risky nodes';
   return `Profile baseline: ${workflow.permissionPreset || 'inherit'}`;
+}
+
+function secretFieldDisplay(value: unknown) {
+  const text = String(value || '');
+  return text ? '••••••••' : 'No secret selected';
+}
+
+function validateOutputContract(nodeRun: WorkflowNodeRun | undefined, definition: WorkflowNodeTypeDefinition | null) {
+  const fields = definition?.outputSchema?.fields || [];
+  if (!nodeRun || fields.length === 0) return [];
+  const output = nodeRun.output || {};
+  return fields
+    .filter((field) => !(field.name in output))
+    .map((field) => `Missing output field: ${field.name}`);
 }
 
 function getNodeValidationBadges(workflow: WorkflowDefinition, node: WorkflowNode, lockedNodeIds: string[]) {
@@ -330,6 +361,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [layoutMode, setLayoutMode] = useState<WorkflowLayoutMode>('left-to-right');
   const [lockedNodeIds, setLockedNodeIds] = useState<string[]>([]);
   const [minimapFilter, setMinimapFilter] = useState<WorkflowMinimapFilter>('all');
+  const [nodeConfigPresets, setNodeConfigPresets] = useState(() => readNodeConfigPresets());
+  const [jsonConfigText, setJsonConfigText] = useState('{}');
+  const [jsonConfigError, setJsonConfigError] = useState('');
   const [libraryFilter, setLibraryFilter] = useState<WorkflowLibraryFilter>('All');
   const [inspectorTab, setInspectorTab] = useState<WorkflowInspectorTab>('Config');
   const [isRunSetupOpen, setIsRunSetupOpen] = useState(false);
@@ -366,6 +400,50 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     () => nodeTypeDefinitions.find((definition) => definition.type === selectedNode?.type) || null,
     [nodeTypeDefinitions, selectedNode?.type],
   );
+  const schemaVersion = selectedNodeDefinition?.ui?.schemaVersion || selectedNode?.config?.schemaVersion || '1.0';
+  const requiredFieldErrors = useMemo(() => {
+    if (!selectedNode) return [];
+    const errors: string[] = [];
+    if (!selectedNode.title.trim()) errors.push('Title is required');
+    if ((selectedNode.type === 'agent' || selectedNode.type === 'subagent') && !selectedNode.agentId?.trim()) errors.push('Agent is required');
+    if ((selectedNode.type === 'mcp' || selectedNode.type === 'tool') && !selectedNode.toolName?.trim()) errors.push('Tool is required');
+    if (selectedNode.type === 'shell' && !selectedNode.command?.trim()) errors.push('Command is required');
+    if (selectedNode.type === 'condition' && !selectedNode.condition?.trim()) errors.push('Condition is required');
+    (selectedNodeDefinition?.configSchema?.fields || []).forEach((field) => {
+      if (field.required && !selectedNode.config?.[field.name]) errors.push(`${field.label || field.name} is required`);
+    });
+    return errors;
+  }, [selectedNode, selectedNodeDefinition]);
+  const typedVariablePicker = useMemo(() => {
+    const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
+    const upstreamIds = selectedNode ? draft.edges.filter((edge) => edge.to === selectedNode.id).map((edge) => edge.from) : [];
+    const upstreamVariables = upstreamIds.flatMap((nodeId) => [
+      `nodes.${nodeId}.output.summary`,
+      `nodes.${nodeId}.output.artifactId`,
+      `nodes.${nodeId}.output.stdout`,
+    ]);
+    return [...inputVariables, ...upstreamVariables].map((variable) => ({
+      token: `{{${variable}}}`,
+      source: variable.startsWith('inputs.') ? 'workflow input' : 'upstream node output',
+      type: variable.endsWith('.summary') ? 'markdown' : variable.endsWith('.status') ? 'status' : 'string',
+      example: variable.startsWith('inputs.') ? runInputs[variable.replace('inputs.', '')] || 'user input' : 'completed output',
+    }));
+  }, [draft.edges, draft.inputs, runInputs, selectedNode]);
+  const mappingPreview = useMemo(() => draft.nodes.map((node) => ({
+    node,
+    input: {
+      prompt: node.prompt || '',
+      command: node.command || '',
+      condition: node.condition || '',
+      variables: [...(node.prompt || '').matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)].map((match) => match[1]),
+    },
+  })), [draft.nodes]);
+  const dataLineageRows = useMemo(() => {
+    if (!selectedNode) return [];
+    const incoming = draft.edges.filter((edge) => edge.to === selectedNode.id).map((edge) => `${edge.from} -> ${selectedNode.id}`);
+    const outgoing = draft.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => `${selectedNode.id} -> ${edge.to}`);
+    return [...incoming, ...outgoing, ...typedVariablePicker.map((variable) => `${variable.source}: ${variable.token}`)];
+  }, [draft.edges, selectedNode, typedVariablePicker]);
   const filteredNodeTypes = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
     if (!query) return paletteNodeTypes;
@@ -618,6 +696,54 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       edges: current.edges.map((edge) => (edge.id === edgeId ? { ...edge, ...patch } : edge)),
     }));
   }, [commitDraft]);
+
+  useEffect(() => {
+    setJsonConfigText(JSON.stringify(selectedNode?.config || {}, null, 2));
+    setJsonConfigError('');
+  }, [selectedNode?.id, selectedNode?.config]);
+
+  const saveNodeConfigPreset = useCallback(() => {
+    if (!selectedNode) return;
+    const preset = {
+      id: `preset-${selectedNode.type}-${Date.now()}`,
+      label: `${selectedNode.title || selectedNode.type} preset`,
+      type: selectedNode.type,
+      config: {
+        agentId: selectedNode.agentId,
+        toolName: selectedNode.toolName,
+        command: selectedNode.command,
+        prompt: selectedNode.prompt,
+        condition: selectedNode.condition,
+        permission: selectedNode.permission,
+        retryLimit: selectedNode.retryLimit,
+        timeoutMs: selectedNode.timeoutMs,
+        config: selectedNode.config,
+      },
+    };
+    setNodeConfigPresets((current) => {
+      const next = [preset, ...current].slice(0, 24);
+      writeNodeConfigPresets(next);
+      return next;
+    });
+  }, [selectedNode]);
+
+  const applyNodeConfigPreset = useCallback((presetId: string) => {
+    if (!selectedNode) return;
+    const preset = nodeConfigPresets.find((item) => item.id === presetId);
+    if (!preset) return;
+    updateNode(selectedNode.id, preset.config);
+  }, [nodeConfigPresets, selectedNode, updateNode]);
+
+  const applyJsonConfig = useCallback(() => {
+    if (!selectedNode) return;
+    try {
+      const parsed = JSON.parse(jsonConfigText || '{}');
+      setJsonConfigError('');
+      updateNode(selectedNode.id, { config: parsed });
+    } catch (parseError) {
+      setJsonConfigError(parseError instanceof Error ? parseError.message : 'Invalid JSON config');
+    }
+  }, [jsonConfigText, selectedNode, updateNode]);
 
   const addNode = useCallback((type: WorkflowNodeType) => {
     commitDraft((current) => {
@@ -1839,6 +1965,74 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         : 'Ready: no external dependency required.'}
                   </span>
                 </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-node-schema-versioning">
+                  <span className="block font-semibold text-foreground">Schema version</span>
+                  <span className="mt-1 block">Node schema {String(schemaVersion)} / workflow contract compatible</span>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-required-field-guard">
+                  <span className="block font-semibold text-foreground">Required fields</span>
+                  {requiredFieldErrors.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-red-700">
+                      {requiredFieldErrors.map((item) => <li key={item}>{item}</li>)}
+                    </ul>
+                  ) : (
+                    <span className="mt-1 block text-emerald-700">All required fields are ready.</span>
+                  )}
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-node-config-presets">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-foreground">Config presets</span>
+                    <button type="button" onClick={saveNodeConfigPreset} className="rounded border border-border px-2 py-1 text-[11px] hover:bg-muted">Save preset</button>
+                  </div>
+                  <select
+                    className="mt-2 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground"
+                    onChange={(event) => event.target.value && applyNodeConfigPreset(event.target.value)}
+                    defaultValue=""
+                  >
+                    <option value="">Apply preset...</option>
+                    {nodeConfigPresets.filter((preset) => preset.type === selectedNode.type).map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-secret-field-type">
+                  <span className="block font-semibold text-foreground">Secret fields</span>
+                  <span className="mt-1 block">Secret token: {secretFieldDisplay(selectedNode.config?.secretKey)}</span>
+                  <span className="mt-1 block">Exports keep secret references only.</span>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-json-config-editor">
+                  <span className="block font-semibold text-foreground">JSON config</span>
+                  <textarea value={jsonConfigText} onChange={(event) => setJsonConfigText(event.target.value)} className="mt-2 min-h-24 w-full rounded border border-border bg-background p-2 font-mono text-[11px] text-foreground" />
+                  {jsonConfigError && <span className="mt-1 block text-red-700">{jsonConfigError}</span>}
+                  <button type="button" onClick={applyJsonConfig} className="mt-2 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted">Apply JSON</button>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-mapping-preview">
+                  <span className="block font-semibold text-foreground">Mapping preview</span>
+                  <div className="mt-2 max-h-28 space-y-1 overflow-auto">
+                    {mappingPreview.map((item) => (
+                      <div key={item.node.id} className="rounded border border-border px-2 py-1">
+                        <span className="font-medium text-foreground">{item.node.title}</span>
+                        <span className="ml-2 font-mono text-[10px]">{item.input.variables.join(', ') || 'no variables'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-transform-functions">
+                  <span className="block font-semibold text-foreground">Transform functions</span>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {transformFunctions.map((fn) => (
+                      <button key={fn} type="button" onClick={() => insertVariable(fn)} className="rounded border border-border px-2 py-1 font-mono text-[10px] hover:bg-muted">{fn}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-output-contract-test">
+                  <span className="block font-semibold text-foreground">Output contract</span>
+                  {validateOutputContract(selectedRun?.nodeRuns?.[selectedNode.id], selectedNodeDefinition).length > 0 ? (
+                    <span className="mt-1 block text-red-700">{validateOutputContract(selectedRun?.nodeRuns?.[selectedNode.id], selectedNodeDefinition).join(', ')}</span>
+                  ) : (
+                    <span className="mt-1 block text-emerald-700">Output schema is satisfied or not required.</span>
+                  )}
+                </div>
                 {selectedNodeDefinition?.configSchema?.fields?.length ? (
                   <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
                     <span className="block font-semibold text-foreground">Typed config</span>
@@ -1882,6 +2076,19 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 </div>
                 <div data-testid="workflow-node-variables">
                   <h4 className="mb-2 text-xs font-semibold text-muted-foreground">Available variables</h4>
+                  <div className="mb-3 space-y-1 rounded-md border border-border bg-card p-2" data-testid="workflow-typed-variable-picker">
+                    {typedVariablePicker.map((variable) => (
+                      <button
+                        key={variable.token}
+                        type="button"
+                        onClick={() => insertVariable(variable.token.replace(/^\{\{|\}\}$/g, ''))}
+                        className="block w-full rounded border border-border bg-muted/30 px-2 py-1 text-left text-[11px] hover:bg-muted"
+                      >
+                        <span className="font-mono text-foreground">{variable.token}</span>
+                        <span className="ml-2 text-muted-foreground">{variable.type} / {variable.source} / {String(variable.example).slice(0, 32)}</span>
+                      </button>
+                    ))}
+                  </div>
                   <div className="space-y-1">
                     {availableVariables.map((variable) => (
                       <button
@@ -1895,6 +2102,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         <span className="ml-2 text-muted-foreground">{variable.startsWith('inputs.') ? 'input' : 'upstream output'}</span>
                       </button>
                     ))}
+                  </div>
+                  <div className="mt-3 rounded-md border border-border bg-card p-2" data-testid="workflow-data-lineage-view">
+                    <span className="block text-xs font-semibold text-foreground">Data lineage</span>
+                    <div className="mt-2 max-h-28 space-y-1 overflow-auto">
+                      {dataLineageRows.length > 0 ? dataLineageRows.map((row) => (
+                        <div key={row} className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground">{row}</div>
+                      )) : (
+                        <div className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground">No upstream lineage yet.</div>
+                      )}
+                    </div>
                   </div>
                   {invalidVariables.length > 0 && (
                     <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700" data-testid="workflow-invalid-variables">

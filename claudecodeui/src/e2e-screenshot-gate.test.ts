@@ -66,6 +66,16 @@ describe('E2E screenshot evidence gate', () => {
       'REQ-099-workflow-edge-branch-labels.png',
       'REQ-100-workflow-graph-minimap-filters.png',
       'REQ-101-workflow-graph-validation-badges.png',
+      'REQ-102-workflow-node-schema-versioning.png',
+      'REQ-103-workflow-node-config-presets.png',
+      'REQ-104-workflow-required-field-guard.png',
+      'REQ-105-workflow-secret-field-type.png',
+      'REQ-106-workflow-json-config-editor.png',
+      'REQ-107-workflow-typed-variable-picker.png',
+      'REQ-108-workflow-mapping-preview.png',
+      'REQ-109-workflow-transform-functions.png',
+      'REQ-110-workflow-output-contract-test.png',
+      'REQ-111-workflow-data-lineage-view.png',
     ].forEach((screenshotName) => {
       const workflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
       const realWorkflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio-real.screenshot.spec.ts'), 'utf8');

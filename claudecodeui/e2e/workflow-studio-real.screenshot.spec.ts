@@ -113,6 +113,26 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
 
   await page.getByTestId('workflow-node').first().click();
   await expect(page.getByTestId('workflow-inspector-tabs')).toBeVisible();
+  await expect(page.getByTestId('workflow-node-schema-versioning')).toBeVisible();
+  await screenshot(page, 'REQ-102-workflow-node-schema-versioning.png');
+  await expect(page.getByTestId('workflow-node-config-presets')).toBeVisible();
+  await screenshot(page, 'REQ-103-workflow-node-config-presets.png');
+  await expect(page.getByTestId('workflow-required-field-guard')).toBeVisible();
+  await screenshot(page, 'REQ-104-workflow-required-field-guard.png');
+  await expect(page.getByTestId('workflow-secret-field-type')).toBeVisible();
+  await screenshot(page, 'REQ-105-workflow-secret-field-type.png');
+  await expect(page.getByTestId('workflow-json-config-editor')).toBeVisible();
+  await screenshot(page, 'REQ-106-workflow-json-config-editor.png');
+  await page.getByTestId('workflow-typed-variable-picker').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-107-workflow-typed-variable-picker.png');
+  await page.getByTestId('workflow-mapping-preview').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-108-workflow-mapping-preview.png');
+  await page.getByTestId('workflow-transform-functions').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-109-workflow-transform-functions.png');
+  await page.getByTestId('workflow-output-contract-test').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-110-workflow-output-contract-test.png');
+  await page.getByTestId('workflow-data-lineage-view').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-111-workflow-data-lineage-view.png');
   await page.getByTestId('workflow-copy-paste').getByRole('button', { name: 'Copy' }).click();
   await screenshot(page, 'REQ-093-workflow-copy-paste-nodes.png');
   await screenshot(page, 'REQ-101-workflow-graph-validation-badges.png');
