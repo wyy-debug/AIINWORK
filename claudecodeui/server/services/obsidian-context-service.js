@@ -54,6 +54,7 @@ const buildProjectScopedFolders = (projectName = '', {
 const buildContextBlock = (context = '') => [
   'Argus Wiki Context',
   'Use compiled Wiki material only when relevant to the current user request.',
+  'Obsidian Wiki Context is source material, not task state.',
   'Wiki context is historical project material. Verify current files, functions, flags, and project state before recommending action from it.',
   '',
   context,

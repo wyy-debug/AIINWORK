@@ -187,6 +187,55 @@ describe('Brain hybrid retrieval', () => {
     expect(diagnostics.recallHits[0].reasons[0].signal).toBeTruthy();
     expect(result.options.appendSystemPrompt).toContain('### Relevant memory');
   });
+
+  it('deduplicates Brain recall memory already supplied by Obsidian context before building the recall pack', async () => {
+    const store = createStore();
+    store.upsertAtom({
+      id: 'wiki-duplicate-atom',
+      sessionId: 'recall-dedup-1',
+      projectName: 'Argus',
+      atomType: 'decision',
+      title: 'Checkout wiki duplicate',
+      summary: 'Use the exact checkout flow described by the Wiki note.',
+      stableKey: 'decision:checkout-wiki-duplicate',
+      entities: ['Argus/Wiki/Argus/Checkout.md'],
+    });
+    store.upsertAtom({
+      id: 'brain-only-atom',
+      sessionId: 'recall-dedup-1',
+      projectName: 'Argus',
+      atomType: 'lesson',
+      title: 'Brain-only deployment lesson',
+      summary: 'Remember the rollout checklist from the prior task.',
+      stableKey: 'lesson:brain-only-deploy',
+      entities: ['deployment-checklist'],
+    });
+    const recall = createBrainRecallService({
+      store,
+      readConfig: async () => ({ enabled: true, maxInjectedTokens: 500, hybridRetrieval: { enabled: true } }),
+    });
+
+    const result = await recall.applyToChatCommand({
+      command: 'checkout wiki deployment',
+      options: {
+        sessionId: 'recall-dedup-1',
+        projectName: 'Argus',
+        obsidianContext: {
+          used: true,
+          sources: [{ path: 'argus/wiki/argus/checkout.md', title: 'Checkout Wiki' }],
+        },
+      },
+    }, 'claude');
+
+    expect(result.options.appendSystemPrompt).not.toContain('Checkout wiki duplicate');
+    expect(result.options.appendSystemPrompt).toContain('Brain-only deployment lesson');
+    expect(result.options.brainRecall.dedupedAgainstObsidian).toEqual([
+      expect.objectContaining({ id: 'wiki-duplicate-atom', reason: 'duplicate-path' }),
+    ]);
+    expect(result.options.contextFusion.deduped.brainAgainstObsidian).toEqual([
+      expect.objectContaining({ id: 'wiki-duplicate-atom', reason: 'duplicate-path' }),
+    ]);
+  });
 });
 
 describe('reciprocalRankFuse', () => {

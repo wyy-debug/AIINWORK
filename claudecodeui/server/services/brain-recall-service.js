@@ -2,6 +2,10 @@ import { readResolvedBrainRuntimeConfig } from './mtl-code-model-service.js';
 import { createBrainHybridRetrievalService } from './brain-hybrid-retrieval-service.js';
 import { buildBrainRecallPack } from './brain-recall-pack-service.js';
 import { brainStore as defaultBrainStore } from './brain-store-service.js';
+import {
+  applyContextFusionGuardrailsToChatCommand,
+  filterBrainRecallHitsAgainstObsidian,
+} from './context-fusion-guardrail-service.js';
 
 const readString = (value) => (typeof value === 'string' ? value.trim() : '');
 const compactLine = (value = '', max = 220) => {
@@ -138,20 +142,25 @@ export function createBrainRecallService({
           limit: config?.hybridRetrieval?.limit || 8,
           vectorTimeoutMs: config?.hybridRetrieval?.vectorTimeoutMs || 80,
         });
+      const dedupedRetrieval = filterBrainRecallHitsAgainstObsidian(
+        retrieval.hits,
+        data?.options?.obsidianContext?.sources || [],
+      );
+      const retrievalHits = dedupedRetrieval.hits;
       const legacyPrompt = buildArgusBrainContextPrompt({
         compaction,
         projectNodes,
         matchedNodes,
-        hybridHits: retrieval.hits,
+        hybridHits: retrievalHits,
         diagnostics: {
-          reason: compaction ? 'latest session compaction' : retrieval.hits.length ? 'hybrid retrieval' : matchedNodes.length ? 'keyword matched project nodes' : 'project decisions and risks',
+          reason: compaction ? 'latest session compaction' : retrievalHits.length ? 'hybrid retrieval' : matchedNodes.length ? 'keyword matched project nodes' : 'project decisions and risks',
         },
       });
       const recallPack = buildBrainRecallPack({
         command: data.command || '',
         maxTokens: config.maxInjectedTokens || 1200,
         compaction,
-        retrievalHits: retrieval.hits,
+        retrievalHits,
       });
       const prompt = trimByTokenBudget(recallPack.prompt || legacyPrompt, config.maxInjectedTokens);
       const diagnostics = {
@@ -160,10 +169,11 @@ export function createBrainRecallService({
         status: prompt ? 'injected' : 'empty',
         recallHits: [
           ...(compaction ? [{ kind: 'compaction', id: compaction.id }] : []),
-          ...retrieval.hits.map((hit) => ({ kind: hit.kind, id: hit.id, title: hit.title, score: hit.score, reasons: hit.reasons })),
+          ...retrievalHits.map((hit) => ({ kind: hit.kind, id: hit.id, title: hit.title, score: hit.score, reasons: hit.reasons })),
           ...projectNodes.map((node) => ({ kind: 'project-node', id: node.id, type: node.nodeType })),
           ...matchedNodes.map((node) => ({ kind: 'keyword-node', id: node.id, type: node.nodeType })),
         ].slice(0, 20),
+        dedupedAgainstObsidian: dedupedRetrieval.removed,
         recallPack: recallPack.diagnostics,
         retrieval: retrieval.diagnostics,
         currentGoal: compaction?.currentGoal || '',
@@ -182,7 +192,7 @@ export function createBrainRecallService({
   const applyToChatCommand = async (data = {}, provider = 'claude') => {
     const { config, prompt, diagnostics } = await recall(data, provider);
     const options = data?.options && typeof data.options === 'object' ? data.options : {};
-    return {
+    return applyContextFusionGuardrailsToChatCommand({
       ...data,
       options: {
         ...options,
@@ -202,7 +212,7 @@ export function createBrainRecallService({
             : options.runtimeDiagnostics?.appendSystemPromptLength,
         },
       },
-    };
+    });
   };
 
   return {

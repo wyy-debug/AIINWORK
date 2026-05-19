@@ -174,7 +174,7 @@ export function buildBrainRecallPack({
   const canvas = symbolicCanvas?.mermaid || compaction?.mermaid || '';
   const order = mode === 'fix-tests' ? FIX_TEST_SECTION_ORDER : SECTION_ORDER;
   const byId = new Map([
-    ['stale-warning', createSection('stale-warning', ['Verify historical Brain state against current files and runtime before acting.'], budgets['stale-warning'])],
+    ['stale-warning', createSection('stale-warning', ['Argus Brain is task state, not source material. Verify historical Brain state against current files and runtime before acting.'], budgets['stale-warning'])],
     ['current-goal', createSection('current-goal', [compaction?.currentGoal || 'Continue the current task.'], budgets['current-goal'])],
     ['status', createSection('status', [compaction?.summary || 'No compact status summary yet.'], budgets.status)],
     ['lessons', createSection('lessons', lessons.map((hit) => `- ${hit.title}: ${hit.summary || ''}`), budgets.lessons)],
