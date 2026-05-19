@@ -24,7 +24,7 @@ describe('AgentProfileSwitcher wiring', () => {
 
     expect(composerSource).toContain("import AgentProfileSwitcher from './AgentProfileSwitcher'");
     expect(composerSource).toContain('<AgentProfileSwitcher');
-    expect(composerSource).toContain('selectedAgentProfileKind={selectedAgentProfileKind}');
+    expect(composerSource).toContain('selectedProfileKind={selectedAgentProfileKind}');
     expect(composerSource).toContain('onProfileChange={onAgentProfileChange}');
   });
 });

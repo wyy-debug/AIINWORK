@@ -226,6 +226,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     }),
+  installCapabilityMarketplaceItem: (itemId, { scope = 'user', configuration = {} } = {}) =>
+    apiFetch(`/api/capability-marketplace/${encodeURIComponent(itemId)}/install`, {
+      method: 'POST',
+      body: JSON.stringify({ scope, configuration }),
+    }),
   generateGitReviewFlow: ({ project = '', checkpointId = '' } = {}) =>
     apiFetch('/api/git/review-flow', {
       method: 'POST',

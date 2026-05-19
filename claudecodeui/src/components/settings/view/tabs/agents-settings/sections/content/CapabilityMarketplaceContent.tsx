@@ -185,6 +185,7 @@ export default function CapabilityMarketplaceContent({ projects }: CapabilityMar
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
+  const [configurationDrafts, setConfigurationDrafts] = useState<Record<string, Record<string, string>>>({});
 
   useEffect(() => {
     if (!projectPath && projects[0]) {
@@ -270,18 +271,34 @@ export default function CapabilityMarketplaceContent({ projects }: CapabilityMar
     }
   };
 
-  const installRepositoryItem = async (item: CapabilityMarketplaceItem) => {
-    if (!item.repoId || !item.itemId) return;
+  const updateConfigurationDraft = (itemId: string, key: string, value: string) => {
+    setConfigurationDrafts((previous) => ({
+      ...previous,
+      [itemId]: {
+        ...(previous[itemId] || {}),
+        [key]: value,
+      },
+    }));
+  };
+
+  const installMarketplaceItem = async (item: CapabilityMarketplaceItem) => {
     setBusyKey(`install:${item.id}`);
     setError('');
+    const configuration = configurationDrafts[item.id] || {};
     try {
-      const response = await api.installAgentRepositoryItem({
-        repoId: item.repoId,
-        itemId: item.itemId,
-        target: projectPath ? 'project' : 'user',
-        projectPath: projectPath || undefined,
-        overwrite: false,
-      });
+      const response = item.repoId && item.itemId
+        ? await api.installAgentRepositoryItem({
+            repoId: item.repoId,
+            itemId: item.itemId,
+            target: projectPath ? 'project' : 'user',
+            projectPath: projectPath || undefined,
+            overwrite: false,
+            configuration: { mcpValues: configuration },
+          })
+        : await api.installCapabilityMarketplaceItem(item.id, {
+            scope: projectPath ? 'project' : 'user',
+            configuration,
+          });
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(readError(payload, 'Failed to install capability'));
@@ -388,7 +405,10 @@ export default function CapabilityMarketplaceContent({ projects }: CapabilityMar
       {status !== 'loading' && filteredItems.length > 0 && (
         <div className="grid gap-3 xl:grid-cols-2">
           {filteredItems.map((item) => {
-            const canInstall = item.installState !== 'installed' && item.repoId && item.itemId && !item.setupRequired;
+            const setupFields = item.setupFields || [];
+            const hasSetupFields = setupFields.length > 0;
+            const canInstall = item.installState !== 'installed';
+            const canConfigure = hasSetupFields;
             const busy = busyKey === `toggle:${item.id}` || busyKey === `install:${item.id}`;
             const Icon = item.kind === 'mcp-server' ? PlugZap : item.kind === 'agent-template' ? Bot : item.kind === 'skill' ? Wrench : Sparkles;
             return (
@@ -452,16 +472,34 @@ export default function CapabilityMarketplaceContent({ projects }: CapabilityMar
                   ))}
                 </div>
 
-                {canInstall && (
+                {hasSetupFields && (
+                  <div className="mt-4 grid gap-2 rounded-lg border border-border/70 bg-background/50 p-3">
+                    <div className="text-xs font-medium text-foreground">Configure</div>
+                    {setupFields.map((field) => (
+                      <label key={`${item.id}:${field.key}`} className="grid gap-1 text-xs text-muted-foreground">
+                        <span>{field.label || field.key}{field.required ? ' *' : ''}</span>
+                        <input
+                          type={field.type === 'password' ? 'password' : 'text'}
+                          value={configurationDrafts[item.id]?.[field.key] || ''}
+                          onChange={(event) => updateConfigurationDraft(item.id, field.key, event.target.value)}
+                          placeholder={field.key}
+                          className="h-8 rounded border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-primary"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {(canInstall || canConfigure) && (
                   <div className="mt-4">
                     <button
                       type="button"
-                      onClick={() => void installRepositoryItem(item)}
+                      onClick={() => void installMarketplaceItem(item)}
                       disabled={busy}
                       className="inline-flex h-8 items-center justify-center gap-1.5 rounded border border-border px-2.5 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-60"
                     >
                       {busyKey === `install:${item.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                      Install
+                      {item.installState === 'installed' ? 'Save configuration' : (hasSetupFields ? 'Configure' : 'Install')}
                     </button>
                   </div>
                 )}

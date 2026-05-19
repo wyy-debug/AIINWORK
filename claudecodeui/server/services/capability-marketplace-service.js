@@ -67,6 +67,25 @@ function normalizeSetupFields(value) {
     .slice(0, 24);
 }
 
+function normalizeConfiguration(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const result = {};
+  for (const [key, rawValue] of Object.entries(source)) {
+    const normalizedKey = normalizeString(key, '', 120);
+    if (!normalizedKey) continue;
+    const text = normalizeString(rawValue, '', 4000);
+    if (!text) continue;
+    result[normalizedKey] = text;
+  }
+  return result;
+}
+
+function hasRequiredConfiguration(setupFields = [], configuration = {}) {
+  return setupFields
+    .filter((field) => field.required)
+    .every((field) => Boolean(normalizeString(configuration[field.key], '', 4000)));
+}
+
 export function normalizeCapabilityMarketplaceItem(value = {}, options = {}) {
   const kind = normalizeKind(value.kind || value.type);
   const rawId = value.id || value.itemId || value.name || value.title;
@@ -74,7 +93,13 @@ export function normalizeCapabilityMarketplaceItem(value = {}, options = {}) {
   const id = `${kind}-${slug}`;
   const setupFields = normalizeSetupFields(value.setupFields || value.mcp?.setupFields || value.configurationFields);
   const installed = options.installed === true || value.installState === 'installed' || value.installed === true;
-  const enabled = options.enabled === true || value.enabled === true || installed;
+  const hasEnabledOverride = Object.prototype.hasOwnProperty.call(options, 'enabled')
+    || Object.prototype.hasOwnProperty.call(value, 'enabled');
+  const enabled = hasEnabledOverride ? (options.enabled === true || value.enabled === true) : installed;
+  const configuration = normalizeConfiguration(options.configuration || value.configuration || {});
+  const configurationStatus = setupFields.some((field) => field.required) && !hasRequiredConfiguration(setupFields, configuration)
+    ? 'needs-configuration'
+    : 'ready';
 
   return {
     id,
@@ -91,7 +116,7 @@ export function normalizeCapabilityMarketplaceItem(value = {}, options = {}) {
     setupRequired: setupFields.some((field) => field.required),
     installState: installed ? 'installed' : 'available',
     enabled,
-    configurationStatus: setupFields.some((field) => field.required) ? 'needs-configuration' : 'ready',
+    configurationStatus,
   };
 }
 
@@ -197,6 +222,9 @@ function mergeItems(items) {
       },
       installState: existing.installState === 'installed' || item.installState === 'installed' ? 'installed' : 'available',
       enabled: Boolean(existing.enabled || item.enabled),
+      configurationStatus: existing.configurationStatus === 'ready' || item.configurationStatus === 'ready'
+        ? 'ready'
+        : (item.configurationStatus || existing.configurationStatus || 'ready'),
     });
   }
   return Array.from(byId.values()).sort((left, right) => left.title.localeCompare(right.title));
@@ -207,9 +235,33 @@ export function createCapabilityMarketplaceStore({ rootDir = path.join(os.homedi
 
   return {
     async getState() {
-      const state = await readJson(statePath, { enabled: {} });
+      const state = await readJson(statePath, { enabled: {}, installed: {}, configurations: {} });
       return {
         enabled: state && typeof state.enabled === 'object' ? state.enabled : {},
+        installed: state && typeof state.installed === 'object' ? state.installed : {},
+        configurations: state && typeof state.configurations === 'object' ? state.configurations : {},
+      };
+    },
+
+    async installCapability(itemId, { scope = 'user', configuration = {} } = {}) {
+      const id = normalizeString(itemId, '', 160);
+      if (!id) throw new Error('Marketplace item id is required');
+      const normalizedScope = scope === 'project' ? 'project' : 'user';
+      const state = await this.getState();
+      state.installed[id] = {
+        scope: normalizedScope,
+        installedAt: new Date().toISOString(),
+      };
+      state.configurations[id] = normalizeConfiguration(configuration);
+      if (state.enabled[id] === undefined) {
+        state.enabled[id] = true;
+      }
+      await writeJson(statePath, state);
+      return {
+        id,
+        installState: 'installed',
+        enabled: state.enabled[id],
+        configurationStatus: Object.keys(state.configurations[id]).length > 0 ? 'ready' : 'needs-configuration',
       };
     },
 
@@ -229,8 +281,9 @@ export function createCapabilityMarketplaceStore({ rootDir = path.join(os.homedi
       const normalizedRepository = repositoryItems.map((item) => {
         const normalized = normalizeCapabilityMarketplaceItem(item);
         return normalizeCapabilityMarketplaceItem(normalized, {
-          installed: skillKeys.has(normalized.id) || mcpKeys.has(normalized.id),
+          installed: skillKeys.has(normalized.id) || mcpKeys.has(normalized.id) || Boolean(state.installed[normalized.id]),
           enabled: state.enabled[normalized.id] === true,
+          configuration: state.configurations[normalized.id],
         });
       });
       const installedSkillItems = installedSkills.map((skill) => normalizeCapabilityMarketplaceItem({
@@ -248,8 +301,9 @@ export function createCapabilityMarketplaceStore({ rootDir = path.join(os.homedi
         source: `${server.provider || 'provider'} ${server.scope || ''}`.trim(),
       }, { installed: true, enabled: state.enabled[capabilityKey('mcp-server', server.name || server.serverName)] !== false }));
       const builtIn = getBuiltInEnterpriseCapabilities().map((item) => normalizeCapabilityMarketplaceItem(item, {
-        installed: mcpKeys.has(item.id),
+        installed: mcpKeys.has(item.id) || Boolean(state.installed[item.id]),
         enabled: state.enabled[item.id] === true || mcpKeys.has(item.id),
+        configuration: state.configurations[item.id],
       }));
 
       return {

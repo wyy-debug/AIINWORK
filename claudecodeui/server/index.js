@@ -39,6 +39,7 @@ import {
 } from './projects.js';
 import agentRepositoryRoutes from './routes/agent-repository.js';
 import agentRoutes from './routes/agent.js';
+import agentProfilesRoutes from './routes/agent-profiles.js';
 import agentsRoutes from './routes/agents.js';
 import artifactsRoutes from './routes/artifacts.js';
 import authRoutes from './routes/auth.js';
@@ -506,6 +507,7 @@ app.use('/api/agent-repository', authenticateToken, agentRepositoryRoutes);
 
 // Agent profile configuration routes (protected)
 app.use('/api/agents', authenticateToken, agentsRoutes);
+app.use('/api/agent-profiles', authenticateToken, agentProfilesRoutes);
 app.use('/api/recipes', authenticateToken, recipesRoutes);
 
 // Unified session messages route (protected)

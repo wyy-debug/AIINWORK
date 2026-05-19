@@ -15,7 +15,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
-      'src/**/*.test.ts',
+      'src/**/*.{test,spec}.{ts,tsx}',
       'scripts/**/*.test.mjs',
       'obsidian-plugins/**/*.test.mjs',
       'server/services/tests/**/*.{test,spec}.{ts,mjs}',

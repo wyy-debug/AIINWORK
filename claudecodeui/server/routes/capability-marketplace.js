@@ -56,4 +56,16 @@ router.post('/:id/enabled', async (req, res) => {
   }
 });
 
+router.post('/:id/install', async (req, res) => {
+  try {
+    const result = await marketplaceStore.installCapability(req.params.id, {
+      scope: req.body?.scope,
+      configuration: req.body?.configuration || {},
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendMarketplaceError(res, error);
+  }
+});
+
 export default router;

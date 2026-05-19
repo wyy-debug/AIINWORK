@@ -89,4 +89,35 @@ describe('capability marketplace service', () => {
     await store.setEnabled('mcp-server-crashsight', false);
     expect((await store.getState()).enabled['mcp-server-crashsight']).toBe(false);
   });
+
+  it('persists install and configuration state for marketplace items', async () => {
+    const store = createCapabilityMarketplaceStore({ rootDir });
+
+    await store.installCapability('mcp-server-crashsight', {
+      scope: 'project',
+      configuration: { CRASHSIGHT_TOKEN: 'configured-token' },
+    });
+    const state = await store.getState();
+    expect(state.installed['mcp-server-crashsight']).toMatchObject({ scope: 'project' });
+    expect(state.configurations['mcp-server-crashsight']).toEqual({ CRASHSIGHT_TOKEN: 'configured-token' });
+
+    const catalog = await store.listMarketplace();
+    const crashsight = catalog.items.find((item) => item.id === 'mcp-server-crashsight');
+    expect(crashsight.installState).toBe('installed');
+    expect(crashsight.configurationStatus).toBe('ready');
+  });
+
+  it('keeps installed marketplace items disabled when the user turns them off', async () => {
+    const store = createCapabilityMarketplaceStore({ rootDir });
+
+    await store.installCapability('mcp-server-crashsight', {
+      configuration: { CRASHSIGHT_TOKEN: 'configured-token' },
+    });
+    await store.setEnabled('mcp-server-crashsight', false);
+
+    const catalog = await store.listMarketplace();
+    const crashsight = catalog.items.find((item) => item.id === 'mcp-server-crashsight');
+    expect(crashsight.installState).toBe('installed');
+    expect(crashsight.enabled).toBe(false);
+  });
 });
