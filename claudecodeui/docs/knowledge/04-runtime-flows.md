@@ -89,10 +89,10 @@ sequenceDiagram
 Argus Brain / Subagent current runtime
 
 1. Settings reads `argusBrain` and `subagents` from `~/.mtl-code/settings.json`. Legacy `openMythosRuntime` is ignored.
-2. Obsidian Wiki and CodeGraph context are applied first, then Brain recall may append a short `Argus Brain Context` block.
+2. Obsidian Wiki and CodeGraph context are applied first, then Brain recall may append a short `Argus Brain Recall Pack` block.
 3. Brain captures command, runtime event, checkpoint, artifact, assistant summary, error, and permission events without blocking chat.
 4. Brain compacts long task state into a Mermaid canvas with refs; Subagent execution remains controlled only by `subagents.enabled`.
-5. `agent_runtime_debug` exposes Brain diagnostics and Subagent gates; it no longer exposes an OpenMythos card.
+5. `agent_runtime_debug` exposes Brain diagnostics, context fusion diagnostics, and Subagent gates; it no longer exposes an OpenMythos card.
 
 `server/index.js` 当前主路径处理 `claude-command`，它是 Argus 的 compatibility message type。以下其他 command types 可能仍在旧代码中存在，但属于 legacy hidden Provider surface：
 

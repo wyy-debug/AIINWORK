@@ -22,9 +22,9 @@ Argus UI is a local-first Electron workspace for Chat, Changes, Run, Preview, Re
 - `server/services/runtime-permission-service.js` guards Shell, Actions, Worktree setup, automation command execution, and backend runtime commands.
 - `server/services/context-budget-service.js` provides the single ContextBudget contract for live and historical token display.
 
-## OpenMythos And Subagents
+## Historical OpenMythos And Subagents
 
-OpenMythos is advisory only. It can create runtime hints, effort guidance, phase suggestions, and expert-route suggestions. It no longer creates worker plans, dispatch tickets, or auto-dispatch environment variables.
+OpenMythos is historical migration context only. Current runtime hints, task memory, and context diagnostics should use Argus Brain, CodeGraph, Obsidian Wiki, and explicit Subagents controls. Legacy OpenMythos-shaped settings no longer create worker plans, dispatch tickets, or auto-dispatch environment variables.
 
 Subagent execution follows the Codex collaborative tool protocol:
 

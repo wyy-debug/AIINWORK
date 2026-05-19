@@ -1,14 +1,15 @@
 ﻿# Argus Obsidian Bridge 使用文档
 
-Updated: 2026-05-07
+Updated: 2026-05-19
 
-Argus Obsidian Bridge 用于把 Argus 生成的知识类结果写入本机 Obsidian vault，并在对话时按用户授权目录读回少量上下文。第一版只支持本机 Obsidian Desktop，不依赖第三方 Local REST API。
+Argus Obsidian Bridge 用于把 Argus 生成的知识类结果写入本机 Obsidian vault，并在对话时按用户授权目录读回少量上下文。当前默认把 Obsidian 作为项目 Wiki 和知识库；`Argus/AIMemory` 是 legacy migration input，不再是默认读回目录。
 
 ## 适用场景
 
 - 项目总结、review notes、计划、架构决策写入项目知识库。
 - 日记、阅读、人物、想法写入第二大脑。
-- AI memory、偏好、决策索引写入 AI 可读记忆库。
+- 显式 Wiki 候选进入 review flow，确认后写入 `Argus/Wiki/<project>`。
+- 旧 AI memory、偏好、决策索引先作为迁移输入处理；个人偏好应留给 Claude native memory。
 - Obsidian 暂时不可达时，内容 fallback 到项目 `docs/knowledge/<mode>/`，不丢文档。
 
 ## 推荐安装方式: Argus 设置页
@@ -107,9 +108,11 @@ Settings -> Runtime -> Argus Bridge for Obsidian
 | Pairing token | 粘贴插件 token |
 | Auto-export knowledge results | 开启 |
 | Fallback to project docs | 开启 |
-| Enable AI memory readback | 按需开启 |
+| Enable Wiki readback | 开启 |
+| Enable AI memory readback | 默认关闭；只作为 legacy migration input |
+| Semantic index provider | 按环境选择 bridge/local HTTP/MCP，或使用 keyword fallback |
 | Max results | `5` |
-| Readable vault folders | `Argus/Projects`, `Argus/AIMemory`, `Argus/SecondBrain` |
+| Readable vault folders | `Argus/Wiki`, `Argus/_Indexes` |
 
 点 `Save bridge` 后，点 `Test connection`。成功时会显示 vault 名称和插件版本，例如:
 
@@ -123,14 +126,14 @@ Connected to self.
 
 | Mode | Obsidian 目录 | 用途 |
 | --- | --- | --- |
-| `project-knowledge` | `Argus/Projects/<project>/` | 项目总结、review notes、计划、决策、会话记录 |
+| `project-knowledge` | `Argus/Wiki/<project>/` | 项目总结、review notes、计划、决策、会话记录 |
 | `second-brain` | `Argus/SecondBrain/<YYYY>/` | 日记、阅读、人物、想法、长期主题 |
-| `ai-memory` | `Argus/AIMemory/<project-or-General>/` | 给 AI 读回的事实、偏好、决策索引 |
+| `ai-memory` | `Argus/AIMemory/<project-or-General>/` | legacy migration input；新写入优先使用 Wiki candidate review |
 
 项目知识库会自动维护:
 
 ```text
-Argus/Projects/<project>/Index.md
+Argus/Wiki/<project>/Index.md
 ```
 
 这个文件作为轻量 MOC，链接项目总结、计划、决策和会话记录。
@@ -164,11 +167,11 @@ Argus/Projects/<project>/Index.md
 
 自动捕获会先创建 `chat-auto-capture` 来源的 knowledge artifact，再走同一套 Obsidian 导出和 fallback 链路。
 
-自动捕获的写入 mode 会按内容评分判断:
+自动捕获的写入 mode 会按内容评分判断。当前推荐把稳定项目知识沉淀为 Wiki candidate，由用户确认后写入 Wiki:
 
-- 普通项目总结、review、计划、决策默认进入 `project-knowledge`。
+- 普通项目总结、review、计划、决策默认进入 `project-knowledge` / Wiki candidate。
 - 阅读笔记、书摘、人物、想法、灵感、反思、长期主题、开放问题这类内容进入 `second-brain`。
-- 用户偏好、稳定事实、未来回答规则、需要后续对话记住的内容进入 `ai-memory`。
+- 用户偏好、未来回答规则、需要跨项目记住的个人习惯应使用 Claude native memory；旧 `ai-memory` 只用于迁移和人工确认。
 
 用户不需要显式说目标库；显式指定只作为覆盖信号。
 
@@ -184,9 +187,9 @@ Argus/Projects/<project>/Index.md
 
 聊天消息旁边会显示轻量状态，例如 `Saved to Obsidian`、`Memory candidate`、`Skipped`、`Fallback to docs/knowledge` 或 `Obsidian save failed`。展开/悬停可看到 Obsidian path、artifact id、路由原因或错误。
 
-AI Memory 会分层处理:
+Legacy AIMemory 会分层处理:
 
-- 高置信稳定事实、偏好、长期决策直接写入 `Argus/AIMemory/...`。
+- 高置信稳定项目事实、长期决策应迁移到 `Argus/Wiki/<project>`。
 - 中等置信内容进入 `AI Memory review queue`，用户确认后再写长期记忆。
 - 低置信内容跳过，只记录 skipped reason。
 
@@ -211,11 +214,11 @@ Ctrl+K -> /results
 
 如果之前 fallback 或失败，恢复 Obsidian 后再次点 `Send to Obsidian` 会用稳定 `argusId` 更新同一篇笔记，不制造重复笔记。
 
-Results 面板会显示 `Routing reason`，例如因为命中 `reading notes / idea / person` 写入 SecondBrain，或因为命中 `stable fact / preference` 写入 AIMemory。
+Results 面板会显示 `Routing reason`，例如因为命中 `reading notes / idea / person` 写入 SecondBrain，或因为命中项目知识信号进入 Wiki candidate review。
 
 ## Wiki Compiler 和文件自主落库
 
-Argus 现在支持 Karpathy-style Wiki Compiler：上传文件后先保留 Raw source，再编译成 Wiki note，并按自动分类写入 Projects、SecondBrain 或 AIMemory。
+Argus 现在支持 Karpathy-style Wiki Compiler：上传文件后先保留 Raw source，再编译成 Wiki note，并按自动分类写入 Wiki、SecondBrain，或进入 legacy AIMemory 迁移路径。
 
 默认目录:
 
@@ -261,20 +264,20 @@ Duplicate cleanup -> Scan duplicates -> Archive duplicates
 
 如果 Obsidian 已打开但刚更新过插件，先执行 `Reload community plugins` 或重启 Obsidian；否则新增 duplicate endpoint 可能还没加载。
 
-## AI 读回
+## Wiki / semantic 读回
 
-开启 `Enable AI memory readback` 后，用户发送 chat message 时，Argus 会在本次请求前读取少量 Obsidian context。读回内容只进入当前模型请求，不写入历史 transcript。
+开启 `Enable Wiki readback` 后，用户发送 chat message 时，Argus 会在本次请求前读取少量 Obsidian Wiki context。读回内容只进入当前模型请求，不写入历史 transcript。
 
 默认项目范围:
 
 ```text
-Argus/AIMemory/<project-or-General>
-Argus/Projects/<project-or-General>
+Argus/Wiki/<project-or-General>
+Argus/_Indexes
 ```
 
 最终仍受插件 `Readable folders` 限制。也就是说，Argus 只能读插件设置中允许的 vault 目录。
 
-可以在 Settings 里输入 `Test query`，点击 `Test search/context` 验证读回。成功示例:
+可以在 Settings 里输入 `Test query`，点击 `Test search/context` 或 semantic query 验证读回。成功示例:
 
 ```text
 Search returned 5 note(s); context returned 5 note(s).
@@ -284,7 +287,8 @@ Search returned 5 note(s); context returned 5 note(s).
 
 - `Include active Obsidian note selection in chat readback`: 会读取 Obsidian 当前打开笔记/选中文本，注入本次请求。
 - `Test active note`: 在 Settings 里验证当前笔记是否可读。
-- 读回来源会保存在本次请求 metadata 中，UI 后续可以展开查看来源。
+- Semantic index 状态通过 `/api/obsidian-bridge/semantic-index/status` 查看；如果 semantic provider 不可用，会保留 keyword fallback。
+- 读回来源会保存在本次请求 metadata 中，`contextFusion` 会显示 Obsidian、CodeGraph、Brain 的 token 贡献。
 
 ## Obsidian -> Argus 反向发送
 
@@ -337,13 +341,13 @@ operation: 'append-heading' | 'replace-heading' | 'upsert-frontmatter'
 }
 ```
 
-## AI Memory 候选队列
+## Wiki 候选队列与 legacy AI Memory
 
 Argus 现在不会直接把长期记忆写死到 vault。流程是:
 
 1. 从 Obsidian 选中文本、反向导入 artifact、知识类结果中提取候选。
-2. 候选进入 Settings 的 `AI Memory review queue`。
-3. 用户确认 `Commit` 后，才写入 `Argus/AIMemory/<project-or-General>/`。
+2. 候选进入 Wiki candidate review。
+3. 用户确认 `Commit` 后，才写入 `Argus/Wiki/<project>`。
 4. 同一 `stableKey` 会去重；同 key 不同内容会标记为 `conflict`，等待用户判断。
 
 ## Multi Vault

@@ -240,6 +240,9 @@ Boundaries:
 - Claude native memory handles user preferences and ordinary remember or forget requests.
 - Obsidian is a Wiki and knowledge base. It is used for historical readback and explicit save-to-Wiki actions.
 - Argus Brain handles task state only. It does not write Obsidian and does not override Claude native memory storage.
+- Context diagnostics show which source injected Wiki, CodeGraph, or Brain context and how many tokens each source contributed.
+
+For troubleshooting and migration, see [2026-05-19-brain-obsidian-context-guide.md](2026-05-19-brain-obsidian-context-guide.md).
 
 OpenMythos Runtime has been removed from the active product surface. Historical notes remain only for migration context.
 
