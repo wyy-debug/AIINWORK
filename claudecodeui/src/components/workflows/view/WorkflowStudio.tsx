@@ -386,6 +386,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [workflowMcpCatalog, setWorkflowMcpCatalog] = useState<Array<Record<string, any>>>([]);
   const [templateProductState, setTemplateProductState] = useState<Record<string, any> | null>(null);
   const [observabilityState, setObservabilityState] = useState<Record<string, any> | null>(null);
+  const [governanceState, setGovernanceState] = useState<Record<string, any> | null>(null);
   const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
@@ -635,16 +636,56 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     ? observabilityState.coverageMap.coverage.map((item: any) => item.file).join(', ')
     : 'Maps workflow features to unit, source contract, e2e, and screenshot gates.';
   const evidenceExport = selectedRun ? `${selectedRun.id}: ${observabilityState?.evidenceBundle ? 'bundle ready' : 'commands, screenshots, run id, commit sha'}` : 'Select a run to export evidence.';
-  const workflowChangeHistory = useMemo(() => `${historyPast.length} draft revisions in undo history`, [historyPast.length]);
-  const draftPublishFlow = 'Draft and published definitions are separated; runs prefer published revisions.';
-  const reviewRequest = 'Review request shows DAG diff and risk changes before publish.';
-  const ownershipMetadata = 'Owner: project team; maintainer: workflow owner; support: local enterprise contact.';
-  const deprecationFlow = 'Deprecated workflows show replacement template and affected recent runs.';
-  const usageAnalytics = useMemo(() => `${runs.length} runs, ${failedRuns.length} failed, ${pendingApprovalRuns.length} waiting approvals`, [failedRuns.length, pendingApprovalRuns.length, runs.length]);
-  const roleBasedVisibility = 'Visibility can be scoped by role for workflow, template, and node package.';
-  const complianceLabels = 'Labels: data-sensitive, external-network, code-write.';
-  const auditLogSearch = 'Audit search filters workflow, run, approval, actor, and time.';
-  const policyReport = 'Policy report summarizes security labels, dependencies, approvals, and MCP allowlist.';
+  const workflowChangeHistory = useMemo(() => {
+    const revisions = governanceState?.history?.revisions || governanceState?.governance?.revisions || [];
+    return revisions.length > 0
+      ? `${revisions.length} saved revision(s), latest ${revisions[0]?.currentDigest || governanceState?.history?.latestDigest || 'unknown'}`
+      : `${historyPast.length} local undo revision(s), backend history not loaded yet`;
+  }, [governanceState, historyPast.length]);
+  const draftPublishFlow = useMemo(() => {
+    const governance = governanceState?.governance;
+    return governance
+      ? `${governance.status}; published revision ${governance.publishedRevisionId || 'none'} at ${governance.publishedAt || 'not published'}`
+      : 'Draft and published definitions are separated; runs prefer published revisions.';
+  }, [governanceState]);
+  const reviewRequest = useMemo(() => {
+    const requests = governanceState?.governance?.reviewRequests || [];
+    return requests.length > 0
+      ? `${requests.length} review request(s), latest ${requests.at(-1)?.status || 'requested'} for ${requests.at(-1)?.reviewer || 'reviewer'}`
+      : 'Review request API returns DAG diff and risk changes before publish.';
+  }, [governanceState]);
+  const ownershipMetadata = useMemo(() => {
+    const owner = governanceState?.governance?.ownership;
+    return owner ? `Owner: ${owner.owner}; team: ${owner.team}; maintainer: ${owner.maintainer}; support: ${owner.supportContact}` : 'Owner: project team; maintainer: workflow owner; support: local enterprise contact.';
+  }, [governanceState]);
+  const deprecationFlow = useMemo(() => {
+    const deprecated = governanceState?.governance?.deprecated;
+    return deprecated?.enabled
+      ? `Deprecated: ${deprecated.reason}; replacement ${deprecated.replacementWorkflowId || 'not set'}; impact ${deprecated.impact || 'review required'}`
+      : 'Active workflow; deprecation API can record replacement template and affected recent runs.';
+  }, [governanceState]);
+  const usageAnalytics = useMemo(() => {
+    const analytics = governanceState?.analytics?.[0];
+    return analytics
+      ? `${analytics.runCount} runs, ${(analytics.successRate * 100).toFixed(0)}% success, ${analytics.failureCount} failed`
+      : `${runs.length} runs, ${failedRuns.length} failed, ${pendingApprovalRuns.length} waiting approvals`;
+  }, [failedRuns.length, governanceState, pendingApprovalRuns.length, runs.length]);
+  const roleBasedVisibility = useMemo(() => {
+    const visibility = governanceState?.governance?.visibility;
+    return visibility ? `Visible roles: ${(visibility.roles || []).join(', ') || 'none'}; default ${visibility.defaultRole}` : 'Visibility can be scoped by role for workflow, template, and node package.';
+  }, [governanceState]);
+  const complianceLabels = useMemo(() => {
+    const labels = governanceState?.governance?.complianceLabels || [];
+    return labels.length > 0 ? `Labels: ${labels.join(', ')}` : 'No compliance labels yet; supported labels include data-sensitive, external-network, code-write.';
+  }, [governanceState]);
+  const auditLogSearch = useMemo(() => {
+    const records = governanceState?.audit || [];
+    return records.length > 0 ? `${records.length} audit record(s), latest ${records[0]?.type || records[0]?.summary}` : 'Audit search filters workflow, run, approval, actor, and time.';
+  }, [governanceState]);
+  const policyReport = useMemo(() => {
+    const report = governanceState?.policy?.workflows?.[0];
+    return report ? `${report.status}; ${report.riskyNodes?.length || 0} risky node(s); MCP allowlist ${(report.mcpAllowlist || []).length}; approvals ${report.approvalCount || 0}` : 'Policy report summarizes security labels, dependencies, approvals, and MCP allowlist.';
+  }, [governanceState]);
   const largeGraphPerformance = useMemo(() => `${draft.nodes.length}/100 nodes visible; React Flow keeps canvas interaction stable.`, [draft.nodes.length]);
   const virtualizedRunLogs = useMemo(() => `${streamingLogRows.length} log rows ready for virtualized rendering.`, [streamingLogRows.length]);
   const offlineReadMode = 'Cached workflow and run summaries remain readable when backend is unavailable.';
@@ -722,7 +763,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (!draft.id) return;
     let cancelled = false;
     const loadSecurity = async () => {
-      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse, templateResponse, upgradeResponse, exportPreviewResponse] = await Promise.all([
+      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse, templateResponse, upgradeResponse, exportPreviewResponse, historyResponse, governanceResponse, analyticsResponse, auditSearchResponse, policyResponse] = await Promise.all([
         api.workflowSecurity(draft.id),
         api.exportWorkflowApprovalAudit(draft.id, selectedRun?.id || ''),
         api.workflowAgentBridge(draft.id),
@@ -731,8 +772,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         api.workflowTemplateDetail(draft.id),
         api.workflowTemplateUpgradeStatus(draft.id),
         api.previewWorkflowPackageExport([draft.id]),
+        api.workflowHistory(draft.id),
+        api.workflowGovernance(draft.id),
+        api.workflowUsageAnalytics(draft.id),
+        api.workflowAuditSearch({ workflowId: draft.id, limit: 25 }),
+        api.workflowPolicyReport(draft.id),
       ]);
-      const [securityData, auditData, bridgeData, toolsData, mcpData, templateData, upgradeData, exportPreviewData] = await Promise.all([
+      const [securityData, auditData, bridgeData, toolsData, mcpData, templateData, upgradeData, exportPreviewData, historyData, governanceData, analyticsData, auditSearchData, policyData] = await Promise.all([
         securityResponse.json(),
         auditResponse.json(),
         bridgeResponse.json(),
@@ -741,6 +787,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         templateResponse.json(),
         upgradeResponse.json(),
         exportPreviewResponse.json(),
+        historyResponse.json(),
+        governanceResponse.json(),
+        analyticsResponse.json(),
+        auditSearchResponse.json(),
+        policyResponse.json(),
       ]);
       if (cancelled) return;
       if (securityResponse.ok) {
@@ -757,6 +808,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         detail: templateResponse.ok ? templateData.detail : null,
         upgrade: upgradeResponse.ok ? upgradeData.status : null,
         exportPreview: exportPreviewResponse.ok ? exportPreviewData.preview : null,
+      });
+      setGovernanceState({
+        history: historyResponse.ok ? historyData.history : null,
+        governance: governanceResponse.ok ? governanceData.governance : null,
+        analytics: analyticsResponse.ok ? analyticsData.analytics : null,
+        audit: auditSearchResponse.ok ? auditSearchData.records : null,
+        policy: policyResponse.ok ? policyData.report : null,
       });
       if (selectedRun?.id) {
         const [failuresResponse, recoveryResponse, artifactsResponse, evidenceResponse, trendResponse, coverageResponse, bundleResponse] = await Promise.all([
@@ -1300,6 +1358,59 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setIsBusy(false);
     }
   }, [draft.id, draft.nodes, permissionOverrideRequest, selectedNodeId]);
+
+  const refreshGovernance = useCallback(async () => {
+    const [historyResponse, governanceResponse, analyticsResponse, auditResponse, policyResponse] = await Promise.all([
+      api.workflowHistory(draft.id),
+      api.workflowGovernance(draft.id),
+      api.workflowUsageAnalytics(draft.id),
+      api.workflowAuditSearch({ workflowId: draft.id, limit: 25 }),
+      api.workflowPolicyReport(draft.id),
+    ]);
+    const [historyData, governanceData, analyticsData, auditData, policyData] = await Promise.all([
+      historyResponse.json(),
+      governanceResponse.json(),
+      analyticsResponse.json(),
+      auditResponse.json(),
+      policyResponse.json(),
+    ]);
+    setGovernanceState({
+      history: historyResponse.ok ? historyData.history : null,
+      governance: governanceResponse.ok ? governanceData.governance : null,
+      analytics: analyticsResponse.ok ? analyticsData.analytics : null,
+      audit: auditResponse.ok ? auditData.records : null,
+      policy: policyResponse.ok ? policyData.report : null,
+    });
+  }, [draft.id]);
+
+  const workflowGovernanceAction = useCallback(async (action: 'publish' | 'review' | 'deprecate' | 'govern') => {
+    setIsBusy(true);
+    setError('');
+    try {
+      let response: Response;
+      if (action === 'publish') {
+        response = await api.publishWorkflow(draft.id, { actor: 'local-user' });
+      } else if (action === 'review') {
+        response = await api.requestWorkflowReview(draft.id, { requester: 'local-user', reviewer: 'workflow-owner', reason: 'Review DAG and risk changes before publishing.' });
+      } else if (action === 'deprecate') {
+        response = await api.deprecateWorkflow(draft.id, { actor: 'local-user', reason: 'Superseded by a safer workflow.', impact: 'New runs should choose a replacement workflow.' });
+      } else {
+        response = await api.updateWorkflowGovernance(draft.id, {
+          actor: 'local-user',
+          ownership: { owner: 'project-team', team: selectedProject.name || 'local', maintainer: 'workflow-owner', supportContact: 'local-enterprise-contact' },
+          visibility: { roles: ['owner', 'maintainer', 'viewer'], defaultRole: 'viewer' },
+          complianceLabels: ['data-sensitive', 'code-write'],
+        });
+      }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || `Failed to ${action} workflow`);
+      await refreshGovernance();
+    } catch (governanceError) {
+      setError(governanceError instanceof Error ? governanceError.message : 'Failed to update workflow governance');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [draft.id, refreshGovernance, selectedProject.name]);
 
   const smokeTemplate = useCallback(async (workflow: WorkflowDefinition) => {
     setIsBusy(true);
@@ -2729,6 +2840,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </section>
             <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
               <h3 className="text-sm font-semibold text-foreground">Governance and audit</h3>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void workflowGovernanceAction('govern')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-50">
+                  Save governance
+                </button>
+                <button type="button" onClick={() => void workflowGovernanceAction('review')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-50">
+                  Request review
+                </button>
+                <button type="button" onClick={() => void workflowGovernanceAction('publish')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-50">
+                  Publish
+                </button>
+                <button type="button" onClick={() => void workflowGovernanceAction('deprecate')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-50">
+                  Deprecate
+                </button>
+              </div>
               <div className="mt-2 grid gap-2">
                 <div className="rounded border border-border p-2" data-testid="workflow-change-history">{workflowChangeHistory}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-draft-publish-flow">{draftPublishFlow}</div>

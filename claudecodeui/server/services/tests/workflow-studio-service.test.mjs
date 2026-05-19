@@ -1048,4 +1048,81 @@ describe('workflow studio service', () => {
 
     await fs.rm(rootDir, { recursive: true, force: true });
   });
+
+  test('tracks workflow governance history, publish snapshots, reviews, audit, analytics, visibility, compliance, and policy reports', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      autoExecute: false,
+    });
+    await store.upsertWorkflow({
+      id: 'governed-flow',
+      name: 'Governed Flow',
+      profileId: 'build',
+      permissionPreset: 'suggest',
+      nodes: [
+        { id: 'agent', type: 'agent', prompt: 'draft prompt' },
+        { id: 'shell', type: 'shell', command: 'npm test' },
+      ],
+      edges: [{ from: 'agent', to: 'shell' }],
+      actor: 'alice',
+    });
+    await store.upsertWorkflow({
+      id: 'governed-flow',
+      name: 'Governed Flow Updated',
+      profileId: 'build',
+      permissionPreset: 'suggest',
+      nodes: [
+        { id: 'agent', type: 'agent', prompt: 'updated prompt' },
+        { id: 'shell', type: 'shell', command: 'npm test' },
+        { id: 'artifact', type: 'artifact' },
+      ],
+      edges: [{ from: 'agent', to: 'shell' }, { from: 'shell', to: 'artifact' }],
+      actor: 'alice',
+    });
+
+    await store.updateWorkflowGovernance('governed-flow', {
+      actor: 'alice',
+      ownership: { owner: 'workflow-platform', team: 'agent-tools', maintainer: 'bob', supportContact: 'ops@example.test' },
+      visibility: { roles: ['owner', 'maintainer', 'viewer'], defaultRole: 'viewer' },
+      complianceLabels: ['data-sensitive', 'code-write', 'not-supported'],
+    });
+    const review = await store.requestWorkflowReview('governed-flow', { requester: 'alice', reviewer: 'bob' });
+    const published = await store.publishWorkflow('governed-flow', { actor: 'bob' });
+    const run = await store.createRun('governed-flow');
+    const deprecated = await store.deprecateWorkflow('governed-flow', { actor: 'bob', reason: 'Use newer template', replacementWorkflowId: 'replacement-flow' });
+    const history = store.getWorkflowHistory('governed-flow');
+    const analytics = store.getWorkflowUsageAnalytics('governed-flow');
+    const audit = store.searchWorkflowAudit({ workflowId: 'governed-flow', query: 'published' });
+    const policy = store.getWorkflowPolicyReport('governed-flow');
+
+    expect(history.revisions.length).toBeGreaterThanOrEqual(2);
+    expect(history.revisions[0].diff.nodes.after).toBe(3);
+    expect(review).toMatchObject({
+      status: 'requested',
+      reviewer: 'bob',
+      dagDiff: expect.objectContaining({ nodes: expect.any(Object), edges: expect.any(Object) }),
+      riskChanges: expect.arrayContaining([expect.objectContaining({ nodeId: 'shell' })]),
+    });
+    expect(published).toMatchObject({
+      status: 'published',
+      publishedRevisionId: expect.stringMatching(/^workflow_revision_/),
+      ownership: expect.objectContaining({ owner: 'workflow-platform', maintainer: 'bob' }),
+      complianceLabels: ['data-sensitive', 'code-write'],
+    });
+    expect(run.profileSnapshot.governanceStatus).toBe('published');
+    expect(deprecated).toMatchObject({
+      status: 'deprecated',
+      deprecated: expect.objectContaining({ enabled: true, replacementWorkflowId: 'replacement-flow' }),
+    });
+    expect(analytics[0]).toMatchObject({ workflowId: 'governed-flow', runCount: 1 });
+    expect(audit.some((record) => record.type === 'workflow_published')).toBe(true);
+    expect(policy.workflows[0]).toMatchObject({
+      workflowId: 'governed-flow',
+      status: 'deprecated',
+      owner: 'workflow-platform',
+      complianceLabels: ['data-sensitive', 'code-write'],
+      riskyNodes: [expect.objectContaining({ nodeId: 'shell' })],
+    });
+  });
 });

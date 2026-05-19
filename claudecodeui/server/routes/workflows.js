@@ -63,6 +63,36 @@ router.get('/mcp-argument-schema', async (req, res) => {
   }
 });
 
+router.get('/audit/search', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const records = defaultWorkflowStudioStore.searchWorkflowAudit(req.query || {});
+    res.json({ success: true, records });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to search workflow audit log');
+  }
+});
+
+router.get('/policy-report', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const report = defaultWorkflowStudioStore.getWorkflowPolicyReport(req.query.workflowId || '');
+    res.json({ success: true, report });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to build workflow policy report');
+  }
+});
+
+router.get('/analytics/usage', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const analytics = defaultWorkflowStudioStore.getWorkflowUsageAnalytics(req.query.workflowId || '');
+    res.json({ success: true, analytics });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow usage analytics');
+  }
+});
+
 router.post('/import', async (req, res) => {
   try {
     const workflow = await defaultWorkflowStudioStore.importWorkflow(req.body?.content || req.body?.workflow || req.body || {});
@@ -119,6 +149,68 @@ router.get('/:id/security', async (req, res) => {
     return res.json({ success: true, security });
   } catch (error) {
     return sendWorkflowError(res, error, 500, 'Failed to load workflow security state');
+  }
+});
+
+router.get('/:id/history', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const history = defaultWorkflowStudioStore.getWorkflowHistory(req.params.id);
+    if (!history) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, history });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to load workflow history');
+  }
+});
+
+router.get('/:id/governance', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const governance = defaultWorkflowStudioStore.getWorkflowGovernance(req.params.id);
+    if (!governance) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, governance });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to load workflow governance');
+  }
+});
+
+router.put('/:id/governance', async (req, res) => {
+  try {
+    const governance = await defaultWorkflowStudioStore.updateWorkflowGovernance(req.params.id, req.body || {});
+    if (!governance) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, governance });
+  } catch (error) {
+    return sendWorkflowError(res, error, 400, 'Failed to update workflow governance');
+  }
+});
+
+router.post('/:id/publish', async (req, res) => {
+  try {
+    const governance = await defaultWorkflowStudioStore.publishWorkflow(req.params.id, req.body || {});
+    if (!governance) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, governance });
+  } catch (error) {
+    return sendWorkflowError(res, error, error?.statusCode || 400, 'Failed to publish workflow');
+  }
+});
+
+router.post('/:id/review-requests', async (req, res) => {
+  try {
+    const review = await defaultWorkflowStudioStore.requestWorkflowReview(req.params.id, req.body || {});
+    if (!review) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.status(201).json({ success: true, review });
+  } catch (error) {
+    return sendWorkflowError(res, error, 400, 'Failed to request workflow review');
+  }
+});
+
+router.post('/:id/deprecate', async (req, res) => {
+  try {
+    const governance = await defaultWorkflowStudioStore.deprecateWorkflow(req.params.id, req.body || {});
+    if (!governance) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, governance });
+  } catch (error) {
+    return sendWorkflowError(res, error, 400, 'Failed to deprecate workflow');
   }
 });
 

@@ -56,6 +56,8 @@ const RISKY_NODE_TYPES = new Set(['shell', 'mcp', 'tool']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+const WORKFLOW_GOVERNANCE_STATUSES = new Set(['draft', 'published', 'deprecated']);
+const WORKFLOW_COMPLIANCE_LABELS = new Set(['data-sensitive', 'external-network', 'code-write', 'secret-access', 'mcp-enabled']);
 
 const BUILT_IN_NODE_TYPES = new Set(WORKFLOW_NODE_TYPES);
 const BUILT_IN_TOOL_REGISTRY = Object.freeze([
@@ -429,6 +431,103 @@ export function normalizeWorkflowDefinition(input = {}, existing = null, now = (
     metadata: asObject(source.metadata || previous.metadata),
     createdAt: previous.createdAt || source.createdAt || timestamp,
     updatedAt: timestamp,
+  };
+}
+
+function workflowDefinitionDigest(workflow) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify({
+      name: workflow.name,
+      description: workflow.description,
+      profileId: workflow.profileId,
+      permissionPreset: workflow.permissionPreset,
+      inputs: workflow.inputs,
+      outputs: workflow.outputs,
+      nodes: workflow.nodes,
+      edges: workflow.edges,
+      maxConcurrency: workflow.maxConcurrency,
+    }))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function summarizeDefinitionDiff(previous = null, next = {}) {
+  const before = previous ? asObject(previous) : {};
+  const beforeNodes = Array.isArray(before.nodes) ? before.nodes : [];
+  const nextNodes = Array.isArray(next.nodes) ? next.nodes : [];
+  const beforeEdges = Array.isArray(before.edges) ? before.edges : [];
+  const nextEdges = Array.isArray(next.edges) ? next.edges : [];
+  const beforeNodeIds = new Set(beforeNodes.map((node) => node.id));
+  const nextNodeIds = new Set(nextNodes.map((node) => node.id));
+  const beforeEdgeIds = new Set(beforeEdges.map((edge) => edge.id));
+  const nextEdgeIds = new Set(nextEdges.map((edge) => edge.id));
+  return {
+    created: !previous,
+    changedFields: ['name', 'description', 'profileId', 'permissionPreset', 'maxConcurrency']
+      .filter((field) => previous && before[field] !== next[field]),
+    nodes: {
+      before: beforeNodes.length,
+      after: nextNodes.length,
+      added: [...nextNodeIds].filter((id) => !beforeNodeIds.has(id)),
+      removed: [...beforeNodeIds].filter((id) => !nextNodeIds.has(id)),
+    },
+    edges: {
+      before: beforeEdges.length,
+      after: nextEdges.length,
+      added: [...nextEdgeIds].filter((id) => !beforeEdgeIds.has(id)),
+      removed: [...beforeEdgeIds].filter((id) => !nextEdgeIds.has(id)),
+    },
+  };
+}
+
+function compactWorkflowSnapshot(workflow) {
+  const snapshot = clone(workflow);
+  snapshot.metadata = asObject(snapshot.metadata);
+  if (snapshot.metadata.governance) {
+    snapshot.metadata.governance = {
+      ...asObject(snapshot.metadata.governance),
+      revisions: [],
+      reviewRequests: [],
+      auditRecords: [],
+      publishedDefinition: null,
+    };
+  }
+  return snapshot;
+}
+
+function normalizeWorkflowGovernance(workflow = {}) {
+  const governance = asObject(workflow.metadata?.governance);
+  const ownership = asObject(governance.ownership);
+  const visibility = asObject(governance.visibility);
+  const deprecated = asObject(governance.deprecated);
+  const status = WORKFLOW_GOVERNANCE_STATUSES.has(governance.status) ? governance.status : 'draft';
+  return {
+    status,
+    publishedAt: normalizeText(governance.publishedAt, '', 80),
+    publishedRevisionId: normalizeText(governance.publishedRevisionId, '', 160),
+    publishedDefinition: governance.publishedDefinition || null,
+    revisions: Array.isArray(governance.revisions) ? governance.revisions.slice(-50).map(asObject) : [],
+    reviewRequests: Array.isArray(governance.reviewRequests) ? governance.reviewRequests.slice(-50).map(asObject) : [],
+    ownership: {
+      owner: normalizeText(ownership.owner, 'project-team', 120),
+      team: normalizeText(ownership.team, 'local', 120),
+      maintainer: normalizeText(ownership.maintainer, 'workflow-owner', 120),
+      supportContact: normalizeText(ownership.supportContact, 'local-enterprise-contact', 180),
+    },
+    visibility: {
+      roles: normalizeStringArray(visibility.roles || ['owner', 'maintainer'], 80),
+      defaultRole: normalizeText(visibility.defaultRole, 'viewer', 80),
+    },
+    complianceLabels: normalizeStringArray(governance.complianceLabels, 80)
+      .filter((label) => WORKFLOW_COMPLIANCE_LABELS.has(label)),
+    deprecated: {
+      enabled: Boolean(deprecated.enabled),
+      reason: normalizeText(deprecated.reason, '', 500),
+      replacementWorkflowId: normalizeText(deprecated.replacementWorkflowId, '', 120),
+      deprecatedAt: normalizeText(deprecated.deprecatedAt, '', 80),
+      impact: normalizeText(deprecated.impact, '', 500),
+    },
+    auditRecords: Array.isArray(governance.auditRecords) ? governance.auditRecords.slice(-200).map(asObject) : [],
   };
 }
 
@@ -1400,6 +1499,25 @@ export function createWorkflowStudioStore({
     return workflow ? clone(workflow) : null;
   }
 
+  function getRunnableWorkflow(workflow) {
+    const governance = normalizeWorkflowGovernance(workflow);
+    if (governance.status === 'published' && governance.publishedDefinition) {
+      return normalizeWorkflowDefinition({
+        ...governance.publishedDefinition,
+        id: workflow.id,
+        name: workflow.name,
+        metadata: {
+          ...asObject(governance.publishedDefinition.metadata),
+          governance: {
+            ...governance,
+            publishedDefinition: null,
+          },
+        },
+      }, workflow, now);
+    }
+    return workflow;
+  }
+
   function normalizeNodePackage(input = {}) {
     const source = asObject(input);
     const type = normalizeId(source.type || source.id, 'custom-node');
@@ -1458,6 +1576,35 @@ export function createWorkflowStudioStore({
     const index = workflows.findIndex((workflow) => workflow.id === id);
     const existing = index >= 0 ? workflows[index] : null;
     const normalized = normalizeWorkflowDefinition({ ...input, id }, existing, now);
+    const governance = normalizeWorkflowGovernance(normalized);
+    const revision = {
+      id: `workflow_revision_${crypto.randomUUID()}`,
+      workflowId: normalized.id,
+      actor: normalizeText(input.actor || input.metadata?.governance?.actor, 'local-user', 120),
+      createdAt: nowIso(now),
+      previousDigest: existing ? workflowDefinitionDigest(existing) : '',
+      currentDigest: workflowDefinitionDigest(normalized),
+      diff: summarizeDefinitionDiff(existing, normalized),
+    };
+    normalized.metadata = {
+      ...asObject(normalized.metadata),
+      governance: {
+        ...governance,
+        revisions: [...governance.revisions, revision].slice(-50),
+        auditRecords: [
+          ...governance.auditRecords,
+          {
+            id: `workflow_audit_${crypto.randomUUID()}`,
+            type: existing ? 'workflow_saved' : 'workflow_created',
+            actor: revision.actor,
+            workflowId: normalized.id,
+            createdAt: revision.createdAt,
+            summary: existing ? 'Workflow definition saved.' : 'Workflow definition created.',
+            diff: revision.diff,
+          },
+        ].slice(-200),
+      },
+    };
     const validation = validateWorkflowDefinition(normalized).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
@@ -1763,7 +1910,8 @@ export function createWorkflowStudioStore({
       error.statusCode = 404;
       throw error;
     }
-    const validation = validateWorkflowDefinition(workflow).validation;
+    const runnableWorkflow = getRunnableWorkflow(workflow);
+    const validation = validateWorkflowDefinition(runnableWorkflow).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -1771,9 +1919,9 @@ export function createWorkflowStudioStore({
       throw error;
     }
     const providedInputs = asObject(input.inputs);
-    const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
+    const runInputs = Object.fromEntries((runnableWorkflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
     Object.assign(runInputs, providedInputs);
-    const inputValidation = validateRunInputs(workflow, runInputs);
+    const inputValidation = validateRunInputs(runnableWorkflow, runInputs);
     if (!inputValidation.valid) {
       const error = new Error(inputValidation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -1781,7 +1929,7 @@ export function createWorkflowStudioStore({
       throw error;
     }
 
-    const agent = await agentResolver(workflow.profileId);
+    const agent = await agentResolver(runnableWorkflow.profileId);
     const timestamp = now();
     const run = normalizeRun({
       id: `workflow_run_${crypto.randomUUID()}`,
@@ -1792,18 +1940,20 @@ export function createWorkflowStudioStore({
       sessionId: input.sessionId || '',
       inputs: runInputs,
       profileSnapshot: {
-        profileId: workflow.profileId,
-        permissionPreset: workflow.permissionPreset,
-        agentName: agent?.name || workflow.profileId,
+        profileId: runnableWorkflow.profileId,
+        permissionPreset: runnableWorkflow.permissionPreset,
+        agentName: agent?.name || runnableWorkflow.profileId,
+        governanceStatus: normalizeWorkflowGovernance(workflow).status,
+        publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
       },
       queue: {
         state: autoExecute ? 'running' : 'queued',
-        maxConcurrency: workflow.maxConcurrency,
+        maxConcurrency: runnableWorkflow.maxConcurrency,
         updatedAt: timestamp,
       },
-      nodeRuns: Object.fromEntries(workflow.nodes.map((node) => [node.id, createNodeRun(node, now)])),
+      nodeRuns: Object.fromEntries(runnableWorkflow.nodes.map((node) => [node.id, createNodeRun(node, now)])),
       logs: [`Created workflow run for ${workflow.name}.`],
-      timelineEvents: [createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name }, now)],
+      timelineEvents: [createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name, governanceStatus: normalizeWorkflowGovernance(workflow).status }, now)],
       createdAt: timestamp,
       startedAt: timestamp,
       updatedAt: timestamp,
@@ -1813,11 +1963,11 @@ export function createWorkflowStudioStore({
     if (!autoExecute) {
       run.status = 'queued';
       run.queue.state = 'queued';
-      run.timelineEvents.push(createRunEvent('workflow_run_queued', { maxConcurrency: workflow.maxConcurrency }, now));
+      run.timelineEvents.push(createRunEvent('workflow_run_queued', { maxConcurrency: runnableWorkflow.maxConcurrency }, now));
       await saveRuns();
       return clone(run);
     }
-    return executeReadyNodes(workflow, run);
+    return executeReadyNodes(runnableWorkflow, run);
   }
 
   function listRuns({ workflowId = '', status = '', sessionId = '', projectPath = '', limit = 50 } = {}) {
@@ -2579,6 +2729,264 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function getWorkflowHistory(workflowId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const governance = normalizeWorkflowGovernance(workflow);
+    return {
+      workflowId: workflow.id,
+      status: governance.status,
+      revisions: clone(governance.revisions).reverse(),
+      latestDigest: workflowDefinitionDigest(workflow),
+    };
+  }
+
+  async function updateWorkflowGovernance(workflowId, input = {}) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const current = normalizeWorkflowGovernance(workflow);
+    const actor = normalizeText(input.actor, 'local-user', 120);
+    const status = WORKFLOW_GOVERNANCE_STATUSES.has(input.status) ? input.status : current.status;
+    const governance = {
+      ...current,
+      status,
+      ownership: {
+        ...current.ownership,
+        ...asObject(input.ownership),
+      },
+      visibility: {
+        ...current.visibility,
+        ...asObject(input.visibility),
+        roles: normalizeStringArray(input.visibility?.roles || current.visibility.roles, 80),
+      },
+      complianceLabels: normalizeStringArray(input.complianceLabels || current.complianceLabels, 80)
+        .filter((label) => WORKFLOW_COMPLIANCE_LABELS.has(label)),
+      deprecated: {
+        ...current.deprecated,
+        ...asObject(input.deprecated),
+      },
+      auditRecords: [
+        ...current.auditRecords,
+        {
+          id: `workflow_audit_${crypto.randomUUID()}`,
+          type: 'workflow_governance_updated',
+          actor,
+          workflowId: workflow.id,
+          createdAt: nowIso(now),
+          summary: 'Workflow governance metadata updated.',
+        },
+      ].slice(-200),
+    };
+    workflow.metadata = {
+      ...asObject(workflow.metadata),
+      governance,
+    };
+    workflow.updatedAt = nowIso(now);
+    await saveWorkflows();
+    return getWorkflowGovernance(workflow.id);
+  }
+
+  function getWorkflowGovernance(workflowId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const governance = normalizeWorkflowGovernance(workflow);
+    return {
+      workflowId: workflow.id,
+      name: workflow.name,
+      ...clone(governance),
+      visibilityAllowedRoles: governance.visibility.roles,
+      visibleToViewer: governance.visibility.roles.includes('viewer') || governance.visibility.roles.includes('owner'),
+    };
+  }
+
+  async function publishWorkflow(workflowId, input = {}) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const validation = validateWorkflowDefinition(workflow).validation;
+    if (!validation.valid) {
+      const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
+      error.statusCode = 400;
+      error.validation = validation;
+      throw error;
+    }
+    const current = normalizeWorkflowGovernance(workflow);
+    const latestRevision = current.revisions[current.revisions.length - 1] || null;
+    const actor = normalizeText(input.actor, 'local-user', 120);
+    const publishedAt = nowIso(now);
+    const governance = {
+      ...current,
+      status: 'published',
+      publishedAt,
+      publishedRevisionId: latestRevision?.id || '',
+      publishedDefinition: compactWorkflowSnapshot(workflow),
+      auditRecords: [
+        ...current.auditRecords,
+        {
+          id: `workflow_audit_${crypto.randomUUID()}`,
+          type: 'workflow_published',
+          actor,
+          workflowId: workflow.id,
+          createdAt: publishedAt,
+          summary: `Published revision ${latestRevision?.id || 'current'}.`,
+        },
+      ].slice(-200),
+    };
+    workflow.metadata = {
+      ...asObject(workflow.metadata),
+      governance,
+    };
+    workflow.updatedAt = publishedAt;
+    await saveWorkflows();
+    return getWorkflowGovernance(workflow.id);
+  }
+
+  async function requestWorkflowReview(workflowId, input = {}) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const current = normalizeWorkflowGovernance(workflow);
+    const published = current.publishedDefinition || null;
+    const request = {
+      id: `workflow_review_${crypto.randomUUID()}`,
+      workflowId: workflow.id,
+      requester: normalizeText(input.requester, 'local-user', 120),
+      reviewer: normalizeText(input.reviewer, current.ownership.maintainer, 120),
+      reason: normalizeText(input.reason, '', 500),
+      status: 'requested',
+      createdAt: nowIso(now),
+      dagDiff: summarizeDefinitionDiff(published, workflow),
+      riskChanges: buildPermissionDryRun(workflow).rows.filter((row) => row.riskLevel !== 'low' || row.decision !== 'allow'),
+    };
+    workflow.metadata = {
+      ...asObject(workflow.metadata),
+      governance: {
+        ...current,
+        reviewRequests: [...current.reviewRequests, request].slice(-50),
+        auditRecords: [
+          ...current.auditRecords,
+          {
+            id: `workflow_audit_${crypto.randomUUID()}`,
+            type: 'workflow_review_requested',
+            actor: request.requester,
+            workflowId: workflow.id,
+            createdAt: request.createdAt,
+            summary: `Review requested from ${request.reviewer}.`,
+          },
+        ].slice(-200),
+      },
+    };
+    workflow.updatedAt = request.createdAt;
+    await saveWorkflows();
+    return clone(request);
+  }
+
+  async function deprecateWorkflow(workflowId, input = {}) {
+    return updateWorkflowGovernance(workflowId, {
+      actor: input.actor,
+      status: 'deprecated',
+      deprecated: {
+        enabled: true,
+        reason: normalizeText(input.reason, 'Deprecated by workflow owner.', 500),
+        replacementWorkflowId: normalizeText(input.replacementWorkflowId, '', 120),
+        deprecatedAt: nowIso(now),
+        impact: normalizeText(input.impact, 'New runs should use the replacement workflow.', 500),
+      },
+    });
+  }
+
+  function getWorkflowUsageAnalytics(workflowId = '') {
+    const id = normalizeText(workflowId);
+    const scopedRuns = runs.filter((run) => !id || run.workflowId === id);
+    const byWorkflow = new Map();
+    for (const run of scopedRuns) {
+      const record = byWorkflow.get(run.workflowId) || {
+        workflowId: run.workflowId,
+        workflowName: run.workflowName,
+        runCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        averageDurationMs: 0,
+        commonFailedNodes: {},
+      };
+      record.runCount += 1;
+      if (run.status === 'completed') record.successCount += 1;
+      if (run.status === 'failed') record.failureCount += 1;
+      const duration = run.completedAt && run.startedAt ? run.completedAt - run.startedAt : 0;
+      record.averageDurationMs += duration;
+      for (const nodeRun of Object.values(run.nodeRuns || {})) {
+        if (nodeRun.status === 'failed') record.commonFailedNodes[nodeRun.nodeId] = (record.commonFailedNodes[nodeRun.nodeId] || 0) + 1;
+      }
+      byWorkflow.set(run.workflowId, record);
+    }
+    return [...byWorkflow.values()].map((record) => ({
+      ...record,
+      successRate: record.runCount ? record.successCount / record.runCount : 0,
+      averageDurationMs: record.runCount ? Math.round(record.averageDurationMs / record.runCount) : 0,
+      commonFailedNodes: Object.entries(record.commonFailedNodes)
+        .map(([nodeId, count]) => ({ nodeId, count }))
+        .sort((left, right) => right.count - left.count),
+    }));
+  }
+
+  function searchWorkflowAudit(input = {}) {
+    const query = normalizeText(input.query || input.q, '', 200).toLowerCase();
+    const workflowId = normalizeText(input.workflowId, '', 120);
+    const actor = normalizeText(input.actor, '', 120).toLowerCase();
+    const records = workflows.flatMap((workflow) => normalizeWorkflowGovernance(workflow).auditRecords
+      .map((record) => ({
+        ...record,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+      })))
+      .concat(runs.flatMap((run) => (run.timelineEvents || []).map((event) => ({
+        id: event.id,
+        type: event.type,
+        actor: event.payload?.approver || event.payload?.actor || '',
+        workflowId: run.workflowId,
+        workflowName: run.workflowName,
+        runId: run.id,
+        createdAt: event.createdAt,
+        summary: event.payload?.summary || event.payload?.decision || event.type,
+      }))));
+    return records
+      .filter((record) => !workflowId || record.workflowId === workflowId)
+      .filter((record) => !actor || String(record.actor || '').toLowerCase() === actor)
+      .filter((record) => !query || JSON.stringify(record).toLowerCase().includes(query))
+      .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))
+      .slice(0, Math.max(1, Math.min(Number(input.limit) || 100, 500)))
+      .map(clone);
+  }
+
+  function getWorkflowPolicyReport(workflowId = '') {
+    const workflowFilter = normalizeText(workflowId, '', 120);
+    const selected = workflows.filter((workflow) => !workflowFilter || workflow.id === workflowFilter);
+    return {
+      generatedAt: nowIso(now),
+      workflows: selected.map((workflow) => {
+        const governance = normalizeWorkflowGovernance(workflow);
+        const security = getWorkflowSecurity(workflow);
+        return {
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          status: governance.status,
+          owner: governance.ownership.owner,
+          visibilityRoles: governance.visibility.roles,
+          complianceLabels: governance.complianceLabels,
+          deprecated: governance.deprecated,
+          dependencyReport: checkTemplateDependencies(workflow.id),
+          approvalCount: runs
+            .filter((run) => run.workflowId === workflow.id)
+            .flatMap((run) => run.timelineEvents || [])
+            .filter((event) => event.type === 'workflow_approval_decision').length,
+          mcpAllowlist: security.mcpAllowlist,
+          riskyNodes: workflow.nodes.filter((node) => RISKY_NODE_TYPES.has(node.type)).map(summarizeNode),
+        };
+      }),
+    };
+  }
+
   function getAgentBridgeState(workflowId, { inputs = {} } = {}) {
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
     if (!workflow) return null;
@@ -2868,6 +3276,15 @@ export function createWorkflowStudioStore({
     permissionDryRun,
     createPermissionOverrideRequest,
     exportApprovalAudit,
+    getWorkflowHistory,
+    getWorkflowGovernance,
+    updateWorkflowGovernance,
+    publishWorkflow,
+    requestWorkflowReview,
+    deprecateWorkflow,
+    getWorkflowUsageAnalytics,
+    searchWorkflowAudit,
+    getWorkflowPolicyReport,
     getAgentBridgeState,
     getToolRegistry,
     getMcpToolCatalog,

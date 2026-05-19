@@ -461,6 +461,36 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({}),
     }),
+  workflowHistory: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/history`),
+  workflowGovernance: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/governance`),
+  updateWorkflowGovernance: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/governance`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  publishWorkflow: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  requestWorkflowReview: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/review-requests`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deprecateWorkflow: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/deprecate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  workflowUsageAnalytics: (workflowId = '') =>
+    apiFetch(`/api/workflows/analytics/usage${workflowId ? `?workflowId=${encodeURIComponent(workflowId)}` : ''}`),
+  workflowAuditSearch: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/api/workflows/audit/search${query ? `?${query}` : ''}`);
+  },
+  workflowPolicyReport: (workflowId = '') =>
+    apiFetch(`/api/workflows/policy-report${workflowId ? `?workflowId=${encodeURIComponent(workflowId)}` : ''}`),
   workflowBenchmarkReadiness: () => apiFetch('/api/workflow-benchmarks'),
   workflowBenchmarkTrend: () => apiFetch('/api/workflow-benchmarks/trend'),
   workflowCoverageMap: () => apiFetch('/api/workflow-benchmarks/coverage-map'),
