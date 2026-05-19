@@ -11,6 +11,7 @@ import {
   getActiveObsidianNote,
   getObsidianBridgeHealth,
   getObsidianGraph,
+  getObsidianReadOnlyProviderCapabilities,
   getObsidianSemanticIndexState,
   archiveObsidianDuplicates,
   migrateObsidianWikiLegacy,
@@ -189,6 +190,15 @@ router.get('/semantic-index/status', async (_req, res) => {
     res.json({ success: true, semanticIndex: getObsidianSemanticIndexState() });
   } catch (error) {
     sendBridgeError(res, error, 'Failed to read Obsidian semantic index status');
+  }
+});
+
+router.get('/semantic-index/capabilities', async (_req, res) => {
+  try {
+    const provider = await getObsidianReadOnlyProviderCapabilities();
+    res.json({ success: true, provider });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to read Obsidian semantic provider capabilities');
   }
 });
 

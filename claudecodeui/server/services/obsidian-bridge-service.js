@@ -8,6 +8,11 @@ import {
   normalizeObsidianSemanticIndexMetadata,
   queryObsidianSemanticIndex,
 } from './obsidian-semantic-index-service.js';
+import {
+  detectReadOnlyObsidianProviderCapabilities,
+  normalizeReadOnlyObsidianProviderConfig,
+  queryReadOnlyObsidianProvider,
+} from './obsidian-readonly-provider-service.js';
 
 const CONFIG_KEY = 'obsidian_bridge';
 const DEFAULT_PORT = '27177';
@@ -68,6 +73,10 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   obsidianSemanticProvider: 'auto',
   obsidianSemanticFallbackEnabled: true,
   obsidianSemanticIndexMetadata: {},
+  obsidianSemanticProviderTransport: 'bridge',
+  obsidianSemanticProviderEndpoint: '',
+  obsidianSemanticProviderCommand: '',
+  obsidianSemanticProviderTimeoutMs: 1500,
   obsidianMainPathSwitchScope: MAIN_PATH_SWITCH_SCOPE,
   routingRules: {
     readingNotesMode: 'second-brain',
@@ -344,6 +353,10 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     obsidianSemanticProvider: normalizeObsidianSemanticProvider(source.obsidianSemanticProvider),
     obsidianSemanticFallbackEnabled: source.obsidianSemanticFallbackEnabled !== false,
     obsidianSemanticIndexMetadata: normalizeObsidianSemanticIndexMetadata(source.obsidianSemanticIndexMetadata),
+    obsidianSemanticProviderTransport: normalizeReadOnlyObsidianProviderConfig(source).transport,
+    obsidianSemanticProviderEndpoint: normalizeReadOnlyObsidianProviderConfig(source).endpoint,
+    obsidianSemanticProviderCommand: normalizeReadOnlyObsidianProviderConfig(source).command,
+    obsidianSemanticProviderTimeoutMs: normalizeReadOnlyObsidianProviderConfig(source).timeoutMs,
     obsidianMainPathSwitchScope: MAIN_PATH_SWITCH_SCOPE,
     routingRules: normalizeRoutingRules(source.routingRules),
     vaults,
@@ -430,6 +443,20 @@ export const getObsidianSemanticIndexState = () => {
     config,
     status: { semanticProviders },
   });
+};
+
+export const getObsidianReadOnlyProviderCapabilities = async ({
+  fetchImpl = globalThis.fetch,
+  mcpClient = null,
+} = {}) => {
+  const config = readObsidianBridgeConfig({ includeToken: true });
+  return detectReadOnlyObsidianProviderCapabilities({
+    transport: config.obsidianSemanticProviderTransport,
+    providerId: config.obsidianSemanticProvider,
+    endpoint: config.obsidianSemanticProviderEndpoint,
+    command: config.obsidianSemanticProviderCommand,
+    timeoutMs: config.obsidianSemanticProviderTimeoutMs,
+  }, { fetchImpl, mcpClient });
 };
 
 const hasAuthError = (value = '') => /\b(401|403|unauthori[sz]ed|forbidden|stale\s+token|token)\b/i.test(value);
@@ -1192,14 +1219,40 @@ export const searchObsidianSemanticIndex = async (payload = {}, {
   }
 
   const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
-  const state = getObsidianSemanticIndexState();
+  const bridgeConfig = readObsidianBridgeConfig({ includeToken: true });
+  const readOnlyProvider = normalizeReadOnlyObsidianProviderConfig({
+    transport: bridgeConfig.obsidianSemanticProviderTransport,
+    providerId: bridgeConfig.obsidianSemanticProvider,
+    endpoint: bridgeConfig.obsidianSemanticProviderEndpoint,
+    command: bridgeConfig.obsidianSemanticProviderCommand,
+    timeoutMs: bridgeConfig.obsidianSemanticProviderTimeoutMs,
+  });
+  const state = readOnlyProvider.transport === 'bridge'
+    ? getObsidianSemanticIndexState()
+    : {
+      ...getObsidianSemanticIndexState(),
+      status: 'ready',
+      provider: {
+        id: readOnlyProvider.providerId,
+        label: readOnlyProvider.providerId,
+        available: true,
+        readOnly: true,
+      },
+    };
   const normalizedPayload = normalizeObsidianSearchPayload(payload, config);
   return queryObsidianSemanticIndex(normalizedPayload, {
     state,
-    semanticSearch: (nextPayload) => callBridge('/argus/v1/semantic/search', {
-      method: 'POST',
-      body: JSON.stringify(nextPayload),
-    }, config, fetchImpl),
+    semanticSearch: (nextPayload) => (
+      readOnlyProvider.transport === 'bridge'
+        ? callBridge('/argus/v1/semantic/search', {
+          method: 'POST',
+          body: JSON.stringify(nextPayload),
+        }, config, fetchImpl)
+        : queryReadOnlyObsidianProvider(nextPayload, {
+          config: readOnlyProvider,
+          fetchImpl,
+        })
+    ),
     fallbackSearch: (nextPayload) => searchObsidianBridge(nextPayload, { fetchImpl }),
   });
 };
