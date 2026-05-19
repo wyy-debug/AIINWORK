@@ -74,6 +74,9 @@ type WorkflowStudioProps = {
 type StudioView = 'Home' | 'Library' | 'Editor' | 'Runs';
 type WorkflowInspectorTab = 'Config' | 'Data' | 'Permissions' | 'Runtime';
 type WorkflowLibraryFilter = 'All' | 'Built-in' | 'Enterprise' | 'Needs setup' | 'Recently used';
+type WorkflowLayoutMode = 'left-to-right' | 'top-down' | 'compact';
+type WorkflowEdgeRouteStyle = NonNullable<WorkflowEdge['routeStyle']>;
+type WorkflowMinimapFilter = 'all' | 'status' | 'type' | 'risk';
 
 type WorkflowPaletteGroup = {
   id: string;
@@ -85,6 +88,8 @@ interface WorkflowFlowNodeData extends Record<string, unknown> {
   workflowNode: WorkflowNode;
   runState: WorkflowNodeRun | null;
   permissionPreset: string;
+  validationBadges: string[];
+  isLocked: boolean;
 }
 
 type WorkflowFlowNode = Node<WorkflowFlowNodeData, 'workflowNode'>;
@@ -114,6 +119,9 @@ const paletteGroups: WorkflowPaletteGroup[] = [
 
 const inspectorTabs: WorkflowInspectorTab[] = ['Config', 'Data', 'Permissions', 'Runtime'];
 const libraryFilters: WorkflowLibraryFilter[] = ['All', 'Built-in', 'Enterprise', 'Needs setup', 'Recently used'];
+const layoutModes: WorkflowLayoutMode[] = ['left-to-right', 'top-down', 'compact'];
+const edgeRouteStyles: WorkflowEdgeRouteStyle[] = ['smoothstep', 'straight', 'step'];
+const minimapFilters: WorkflowMinimapFilter[] = ['all', 'status', 'type', 'risk'];
 const favoriteStorageKey = 'workflowStudio.favoriteWorkflowIds';
 const recentStorageKey = 'workflowStudio.recentWorkflowIds';
 
@@ -233,11 +241,24 @@ function describePermissionSource(workflow: WorkflowDefinition, node: WorkflowNo
   return `Profile baseline: ${workflow.permissionPreset || 'inherit'}`;
 }
 
+function getNodeValidationBadges(workflow: WorkflowDefinition, node: WorkflowNode, lockedNodeIds: string[]) {
+  const badges: string[] = [];
+  if (lockedNodeIds.includes(node.id)) badges.push('locked');
+  if (node.type === 'mcp' && !node.toolName) badges.push('missing mcp tool');
+  if (node.type === 'shell' && !node.command?.trim()) badges.push('missing command');
+  if ((node.type === 'agent' || node.type === 'subagent') && !node.agentId?.trim()) badges.push('missing agent');
+  if (node.type === 'condition' && !node.condition?.trim()) badges.push('missing condition');
+  if (riskyNodeTypes.has(node.type)) badges.push(`permission ${node.permission || workflow.permissionPreset}`);
+  if (!workflow.edges.some((edge) => edge.from === node.id || edge.to === node.id) && workflow.nodes.length > 1) badges.push('unconnected');
+  return badges.slice(0, 3);
+}
+
 function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const node = data.workflowNode;
   const runState = data.runState;
   const Icon = nodeIconByType[node.type] || Bot;
   const isRisky = riskyNodeTypes.has(node.type);
+  const validationBadges = data.validationBadges || [];
   return (
     <div
       data-testid="workflow-node"
@@ -268,6 +289,16 @@ function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
             ? 'Missing MCP tool'
             : 'Dependencies ready'}
       </div>
+      <div className="mt-2 flex flex-wrap gap-1" data-testid="workflow-graph-validation-badges">
+        {validationBadges.length > 0 ? validationBadges.map((badge) => (
+          <span key={badge} className="rounded border border-current/20 bg-white/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wide">
+            {badge}
+          </span>
+        )) : (
+          <span className="rounded border border-current/20 bg-white/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wide">valid</span>
+        )}
+      </div>
+      {data.isLocked && <span className="mt-2 block text-[10px] font-medium opacity-75">layout locked</span>}
       {runState && (
         <span className={cn('mt-3 inline-flex rounded-full border px-2 py-0.5 text-[11px]', statusTone[runState.status] || statusTone.pending)}>
           {runState.status}
@@ -289,8 +320,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
   const [draft, setDraft] = useState<WorkflowDefinition>(() => createBlankWorkflow(selectedProject));
   const [selectedNodeId, setSelectedNodeId] = useState('');
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeId, setSelectedEdgeId] = useState('');
   const [nodeSearch, setNodeSearch] = useState('');
+  const [copiedNodes, setCopiedNodes] = useState<WorkflowNode[]>([]);
+  const [copiedEdges, setCopiedEdges] = useState<WorkflowEdge[]>([]);
+  const [historyPast, setHistoryPast] = useState<WorkflowDefinition[]>([]);
+  const [historyFuture, setHistoryFuture] = useState<WorkflowDefinition[]>([]);
+  const [layoutMode, setLayoutMode] = useState<WorkflowLayoutMode>('left-to-right');
+  const [lockedNodeIds, setLockedNodeIds] = useState<string[]>([]);
+  const [minimapFilter, setMinimapFilter] = useState<WorkflowMinimapFilter>('all');
   const [libraryFilter, setLibraryFilter] = useState<WorkflowLibraryFilter>('All');
   const [inspectorTab, setInspectorTab] = useState<WorkflowInspectorTab>('Config');
   const [isRunSetupOpen, setIsRunSetupOpen] = useState(false);
@@ -528,26 +567,60 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }
   }, [openWorkflowDeepLink, selectedWorkflowId, workflows.length]);
 
+  const commitDraft = useCallback((updater: (current: WorkflowDefinition) => WorkflowDefinition) => {
+    setDraft((current) => {
+      setHistoryPast((history) => [...history, current].slice(-30));
+      setHistoryFuture([]);
+      return updater(current);
+    });
+  }, []);
+
   const updateDraft = useCallback((patch: Partial<WorkflowDefinition>) => {
-    setDraft((current) => ({ ...current, ...patch }));
+    commitDraft((current) => ({ ...current, ...patch }));
+  }, [commitDraft]);
+
+  const undoWorkflowEdit = useCallback(() => {
+    setHistoryPast((history) => {
+      const previous = history.at(-1);
+      if (!previous) return history;
+      setHistoryFuture((future) => [draft, ...future].slice(0, 30));
+      setDraft(previous);
+      setSelectedNodeId('');
+      setSelectedNodeIds([]);
+      setSelectedEdgeId('');
+      return history.slice(0, -1);
+    });
+  }, [draft]);
+
+  const redoWorkflowEdit = useCallback(() => {
+    setHistoryFuture((future) => {
+      const next = future[0];
+      if (!next) return future;
+      setHistoryPast((history) => [...history, draft].slice(-30));
+      setDraft(next);
+      setSelectedNodeId('');
+      setSelectedNodeIds([]);
+      setSelectedEdgeId('');
+      return future.slice(1);
+    });
   }, []);
 
   const updateNode = useCallback((nodeId: string, patch: Partial<WorkflowNode>) => {
-    setDraft((current) => ({
+    commitDraft((current) => ({
       ...current,
       nodes: current.nodes.map((node) => (node.id === nodeId ? { ...node, ...patch } : node)),
     }));
-  }, []);
+  }, [commitDraft]);
 
   const updateEdge = useCallback((edgeId: string, patch: Partial<WorkflowEdge>) => {
-    setDraft((current) => ({
+    commitDraft((current) => ({
       ...current,
       edges: current.edges.map((edge) => (edge.id === edgeId ? { ...edge, ...patch } : edge)),
     }));
-  }, []);
+  }, [commitDraft]);
 
   const addNode = useCallback((type: WorkflowNodeType) => {
-    setDraft((current) => {
+    commitDraft((current) => {
       const count = current.nodes.filter((node) => node.type === type).length;
       const id = makeId(type, count);
       const node: WorkflowNode = {
@@ -567,21 +640,23 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         position: { x: 80 + current.nodes.length * 220, y: 120 + (current.nodes.length % 2) * 140 },
       };
       setSelectedNodeId(node.id);
+      setSelectedNodeIds([node.id]);
       return { ...current, nodes: [...current.nodes, node] };
     });
-  }, []);
+  }, [commitDraft]);
 
   const deleteNode = useCallback((nodeId: string) => {
-    setDraft((current) => ({
+    commitDraft((current) => ({
       ...current,
       nodes: current.nodes.filter((node) => node.id !== nodeId),
       edges: current.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId),
     }));
     setSelectedNodeId('');
-  }, []);
+    setSelectedNodeIds((current) => current.filter((id) => id !== nodeId));
+  }, [commitDraft]);
 
   const duplicateNode = useCallback((nodeId: string) => {
-    setDraft((current) => {
+    commitDraft((current) => {
       const source = current.nodes.find((node) => node.id === nodeId);
       if (!source) return current;
       const copy: WorkflowNode = {
@@ -591,22 +666,107 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         position: { x: source.position.x + 36, y: source.position.y + 36 },
       };
       setSelectedNodeId(copy.id);
+      setSelectedNodeIds([copy.id]);
       return { ...current, nodes: [...current.nodes, copy] };
     });
-  }, []);
+  }, [commitDraft]);
 
   const autoLayoutNodes = useCallback(() => {
-    setDraft((current) => ({
-      ...current,
-      nodes: current.nodes.map((node, index) => ({
-        ...node,
-        position: {
-          x: 80 + (index % 4) * 230,
-          y: 110 + Math.floor(index / 4) * 150,
-        },
-      })),
-    }));
-  }, []);
+    commitDraft((current) => {
+      const unlockedNodes = current.nodes.filter((node) => !lockedNodeIds.includes(node.id));
+      const positioned = new Map(unlockedNodes.map((node, index) => {
+        const compactColumns = 3;
+        const position = layoutMode === 'top-down'
+          ? { x: 140 + (index % compactColumns) * 260, y: 100 + Math.floor(index / compactColumns) * 170 }
+          : layoutMode === 'compact'
+            ? { x: 100 + (index % 4) * 210, y: 100 + Math.floor(index / 4) * 135 }
+            : { x: 90 + index * 250, y: 140 + (index % 2) * 70 };
+        return [node.id, position] as const;
+      }));
+      return {
+        ...current,
+        nodes: current.nodes.map((node) => positioned.has(node.id) ? { ...node, position: positioned.get(node.id)! } : node),
+      };
+    });
+  }, [commitDraft, layoutMode, lockedNodeIds]);
+
+  const copySelectedNodes = useCallback(() => {
+    const ids = selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+    if (ids.length === 0) return;
+    const selected = draft.nodes.filter((node) => ids.includes(node.id));
+    setCopiedNodes(selected);
+    setCopiedEdges(draft.edges.filter((edge) => ids.includes(edge.from) && ids.includes(edge.to)));
+  }, [draft.edges, draft.nodes, selectedNodeId, selectedNodeIds]);
+
+  const pasteCopiedNodes = useCallback(() => {
+    if (copiedNodes.length === 0) return;
+    commitDraft((current) => {
+      const idMap = new Map<string, string>();
+      const copies = copiedNodes.map((node, index) => {
+        const nextId = makeId(`${node.id}-copy`, current.nodes.length + index);
+        idMap.set(node.id, nextId);
+        return {
+          ...node,
+          id: nextId,
+          title: `${node.title} Copy`,
+          position: { x: node.position.x + 64, y: node.position.y + 64 },
+        };
+      });
+      const edgeCopies = copiedEdges
+        .filter((edge) => idMap.has(edge.from) && idMap.has(edge.to))
+        .map((edge, index) => ({
+          ...edge,
+          id: makeId(`${edge.id}-copy`, current.edges.length + index),
+          from: idMap.get(edge.from)!,
+          to: idMap.get(edge.to)!,
+        }));
+      const copyIds = copies.map((node) => node.id);
+      setSelectedNodeId(copyIds[0] || '');
+      setSelectedNodeIds(copyIds);
+      return { ...current, nodes: [...current.nodes, ...copies], edges: [...current.edges, ...edgeCopies] };
+    });
+  }, [commitDraft, copiedEdges, copiedNodes]);
+
+  const duplicateSelectedSubgraph = useCallback(() => {
+    copySelectedNodes();
+    const ids = selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+    if (ids.length === 0) return;
+    const nodesToCopy = draft.nodes.filter((node) => ids.includes(node.id));
+    const edgesToCopy = draft.edges.filter((edge) => ids.includes(edge.from) && ids.includes(edge.to));
+    if (nodesToCopy.length === 0) return;
+    commitDraft((current) => {
+      const idMap = new Map<string, string>();
+      const copies = nodesToCopy.map((node, index) => {
+        const nextId = makeId(`${node.id}-branch`, current.nodes.length + index);
+        idMap.set(node.id, nextId);
+        return {
+          ...node,
+          id: nextId,
+          title: `${node.title} Branch`,
+          position: { x: node.position.x + 96, y: node.position.y + 96 },
+        };
+      });
+      const edgeCopies = edgesToCopy.map((edge, index) => ({
+        ...edge,
+        id: makeId(`${edge.id}-branch`, current.edges.length + index),
+        from: idMap.get(edge.from)!,
+        to: idMap.get(edge.to)!,
+      }));
+      const copyIds = copies.map((node) => node.id);
+      setSelectedNodeId(copyIds[0] || '');
+      setSelectedNodeIds(copyIds);
+      return { ...current, nodes: [...current.nodes, ...copies], edges: [...current.edges, ...edgeCopies] };
+    });
+  }, [commitDraft, copySelectedNodes, draft.edges, draft.nodes, selectedNodeId, selectedNodeIds]);
+
+  const toggleLayoutLock = useCallback(() => {
+    const ids = selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+    if (ids.length === 0) return;
+    setLockedNodeIds((current) => {
+      const allLocked = ids.every((id) => current.includes(id));
+      return allLocked ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])];
+    });
+  }, [selectedNodeId, selectedNodeIds]);
 
   const insertVariable = useCallback((variable: string) => {
     if (!selectedNode) return;
@@ -621,9 +781,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   }, [selectedNode, updateNode]);
 
   const removeEdge = useCallback((edgeId: string) => {
-    setDraft((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) }));
+    commitDraft((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) }));
     setSelectedEdgeId((current) => current === edgeId ? '' : current);
-  }, []);
+  }, [commitDraft]);
 
   const saveWorkflow = useCallback(async () => {
     setIsBusy(true);
@@ -879,13 +1039,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       id: node.id,
       type: 'workflowNode',
       position: node.position,
+      selected: selectedNodeIds.includes(node.id),
       data: {
         workflowNode: node,
         runState: nodeRuns[node.id] || null,
         permissionPreset: draft.permissionPreset,
+        validationBadges: getNodeValidationBadges(draft, node, lockedNodeIds),
+        isLocked: lockedNodeIds.includes(node.id),
       },
     }));
-  }, [draft.nodes, draft.permissionPreset]);
+  }, [draft, lockedNodeIds, selectedNodeIds]);
 
   const toFlowEdges = useCallback((run: WorkflowRun | null): WorkflowFlowEdge[] => draft.edges.map((edge) => {
     const targetRun = run?.nodeRuns?.[edge.to];
@@ -893,8 +1056,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       id: edge.id,
       source: edge.from,
       target: edge.to,
-      type: 'smoothstep',
-      label: edge.mode || 'success',
+      type: edge.routeStyle || 'smoothstep',
+      label: edge.condition ? `${edge.mode || 'success'}: ${edge.condition}` : edge.mode || 'success',
       data: { mode: edge.mode },
       animated: targetRun?.status === 'running' || targetRun?.status === 'waiting_approval',
       markerEnd: { type: MarkerType.ArrowClosed },
@@ -913,9 +1076,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         return node;
       }),
     }));
-    const selectedChange = changes.find((change) => 'id' in change && change.type === 'select' && change.selected);
-    if (selectedChange && 'id' in selectedChange) {
-      setSelectedNodeId(selectedChange.id);
+    const selectionChanges = changes.filter((change) => 'id' in change && change.type === 'select');
+    if (selectionChanges.length > 0) {
+      setSelectedNodeIds((current) => {
+        const next = new Set(current);
+        selectionChanges.forEach((change) => {
+          if ('id' in change && change.type === 'select') {
+            if (change.selected) next.add(change.id);
+            else next.delete(change.id);
+          }
+        });
+        const ids = [...next];
+        setSelectedNodeId(ids.at(-1) || '');
+        return ids;
+      });
       setSelectedEdgeId('');
     }
   }, []);
@@ -929,12 +1103,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (selectedChange && 'id' in selectedChange) {
       setSelectedEdgeId(selectedChange.id);
       setSelectedNodeId('');
+      setSelectedNodeIds([]);
     }
   }, []);
 
   const handleFlowConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
-    setDraft((current) => {
+    commitDraft((current) => {
       const exists = current.edges.some((edge) => edge.from === connection.source && edge.to === connection.target);
       if (exists) return current;
       const edge: WorkflowEdge = {
@@ -942,24 +1117,64 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         from: connection.source!,
         to: connection.target!,
         mode: 'success',
+        routeStyle: 'smoothstep',
       };
       return { ...current, edges: [...current.edges, edge] };
     });
-  }, []);
+  }, [commitDraft]);
 
   const renderCanvas = (run: WorkflowRun | null = null) => {
     const flowNodes = toFlowNodes(run);
     const flowEdges = toFlowEdges(run);
+    const selectedCount = selectedNodeIds.length;
+    const minimapNodeColor = (node: WorkflowFlowNode) => {
+      const workflowNode = node.data.workflowNode;
+      const runStatus = node.data.runState?.status;
+      if (minimapFilter === 'risk') return riskyNodeTypes.has(workflowNode.type) ? '#f59e0b' : '#cbd5e1';
+      if (minimapFilter === 'type') return workflowNode.type === 'subagent' || workflowNode.type === 'agent' ? '#38bdf8' : '#a78bfa';
+      if (minimapFilter === 'status') return runStatus === 'failed' ? '#ef4444' : runStatus === 'completed' ? '#22c55e' : '#94a3b8';
+      return riskyNodeTypes.has(workflowNode.type) ? '#fbbf24' : '#93c5fd';
+    };
     return (
       <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2" data-testid="workflow-canvas-controls">
-          <div className="text-xs text-muted-foreground">
+          <div className="text-xs text-muted-foreground" data-testid="workflow-multi-select">
             {flowNodes.length} nodes / {flowEdges.length} edges
+            <span className="ml-2 rounded border border-border bg-background px-2 py-1">{selectedCount} selected</span>
           </div>
-          <button type="button" onClick={autoLayoutNodes} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Auto layout">
-            <GitBranch className="h-3.5 w-3.5" />
-            Layout
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1 rounded-md border border-border bg-background p-1" data-testid="workflow-copy-paste">
+              <button type="button" onClick={copySelectedNodes} disabled={selectedCount === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Copy</button>
+              <button type="button" onClick={pasteCopiedNodes} disabled={copiedNodes.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Paste</button>
+            </div>
+            <button type="button" data-testid="workflow-duplicate-subgraph" onClick={duplicateSelectedSubgraph} disabled={selectedCount === 0} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-40">
+              <Copy className="h-3.5 w-3.5" />
+              Subgraph
+            </button>
+            <div className="inline-flex items-center gap-1 rounded-md border border-border bg-background p-1" data-testid="workflow-undo-redo">
+              <button type="button" onClick={undoWorkflowEdit} disabled={historyPast.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Undo</button>
+              <button type="button" onClick={redoWorkflowEdit} disabled={historyFuture.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Redo</button>
+            </div>
+            <label className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs" data-testid="workflow-layout-mode">
+              Layout
+              <select value={layoutMode} onChange={(event) => setLayoutMode(event.target.value as WorkflowLayoutMode)} className="bg-transparent text-xs outline-none">
+                {layoutModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+              </select>
+            </label>
+            <button type="button" data-testid="workflow-layout-lock" onClick={toggleLayoutLock} disabled={selectedCount === 0} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-40">
+              {selectedNodeIds.every((id) => lockedNodeIds.includes(id)) && selectedCount > 0 ? 'Unlock layout' : 'Lock layout'}
+            </button>
+            <label className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs" data-testid="workflow-minimap-filters">
+              MiniMap
+              <select value={minimapFilter} onChange={(event) => setMinimapFilter(event.target.value as WorkflowMinimapFilter)} className="bg-transparent text-xs outline-none">
+                {minimapFilters.map((filter) => <option key={filter} value={filter}>{filter}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={autoLayoutNodes} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Auto layout">
+              <GitBranch className="h-3.5 w-3.5" />
+              Apply
+            </button>
+          </div>
         </div>
         <div className="h-[560px] min-w-[980px] overflow-hidden rounded-md border border-border bg-background" data-testid="workflow-dag-canvas">
           <ReactFlowProvider>
@@ -973,6 +1188,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 onConnect={handleFlowConnect}
                 onNodeClick={(_: ReactMouseEvent, node: WorkflowFlowNode) => {
                   setSelectedNodeId(node.id);
+                  setSelectedNodeIds((current) => current.includes(node.id) && current.length > 1 ? current : [node.id]);
                   setSelectedEdgeId('');
                 }}
                 onEdgeClick={(_: ReactMouseEvent, edge: WorkflowFlowEdge) => {
@@ -982,10 +1198,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 fitView
                 minZoom={0.35}
                 maxZoom={1.6}
+                multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
+                selectionOnDrag
               >
                 <Background gap={24} color="#e2e8f0" />
                 <Controls />
-                <MiniMap data-testid="workflow-minimap" pannable zoomable nodeStrokeWidth={2} />
+                <MiniMap data-testid="workflow-minimap" pannable zoomable nodeStrokeWidth={2} nodeColor={minimapNodeColor} />
               </ReactFlow>
             </div>
           </ReactFlowProvider>
@@ -1647,7 +1865,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <div>
                   <h4 className="mb-2 text-xs font-semibold text-muted-foreground">Edges</h4>
                   {draft.edges.filter((edge) => edge.from === selectedNode.id || edge.to === selectedNode.id).map((edge) => (
-                    <button key={edge.id} type="button" onClick={() => removeEdge(edge.id)} className="mb-2 block w-full rounded border border-border px-2 py-1 text-left text-xs hover:bg-muted">
+                    <button
+                      key={edge.id}
+                      type="button"
+                      data-testid="workflow-select-edge"
+                      onClick={() => {
+                        setSelectedEdgeId(edge.id);
+                        setSelectedNodeId('');
+                        setSelectedNodeIds([]);
+                      }}
+                      className="mb-2 block w-full rounded border border-border px-2 py-1 text-left text-xs hover:bg-muted"
+                    >
                       {edge.from} {'->'} {edge.to}
                     </button>
                   ))}
@@ -1681,12 +1909,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   <span className="block font-semibold text-foreground">Edge</span>
                   <span className="mt-1 block">{selectedEdge.from} {'->'} {selectedEdge.to}</span>
                 </div>
-                <label className="block text-xs font-medium text-muted-foreground">
+                <label className="block text-xs font-medium text-muted-foreground" data-testid="workflow-edge-branch-labels">
                   Branch mode
                   <select value={selectedEdge.mode || 'success'} onChange={(event) => updateEdge(selectedEdge.id, { mode: event.target.value as WorkflowEdge['mode'] })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground">
                     <option value="success">success</option>
                     <option value="failure">failure</option>
                     <option value="always">always</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-medium text-muted-foreground" data-testid="workflow-edge-route-style">
+                  Route style
+                  <select value={selectedEdge.routeStyle || 'smoothstep'} onChange={(event) => updateEdge(selectedEdge.id, { routeStyle: event.target.value as WorkflowEdgeRouteStyle })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground">
+                    {edgeRouteStyles.map((edgeRouteStyle) => (
+                      <option key={edgeRouteStyle} value={edgeRouteStyle}>{edgeRouteStyle}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="block text-xs font-medium text-muted-foreground">

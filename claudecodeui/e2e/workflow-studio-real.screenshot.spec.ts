@@ -99,13 +99,45 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
   await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
+  await expect(page.getByTestId('workflow-multi-select')).toBeVisible();
+  await expect(page.getByTestId('workflow-copy-paste')).toBeVisible();
+  await expect(page.getByTestId('workflow-duplicate-subgraph')).toBeVisible();
+  await expect(page.getByTestId('workflow-undo-redo')).toBeVisible();
+  await expect(page.getByTestId('workflow-layout-mode')).toBeVisible();
+  await expect(page.getByTestId('workflow-layout-lock')).toBeVisible();
+  await expect(page.getByTestId('workflow-minimap-filters')).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-editor.png');
   await screenshot(page, 'REQ-064-real-editor-create-save-reopen.png');
   await screenshot(page, 'REQ-081-editor-react-flow-canvas.png');
+  await screenshot(page, 'REQ-092-workflow-multi-select-nodes.png');
 
   await page.getByTestId('workflow-node').first().click();
   await expect(page.getByTestId('workflow-inspector-tabs')).toBeVisible();
+  await page.getByTestId('workflow-copy-paste').getByRole('button', { name: 'Copy' }).click();
+  await screenshot(page, 'REQ-093-workflow-copy-paste-nodes.png');
+  await screenshot(page, 'REQ-101-workflow-graph-validation-badges.png');
+  await page.getByTestId('workflow-duplicate-subgraph').click();
+  await screenshot(page, 'REQ-094-workflow-duplicate-subgraph.png');
+  await page.getByTestId('workflow-undo-redo').getByRole('button', { name: 'Undo' }).click();
+  await screenshot(page, 'REQ-095-workflow-undo-redo.png');
+  await page.getByTestId('workflow-layout-mode').locator('select').selectOption('top-down');
+  await page.getByRole('button', { name: 'Apply' }).first().click();
+  await screenshot(page, 'REQ-096-workflow-auto-layout-modes.png');
+  await page.getByTestId('workflow-node').first().click();
+  await page.getByTestId('workflow-layout-lock').click();
+  await screenshot(page, 'REQ-097-workflow-layout-lock.png');
+  await page.getByTestId('workflow-minimap-filters').locator('select').selectOption('risk');
+  await screenshot(page, 'REQ-100-workflow-graph-minimap-filters.png');
   await screenshot(page, 'REQ-081-inspector-node-config.png');
+
+  await page.getByTestId('workflow-select-edge').first().click();
+  await expect(page.getByTestId('workflow-edge-editor')).toBeVisible();
+  await expect(page.getByTestId('workflow-edge-route-style')).toBeVisible();
+  await expect(page.getByTestId('workflow-edge-branch-labels')).toBeVisible();
+  await page.getByTestId('workflow-edge-route-style').locator('select').selectOption('step');
+  await screenshot(page, 'REQ-098-workflow-edge-route-styles.png');
+  await page.getByTestId('workflow-edge-branch-labels').locator('select').selectOption('failure');
+  await screenshot(page, 'REQ-099-workflow-edge-branch-labels.png');
 
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Library' }).click();
   await expect(page.getByTestId('workflow-library-gallery')).toBeVisible();

@@ -45,6 +45,7 @@ export interface WorkflowEdge {
   to: string;
   mode?: 'success' | 'failure' | 'always';
   condition?: string;
+  routeStyle?: 'smoothstep' | 'straight' | 'step';
 }
 
 export interface WorkflowNodeConfigField {
