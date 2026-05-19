@@ -124,8 +124,12 @@ export function createBrainHybridRetrievalService({
   } = {}) => {
     const started = performance.now();
     const warnings = [];
-    const atoms = store.listAtoms({ sessionId, provider, projectName, limit: 240 });
-    const scenarios = store.listScenarios({ sessionId, provider, projectName, limit: 60 });
+    const projectScoped = Boolean(String(projectName || '').trim());
+    const memoryScope = projectScoped
+      ? { provider, projectName }
+      : { sessionId, provider };
+    const atoms = store.listAtoms({ ...memoryScope, limit: 240 });
+    const scenarios = store.listScenarios({ ...memoryScope, limit: 60 });
     const projectProfile = projectName ? store.getProjectProfile({ projectName, provider }) : null;
     const documents = normalizeDocuments({ atoms, scenarios, projectProfile });
     const queryTokens = tokenizeBrainText(query);
@@ -206,6 +210,7 @@ export function createBrainHybridRetrievalService({
       signals: rankings.map((ranking) => ranking.signal),
       latencyMs: Math.round(performance.now() - started),
       totalCandidates: documents.length,
+      memoryScope: projectScoped ? 'project' : 'session',
     };
     const run = store.addRetrievalRun?.({
       sessionId,

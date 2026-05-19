@@ -188,6 +188,44 @@ describe('Brain hybrid retrieval', () => {
     expect(result.options.appendSystemPrompt).toContain('### Relevant memory');
   });
 
+  it('recalls same-project atoms from previous sessions when a new session has no memory yet', async () => {
+    const store = createStore();
+    store.upsertAtom({
+      sessionId: 'previous-session',
+      projectName: 'Argus',
+      atomType: 'decision',
+      title: 'Do not restore retired built-in capabilities',
+      summary: 'Keep Obsidian, CodeGraph, and the small model runtime removed; use Brain plus MCP/Profile integrations instead.',
+      stableKey: 'decision:retired-capabilities',
+      entities: ['Obsidian', 'CodeGraph', 'small model runtime'],
+      confidence: 0.98,
+      updatedAtMs: 2_000,
+    });
+    const recall = createBrainRecallService({
+      store,
+      readConfig: async () => ({ enabled: true, maxInjectedTokens: 500, hybridRetrieval: { enabled: true } }),
+    });
+
+    const result = await recall.applyToChatCommand({
+      command: 'According to project memory, what capabilities should we not restore?',
+      options: {
+        sessionId: 'new-empty-session',
+        projectName: 'Argus',
+      },
+    }, 'claude');
+
+    expect(result.options.appendSystemPrompt).toContain('Do not restore retired built-in capabilities');
+    expect(result.options.appendSystemPrompt).toContain('Obsidian, CodeGraph, and the small model runtime');
+    expect(result.options.runtimeDiagnostics.brainRuntime.recall.recallHits).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'atom',
+          title: 'Do not restore retired built-in capabilities',
+        }),
+      ]),
+    );
+  });
+
   it('builds Brain recall without retired external-source dedupe diagnostics', async () => {
     const store = createStore();
     store.upsertAtom({

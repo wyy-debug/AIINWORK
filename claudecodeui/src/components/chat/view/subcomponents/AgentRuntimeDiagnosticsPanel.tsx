@@ -91,8 +91,12 @@ type BrainInspector = {
   };
   recallHits?: Array<{
     id: string;
+    kind?: string;
+    type?: string;
+    atomType?: string;
     title?: string;
-    reasons?: Array<{ signal?: string; rank?: number }>;
+    summary?: string;
+    reasons?: Array<{ signal?: string; rank?: number } | string>;
   }>;
   canvas?: { mermaid?: string; textFallback?: string };
 };
@@ -112,6 +116,13 @@ function formatText(value: unknown) {
 
 function formatBoolean(value: unknown) {
   return typeof value === 'boolean' ? String(value) : EMPTY_TEXT;
+}
+
+function formatRecallReasons(reasons: Array<{ signal?: string } | string> = []) {
+  const labels = reasons
+    .map((reason) => (typeof reason === 'string' ? reason : reason?.signal))
+    .filter((label): label is string => Boolean(label));
+  return labels.length ? labels.join(', ') : 'included';
 }
 
 function Field({ label, value }: { label: string; value: string }) {
@@ -176,10 +187,12 @@ function BrainRuntimeSection({
   const runtime = diagnostics?.brainRuntime;
   const compaction = brain?.latestCompaction;
   const recall = runtime?.recall;
+  const recallHits = recall?.recallHits || brain?.inspector?.recallHits || [];
   const activeDecisions = compaction?.activeDecisions || recall?.activeDecisions || [];
   const openRisks = compaction?.openRisks || recall?.openRisks || [];
   const summary = compaction?.summary || [
     compaction?.currentGoal || recall?.currentGoal,
+    recallHits.map((hit) => `${hit.title || hit.id || hit.kind}: ${hit.summary || ''}`.trim()).join('\n'),
     activeDecisions.join('\n'),
     openRisks.join('\n'),
     compaction?.nextAction || recall?.nextAction,
@@ -238,7 +251,9 @@ function BrainRuntimeSection({
           <div className="rounded-lg border border-border bg-card/70 p-3">
             <div className="text-[11px] font-medium uppercase text-muted-foreground">Canvas</div>
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted/45 p-2 text-[11px] leading-4 text-foreground">
-              {compaction?.mermaid || 'No compacted canvas yet.'}
+              {compaction?.mermaid || (recallHits.length
+                ? 'No compaction canvas yet. Showing recalled project memory instead.'
+                : 'No compacted canvas yet.')}
             </pre>
           </div>
           <div className="rounded-lg border border-border bg-card/70 p-3">
@@ -248,6 +263,36 @@ function BrainRuntimeSection({
           <div className="rounded-lg border border-border bg-card/70 p-3">
             <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Open risks</div>
             <StringBadges values={openRisks} />
+          </div>
+          <div className="rounded-lg border border-border bg-card/70 p-3 lg:col-span-2">
+            <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Recall hit details</div>
+            <div className="mb-2 text-[11px] text-muted-foreground">Recall reasons are shown under each hit.</div>
+            {recallHits.length ? (
+              <div className="grid gap-2">
+                {recallHits.slice(0, 8).map((hit) => (
+                  <div key={hit.id || hit.title} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 truncate font-medium text-foreground" title={hit.title || hit.id}>
+                        {hit.title || hit.id || 'Brain memory'}
+                      </div>
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        {hit.atomType || hit.type || hit.kind || 'memory'}
+                      </span>
+                    </div>
+                    {hit.summary && (
+                      <div className="mt-1 line-clamp-2 text-muted-foreground" title={hit.summary}>
+                        {hit.summary}
+                      </div>
+                    )}
+                    <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                      {formatRecallReasons(hit.reasons)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <span className="text-xs text-muted-foreground">No recall hit details yet.</span>
+            )}
           </div>
           <div className="rounded-lg border border-border bg-card/70 p-3 lg:col-span-2">
             <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Refs</div>
@@ -335,10 +380,10 @@ function BrainWorkbenchSection({ inspector }: { inspector?: BrainInspector | nul
           <div className="text-xs leading-5 text-foreground">{formatText(inspector?.layers?.projectProfile?.summary)}</div>
         </div>
         <div className="rounded-md border border-border bg-background/70 p-2">
-          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Recall reasons</div>
+          <div className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">Recall hit details</div>
           {recallHits.length ? recallHits.slice(0, 4).map((hit) => (
             <div key={hit.id} className="truncate text-xs text-foreground" title={hit.title || hit.id}>
-              {hit.title || hit.id}: {(hit.reasons || []).map((reason) => reason.signal).filter(Boolean).join(', ') || 'included'}
+              {hit.title || hit.id}: {hit.summary || formatRecallReasons(hit.reasons || [])}
             </div>
           )) : <div className="text-xs text-muted-foreground">No recall hits recorded yet.</div>}
         </div>

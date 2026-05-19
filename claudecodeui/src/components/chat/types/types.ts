@@ -303,7 +303,17 @@ export interface BrainRuntimeDiagnostics {
     enabled?: boolean;
     used?: boolean;
     status?: string;
-    recallHits?: Array<{ kind?: string; id?: string; type?: string }>;
+    recallHits?: Array<{
+      kind?: string;
+      id?: string;
+      type?: string;
+      title?: string;
+      summary?: string;
+      score?: number;
+      status?: string;
+      atomType?: string;
+      reasons?: Array<{ signal?: string; rank?: number; score?: number } | string>;
+    }>;
     currentGoal?: string;
     nextAction?: string;
     activeDecisions?: string[];

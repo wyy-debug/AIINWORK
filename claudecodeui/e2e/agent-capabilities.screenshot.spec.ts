@@ -144,7 +144,14 @@ async function installMockApi(page: Page) {
           scenarios: [{ id: 'scenario-1', title: 'Close issue with screenshot evidence' }],
           projectProfile: { summary: 'MTL-Code uses Brain + MCP + Agent Profiles.' },
         },
-        recallHits: [{ id: 'hit-1', title: 'Screenshot gate required', reasons: [{ signal: 'goal', rank: 1 }] }],
+        recallHits: [{
+          id: 'hit-1',
+          kind: 'atom',
+          atomType: 'goal',
+          title: 'Do not restore retired built-in capabilities',
+          summary: 'Keep Obsidian, CodeGraph, and the small model runtime removed; use Brain plus MCP/Profile integrations instead.',
+          reasons: [{ signal: 'project-memory', rank: 1 }],
+        }],
       },
     });
     if (path === '/api/checkpoints') return json(route, {
@@ -286,6 +293,15 @@ test('REQ-043 captures runtime drawer panels screenshot @screenshot', async ({ p
   await expect(page.getByText('Argus Brain').first()).toBeVisible();
   await expect(page.getByText('Brain Workbench').first()).toBeVisible();
   await capture(page, 'REQ-043-runtime-drawer-panels.png');
+});
+
+test('REQ-045 captures Brain recall hit details screenshot @screenshot', async ({ page }) => {
+  await openSession(page);
+  await expect(page.getByText('Recall hit details').first()).toBeVisible();
+  await expect(page.getByText('Do not restore retired built-in capabilities').first()).toBeVisible();
+  await expect(page.getByText(/Obsidian, CodeGraph, and the small model runtime/).first()).toBeVisible();
+  await page.getByText('Recall hit details').first().scrollIntoViewIfNeeded();
+  await capture(page, 'REQ-045-brain-recall-hit-details.png');
 });
 
 test('REQ-043 captures Marketplace and Agent Profile entry screenshots @screenshot', async ({ page }) => {
