@@ -335,6 +335,90 @@ describe('workflow studio service', () => {
     expect(run.nodeRuns.shell.output.stdout).toContain('npm test');
   });
 
+  test('default shell bridge executes commands and captures stdout', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'shell-exec-flow',
+      name: 'Shell Exec Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [{ id: 'shell', type: 'shell', command: 'node -e "console.log(\'workflow-shell\')"' }],
+      edges: [],
+    });
+
+    const run = await store.createRun('shell-exec-flow');
+
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.shell.output.stdout).toContain('workflow-shell');
+  });
+
+  test('default git review tool bridge returns structured review output', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-git-review-'));
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'git-review-flow',
+      name: 'Git Review Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [{ id: 'review', type: 'tool', toolName: 'git-native-review' }],
+      edges: [],
+    });
+
+    const run = await store.createRun('git-review-flow', { projectPath: rootDir });
+
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.review.output).toMatchObject({ hasChanges: false });
+    expect(run.nodeRuns.review.output.content).toMatch(/nothing to review/i);
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  test('default mcp bridge fails with a clear missing tool error', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'missing-mcp-flow',
+      name: 'Missing MCP Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [{ id: 'mcp', type: 'mcp', toolName: 'redmine.search' }],
+      edges: [],
+    });
+
+    const run = await store.createRun('missing-mcp-flow');
+
+    expect(run.status).toBe('failed');
+    expect(run.nodeRuns.mcp.error).toMatch(/MCP tool is not configured/i);
+  });
+
+  test('subagent bridge waits for terminal status and fails terminal errors', async () => {
+    let pollCount = 0;
+    const subagentStore = {
+      async createRun() {
+        return { id: 'subagent-run-terminal', status: 'running' };
+      },
+      async getRun() {
+        pollCount += 1;
+        return pollCount > 1
+          ? { id: 'subagent-run-terminal', status: 'completed', result: 'terminal result' }
+          : { id: 'subagent-run-terminal', status: 'running' };
+      },
+    };
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, subagentRunStore: subagentStore });
+    await store.upsertWorkflow({
+      id: 'subagent-terminal-flow',
+      name: 'Subagent Terminal Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [{ id: 'explore', type: 'subagent', agentId: 'subagent-explore', timeoutMs: 1000 }],
+      edges: [],
+    });
+
+    const run = await store.createRun('subagent-terminal-flow');
+
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.explore.output.status).toBe('completed');
+    expect(run.nodeRuns.explore.output.result).toBe('terminal result');
+  });
+
   test('records checkpoint refs and exposes workflow timeline events', async () => {
     const store = createWorkflowStudioStore({
       persist: false,
@@ -350,7 +434,7 @@ describe('workflow studio service', () => {
       name: 'Timeline Flow',
       profileId: 'build',
       permissionPreset: 'full-auto',
-      nodes: [{ id: 'shell', type: 'shell', command: 'npm test' }],
+      nodes: [{ id: 'shell', type: 'shell', command: 'node -e "console.log(\'checkpoint\')"' }],
       edges: [],
     });
 

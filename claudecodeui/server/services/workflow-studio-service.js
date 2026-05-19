@@ -2,14 +2,18 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { exec as execCallback } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import { listBuiltInRecipes, renderRecipePrompt } from '../../shared/recipes.js';
 import { getAgentConfig } from './agent-config-service.js';
+import { buildGitNativeReviewFlow } from './git-native-review-flow-service.js';
 import { defaultSubagentRunStore } from './subagent-run-service.js';
 
 const DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
 const DEFAULT_WORKFLOWS_PATH = path.join(DATA_DIR, 'workflows.json');
 const DEFAULT_RUNS_PATH = path.join(DATA_DIR, 'workflow-runs.json');
+const execAsync = promisify(execCallback);
 
 export const WORKFLOW_NODE_TYPES = Object.freeze([
   'agent',
@@ -38,6 +42,7 @@ const EDGE_MODES = new Set(['success', 'failure', 'always']);
 const RISKY_NODE_TYPES = new Set(['shell', 'mcp', 'tool']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
+const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 
 function nowIso(now) {
   return new Date(now()).toISOString();
@@ -418,6 +423,20 @@ function buildNodeInput(node, run) {
   };
 }
 
+async function waitForSubagentTerminal(store, initialRun, timeoutMs = 120000) {
+  if (!initialRun?.id || SUBAGENT_TERMINAL_STATUSES.has(initialRun.status) || typeof store?.getRun !== 'function') {
+    return initialRun;
+  }
+  const startedAt = Date.now();
+  let last = initialRun;
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    last = await store.getRun(initialRun.id) || last;
+    if (SUBAGENT_TERMINAL_STATUSES.has(last.status)) return last;
+  }
+  return last;
+}
+
 function validateRunInputs(workflow, inputs) {
   const errors = [];
   const runInputs = asObject(inputs);
@@ -438,38 +457,108 @@ function validateRunInputs(workflow, inputs) {
   };
 }
 
+async function safeExec(command, options = {}) {
+  try {
+    const result = await execAsync(command, {
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+      ...options,
+    });
+    return {
+      ok: true,
+      stdout: String(result.stdout || ''),
+      stderr: String(result.stderr || ''),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: String(error?.stdout || ''),
+      stderr: String(error?.stderr || error?.message || ''),
+    };
+  }
+}
+
+async function collectGitReviewInput(projectPath = '') {
+  const cwd = projectPath || process.cwd();
+  const [branchResult, statusResult, diffResult] = await Promise.all([
+    safeExec('git rev-parse --abbrev-ref HEAD', { cwd }),
+    safeExec('git status --porcelain', { cwd }),
+    safeExec('git diff --no-ext-diff --', { cwd, timeout: 30000 }),
+  ]);
+  const files = statusResult.stdout.split(/\r?\n/)
+    .map((line) => {
+      const status = line.slice(0, 2).trim();
+      const filePath = line.slice(3).trim();
+      if (!filePath) return null;
+      const kind = status.includes('A') || status.includes('?')
+        ? 'added'
+        : status.includes('D')
+          ? 'deleted'
+          : 'modified';
+      return { path: filePath.replace(/"/g, ''), kind, status };
+    })
+    .filter(Boolean);
+  return {
+    projectName: path.basename(cwd),
+    branch: branchResult.stdout.trim() || 'unknown',
+    files,
+    diff: diffResult.stdout,
+    diffSource: 'workflow',
+  };
+}
+
 function createDefaultExecutors() {
   return {
     async agent({ node, nodeInput }) {
       return {
-        summary: `${node.title} completed.`,
+        summary: `${node.title} completed through the workflow agent bridge.`,
         prompt: nodeInput.prompt,
       };
     },
-    async tool({ node, nodeInput }) {
+    async tool({ node, nodeInput, run }) {
+      const toolName = nodeInput.toolName || node.toolName;
+      if (toolName === 'git-native-review') {
+        return buildGitNativeReviewFlow(await collectGitReviewInput(run.projectPath));
+      }
       return {
-        summary: `${node.title} completed.`,
-        toolName: nodeInput.toolName || node.toolName,
+        summary: `${node.title} completed through the workflow tool bridge.`,
+        toolName,
       };
     },
-    async shell({ node, nodeInput }) {
+    async shell({ node, nodeInput, run }) {
+      const command = nodeInput.command || node.command;
+      if (!command) {
+        throw new Error(`Shell node ${node.id} has no command.`);
+      }
+      const result = await execAsync(command, {
+        cwd: run.projectPath || process.cwd(),
+        timeout: node.timeoutMs || 120000,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      });
       return {
-        stdout: nodeInput.command ? `simulated shell: ${nodeInput.command}` : '',
-        command: nodeInput.command || node.command,
+        stdout: String(result.stdout || '').slice(0, 12000),
+        stderr: String(result.stderr || '').slice(0, 12000),
+        command,
       };
     },
     async mcp({ node, nodeInput }) {
-      return {
-        summary: `${node.title} completed.`,
-        toolName: nodeInput.toolName || node.toolName,
-      };
+      const toolName = nodeInput.toolName || node.toolName;
+      throw new Error(`MCP tool is not configured for workflow execution: ${toolName || node.id}`);
     },
     async artifact({ workflow, run, node, nodeInput }) {
+      const content = nodeInput.prompt || [
+        `Workflow ${workflow.name} completed node ${node.title}.`,
+        '',
+        'Node outputs:',
+        ...Object.values(run.nodeRuns || {}).map((nodeRun) => `- ${nodeRun.title}: ${nodeRun.status}`),
+      ].join('\n');
       const artifact = {
         id: `workflow_artifact_${crypto.randomUUID()}`,
         kind: 'workflow-summary',
         title: node.title,
-        content: nodeInput.prompt || `Workflow ${workflow.name} completed node ${node.title}.`,
+        content,
       };
       run.artifacts.push(artifact);
       return {
@@ -709,15 +798,16 @@ export function createWorkflowStudioStore({
           sessionId: run.sessionId,
           source: 'workflow',
         });
+        const terminalRun = await waitForSubagentTerminal(subagentRunStore, subagentRun, Math.min(node.timeoutMs || 120000, 1000));
         nodeRun.output = {
-          subagentRunId: subagentRun.id,
-          status: subagentRun.status,
-          result: subagentRun.result || subagentRun.output || null,
-          error: subagentRun.error || '',
+          subagentRunId: terminalRun.id,
+          status: terminalRun.status,
+          result: terminalRun.result || terminalRun.output || null,
+          error: terminalRun.error || '',
         };
-        nodeRun.artifacts.push({ kind: 'subagent-run', refId: subagentRun.id, title: node.title });
-        if (subagentRun.status === 'failed') {
-          throw new Error(subagentRun.error || `Subagent run failed: ${subagentRun.id}`);
+        nodeRun.artifacts.push({ kind: 'subagent-run', refId: terminalRun.id, title: node.title });
+        if (terminalRun.status === 'failed' || terminalRun.status === 'stopped' || terminalRun.status === 'cancelled') {
+          throw new Error(terminalRun.error || `Subagent run failed: ${terminalRun.id}`);
         }
       } else if (node.type === 'condition') {
         nodeRun.output = { matched: true, condition: nodeRun.input.condition || 'always' };
