@@ -172,6 +172,46 @@ describe('workflow studio service', () => {
     expect(completed.status).toBe('completed');
   });
 
+  test('denies risky nodes under enterprise-safe permission preset', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        shell: async () => ({ stdout: 'should not run' }),
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'enterprise-safe-shell-flow',
+      name: 'Enterprise Safe Shell Flow',
+      profileId: 'build',
+      permissionPreset: 'enterprise-safe',
+      nodes: [{ id: 'shell', type: 'shell', command: 'npm test' }],
+      edges: [],
+    });
+
+    const run = await store.createRun('enterprise-safe-shell-flow');
+
+    expect(run.status).toBe('failed');
+    expect(run.nodeRuns.shell.permissionDecision).toBe('deny');
+    expect(run.nodeRuns.shell.error).toMatch(/permission boundary/i);
+    expect(run.timelineEvents.some((event) => event.type === 'workflow_node_failed')).toBe(true);
+  });
+
+  test('rejects node-level permission escalation during validation', () => {
+    const result = validateWorkflowDefinition({
+      id: 'escalation-flow',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      nodes: [{ id: 'shell', type: 'shell', permission: 'allow', command: 'npm test' }],
+      edges: [],
+    });
+
+    expect(result.validation.valid).toBe(false);
+    expect(result.validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'permission_escalation', nodeId: 'shell' }),
+    ]));
+  });
+
   test('validates required workflow inputs before creating a run', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.upsertWorkflow({

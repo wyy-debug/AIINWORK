@@ -73,6 +73,8 @@ const nodeTone: Record<WorkflowNodeType, string> = {
   join: 'border-slate-200 bg-slate-50 text-slate-900',
 };
 
+const riskyNodeTypes = new Set<WorkflowNodeType>(['shell', 'mcp', 'tool']);
+
 function makeId(prefix: string, count: number) {
   return `${prefix}-${count + 1}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
@@ -106,6 +108,14 @@ function createBlankWorkflow(project: Project): WorkflowDefinition {
     maxConcurrency: 4,
     metadata: {},
   };
+}
+
+function describePermissionSource(workflow: WorkflowDefinition, node: WorkflowNode | null) {
+  if (!node) return 'No node selected';
+  if (node.permission) return `Node override: ${node.permission}`;
+  if (workflow.permissionPreset === 'enterprise-safe' && riskyNodeTypes.has(node.type)) return 'Profile baseline: enterprise-safe denies risky nodes';
+  if (workflow.permissionPreset === 'suggest' && riskyNodeTypes.has(node.type)) return 'Profile baseline: suggest asks before risky nodes';
+  return `Profile baseline: ${workflow.permissionPreset || 'inherit'}`;
 }
 
 function nodeCenter(node: WorkflowNode) {
@@ -144,6 +154,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     ]);
     return [...inputVariables, ...upstreamVariables];
   }, [draft.edges, draft.inputs, selectedNode]);
+  const selectedNodeTemplateText = selectedNode?.type === 'shell'
+    ? selectedNode.command || ''
+    : selectedNode?.type === 'condition'
+      ? selectedNode.condition || ''
+      : selectedNode?.prompt || '';
+  const invalidVariables = useMemo(() => {
+    const matches = [...selectedNodeTemplateText.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)].map((match) => match[1]);
+    return [...new Set(matches.filter((variable) => !availableVariables.includes(variable)))];
+  }, [availableVariables, selectedNodeTemplateText]);
+  const permissionSource = useMemo(() => describePermissionSource(draft, selectedNode), [draft, selectedNode]);
 
   const loadData = useCallback(async () => {
     setError('');
@@ -231,6 +251,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }));
     setSelectedNodeId('');
   }, []);
+
+  const insertVariable = useCallback((variable: string) => {
+    if (!selectedNode) return;
+    const token = `{{${variable}}}`;
+    if (selectedNode.type === 'shell') {
+      updateNode(selectedNode.id, { command: `${selectedNode.command || ''}${selectedNode.command ? ' ' : ''}${token}` });
+    } else if (selectedNode.type === 'condition') {
+      updateNode(selectedNode.id, { condition: `${selectedNode.condition || ''}${selectedNode.condition ? ' ' : ''}${token}` });
+    } else {
+      updateNode(selectedNode.id, { prompt: `${selectedNode.prompt || ''}${selectedNode.prompt ? ' ' : ''}${token}` });
+    }
+  }, [selectedNode, updateNode]);
 
   const connectNode = useCallback((nodeId: string) => {
     if (!connectFrom) {
@@ -679,6 +711,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <option value="allow">allow only if profile permits</option>
                   </select>
                 </label>
+                <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground" data-testid="workflow-permission-source">
+                  <span className="block font-semibold text-foreground">Permission source</span>
+                  <span className="mt-1 block">{permissionSource}</span>
+                  {riskyNodeTypes.has(selectedNode.type) && (
+                    <span className="mt-2 block text-amber-700">Risky node: shell, MCP, tool, git/write-style actions may ask or deny before execution.</span>
+                  )}
+                </div>
                 <button type="button" onClick={() => deleteNode(selectedNode.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50">
                   <X className="h-4 w-4" />
                   Delete node
@@ -695,11 +734,22 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   <h4 className="mb-2 text-xs font-semibold text-muted-foreground">Available variables</h4>
                   <div className="space-y-1">
                     {availableVariables.map((variable) => (
-                      <code key={variable} className="block rounded border border-border bg-muted/40 px-2 py-1 text-[11px] text-foreground">
+                      <button
+                        key={variable}
+                        type="button"
+                        data-testid="workflow-insert-variable"
+                        onClick={() => insertVariable(variable)}
+                        className="block w-full rounded border border-border bg-muted/40 px-2 py-1 text-left text-[11px] text-foreground hover:bg-muted"
+                      >
                         {'{{'}{variable}{'}}'}
-                      </code>
+                      </button>
                     ))}
                   </div>
+                  {invalidVariables.length > 0 && (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700" data-testid="workflow-invalid-variables">
+                      Invalid variables: {invalidVariables.join(', ')}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (

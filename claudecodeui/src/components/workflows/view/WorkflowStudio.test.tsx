@@ -20,7 +20,10 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-run-inputs"');
     expect(source).toContain('data-testid="workflow-run-input"');
     expect(source).toContain('data-testid="workflow-node-variables"');
+    expect(source).toContain('data-testid="workflow-insert-variable"');
+    expect(source).toContain('data-testid="workflow-invalid-variables"');
     expect(source).toContain('data-testid="workflow-node-run-details"');
+    expect(source).toContain('data-testid="workflow-permission-source"');
     expect(source).toContain('Agent Workflow Studio');
   });
 
