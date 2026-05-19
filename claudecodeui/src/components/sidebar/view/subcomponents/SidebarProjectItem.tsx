@@ -363,7 +363,7 @@ export default function SidebarProjectItem({
             </button>
           )}
 
-          <div className="flex h-full flex-shrink-0 items-center gap-1 pr-1">
+          <div className="relative z-10 flex h-full flex-shrink-0 items-center gap-1 pr-1">
             {isEditing ? (
               <>
                 <button
@@ -393,8 +393,23 @@ export default function SidebarProjectItem({
               <>
                 <button
                   type="button"
+                  data-testid="sidebar-project-edit-button"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onStartEditingProject(project);
+                  }}
+                  title={t('tooltips.renameProject')}
+                  aria-label={t('tooltips.renameProject')}
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
                   data-testid="sidebar-project-new-session-button"
                   className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     onProjectSelect(project);

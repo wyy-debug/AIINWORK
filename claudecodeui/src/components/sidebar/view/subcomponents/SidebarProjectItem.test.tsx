@@ -14,6 +14,9 @@ describe('SidebarProjectItem project row actions', () => {
     expect(source).not.toContain('<Button');
     expect(source).toContain('data-testid="sidebar-project-main-button"');
     expect(source).toContain('data-testid="sidebar-project-new-session-button"');
+    expect(source).toContain('data-testid="sidebar-project-edit-button"');
+    expect(source).toContain('onStartEditingProject(project);');
+    expect(source).toContain("aria-label={t('tooltips.renameProject')}");
     expect(source).toContain('aria-label={t(\'sessions.newSession\')}');
   });
 });
