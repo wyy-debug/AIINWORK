@@ -125,6 +125,41 @@ describe('Brain layered memory pipeline', () => {
     expect(result.projectProfile.summary).toContain('Use deterministic rebuilds');
   });
 
+  it('keeps generic tool and checkpoint atoms out of the project profile summary', () => {
+    const { store } = createStore();
+    const layered = createBrainLayeredMemoryService({ store });
+    store.upsertAtom({
+      sessionId: 'profile-noise-1',
+      projectName: 'Argus',
+      atomType: 'decision',
+      title: 'tool_result',
+      summary: 'tool_result',
+      stableKey: 'decision:tool-result-noise',
+    });
+    store.upsertAtom({
+      sessionId: 'profile-noise-1',
+      projectName: 'Argus',
+      atomType: 'constraint',
+      title: 'Checkpoint captured',
+      summary: 'Checkpoint captured',
+      stableKey: 'constraint:checkpoint-noise',
+    });
+    store.upsertAtom({
+      sessionId: 'profile-noise-1',
+      projectName: 'Argus',
+      atomType: 'decision',
+      title: 'Keep Brain plus MCP boundary',
+      summary: 'Do not restore Obsidian, CodeGraph, or small model runtime.',
+      stableKey: 'decision:brain-mcp-boundary',
+    });
+
+    const result = layered.rebuildTopLayers({ sessionId: 'profile-noise-1', projectName: 'Argus' });
+
+    expect(result.projectProfile.summary).toContain('Keep Brain plus MCP boundary');
+    expect(result.projectProfile.summary).not.toContain('tool_result');
+    expect(result.projectProfile.summary).not.toContain('Checkpoint captured');
+  });
+
   it('skips ordinary personal remember or forget requests', () => {
     const { store } = createStore();
     const layered = createBrainLayeredMemoryService({ store });

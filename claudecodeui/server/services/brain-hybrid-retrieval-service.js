@@ -8,6 +8,49 @@ const compact = (value = '', max = 260) => {
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 };
 
+const USEFUL_ATOM_TYPE_WEIGHTS = new Map([
+  ['goal', 2.4],
+  ['decision', 2.2],
+  ['constraint', 2.1],
+  ['lesson', 1.9],
+  ['fix', 1.4],
+  ['verification', 1.1],
+]);
+
+function isLowValueMemory(document = {}) {
+  const title = String(document.title || '').trim().toLowerCase();
+  const summary = String(document.summary || '').trim().toLowerCase();
+  if (document.kind === 'scenario') {
+    const looksRuntimeOnly = /tool_use|tool_result|checkpoint captured/.test(summary);
+    const hasMemorySignal = /goal|decision|constraint|lesson|remember|do not restore|\u4e0d\u8981\u6062\u590d|\u8bb0\u4f4f/u.test(summary);
+    return looksRuntimeOnly && !hasMemorySignal;
+  }
+  if (document.kind === 'project-profile') {
+    return /^(decisions:\s*tool_result\s*)?(constraints:\s*tool_result\s*)?(lessons:\s*tool_result\s*)?$/i
+      .test(String(document.summary || '').replace(/\s+/g, ' ').trim());
+  }
+  return (
+    title === 'tool_result'
+    || title.startsWith('tool_use:')
+    || title.startsWith('checkpoint captured')
+    || summary === 'tool_result'
+    || summary === 'no matches found'
+    || summary.startsWith('checkpoint captured')
+  );
+}
+
+function scoreMemoryQuality(document = {}, queryTokens = []) {
+  const textTokens = tokenizeBrainText(`${document.title || ''}\n${document.summary || ''}`);
+  const hasQueryOverlap = queryTokens.some((token) => textTokens.includes(token));
+  let score = USEFUL_ATOM_TYPE_WEIGHTS.get(document.atomType) || 0;
+  score += Math.min(Number(document.confidence || 0), 1);
+  if (document.pinned) score += 1.4;
+  if (Array.isArray(document.entities) && document.entities.length > 0) score += 0.5;
+  if (hasQueryOverlap) score += 0.7;
+  if (isLowValueMemory(document) && !hasQueryOverlap) score -= 2.8;
+  return score;
+}
+
 const withTimeout = (promise, timeoutMs) => Promise.race([
   promise,
   new Promise((_, reject) => {
@@ -153,6 +196,7 @@ export function createBrainHybridRetrievalService({
       }),
       rankedSignal('task-status', documents, (document) => (document.status === 'active' ? 1 : 0.3)),
       rankedSignal('source-confidence', documents, (document) => Number(document.confidence || 0.5)),
+      rankedSignal('memory-quality', documents, (document) => scoreMemoryQuality(document, queryTokens)),
       rankedSignal('lesson-fit', documents, (document) => (
         queryLooksLikeFailure && document.atomType === 'lesson' ? 1 : 0
       )),
@@ -186,6 +230,26 @@ export function createBrainHybridRetrievalService({
     }
 
     const fused = reciprocalRankFuse(rankings)
+      .map((hit) => ({
+        ...hit,
+        memoryDocument: {
+          ...(hit.source || {}),
+          kind: hit.kind,
+          title: hit.title,
+          summary: hit.summary,
+          atomType: hit.source?.atomType || '',
+        },
+      }))
+      .filter((hit) => !isLowValueMemory(hit.memoryDocument))
+      .map((hit) => ({
+        ...hit,
+        qualityScore: scoreMemoryQuality(hit.memoryDocument, queryTokens),
+      }))
+      .sort((left, right) => (
+        right.qualityScore - left.qualityScore
+        || right.score - left.score
+        || String(left.title || left.id).localeCompare(String(right.title || right.id))
+      ))
       .slice(0, Math.max(Number(limit) || 8, 1))
       .map((hit) => ({
         id: hit.id,

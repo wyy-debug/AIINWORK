@@ -226,6 +226,63 @@ describe('Brain hybrid retrieval', () => {
     );
   });
 
+  it('prioritizes explicit project memory over generic tool and checkpoint noise', async () => {
+    const store = createStore();
+    store.upsertAtom({
+      sessionId: 'noise-session',
+      projectName: 'Argus',
+      atomType: 'command',
+      title: 'tool_result',
+      summary: 'No matches found',
+      stableKey: 'command:tool-result-noise',
+      confidence: 0.72,
+      updatedAtMs: 6_000,
+    });
+    store.upsertAtom({
+      sessionId: 'noise-session',
+      projectName: 'Argus',
+      atomType: 'file-change',
+      title: 'Checkpoint captured',
+      summary: 'Checkpoint captured 6 changed file(s).',
+      stableKey: 'file-change:checkpoint-noise',
+      confidence: 0.72,
+      updatedAtMs: 5_000,
+    });
+    store.upsertAtom({
+      sessionId: 'previous-session',
+      projectName: 'Argus',
+      atomType: 'goal',
+      title: 'Remember retired capability boundary',
+      summary: 'Do not restore Obsidian, CodeGraph, or the small model runtime. Keep Brain plus MCP/Profile integrations as the product boundary.',
+      stableKey: 'goal:retired-capability-boundary',
+      entities: ['Obsidian', 'CodeGraph', 'small model runtime'],
+      confidence: 0.98,
+      updatedAtMs: 1_000,
+    });
+    const recall = createBrainRecallService({
+      store,
+      readConfig: async () => ({ enabled: true, maxInjectedTokens: 500, hybridRetrieval: { enabled: true } }),
+    });
+
+    const result = await recall.applyToChatCommand({
+      command: '根据项目记忆，我们现在不应该恢复哪些能力？',
+      options: {
+        sessionId: 'new-empty-session',
+        projectName: 'Argus',
+      },
+    }, 'claude');
+
+    const hits = result.options.runtimeDiagnostics.brainRuntime.recall.recallHits;
+    expect(hits[0]).toMatchObject({
+      kind: 'atom',
+      title: 'Remember retired capability boundary',
+    });
+    expect(hits.slice(0, 3).map((hit) => hit.title)).not.toContain('tool_result');
+    expect(hits.slice(0, 3).some((hit) => String(hit.title || '').startsWith('Session working memory'))).toBe(false);
+    expect(hits.every((hit) => hit.title !== 'tool_result')).toBe(true);
+    expect(result.options.appendSystemPrompt).toContain('Do not restore Obsidian, CodeGraph, or the small model runtime');
+  });
+
   it('builds Brain recall without retired external-source dedupe diagnostics', async () => {
     const store = createStore();
     store.upsertAtom({

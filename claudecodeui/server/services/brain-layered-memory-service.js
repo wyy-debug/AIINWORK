@@ -83,10 +83,24 @@ function buildAtomFromEvent(event = {}) {
   };
 }
 
+function isLowValueAtom(atom = {}) {
+  const title = readString(atom.title).toLowerCase();
+  const summary = readString(atom.summary).toLowerCase();
+  return (
+    title === 'tool_result'
+    || title.startsWith('tool_use:')
+    || title.startsWith('checkpoint captured')
+    || summary === 'tool_result'
+    || summary === 'no matches found'
+    || summary.startsWith('checkpoint captured')
+  );
+}
+
 function buildProfileSummary(atoms = []) {
-  const decisions = atoms.filter((atom) => atom.atomType === 'decision').slice(0, 8);
-  const constraints = atoms.filter((atom) => atom.atomType === 'constraint').slice(0, 6);
-  const lessons = atoms.filter((atom) => atom.atomType === 'lesson' || atom.atomType === 'fix').slice(0, 6);
+  const usefulAtoms = atoms.filter((atom) => !isLowValueAtom(atom));
+  const decisions = usefulAtoms.filter((atom) => atom.atomType === 'decision').slice(0, 8);
+  const constraints = usefulAtoms.filter((atom) => atom.atomType === 'constraint').slice(0, 6);
+  const lessons = usefulAtoms.filter((atom) => atom.atomType === 'lesson' || atom.atomType === 'fix').slice(0, 6);
   return [
     decisions.length ? `Decisions: ${decisions.map((atom) => atom.title).join('; ')}` : '',
     constraints.length ? `Constraints: ${constraints.map((atom) => atom.title).join('; ')}` : '',
@@ -168,9 +182,9 @@ function buildTopLayersFromAtoms(store, {
       profileType: 'working-memory',
       summary: buildProfileSummary(projectAtoms),
       content: {
-        decisions: projectAtoms.filter((atom) => atom.atomType === 'decision').slice(0, 12),
-        constraints: projectAtoms.filter((atom) => atom.atomType === 'constraint').slice(0, 12),
-        lessons: projectAtoms.filter((atom) => ['lesson', 'fix'].includes(atom.atomType)).slice(0, 12),
+        decisions: projectAtoms.filter((atom) => atom.atomType === 'decision' && !isLowValueAtom(atom)).slice(0, 12),
+        constraints: projectAtoms.filter((atom) => atom.atomType === 'constraint' && !isLowValueAtom(atom)).slice(0, 12),
+        lessons: projectAtoms.filter((atom) => ['lesson', 'fix'].includes(atom.atomType) && !isLowValueAtom(atom)).slice(0, 12),
         evidence: getEvidenceSummary(store, projectAtoms, { sessionId, provider, projectName: effectiveProjectName }),
       },
       sourceAtomIds: projectAtoms.map((atom) => atom.id).slice(0, 80),

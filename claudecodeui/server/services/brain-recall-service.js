@@ -45,6 +45,35 @@ function matchesKeywords(node, keywords = []) {
   return keywords.some((keyword) => haystack.includes(keyword));
 }
 
+function isUsefulRecallNode(node = {}) {
+  const title = readString(node.title).toLowerCase();
+  const summary = readString(node.summary).toLowerCase();
+  return !(
+    title === 'tool_result'
+    || title.startsWith('tool_use:')
+    || title.startsWith('checkpoint captured')
+    || summary === 'tool_result'
+    || summary === 'no matches found'
+    || summary.startsWith('checkpoint captured')
+  );
+}
+
+function isUsefulRetrievalHit(hit = {}) {
+  const title = readString(hit.title).toLowerCase();
+  const summary = readString(hit.summary).toLowerCase();
+  if (hit.kind === 'scenario') {
+    return /goal|decision|constraint|lesson|remember|do not restore|\u4e0d\u8981\u6062\u590d|\u8bb0\u4f4f/u.test(summary);
+  }
+  return !(
+    title === 'tool_result'
+    || title.startsWith('tool_use:')
+    || title.startsWith('checkpoint captured')
+    || summary === 'tool_result'
+    || summary === 'no matches found'
+    || summary.startsWith('checkpoint captured')
+  );
+}
+
 function trimByTokenBudget(text = '', maxTokens = 1200) {
   const maxChars = Math.max(800, Number(maxTokens || 1200) * 4);
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[Argus Brain Context truncated]` : text;
@@ -121,11 +150,12 @@ export function createBrainRecallService({
           provider,
           types: ['decision', 'risk'],
           limit: 12,
-        })
+        }).filter(isUsefulRecallNode)
         : [];
       const keywords = tokenize(data.command);
       const matchedNodes = context.projectName
         ? store.listProjectNodes({ projectName: context.projectName, provider, limit: 30 })
+          .filter(isUsefulRecallNode)
           .filter((node) => matchesKeywords(node, keywords))
           .slice(0, 8)
         : [];
@@ -139,7 +169,7 @@ export function createBrainRecallService({
           limit: config?.hybridRetrieval?.limit || 8,
           vectorTimeoutMs: config?.hybridRetrieval?.vectorTimeoutMs || 80,
         });
-      const retrievalHits = Array.isArray(retrieval.hits) ? retrieval.hits : [];
+      const retrievalHits = (Array.isArray(retrieval.hits) ? retrieval.hits : []).filter(isUsefulRetrievalHit);
       const legacyPrompt = buildArgusBrainContextPrompt({
         compaction,
         projectNodes,
