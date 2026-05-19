@@ -34,11 +34,7 @@ import {
 } from './services/obsidian-instruction-sync-service.js';
 import { applyCodeGraphRuntimeToChatCommand } from './services/codegraph-service.js';
 import { applyObsidianContextToChatCommand } from './services/obsidian-context-service.js';
-import {
-    isNativeAutoMemorySyncEnabled,
-    resolveNativeMemoryStagingDir,
-    syncNativeMemoryFiles,
-} from './services/obsidian-native-memory-sync-service.js';
+import { applyExplicitWikiIntentToChatCommand } from './services/obsidian-memory-policy-service.js';
 import { ingestUploadedFilesToObsidian } from './services/obsidian-wiki-service.js';
 import {
     getProjects,
@@ -58,6 +54,7 @@ import agentsRoutes from './routes/agents.js';
 import artifactsRoutes from './routes/artifacts.js';
 import authRoutes from './routes/auth.js';
 import automationsRoutes, { startAutomationScheduler } from './routes/automations.js';
+import brainRoutes from './routes/brain.js';
 import checkpointsRoutes from './routes/checkpoints.js';
 import codegraphRoutes from './routes/codegraph.js';
 import codexRoutes from './routes/codex.js';
@@ -114,11 +111,14 @@ import {
     toFileMutationHttpError,
 } from './services/file-mutation-service.js';
 import {
-    buildOpenMythosRuntimePreview,
-    readResolvedOpenMythosRuntimeConfig,
+    readResolvedBrainRuntimeConfig,
     readResolvedSubagentRuntimeConfig,
     resolveMtlCodeModelRuntime,
 } from './services/mtl-code-model-service.js';
+import { brainCaptureService } from './services/brain-capture-service.js';
+import { brainCompactionService } from './services/brain-compaction-service.js';
+import { brainRecallService } from './services/brain-recall-service.js';
+import { brainStore } from './services/brain-store-service.js';
 import { getRequestIpAddress } from './services/hub-usage-service.js';
 import {
     clearSessionGoal,
@@ -477,6 +477,7 @@ app.use('/api/checkpoints', authenticateToken, checkpointsRoutes);
 app.use('/api/recipes', authenticateToken, recipesRoutes);
 app.use('/api/project-profile', authenticateToken, projectProfileRoutes);
 app.use('/api/session-timeline', authenticateToken, sessionTimelineRoutes);
+app.use('/api/brain', authenticateToken, brainRoutes);
 app.use('/api/review-flow', authenticateToken, reviewFlowRoutes);
 app.use('/api/ide-bridge', authenticateToken, ideBridgeRoutes);
 app.use('/api/codegraph', authenticateToken, codegraphRoutes);
@@ -2134,11 +2135,13 @@ class WebSocketWriter {
         this.ipAddress = ipAddress;
         this.isWebSocketWriter = true;  // Marker for transport detection
         this.pendingAutoCaptureContext = null;
+        this.pendingBrainSessionId = null;
+        this.pendingBrainProvider = 'claude';
         this.runtimeEventCapture = null;
+        this.runtimeAssistantText = '';
         this.autoCapture = createObsidianAutoCaptureOrchestrator({
             syncInstructionFile: syncObsidianInstructionFile,
             syncProjectInstructionFiles: syncObsidianProjectInstructionFiles,
-            syncNativeMemoryFiles,
             broadcast: (event) => this.send(createObsidianAutoCaptureStatusMessage(event)),
         });
     }
@@ -2155,6 +2158,18 @@ class WebSocketWriter {
                 ...this.pendingAutoCaptureContext,
                 sessionId: data.newSessionId,
             });
+        }
+        if (data?.kind === 'session_created' && data.newSessionId && this.pendingBrainSessionId) {
+            try {
+                brainStore.migrateSessionId({
+                    fromSessionId: this.pendingBrainSessionId,
+                    toSessionId: data.newSessionId,
+                    provider: this.pendingBrainProvider || data.provider || 'claude',
+                });
+            } catch (error) {
+                console.warn('[Argus Brain] session migration failed:', error?.message || error);
+            }
+            this.pendingBrainSessionId = data.newSessionId;
         }
         void this.autoCapture.observeMessage(data).catch((error) => {
             console.warn('[Obsidian Bridge] Server-side auto-capture failed:', error?.message || error);
@@ -2196,17 +2211,31 @@ class WebSocketWriter {
 
     beginRuntimeEventCapture() {
         this.runtimeEventCapture = [];
+        this.runtimeAssistantText = '';
     }
 
     endRuntimeEventCapture() {
         const captured = this.runtimeEventCapture || [];
+        if (this.runtimeAssistantText.trim()) {
+            captured.push({
+                kind: 'assistant_summary',
+                status: 'complete',
+                content: this.runtimeAssistantText.trim().slice(-4000),
+                timestamp: new Date().toISOString(),
+            });
+        }
         this.runtimeEventCapture = null;
+        this.runtimeAssistantText = '';
         return captured;
     }
 
     captureRuntimeEvent(data) {
         const kind = data.kind || data.type || '';
-        if (!['tool_use', 'tool_result', 'permission_request', 'status'].includes(kind)) {
+        if (kind === 'stream_delta' && typeof data.content === 'string') {
+            this.runtimeAssistantText = `${this.runtimeAssistantText}${data.content}`.slice(-8000);
+            return;
+        }
+        if (!['tool_use', 'tool_result', 'permission_request', 'status', 'error'].includes(kind)) {
             return;
         }
         const status = data.status || data.event || '';
@@ -2220,8 +2249,14 @@ class WebSocketWriter {
             toolName: data.toolName || data.name || '',
             taskId: data.taskId || '',
             isError: data.isError === true || data.kind === 'error',
+            content: data.content || data.text || '',
             timestamp: data.timestamp || new Date().toISOString(),
         });
+    }
+
+    setBrainCaptureContext({ sessionId = '', provider = 'claude' } = {}) {
+        this.pendingBrainSessionId = sessionId || null;
+        this.pendingBrainProvider = provider || 'claude';
     }
 }
 
@@ -2325,18 +2360,16 @@ async function startCheckpointForChatCommand(data, provider) {
 }
 
 async function completeCheckpointForChatCommand(checkpoint, writer, data, provider) {
+    const runtimeEvents = typeof writer.endRuntimeEventCapture === 'function'
+        ? writer.endRuntimeEventCapture()
+        : [];
     if (!checkpoint?.id) {
-        if (typeof writer.endRuntimeEventCapture === 'function') {
-            writer.endRuntimeEventCapture();
-        }
+        await finalizeBrainForChatCommand({ writer, data, provider, checkpoint: null, runtimeEvents });
         return null;
     }
     try {
-        const toolCalls = typeof writer.endRuntimeEventCapture === 'function'
-            ? writer.endRuntimeEventCapture()
-            : [];
         const completed = await completeSessionCheckpoint(checkpoint.id, {
-            toolCalls,
+            toolCalls: runtimeEvents,
             metadata: {
                 provider,
                 finalSessionId: data?.options?.sessionId || data?.sessionId || checkpoint.sessionId || '',
@@ -2352,9 +2385,11 @@ async function completeCheckpointForChatCommand(checkpoint, writer, data, provid
             provider,
             checkpoint: completed,
         }));
+        await finalizeBrainForChatCommand({ writer, data, provider, checkpoint: completed, runtimeEvents });
         return completed;
     } catch (error) {
         console.warn('[checkpoint] complete failed:', error?.message || error);
+        await finalizeBrainForChatCommand({ writer, data, provider, checkpoint, runtimeEvents });
         return null;
     }
 }
@@ -2485,23 +2520,9 @@ function createRuntimeDiagnosticsPayload(data) {
     }
     const permissions = createRuntimePermissionSnapshot(data);
     const bareMode = diagnostics.bareMode === true;
-    const openMythosRuntimeCardActive = Boolean(
-        diagnostics.openMythosRuntime?.enabled
-        && diagnostics.openMythosRuntime?.taskCard
-        && !bareMode
-    );
-    const previewRuntimeCard = openMythosRuntimeCardActive ? buildOpenMythosRuntimePreview(
-            data?.command,
-            diagnostics.openMythosRuntime,
-            permissions.permissionMode,
-        )
-        : null;
-    const openMythosRuntime = diagnostics.openMythosRuntime
+    const brainRuntime = diagnostics.brainRuntime
         ? {
-            ...diagnostics.openMythosRuntime,
-            bareMode,
-            openMythosRuntimeCardActive,
-            runtimeCard: previewRuntimeCard,
+            ...diagnostics.brainRuntime,
             contextCache: {
                 skillPromptLength: diagnostics.skillPromptLength || 0,
                 appendSystemPromptLength: diagnostics.appendSystemPromptLength || 0,
@@ -2512,8 +2533,7 @@ function createRuntimeDiagnosticsPayload(data) {
     return {
         ...diagnostics,
         bareMode,
-        openMythosRuntimeCardActive,
-        openMythosRuntime,
+        brainRuntime,
         provider: getProviderFromCommandType(data?.type),
         sessionId: data?.options?.sessionId || data?.sessionId || null,
         projectName: data?.options?.projectName || data?.projectName || '',
@@ -2687,44 +2707,94 @@ function emitObsidianWikiResult(writer, data) {
 }
 
 async function applyObsidianKnowledgeRuntimeToChatCommand(data) {
+    const withWikiIntent = await applyExplicitWikiIntentToChatCommand(data);
     const withContext = await applyCodeGraphRuntimeToChatCommand(
-        await applyObsidianContextToChatCommand(data),
+        await applyObsidianContextToChatCommand(withWikiIntent),
     );
-    const options = withContext?.options && typeof withContext.options === 'object'
-        ? withContext.options
-        : {};
-    const projectPath = typeof options.projectPath === 'string' && options.projectPath.trim()
-        ? options.projectPath.trim()
-        : typeof options.cwd === 'string' && options.cwd.trim()
-            ? options.cwd.trim()
-            : '';
-    const projectName = typeof options.projectName === 'string' && options.projectName.trim()
-        ? options.projectName.trim()
-        : typeof withContext?.projectName === 'string' && withContext.projectName.trim()
-            ? withContext.projectName.trim()
-            : projectPath
-                ? path.basename(projectPath)
-                : '';
-    const nativeSyncEnabled = withContext?.type === 'claude-command'
-        && isNativeAutoMemorySyncEnabled();
+    return withContext;
+}
 
-    if (!nativeSyncEnabled) {
-        return withContext;
+async function applyBrainRuntimeToChatCommand(data, provider = getProviderFromCommandType(data?.type)) {
+    if (!['claude', 'cursor', 'codex', 'gemini'].includes(provider)) {
+        return data;
     }
+    return brainRecallService.applyToChatCommand(data, provider);
+}
 
-    return {
-        ...withContext,
-        options: {
-            ...options,
-            obsidianNativeMemorySync: {
-                enabled: true,
-                memoryDir: resolveNativeMemoryStagingDir({ projectPath, projectName }),
-                projectName,
-                projectPath,
-                primaryReadback: withContext?.options?.obsidianContext?.used === true,
+function captureBrainCommandForChat(writer, data, provider) {
+    const config = data?.options?.brainRuntime || {};
+    if (config?.enabled === false) {
+        return null;
+    }
+    const captured = brainCaptureService.captureCommand(data, provider, config);
+    const sessionId = captured?.sessionId
+        || data?.options?.sessionId
+        || data?.sessionId
+        || data?.options?.clientSessionId
+        || data?.clientSessionId
+        || '';
+    if (sessionId && typeof writer.setBrainCaptureContext === 'function') {
+        writer.setBrainCaptureContext({ sessionId, provider });
+    }
+    return captured;
+}
+
+async function finalizeBrainForChatCommand({ writer, data, provider, checkpoint = null, runtimeEvents = [] } = {}) {
+    const config = data?.options?.brainRuntime || {};
+    if (config?.enabled === false) {
+        return null;
+    }
+    const sessionId = checkpoint?.sessionId
+        || data?.options?.sessionId
+        || data?.sessionId
+        || data?.options?.clientSessionId
+        || data?.clientSessionId
+        || '';
+    if (!sessionId) {
+        return null;
+    }
+    brainCaptureService.captureRuntimeEvents({
+        data,
+        provider,
+        events: runtimeEvents,
+        checkpoint,
+        config,
+    });
+    brainCaptureService.captureCheckpoint({
+        data,
+        provider,
+        checkpoint,
+        config,
+    });
+    const projectName = checkpoint?.projectName || data?.options?.projectName || data?.projectName || '';
+    const compaction = brainCompactionService.compactSession({
+        sessionId,
+        provider,
+        projectName,
+        config,
+        force: false,
+    });
+    brainStore.pruneRetention({
+        sessionId,
+        provider,
+        projectName,
+        ...(config.retention || {}),
+    });
+    if (writer && compaction) {
+        writer.send(createNormalizedMessage({
+            kind: 'status',
+            status: 'brain_compacted',
+            content: 'Argus Brain compacted this task state.',
+            sessionId,
+            provider,
+            brain: {
+                compactionId: compaction.id,
+                currentGoal: compaction.currentGoal,
+                nextAction: compaction.nextAction,
             },
-        },
-    };
+        }));
+    }
+    return compaction;
 }
 
 function normalizeUploadedChatFiles(files) {
@@ -2800,9 +2870,9 @@ function normalizeModelProfileId(value) {
 
 async function applyAgentRuntimeToChatCommand(data) {
     const provider = getProviderFromCommandType(data?.type);
-    let openMythosRuntime = provider === 'claude'
-        ? await readResolvedOpenMythosRuntimeConfig().catch((error) => {
-            console.warn('[OpenMythos Runtime] Failed to read settings:', error?.message || error);
+    const brainRuntime = provider === 'claude'
+        ? await readResolvedBrainRuntimeConfig().catch((error) => {
+            console.warn('[Argus Brain] Failed to read settings:', error?.message || error);
             return null;
         })
         : null;
@@ -2890,11 +2960,6 @@ async function applyAgentRuntimeToChatCommand(data) {
         || data?.options?.contextWindowTokens
         || null;
     const sessionBareMode = sessionModelRuntime?.profile?.bareMode === true;
-    const openMythosRuntimeCardActive = Boolean(
-        openMythosRuntime?.enabled
-        && openMythosRuntime?.taskCard
-        && !sessionBareMode
-    );
     const agentId = data?.options?.agentId || (allowSessionAgentBinding ? storedBinding?.agentId : '') || '';
     const sessionSkills = Array.isArray(sessionConfiguration?.skills)
         ? sessionConfiguration.skills.filter((skill) => typeof skill === 'string' && skill.trim()).slice(0, 60)
@@ -2937,8 +3002,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                         modelProfileId: sessionModelProfileId || '',
                         sessionAgentPackage,
                         bareMode: sessionBareMode,
-                        openMythosRuntimeCardActive,
-                        openMythosRuntime,
+                        brainRuntime,
                         subagents: subagentRuntime,
                     },
                 },
@@ -2985,8 +3049,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                 modelProfileId: sessionModelProfileId || '',
                 sessionAgentPackage,
                 bareMode: sessionBareMode,
-                openMythosRuntimeCardActive,
-                openMythosRuntime,
+                brainRuntime,
                 subagents: subagentRuntime,
             },
         };
@@ -3053,8 +3116,7 @@ async function applyAgentRuntimeToChatCommand(data) {
                     modelProfileId: sessionModelProfileId || '',
                     sessionAgentPackage,
                     bareMode: sessionBareMode,
-                    openMythosRuntimeCardActive,
-                    openMythosRuntime,
+                    brainRuntime,
                     subagents: subagentRuntime,
                 },
             };
@@ -3118,8 +3180,7 @@ async function applyAgentRuntimeToChatCommand(data) {
             modelProfileId: sessionModelProfileId || '',
             sessionAgentPackage,
             bareMode: sessionBareMode,
-            openMythosRuntimeCardActive,
-            openMythosRuntime,
+            brainRuntime,
             subagents: subagentRuntime,
         },
         contextWindowTokens: sessionModelRuntime?.contextWindowTokens || runtime.contextWindowTokens,
@@ -3197,15 +3258,16 @@ function handleChatConnection(ws, request) {
                 );
                 const commandWithProfile = applyAgentProfileRuntimeToChatCommand(commandWithIntent);
                 await prepareProjectInstructionFilesBeforeChat(commandWithProfile, 'claude');
-                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(applyUploadedFilesToChatCommand(
                     applyArgusCollaborationModeOptions(await applyAgentRuntimeToChatCommand(commandWithProfile)),
-                ));
+                )));
                 if (commandData?.options?.debugPromptInjection === true) {
                     commandData.options = {
                         ...(commandData.options || {}),
                         debugPromptInjectionOriginalCommand: typeof data.command === 'string' ? data.command : '',
                     };
                 }
+                captureBrainCommandForChat(writer, commandData, 'claude');
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
                 emitObsidianWikiResult(writer, commandData);
@@ -3334,11 +3396,12 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'cursor-command') {
                 setWriterAutoCaptureContext(writer, data, 'cursor');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'cursor');
-                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(
                         await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
                     )
-                );
+                ), 'cursor');
+                captureBrainCommandForChat(writer, commandData, 'cursor');
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
                 emitObsidianWikiResult(writer, commandData);
@@ -3356,11 +3419,12 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'codex-command') {
                 setWriterAutoCaptureContext(writer, data, 'codex');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'codex');
-                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(
                         await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
                     )
-                );
+                ), 'codex');
+                captureBrainCommandForChat(writer, commandData, 'codex');
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
                 emitObsidianWikiResult(writer, commandData);
@@ -3378,11 +3442,12 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'gemini-command') {
                 setWriterAutoCaptureContext(writer, data, 'gemini');
                 await waitForWriterAutoCaptureBarrier(writer, data, 'gemini');
-                const commandData = await applyObsidianKnowledgeRuntimeToChatCommand(
+                const commandData = await applyBrainRuntimeToChatCommand(await applyObsidianKnowledgeRuntimeToChatCommand(
                     applyUploadedFilesToChatCommand(
                         await applyAgentRuntimeToChatCommand(applyAgentProfileRuntimeToChatCommand(data))
                     )
-                );
+                ), 'gemini');
+                captureBrainCommandForChat(writer, commandData, 'gemini');
                 emitRuntimeDiagnostics(writer, commandData);
                 emitObsidianContextResult(writer, commandData);
                 emitObsidianWikiResult(writer, commandData);

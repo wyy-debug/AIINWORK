@@ -5,7 +5,7 @@ import { Button } from '../../../../shared/view/ui';
 import { apiFetch } from '../../../../utils/api';
 import type { SettingsProject } from '../../types/types';
 
-import OpenMythosRuntimeContent from './agents-settings/sections/content/OpenMythosRuntimeContent';
+import BrainRuntimeContent from './runtime-settings/BrainRuntimeContent';
 import ObsidianBridgeSettingsContent from './runtime-settings/ObsidianBridgeSettingsContent';
 
 type RuntimePermissions = {
@@ -40,7 +40,7 @@ type RuntimeSettingsTabProps = {
   onOpenSmallModelSettings?: () => void;
 };
 
-type RuntimeSettingsSection = 'local-permissions' | 'obsidian' | 'openmythos';
+type RuntimeSettingsSection = 'local-permissions' | 'obsidian' | 'brain';
 
 const RUNTIME_SETTINGS_TABS: Array<{
   id: RuntimeSettingsSection;
@@ -49,18 +49,18 @@ const RUNTIME_SETTINGS_TABS: Array<{
 }> = [
   {
     id: 'local-permissions',
-    label: '本地执行权限',
-    description: '终端、安全确认和可执行路径。',
+    label: 'Local Permissions',
+    description: 'Terminal, shell safety, and allowed local paths.',
   },
   {
     id: 'obsidian',
-    label: 'Obsidian 知识库',
-    description: 'Bridge 连接、Wiki 上传和回读注入。',
+    label: 'Obsidian Wiki',
+    description: 'Bridge connection, Wiki ingestion, and readback.',
   },
   {
-    id: 'openmythos',
-    label: 'OpenMythos 运行时',
-    description: '推理运行时和子智能体分发。',
+    id: 'brain',
+    label: 'Argus Brain',
+    description: 'Task memory, context compaction, and work restore.',
   },
 ];
 
@@ -89,7 +89,7 @@ export default function RuntimeSettingsTab({
         }
       } catch (error) {
         if (!cancelled) {
-          setMessage(error instanceof Error ? error.message : '加载运行时设置失败。');
+          setMessage(error instanceof Error ? error.message : 'Failed to load runtime permissions.');
         }
       }
     };
@@ -119,9 +119,9 @@ export default function RuntimeSettingsTab({
 
       setPermissions(permissionsData.permissions);
       setAllowedPathsText((permissionsData.permissions.allowedPaths || []).join('\n'));
-      setMessage('运行时设置已保存。');
+      setMessage('Runtime permissions saved.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存运行时设置失败。');
+      setMessage(error instanceof Error ? error.message : 'Failed to save runtime permissions.');
     }
   };
 
@@ -130,16 +130,16 @@ export default function RuntimeSettingsTab({
       <div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <ShieldCheck className="h-4 w-4" />
-          <span>本地执行权限</span>
+          <span>Local execution permissions</span>
         </div>
-        <h3 className="mt-1 text-lg font-semibold text-foreground">终端与安全策略</h3>
+        <h3 className="mt-1 text-lg font-semibold text-foreground">Terminal and safety policy</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          控制 Argus 可以使用的本地终端、路径范围和危险命令确认策略。
+          Controls the local terminal, allowed path scope, and confirmation behavior used by Argus helper commands.
         </p>
       </div>
 
       <div className="rounded-lg border border-border/70 bg-card p-4">
-        <label className="text-sm font-medium text-foreground">默认终端</label>
+        <label className="text-sm font-medium text-foreground">Default terminal</label>
         <select
           className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
           value={permissions.terminal}
@@ -150,16 +150,16 @@ export default function RuntimeSettingsTab({
           }))}
         >
           <option value="powershell">PowerShell</option>
-          <option value="cmd">命令提示符</option>
+          <option value="cmd">Command Prompt</option>
           <option value="wsl">WSL</option>
           <option value="git-bash">Git Bash</option>
         </select>
         <p className="mt-2 text-xs text-muted-foreground">
-          Argus 会在 Shell、Run、Worktree setup、Preview 辅助命令和后端运行命令执行前应用本地权限策略。
+          Argus applies this setting to Shell, Run, worktree setup, preview helpers, and backend command execution.
         </p>
         {permissions.terminal === 'wsl' && (
           <div className="mt-3">
-            <label className="text-xs font-medium text-muted-foreground">WSL 发行版</label>
+            <label className="text-xs font-medium text-muted-foreground">WSL distro</label>
             <input
               className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
               value={permissions.wslDistro}
@@ -171,15 +171,15 @@ export default function RuntimeSettingsTab({
       </div>
 
       <div className="rounded-lg border border-border/70 bg-card p-4">
-        <label className="text-sm font-medium text-foreground">允许路径</label>
+        <label className="text-sm font-medium text-foreground">Allowed paths</label>
         <textarea
           className="mt-2 min-h-28 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
           value={allowedPathsText}
           onChange={(event) => setAllowedPathsText(event.target.value)}
-          placeholder="每行一个绝对路径"
+          placeholder="One absolute path per line"
         />
         <p className="mt-2 text-xs text-muted-foreground">
-          留空时默认允许当前项目路径；超出允许路径的本地命令会被阻止。
+          Leave blank to allow the selected project path. Commands outside allowed paths are blocked.
         </p>
       </div>
 
@@ -193,7 +193,7 @@ export default function RuntimeSettingsTab({
               confirmDangerousCommands: event.target.checked,
             }))}
           />
-          终端或运行任务执行危险命令前需要确认
+          Confirm before running dangerous terminal or helper commands
         </label>
         <label className="mt-3 flex items-center gap-2 text-sm text-foreground">
           <input
@@ -201,12 +201,12 @@ export default function RuntimeSettingsTab({
             checked={permissions.allowWsl}
             onChange={(event) => setPermissions((previous) => ({ ...previous, allowWsl: event.target.checked }))}
           />
-          允许选择 WSL 运行时
+          Allow WSL runtime selection
         </label>
       </div>
 
       <div className="flex justify-end">
-        <Button onClick={save}>保存本地执行权限</Button>
+        <Button onClick={save}>Save Local Permissions</Button>
       </div>
     </div>
   );
@@ -218,18 +218,18 @@ export default function RuntimeSettingsTab({
     />
   );
 
-  const renderOpenMythosTab = () => <OpenMythosRuntimeContent />;
+  const renderBrainTab = () => <BrainRuntimeContent selectedProject={selectedProject} />;
 
   return (
     <div className="max-w-none space-y-6">
       <div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <ShieldCheck className="h-4 w-4" />
-          <span>运行时</span>
+          <span>Runtime</span>
         </div>
-        <h3 className="mt-1 text-xl font-semibold text-foreground">Argus 运行时</h3>
+        <h3 className="mt-1 text-xl font-semibold text-foreground">Argus Runtime</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          分页管理本地执行权限、Obsidian 知识库和 OpenMythos 运行时。
+          Manage local execution permissions, Obsidian Wiki readback, and Argus Brain task memory.
         </p>
       </div>
 
@@ -267,7 +267,8 @@ export default function RuntimeSettingsTab({
 
       {selectedRuntimeTab === 'local-permissions' && renderLocalPermissionsTab()}
       {selectedRuntimeTab === 'obsidian' && renderObsidianTab()}
-      {selectedRuntimeTab === 'openmythos' && renderOpenMythosTab()}
+      {selectedRuntimeTab === 'brain' && renderBrainTab()}
     </div>
   );
 }
+

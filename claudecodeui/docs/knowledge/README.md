@@ -1,6 +1,6 @@
 # Argus Five-Layer Knowledge Architecture
 
-Updated: 2026-05-03
+Updated: 2026-05-18
 
 This directory is the development entry point for `claudecodeui`, now branded as Argus. Use it to answer five practical questions before changing code: what domain concept is involved, which system boundary owns it, which module should change, which runtime flow is affected, and how to verify the result.
 
@@ -16,15 +16,16 @@ This directory is the development entry point for `claudecodeui`, now branded as
 
 ## Current Notes
 
+- [2026-05-18-argus-brain-runtime.md](2026-05-18-argus-brain-runtime.md): Argus Brain storage, capture, compaction, recall, diagnostics, and boundaries with Claude native memory and Obsidian Wiki. OpenMythos is removed from the active runtime surface.
 - [2026-05-07-obsidian-bridge-user-guide.md](2026-05-07-obsidian-bridge-user-guide.md): Argus Bridge for Obsidian installation, pairing, three write modes, chat auto-capture, Results manual export, AI readback, fallback, packaging, smoke, and troubleshooting guide.
 - [2026-05-07-codex-goal-alignment.md](2026-05-07-codex-goal-alignment.md): Codex `/goal` call logic, persisted thread-goal state machine, model tool guardrails, runtime continuation, and the minimal Argus alignment plan.
-- [2026-05-05-codex-subagent-source-migration.md](2026-05-05-codex-subagent-source-migration.md): Codex-style Subagent migration, `spawn_agent` tool protocol, feature gate, thread graph metadata, OpenMythos advisory-only behavior, and UI noise filtering.
+- [2026-05-05-codex-subagent-source-migration.md](2026-05-05-codex-subagent-source-migration.md): Codex-style Subagent migration, `spawn_agent` tool protocol, feature gate, thread graph metadata, historical strategy-layer notes, and UI noise filtering.
 - [2026-05-04-repository-update-summary.md](2026-05-04-repository-update-summary.md): repository update from `2d96cbc` to `4785f3d`, Argus Workbench/API/runtime changes, ContextBudget/RAG removal notes, and verification checklist.
 - [2026-05-03-file-write-guard-packaging.md](2026-05-03-file-write-guard-packaging.md): write guard, stale-save conflict handling, Argus CLI post-write verification, Windows installer output, packaging checks, and next hardening plan.
 - [2026-05-03-context-budget-alignment.md](2026-05-03-context-budget-alignment.md): unified ContextBudget contract for current context window usage, cumulative token consumption, DeepSeek 1M display, diagnostics, and packaging verification.
 - [2026-05-03-argus-workbench-integration.md](2026-05-03-argus-workbench-integration.md): chat-first Workbench flow, visible Changes/Run/Preview/Results panels, runtime settings ownership, and coordinator/subagent defaults.
 - [2026-04-28-mtl-code-user-guide.md](2026-04-28-mtl-code-user-guide.md): user-facing Argus guide covering projects, conversations, model settings, Agent, Skill, MCP, Hub, Worktree, permissions, and caveats.
-- [2026-04-29-openmythos-runtime.md](2026-04-29-openmythos-runtime.md): OpenMythos-inspired runtime controls, saved settings shape, launch environment mapping, diagnostics, and verification steps.
+- [2026-04-29-openmythos-runtime.md](2026-04-29-openmythos-runtime.md): Historical migration note. OpenMythos is no longer an active runtime surface; use Argus Brain for task working memory.
 - [2026-04-29-mimo-model-profiles.md](2026-04-29-mimo-model-profiles.md): multi-model profile settings and Xiaomi MiMo Anthropic-compatible setup.
 - [2026-04-28-redmine-mcp-agent-setup.md](2026-04-28-redmine-mcp-agent-setup.md): SOC Redmine Agent dependency wiring, MCP env storage, `REDMINE_API_KEY` handling, `ainwork-code-search` root setup, and GitNexus package fallback behavior.
 - Agent knowledge/RAG upload and retrieval is removed from the product runtime. Keep Agent context to prompt, Skills, MCP bindings, memory metadata, and normal workspace files.

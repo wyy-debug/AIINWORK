@@ -400,6 +400,182 @@ export const SWARM_MEMORY_TABLE_SQL = `CREATE TABLE IF NOT EXISTS swarm_memory (
 
 export const SWARM_MEMORY_RUN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_swarm_memory_run ON swarm_memory(run_id, created_at_ms);`;
 
+export const BRAIN_SESSIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_sessions (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  project_path TEXT,
+  model_profile_id TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  event_count INTEGER NOT NULL DEFAULT 0,
+  latest_compaction_id TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE(session_id, provider)
+);`;
+
+export const BRAIN_SESSIONS_LOOKUP_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_sessions_lookup ON brain_sessions(session_id, provider);`;
+export const BRAIN_SESSIONS_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_sessions_project ON brain_sessions(project_name, updated_at_ms);`;
+
+export const BRAIN_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_events (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  checkpoint_id TEXT,
+  artifact_id TEXT,
+  event_type TEXT NOT NULL,
+  role TEXT,
+  title TEXT,
+  content TEXT,
+  payload_json TEXT,
+  created_at_ms INTEGER NOT NULL
+);`;
+
+export const BRAIN_EVENTS_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_events_session ON brain_events(session_id, provider, created_at_ms);`;
+export const BRAIN_EVENTS_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_events_project ON brain_events(project_name, event_type, created_at_ms);`;
+export const BRAIN_EVENTS_CHECKPOINT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_events_checkpoint ON brain_events(checkpoint_id);`;
+export const BRAIN_EVENTS_ARTIFACT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_events_artifact ON brain_events(artifact_id);`;
+
+export const BRAIN_REFS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_refs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  event_id TEXT,
+  checkpoint_id TEXT,
+  artifact_id TEXT,
+  ref_type TEXT NOT NULL,
+  ref_id TEXT,
+  label TEXT,
+  content TEXT,
+  metadata_json TEXT,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at_ms INTEGER NOT NULL,
+  pruned_at_ms INTEGER,
+  FOREIGN KEY (event_id) REFERENCES brain_events(id) ON DELETE CASCADE
+);`;
+
+export const BRAIN_REFS_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_refs_session ON brain_refs(session_id, provider, created_at_ms);`;
+export const BRAIN_REFS_EVENT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_refs_event ON brain_refs(event_id);`;
+export const BRAIN_REFS_REF_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_refs_ref ON brain_refs(ref_type, ref_id);`;
+
+export const BRAIN_NODES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_nodes (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  node_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  confidence REAL NOT NULL DEFAULT 1,
+  source_event_ids_json TEXT,
+  ref_ids_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);`;
+
+export const BRAIN_NODES_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_nodes_session ON brain_nodes(session_id, provider, node_type, updated_at_ms);`;
+export const BRAIN_NODES_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_nodes_project ON brain_nodes(project_name, node_type, updated_at_ms);`;
+
+export const BRAIN_COMPACTIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_compactions (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  mermaid TEXT,
+  summary TEXT,
+  current_goal TEXT,
+  completed_steps_json TEXT,
+  active_decisions_json TEXT,
+  open_risks_json TEXT,
+  next_action TEXT,
+  source_event_start_id TEXT,
+  source_event_end_id TEXT,
+  source_event_count INTEGER NOT NULL DEFAULT 0,
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  refs_json TEXT,
+  created_at_ms INTEGER NOT NULL
+);`;
+
+export const BRAIN_COMPACTIONS_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_compactions_session ON brain_compactions(session_id, provider, created_at_ms);`;
+export const BRAIN_COMPACTIONS_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_compactions_project ON brain_compactions(project_name, created_at_ms);`;
+
+export const BRAIN_ATOMS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_atoms (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  atom_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  stable_key TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 1,
+  entities_json TEXT,
+  source_event_ids_json TEXT,
+  ref_ids_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE(session_id, provider, stable_key)
+);`;
+
+export const BRAIN_ATOMS_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_atoms_session ON brain_atoms(session_id, provider, atom_type, updated_at_ms);`;
+export const BRAIN_ATOMS_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_atoms_project ON brain_atoms(project_name, atom_type, updated_at_ms);`;
+export const BRAIN_ATOMS_STABLE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_atoms_stable ON brain_atoms(session_id, provider, stable_key);`;
+
+export const BRAIN_SCENARIOS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_scenarios (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  scenario_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  atom_ids_json TEXT,
+  metrics_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE(session_id, provider, scenario_key)
+);`;
+
+export const BRAIN_SCENARIOS_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_scenarios_session ON brain_scenarios(session_id, provider, updated_at_ms);`;
+export const BRAIN_SCENARIOS_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_scenarios_project ON brain_scenarios(project_name, updated_at_ms);`;
+
+export const BRAIN_PROJECT_PROFILES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_project_profiles (
+  id TEXT PRIMARY KEY,
+  project_name TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  profile_type TEXT NOT NULL DEFAULT 'working-memory',
+  summary TEXT,
+  content_json TEXT,
+  source_atom_ids_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE(project_name, provider, profile_type)
+);`;
+
+export const BRAIN_PROJECT_PROFILES_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_project_profiles_lookup ON brain_project_profiles(project_name, provider, profile_type);`;
+
+export const BRAIN_RETRIEVAL_RUNS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS brain_retrieval_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  provider TEXT NOT NULL DEFAULT 'claude',
+  project_name TEXT,
+  query TEXT,
+  mode TEXT NOT NULL DEFAULT 'hybrid',
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  hits_json TEXT,
+  metrics_json TEXT,
+  created_at_ms INTEGER NOT NULL
+);`;
+
+export const BRAIN_RETRIEVAL_RUNS_SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_retrieval_runs_session ON brain_retrieval_runs(session_id, provider, created_at_ms);`;
+export const BRAIN_RETRIEVAL_RUNS_PROJECT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_brain_retrieval_runs_project ON brain_retrieval_runs(project_name, created_at_ms);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -543,6 +719,42 @@ ${SWARM_ARTIFACTS_TABLE_SQL}
 ${SWARM_MEMORY_TABLE_SQL}
 
 ${SWARM_MEMORY_RUN_INDEX_SQL}
+
+${BRAIN_SESSIONS_TABLE_SQL}
+
+${BRAIN_SESSIONS_LOOKUP_INDEX_SQL}
+
+${BRAIN_SESSIONS_PROJECT_INDEX_SQL}
+
+${BRAIN_EVENTS_TABLE_SQL}
+
+${BRAIN_EVENTS_SESSION_INDEX_SQL}
+
+${BRAIN_EVENTS_PROJECT_INDEX_SQL}
+
+${BRAIN_EVENTS_CHECKPOINT_INDEX_SQL}
+
+${BRAIN_EVENTS_ARTIFACT_INDEX_SQL}
+
+${BRAIN_REFS_TABLE_SQL}
+
+${BRAIN_REFS_SESSION_INDEX_SQL}
+
+${BRAIN_REFS_EVENT_INDEX_SQL}
+
+${BRAIN_REFS_REF_INDEX_SQL}
+
+${BRAIN_NODES_TABLE_SQL}
+
+${BRAIN_NODES_SESSION_INDEX_SQL}
+
+${BRAIN_NODES_PROJECT_INDEX_SQL}
+
+${BRAIN_COMPACTIONS_TABLE_SQL}
+
+${BRAIN_COMPACTIONS_SESSION_INDEX_SQL}
+
+${BRAIN_COMPACTIONS_PROJECT_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

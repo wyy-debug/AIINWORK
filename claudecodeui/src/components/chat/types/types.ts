@@ -292,42 +292,26 @@ export interface AgentRuntimeSkillDetail {
   unavailableReason?: string;
 }
 
-export interface OpenMythosRuntimeDiagnostics {
+export interface BrainRuntimeDiagnostics {
   enabled: boolean;
-  adaptiveEffort: boolean;
-  taskCard: boolean;
-  routingHints: boolean;
-  loopControl?: 'advisory' | 'enforced' | string;
-  stableReinjection?: boolean;
-  phaseAdapter?: boolean;
-  expertRouting?: boolean;
-  contextCacheDiagnostics?: boolean;
-  bareMode?: boolean;
-  openMythosRuntimeCardActive?: boolean;
-  minEffort: string;
-  maxEffort: string;
-  runtimeCard?: {
-    goal?: string;
-    effort?: string;
-    loopBudget?: number;
-    riskScore?: number;
-    phase?: string;
-    phasePlan?: string[];
-    remainingBudget?: number;
-    reasons?: string[];
-    constraints?: string[];
-    expertRoutes?: Array<{
-      kind?: string;
-      label?: string;
-      reason?: string;
-      required?: boolean;
-    }>;
-  } | null;
+  captureRawRefs?: boolean;
+  compactEventThreshold?: number;
+  compactTextThreshold?: number;
+  maxInjectedTokens?: number;
+  recallTimeoutMs?: number;
+  recall?: {
+    enabled?: boolean;
+    used?: boolean;
+    status?: string;
+    recallHits?: Array<{ kind?: string; id?: string; type?: string }>;
+    currentGoal?: string;
+    nextAction?: string;
+    activeDecisions?: string[];
+    openRisks?: string[];
+    latestCompactionId?: string;
+    error?: string;
+  };
   contextCache?: {
-    compactBoundaryCount?: number;
-    microcompactBoundaryCount?: number;
-    toolSummaryCount?: number;
-    summaryLength?: number;
     skillPromptLength?: number;
     appendSystemPromptLength?: number;
   };
@@ -401,8 +385,7 @@ export interface AgentRuntimeDiagnostics {
   model?: string;
   modelProfileId?: string;
   bareMode?: boolean;
-  openMythosRuntimeCardActive?: boolean;
-  openMythosRuntime?: OpenMythosRuntimeDiagnostics | null;
+  brainRuntime?: BrainRuntimeDiagnostics | null;
   subagents?: SubagentRuntimeDiagnostics | null;
   contextWindowTokens?: number | null;
   projectPath?: string;

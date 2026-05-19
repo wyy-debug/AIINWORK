@@ -155,7 +155,7 @@ describe('obsidian wiki policy service', () => {
     });
   });
 
-  it('leaves chat prompts unchanged because Obsidian runtime is template-only', async () => {
+  it('leaves chat prompts unchanged while documenting the Wiki boundary', async () => {
     const service = await import('../obsidian-memory-policy-service.js');
 
     const input = {
@@ -177,7 +177,8 @@ describe('obsidian wiki policy service', () => {
       readObsidianBridgeConfig: () => ({ enabled: true }),
     });
     expect(codex).toBe(codexInput);
-    expect(service.buildObsidianWikiPolicyPrompt()).toContain('Obsidian runtime integration is template-only');
-    expect(service.buildObsidianWikiPolicyPrompt()).toContain('Claude Code native memory owns autonomous memory extraction');
+    expect(service.buildObsidianWikiPolicyPrompt()).toContain('Obsidian Wiki Policy');
+    expect(service.buildObsidianWikiPolicyPrompt()).toContain('not Claude native memory and not Argus Brain');
+    expect(service.buildObsidianWikiPolicyPrompt()).toContain('Ordinary remember/forget requests belong to Claude native memory');
   });
 });

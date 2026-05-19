@@ -1,6 +1,6 @@
 # Argus 使用文档
 
-This guide is for everyday Argus usage: projects, standalone conversations, models, Agent, Skill, MCP, Hub, Worktree, permissions, context compaction, and OpenMythos Runtime.
+This guide is for everyday Argus usage: projects, standalone conversations, models, Agent, Skill, MCP, Hub, Worktree, permissions, context compaction, and Argus Brain Runtime.
 
 ## 1. 基本概念
 
@@ -231,24 +231,17 @@ Argus 当前有三类上下文能力：
 3. Normal code reading does not require a knowledge base.
 4. 压缩摘要可能丢失细节，复杂任务压缩后建议先让 Agent 复述当前状态。
 
-## 12. OpenMythos Runtime
+## 12. Argus Brain Runtime
 
-OpenMythos Runtime 用于把任务难度、冻结目标、专家路由、阶段策略和上下文账本显式化。
+Argus Brain is the current long-task working-memory layer. It captures local task events, compacts them into a short Mermaid task canvas, recalls the current goal, decisions, risks, and next action, and shows evidence refs in diagnostics.
 
-能力状态：
+Boundaries:
 
-- 动态思考深度：按任务信号计算 effort 和 loopBudget；`loopControl=enforced` 时映射到 `maxTurns`。
-- 原始任务稳定注入：冻结目标、约束、验收标准会在工具续写和子代理上下文中重注入。
-- 专家路由：确定性提示安全、验证、性能、架构、前端、Git 或本地执行路线。
-- 按阶段适配器：`orient -> plan -> implement -> verify -> finalize`，前两阶段阻止写操作。
-- Compaction cache diagnostics show compact, microcompact, and tool summary ledgers; this is not MLA/KV cache.
-- 深度 benchmark：提供离线 benchmark 脚本对比预算、路由、阶段和预估成本。
+- Claude native memory handles user preferences and ordinary remember or forget requests.
+- Obsidian is a Wiki and knowledge base. It is used for historical readback and explicit save-to-Wiki actions.
+- Argus Brain handles task state only. It does not write Obsidian and does not override Claude native memory storage.
 
-注意：
-
-1. 这不是隐藏自动派发写文件专家。
-2. 这不是完整 ACT halting 引擎，v1 使用 `maxTurns` 做硬预算。
-3. 诊断面板会显示 runtime card、phase、expert routes 和 context ledger。
+OpenMythos Runtime has been removed from the active product surface. Historical notes remain only for migration context.
 
 ## 13. 常用命令
 

@@ -13,25 +13,24 @@ import {
   writeJsonConfig,
 } from '../shared/utils.js';
 import {
-  OPENMYTHOS_RUNTIME_SETTINGS_KEY,
+  BRAIN_RUNTIME_SETTINGS_KEY,
   GOAL_RUNTIME_SETTINGS_KEY,
   SMALL_MODEL_RUNTIME_SETTINGS_KEY,
   SUBAGENT_RUNTIME_SETTINGS_KEY,
   applyAnthropicRuntimeModelDefaults,
   applyGoalRuntimeToEnv,
   applyOpenAIRuntimeModelDefaults,
-  applyOpenMythosRuntimeToEnv,
   applySubagentRuntimeToEnv,
   canonicalizeAnthropicModel,
   isOpenAIModelProtocol,
+  normalizeBrainRuntimeConfig,
   normalizeAnthropicBaseUrl,
   normalizeGoalRuntimeConfig,
   normalizeOpenAIBaseUrl,
-  normalizeOpenMythosRuntimeConfig,
   normalizeSmallModelRuntimeConfig,
   normalizeSubagentRuntimeConfig,
+  readBrainRuntimeConfig,
   readGoalRuntimeConfig,
-  readOpenMythosRuntimeConfig,
   readSmallModelRuntimeConfig,
   readSubagentRuntimeConfig,
 } from '../services/mtl-code-model-service.js';
@@ -366,7 +365,7 @@ const toMtlCodeModelConfig = (settings, filePath) => {
       contextWindowTokens: activeContextWindowTokens,
       coordinatorMode: readBooleanEnvDefaultTrue(env, MTL_CODE_ENV_KEYS.coordinatorMode),
     },
-    openMythosRuntime: readOpenMythosRuntimeConfig(settings, env),
+    brainRuntime: readBrainRuntimeConfig(settings),
     subagents: readSubagentRuntimeConfig(settings, env),
     goals: readGoalRuntimeConfig(settings, env),
     smallModelRuntime: {
@@ -633,11 +632,6 @@ const applyArgusRuntimeToEnv = (env, runtime) => {
     return;
   }
   env[MTL_CODE_ENV_KEYS.coordinatorMode] = runtime.coordinatorMode !== false ? '1' : '0';
-};
-
-const applyCoordinatorModeFromOpenMythosRuntime = (env, runtime) => {
-  void env;
-  void runtime;
 };
 
 // ===============================
@@ -934,12 +928,11 @@ router.put('/mtl-code-model', async (req, res) => {
     const activeProfile = mergeAndStoreModelProfiles(settings, env, input);
     applyActiveProfileToEnv(settings, env, activeProfile);
     applyArgusRuntimeToEnv(env, input.runtime);
-    const openMythosRuntime = normalizeOpenMythosRuntimeConfig(
-      readObjectRecord(req.body?.openMythosRuntime),
-      readOpenMythosRuntimeConfig(settings, env),
+    const brainRuntime = normalizeBrainRuntimeConfig(
+      readObjectRecord(req.body?.brainRuntime),
+      readBrainRuntimeConfig(settings),
     );
-    settings[OPENMYTHOS_RUNTIME_SETTINGS_KEY] = openMythosRuntime;
-    applyOpenMythosRuntimeToEnv(env, openMythosRuntime);
+    settings[BRAIN_RUNTIME_SETTINGS_KEY] = brainRuntime;
     const subagents = normalizeSubagentRuntimeConfig(
       readObjectRecord(req.body?.subagents),
       readSubagentRuntimeConfig(settings, env),
@@ -957,7 +950,6 @@ router.put('/mtl-code-model', async (req, res) => {
     );
     settings[SMALL_MODEL_RUNTIME_SETTINGS_KEY] = smallModelRuntime;
     applyGoalRuntimeToEnv(env, goals);
-    applyCoordinatorModeFromOpenMythosRuntime(env, openMythosRuntime);
     settings.env = env;
     await writeJsonConfig(filePath, settings);
 

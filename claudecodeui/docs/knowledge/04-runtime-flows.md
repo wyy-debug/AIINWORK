@@ -74,7 +74,7 @@ sequenceDiagram
   participant Runtime as Argus runtime
   participant Store as useSessionStore
 
-  Chat->>Settings: load OpenMythos/Subagent runtime config
+  Chat->>Settings: load Argus Brain/Subagent runtime config
   Settings-->>Chat: runtime diagnostics payload
   Chat->>WS: Argus command message
   WS->>Server: claude-command compatibility message
@@ -86,13 +86,13 @@ sequenceDiagram
   Store-->>Chat: merged render state
 ```
 
-OpenMythos / Subagent ??????
+Argus Brain / Subagent current runtime
 
-1. `useChatComposerState` ?????????? Argus command options???????????????
-2. ??? `~/.mtl-code/settings.json` ?? `openMythosRuntime` ? `subagents`?????????????
-3. OpenMythos ???????????????????? ticket ? worker plan?
-4. Subagent ???????? `subagents.enabled` ????????????????
-5. `agent_runtime_debug` ????????? OpenMythos ? Subagent ?????????????????
+1. Settings reads `argusBrain` and `subagents` from `~/.mtl-code/settings.json`. Legacy `openMythosRuntime` is ignored.
+2. Obsidian Wiki and CodeGraph context are applied first, then Brain recall may append a short `Argus Brain Context` block.
+3. Brain captures command, runtime event, checkpoint, artifact, assistant summary, error, and permission events without blocking chat.
+4. Brain compacts long task state into a Mermaid canvas with refs; Subagent execution remains controlled only by `subagents.enabled`.
+5. `agent_runtime_debug` exposes Brain diagnostics and Subagent gates; it no longer exposes an OpenMythos card.
 
 `server/index.js` 当前主路径处理 `claude-command`，它是 Argus 的 compatibility message type。以下其他 command types 可能仍在旧代码中存在，但属于 legacy hidden Provider surface：
 
@@ -371,36 +371,32 @@ Project/conversation separation:
 10. Switching between project and conversation modes navigates back to `/` and ignores the previous `/session/:id` route once, preventing the route synchronization effect from immediately pulling the UI back into the old project session.
 11. `MainContent` keys `ChatInterface` by mode, project, and session ID so stale local state does not leak when switching modes.
 
-## OpenMythos 建议与 Codex Subagent 流程
+## Historical Subagent Strategy Notes
 
-OpenMythos 是策略层，Codex 风格 collaborative agent tools 是执行层。OpenMythos 可以建议拆分任务，但不会自动启动 worker。
+OpenMythos is removed from the active runtime. Subagent execution remains a separate feature gate controlled by `subagents.enabled`.
 
 ```mermaid
 sequenceDiagram
   participant UI as Argus UI
   participant API as Express runtime config
-  participant CLI as Argus CLI
+  participant CLI as Argus runtime
   participant Coord as Coordinator
   participant Worker as Agent worker
 
-  UI->>API: 保存 openMythosRuntime / subagents
-  API->>CLI: 注入 OpenMythos 与 Subagent feature gate env
-  CLI->>Coord: 追加 OpenMythos advisory runtime reminder
-  Coord->>Coord: 判断用户是否明确要求 subagents/delegation/parallel work
-  Coord->>Worker: 必要时调用 spawn_agent(message/items, agent_type)
-  Worker-->>Coord: 通过 wait_agent 返回最终状态
-  Coord-->>UI: 汇总结果并继续主会话
+  UI->>API: Save subagents config
+  API->>CLI: Inject Subagent feature gate env only
+  Coord->>Coord: Check whether the user explicitly requested subagents, delegation, or parallel work
+  Coord->>Worker: Call spawn_agent only when explicitly requested
+  Worker-->>Coord: Return final status through wait_agent
+  Coord-->>UI: Summarize result and continue the main session
 ```
 
-关键不变量：
+Invariants:
 
-1. OpenMythos 不自动派发。
-2. 只有用户明确要求 subagents、delegation 或 parallel agent work 时，模型才能调用 `spawn_agent`。
-3. `subagents.enabled=false` 时，新会话不暴露 collaborative agent tools。
-4. 诊断面板必须展示 OpenMythos 是“仅建议层”，并展示 Subagents 是否启用、最大并发和最大嵌套深度。
-5. 内部 subagent notification 不应该作为用户蓝色气泡渲染。后端 `ClaudeSessionsProvider` 会在历史/实时归一化时过滤，前端 `useChatMessages` 也会兜底跳过。
-6. `useChatMessages` 会把带 `parentToolUseId` 的实时 child tool 归并回对应 `spawn_agent` 容器，并跳过这些内部 child 消息的主聊天渲染。
-7. 输入框上方的 Subagent 状态条只从当前会话的 subagent container 聚合：`running` 表示容器未完成，`completed` 表示已有 tool result，`outputting` 表示未完成且存在正在输出的 child tool。
+1. Brain recall is not a subagent dispatcher.
+2. Subagent tools are exposed only when the Subagents setting enables them for a new session.
+3. Runtime diagnostics show Brain state and Subagent gates; they do not show an OpenMythos card.
+4. Internal subagent notifications stay grouped under their parent container instead of becoming normal chat bubbles.
 
 ## Worktree Dispatch Management
 

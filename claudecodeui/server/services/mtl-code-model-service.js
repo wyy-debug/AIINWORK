@@ -47,38 +47,10 @@ export const MTL_CODE_MODEL_ENV_KEYS = {
   goalsEnabled: 'MTL_CODE_GOALS_ENABLED',
 };
 
-export const OPENMYTHOS_RUNTIME_SETTINGS_KEY = 'openMythosRuntime';
+export const BRAIN_RUNTIME_SETTINGS_KEY = 'argusBrain';
 export const SUBAGENT_RUNTIME_SETTINGS_KEY = 'subagents';
 export const GOAL_RUNTIME_SETTINGS_KEY = 'goals';
 export const SMALL_MODEL_RUNTIME_SETTINGS_KEY = 'smallModelRuntime';
-
-export const OPENMYTHOS_RUNTIME_ENV_KEYS = {
-  enabled: 'MTL_CODE_OPENMYTHOS_RUNTIME',
-  adaptiveEffort: 'MTL_CODE_OPENMYTHOS_ADAPTIVE_EFFORT',
-  taskCard: 'MTL_CODE_OPENMYTHOS_TASK_CARD',
-  routingHints: 'MTL_CODE_OPENMYTHOS_ROUTING_HINTS',
-  loopControl: 'MTL_CODE_OPENMYTHOS_LOOP_CONTROL',
-  stableReinjection: 'MTL_CODE_OPENMYTHOS_STABLE_REINJECTION',
-  phaseAdapter: 'MTL_CODE_OPENMYTHOS_PHASE_ADAPTER',
-  expertRouting: 'MTL_CODE_OPENMYTHOS_EXPERT_ROUTING',
-  contextCacheDiagnostics: 'MTL_CODE_OPENMYTHOS_CONTEXT_CACHE_DIAGNOSTICS',
-  minEffort: 'MTL_CODE_OPENMYTHOS_MIN_EFFORT',
-  maxEffort: 'MTL_CODE_OPENMYTHOS_MAX_EFFORT',
-};
-
-export const DEFAULT_OPENMYTHOS_RUNTIME_CONFIG = Object.freeze({
-  enabled: false,
-  adaptiveEffort: true,
-  taskCard: true,
-  routingHints: true,
-  loopControl: 'enforced',
-  stableReinjection: true,
-  phaseAdapter: true,
-  expertRouting: true,
-  contextCacheDiagnostics: true,
-  minEffort: 'low',
-  maxEffort: 'max',
-});
 
 export const DEFAULT_SUBAGENT_RUNTIME_CONFIG = Object.freeze({
   enabled: false,
@@ -100,9 +72,21 @@ export const DEFAULT_SMALL_MODEL_RUNTIME_CONFIG = Object.freeze({
   useForWikiReadback: true,
 });
 
+export const DEFAULT_BRAIN_RUNTIME_CONFIG = Object.freeze({
+  enabled: true,
+  captureRawRefs: true,
+  compactEventThreshold: 18,
+  compactTextThreshold: 12000,
+  maxInjectedTokens: 1200,
+  recallTimeoutMs: 800,
+  retention: Object.freeze({
+    perSessionMaxEvents: 1000,
+    perProjectMaxCompactions: 80,
+    rawRefsMaxSizeBytes: 5_000_000,
+  }),
+});
+
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
-const OPENMYTHOS_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const OPENMYTHOS_LOOP_CONTROLS = ['advisory', 'enforced'];
 const MIMO_MODEL_CONTEXT_WINDOWS = {
   'deepseek-v4-pro': 1_000_000,
   'deepseek-v4-flash': 1_000_000,
@@ -136,13 +120,6 @@ const readBooleanEnv = (env, key, fallback) => {
   return fallback;
 };
 
-const readBooleanEnvDefaultTrue = (env, key) => readBooleanEnv(env, key, true);
-
-const isExplicitlyEnabledEnv = (env, key) => {
-  const value = readStringEnv(env, key).toLowerCase();
-  return ['1', 'true', 'yes', 'on'].includes(value);
-};
-
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 
 const resolveClaudeNativeMemoryEnabled = (profile = {}) => (
@@ -151,7 +128,7 @@ const resolveClaudeNativeMemoryEnabled = (profile = {}) => (
     : true
 );
 
-function normalizeOpenMythosBoolean(value, fallback) {
+function normalizeRuntimeBoolean(value, fallback) {
   if (typeof value === 'boolean') {
     return value;
   }
@@ -167,22 +144,12 @@ function normalizeOpenMythosBoolean(value, fallback) {
   return fallback;
 }
 
-function normalizeOpenMythosEffort(value, fallback) {
-  const normalized = (readOptionalString(value) || '').toLowerCase();
-  return OPENMYTHOS_EFFORT_LEVELS.includes(normalized) ? normalized : fallback;
-}
-
-function normalizeOpenMythosLoopControl(value, fallback) {
-  const normalized = (readOptionalString(value) || '').toLowerCase();
-  return OPENMYTHOS_LOOP_CONTROLS.includes(normalized) ? normalized : fallback;
-}
-
-function normalizeOpenMythosPositiveInteger(value, fallback, max = 8) {
+function normalizePositiveInteger(value, fallback, { min = 1, max = 1_000_000 } = {}) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed)) {
     return fallback;
   }
-  return Math.min(parsed, max);
+  return Math.min(Math.max(parsed, min), max);
 }
 
 function normalizeSubagentPositiveInteger(value, fallback, max = 16) {
@@ -209,40 +176,10 @@ function normalizeSmallModelProtocol(value, fallback = 'anthropic') {
   return fallback === 'openai-compatible' ? fallback : 'anthropic';
 }
 
-function normalizeOpenMythosEffortBounds(config) {
-  const minIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(config.minEffort);
-  const maxIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(config.maxEffort);
-  if (minIndex <= maxIndex) {
-    return config;
-  }
-  return {
-    ...config,
-    minEffort: config.maxEffort,
-    maxEffort: config.minEffort,
-  };
-}
-
-export function normalizeOpenMythosRuntimeConfig(value, fallback = DEFAULT_OPENMYTHOS_RUNTIME_CONFIG) {
-  const data = readObjectRecord(value) ?? {};
-  return normalizeOpenMythosEffortBounds({
-    enabled: normalizeOpenMythosBoolean(data.enabled, fallback.enabled),
-    adaptiveEffort: normalizeOpenMythosBoolean(data.adaptiveEffort, fallback.adaptiveEffort),
-    taskCard: normalizeOpenMythosBoolean(data.taskCard, fallback.taskCard),
-    routingHints: normalizeOpenMythosBoolean(data.routingHints, fallback.routingHints),
-    loopControl: normalizeOpenMythosLoopControl(data.loopControl, fallback.loopControl),
-    stableReinjection: normalizeOpenMythosBoolean(data.stableReinjection, fallback.stableReinjection),
-    phaseAdapter: normalizeOpenMythosBoolean(data.phaseAdapter, fallback.phaseAdapter),
-    expertRouting: normalizeOpenMythosBoolean(data.expertRouting, fallback.expertRouting),
-    contextCacheDiagnostics: normalizeOpenMythosBoolean(data.contextCacheDiagnostics, fallback.contextCacheDiagnostics),
-    minEffort: normalizeOpenMythosEffort(data.minEffort, fallback.minEffort),
-    maxEffort: normalizeOpenMythosEffort(data.maxEffort, fallback.maxEffort),
-  });
-}
-
 export function normalizeSubagentRuntimeConfig(value, fallback = DEFAULT_SUBAGENT_RUNTIME_CONFIG) {
   const data = readObjectRecord(value) ?? {};
   return {
-    enabled: normalizeOpenMythosBoolean(data.enabled, fallback.enabled),
+    enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
     maxConcurrentThreadsPerSession: normalizeSubagentPositiveInteger(
       data.maxConcurrentThreadsPerSession,
       fallback.maxConcurrentThreadsPerSession,
@@ -254,7 +191,7 @@ export function normalizeSubagentRuntimeConfig(value, fallback = DEFAULT_SUBAGEN
 export function normalizeGoalRuntimeConfig(value, fallback = DEFAULT_GOAL_RUNTIME_CONFIG) {
   const data = readObjectRecord(value) ?? {};
   return {
-    enabled: normalizeOpenMythosBoolean(data.enabled, fallback.enabled),
+    enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
   };
 }
 
@@ -265,13 +202,60 @@ export function normalizeSmallModelRuntimeConfig(value, fallback = DEFAULT_SMALL
     ? readOptionalString(data.requestModel) || ''
     : fallback.requestModel || '';
   return {
-    enabled: normalizeOpenMythosBoolean(data.enabled, fallback.enabled),
+    enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
     profileId,
     protocol: normalizeSmallModelProtocol(data.protocol, fallback.protocol),
     requestModel,
     timeoutMs: normalizeTimeoutMs(data.timeoutMs, fallback.timeoutMs),
-    useForWikiRouting: normalizeOpenMythosBoolean(data.useForWikiRouting, fallback.useForWikiRouting),
-    useForWikiReadback: normalizeOpenMythosBoolean(data.useForWikiReadback, fallback.useForWikiReadback),
+    useForWikiRouting: normalizeRuntimeBoolean(data.useForWikiRouting, fallback.useForWikiRouting),
+    useForWikiReadback: normalizeRuntimeBoolean(data.useForWikiReadback, fallback.useForWikiReadback),
+  };
+}
+
+export function normalizeBrainRuntimeConfig(value, fallback = DEFAULT_BRAIN_RUNTIME_CONFIG) {
+  const data = readObjectRecord(value) ?? {};
+  const retention = readObjectRecord(data.retention) ?? {};
+  const fallbackRetention = fallback.retention || DEFAULT_BRAIN_RUNTIME_CONFIG.retention;
+  return {
+    enabled: normalizeRuntimeBoolean(data.enabled, fallback.enabled),
+    captureRawRefs: normalizeRuntimeBoolean(data.captureRawRefs, fallback.captureRawRefs),
+    compactEventThreshold: normalizePositiveInteger(
+      data.compactEventThreshold,
+      fallback.compactEventThreshold,
+      { min: 1, max: 500 },
+    ),
+    compactTextThreshold: normalizePositiveInteger(
+      data.compactTextThreshold,
+      fallback.compactTextThreshold,
+      { min: 1000, max: 1_000_000 },
+    ),
+    maxInjectedTokens: normalizePositiveInteger(
+      data.maxInjectedTokens,
+      fallback.maxInjectedTokens,
+      { min: 200, max: 12000 },
+    ),
+    recallTimeoutMs: normalizePositiveInteger(
+      data.recallTimeoutMs,
+      fallback.recallTimeoutMs,
+      { min: 100, max: 10000 },
+    ),
+    retention: {
+      perSessionMaxEvents: normalizePositiveInteger(
+        retention.perSessionMaxEvents,
+        fallbackRetention.perSessionMaxEvents,
+        { min: 100, max: 100000 },
+      ),
+      perProjectMaxCompactions: normalizePositiveInteger(
+        retention.perProjectMaxCompactions,
+        fallbackRetention.perProjectMaxCompactions,
+        { min: 10, max: 10000 },
+      ),
+      rawRefsMaxSizeBytes: normalizePositiveInteger(
+        retention.rawRefsMaxSizeBytes,
+        fallbackRetention.rawRefsMaxSizeBytes,
+        { min: 100000, max: 100_000_000 },
+      ),
+    },
   };
 }
 
@@ -314,47 +298,11 @@ export function readSmallModelRuntimeConfig(settings = {}) {
   );
 }
 
-export function readOpenMythosRuntimeConfig(settings = {}, env = {}) {
-  const envConfig = normalizeOpenMythosRuntimeConfig({
-    enabled: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.enabled, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.enabled),
-    adaptiveEffort: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.adaptiveEffort, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.adaptiveEffort),
-    taskCard: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.taskCard, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.taskCard),
-    routingHints: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.routingHints, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.routingHints),
-    loopControl: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.loopControl)
-      || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.loopControl,
-    stableReinjection: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.stableReinjection, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.stableReinjection),
-    phaseAdapter: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.phaseAdapter),
-    expertRouting: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.expertRouting),
-    contextCacheDiagnostics: readBooleanEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics, DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.contextCacheDiagnostics),
-    minEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort)
-      || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.minEffort,
-    maxEffort: readStringEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort)
-      || DEFAULT_OPENMYTHOS_RUNTIME_CONFIG.maxEffort,
-  });
-  const config = normalizeOpenMythosRuntimeConfig(
-    settings?.[OPENMYTHOS_RUNTIME_SETTINGS_KEY],
-    envConfig,
+export function readBrainRuntimeConfig(settings = {}) {
+  return normalizeBrainRuntimeConfig(
+    settings?.[BRAIN_RUNTIME_SETTINGS_KEY],
+    DEFAULT_BRAIN_RUNTIME_CONFIG,
   );
-  return {
-    ...config,
-    enabled: config.enabled && isExplicitlyEnabledEnv(env, OPENMYTHOS_RUNTIME_ENV_KEYS.enabled),
-  };
-}
-
-export function applyOpenMythosRuntimeToEnv(env, config) {
-  const normalized = normalizeOpenMythosRuntimeConfig(config);
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.enabled] = normalized.enabled ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.adaptiveEffort] = normalized.adaptiveEffort ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.taskCard] = normalized.taskCard ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.routingHints] = normalized.routingHints ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.loopControl] = normalized.loopControl;
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.stableReinjection] = normalized.stableReinjection ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.phaseAdapter] = normalized.phaseAdapter ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.expertRouting] = normalized.expertRouting ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.contextCacheDiagnostics] = normalized.contextCacheDiagnostics ? '1' : '0';
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.minEffort] = normalized.minEffort;
-  env[OPENMYTHOS_RUNTIME_ENV_KEYS.maxEffort] = normalized.maxEffort;
-  return env;
 }
 
 export function applySubagentRuntimeToEnv(env, config) {
@@ -372,158 +320,6 @@ export function applyGoalRuntimeToEnv(env, config) {
   const normalized = normalizeGoalRuntimeConfig(config);
   env[MTL_CODE_MODEL_ENV_KEYS.goalsEnabled] = normalized.enabled ? '1' : '0';
   return env;
-}
-
-export function buildOpenMythosRuntimePreview(input, config, permissionMode = '') {
-  const normalizedConfig = normalizeOpenMythosRuntimeConfig(config);
-  const prompt = (readOptionalString(input) || '').replace(/\s+/g, ' ').trim();
-  if (!normalizedConfig.enabled || !prompt) {
-    return null;
-  }
-  const isTaskNotification = /<task-notification\b/i.test(prompt);
-
-  const signals = [
-    {
-      pattern: /\b(security|auth|permission|secret|token|credential|privacy|hipaa|soc2)\b/i,
-      reason: 'security or privacy sensitive work',
-      weight: 5,
-      route: {
-        kind: 'security',
-        label: 'Security reviewer',
-        required: true,
-      },
-    },
-    {
-      pattern: /\b(migration|schema|database|sql|backfill|rollback|deploy|release|ci|production)\b/i,
-      reason: 'deployment, data, or CI risk',
-      weight: 4,
-      route: {
-        kind: 'verification',
-        label: 'Verification specialist',
-        required: true,
-      },
-    },
-    {
-      pattern: /\b(concurrency|async|race|deadlock|performance|memory|latency|benchmark)\b/i,
-      reason: 'performance or concurrency-sensitive work',
-      weight: 4,
-      route: {
-        kind: 'performance',
-        label: 'Performance specialist',
-        required: false,
-      },
-    },
-    {
-      pattern: /\b(refactor|architecture|design|redesign|multi[- ]?module|cross[- ]?module)\b/i,
-      reason: 'broad architectural change',
-      weight: 3,
-      route: {
-        kind: 'architecture',
-        label: 'Architecture reviewer',
-        required: false,
-      },
-    },
-    {
-      pattern: /\b(implement|build|add|fix|change|update|wire|integrate)\b/i,
-      reason: 'implementation requested',
-      weight: 2,
-    },
-    {
-      pattern: /\b(test|typecheck|lint|verify|benchmark|coverage)\b/i,
-      reason: 'verification requested',
-      weight: 2,
-      route: {
-        kind: 'verification',
-        label: 'Verification specialist',
-        required: false,
-      },
-    },
-    {
-      pattern: /\b(ui|frontend|react|css|layout|responsive|accessibility|visual|figma)\b/i,
-      reason: 'frontend or visual quality work',
-      weight: 2,
-      route: {
-        kind: 'frontend',
-        label: 'Frontend reviewer',
-        required: false,
-      },
-    },
-  ].filter((signal) => signal.pattern.test(prompt));
-
-  const riskScore = signals.reduce((sum, signal) => sum + signal.weight, 0)
-    + Math.min(3, Math.floor(prompt.length / 600));
-  const inferredEffort = riskScore >= 10 ? 'max' : riskScore >= 8 ? 'xhigh' : riskScore >= 4 ? 'high' : riskScore >= 2 ? 'medium' : 'low';
-  const effort = clampOpenMythosEffort(inferredEffort, normalizedConfig.minEffort, normalizedConfig.maxEffort);
-  const baseLoopBudget = effort === 'max' ? 6 : effort === 'xhigh' ? 5 : effort === 'high' ? 4 : effort === 'medium' ? 3 : 2;
-  const phasePlan = normalizedConfig.phaseAdapter
-    ? buildOpenMythosPhasePlan(effort)
-    : ['implement', 'finalize'];
-  const loopBudget = Math.max(baseLoopBudget, phasePlan.length);
-  const expertRoutes = normalizedConfig.expertRouting
-    ? buildOpenMythosExpertRoutes(signals, effort)
-    : [];
-  return {
-    goal: prompt.length <= 260 ? prompt : `${prompt.slice(0, 259)}...`,
-    effort,
-    loopBudget,
-    riskScore,
-    phase: phasePlan[0] || 'implement',
-    phasePlan,
-    remainingBudget: loopBudget,
-    reasons: uniqueStrings(signals.map((signal) => signal.reason)).slice(0, 4),
-    constraints: [
-      'Keep the frozen user goal visible before each major action.',
-      permissionMode === 'plan'
-        ? 'Plan mode is active: explore and plan only; do not mutate tracked files.'
-        : 'Use the smallest safe change and keep verification visible.',
-    ],
-    expertRoutes,
-  };
-}
-
-function clampOpenMythosEffort(effort, minEffort, maxEffort) {
-  const minIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(minEffort);
-  const maxIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(maxEffort);
-  const effortIndex = OPENMYTHOS_EFFORT_LEVELS.indexOf(effort);
-  return OPENMYTHOS_EFFORT_LEVELS[Math.min(Math.max(effortIndex, minIndex), maxIndex)] || effort;
-}
-
-function buildOpenMythosPhasePlan(effort) {
-  if (effort === 'low') {
-    return ['orient', 'finalize'];
-  }
-  if (effort === 'medium') {
-    return ['orient', 'plan', 'implement', 'finalize'];
-  }
-  return ['orient', 'plan', 'implement', 'verify', 'finalize'];
-}
-
-function buildOpenMythosExpertRoutes(signals, effort) {
-  const routes = new Map();
-  for (const signal of signals) {
-    if (!signal.route) {
-      continue;
-    }
-    const existing = routes.get(signal.route.kind);
-    routes.set(signal.route.kind, {
-      ...signal.route,
-      reason: signal.reason,
-      required: Boolean(existing?.required || signal.route.required),
-    });
-  }
-  if (routes.size === 0 || effort === 'low') {
-    routes.set('local', {
-      kind: 'local',
-      label: 'Local execution',
-      reason: 'small or conversational task',
-      required: true,
-    });
-  }
-  return [...routes.values()].slice(0, 5);
-}
-
-function uniqueStrings(values) {
-  return [...new Set(values.filter(Boolean))];
 }
 
 export function canonicalizeAnthropicModel(value) {
@@ -760,13 +556,6 @@ export async function readMtlCodeModelSettings(env = process.env) {
   return readJsonConfig(settingsPath);
 }
 
-export async function readResolvedOpenMythosRuntimeConfig(env = process.env) {
-  const settings = await readMtlCodeModelSettings(env);
-  const settingsEnv = readObjectRecord(settings.env) ?? {};
-  repairAnthropicRuntimeModelEnv(settingsEnv);
-  return readOpenMythosRuntimeConfig(settings, settingsEnv);
-}
-
 export async function readResolvedSubagentRuntimeConfig(env = process.env) {
   const settings = await readMtlCodeModelSettings(env);
   const settingsEnv = readObjectRecord(settings.env) ?? {};
@@ -777,6 +566,11 @@ export async function readResolvedGoalRuntimeConfig(env = process.env) {
   const settings = await readMtlCodeModelSettings(env);
   const settingsEnv = readObjectRecord(settings.env) ?? {};
   return readGoalRuntimeConfig(settings, settingsEnv);
+}
+
+export async function readResolvedBrainRuntimeConfig(env = process.env) {
+  const settings = await readMtlCodeModelSettings(env);
+  return readBrainRuntimeConfig(settings);
 }
 
 export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
@@ -802,7 +596,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     ? normalizeOpenAIBaseUrl(profile.baseUrl)
     : normalizeAnthropicBaseUrl(profile.baseUrl);
   const contextWindowTokens = resolveProfileContextWindow({ ...profile, model }, settingsEnv);
-  const openMythosRuntime = readOpenMythosRuntimeConfig(settings, settingsEnv);
+  const brainRuntime = readBrainRuntimeConfig(settings);
   const subagents = readSubagentRuntimeConfig(settings, settingsEnv);
   const goals = readGoalRuntimeConfig(settings, settingsEnv);
   const coordinatorModeEnabled = false;
@@ -833,7 +627,6 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
       model: requestModel,
     });
   }
-  applyOpenMythosRuntimeToEnv(runtimeEnv, openMythosRuntime);
   applySubagentRuntimeToEnv(runtimeEnv, subagents);
   applyGoalRuntimeToEnv(runtimeEnv, goals);
 
@@ -854,7 +647,7 @@ export async function resolveMtlCodeModelRuntime(profileId, env = process.env) {
     },
     env: Object.fromEntries(Object.entries(runtimeEnv).filter(([, value]) => Boolean(value))),
     contextWindowTokens,
-    openMythosRuntime,
+    brainRuntime,
     subagents,
     goals,
   };

@@ -17,7 +17,7 @@ describe('useChatComposerState subagent dispatch approval', () => {
     expect(source).toContain('coordinatorMode: true');
     expect(source).toContain('subagentRuntimeSnapshot');
     expect(source).toContain('dispatchPlanId');
-    expect(source).toContain("subagentPlanRequestActive ? 'plan'");
+    expect(source).toMatch(/permissionModeForSend = subagentPlanRequestActive\s*\?\s*'plan'/);
     expect(source).toContain('pendingSubmitChatInputRef');
     expect(source).toContain('isLoadingRef.current');
     expect(source).toContain('submitProgrammaticChatInput');

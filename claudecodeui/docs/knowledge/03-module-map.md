@@ -60,7 +60,7 @@
 | TaskMaster | `server/routes/taskmaster.js`，`server/utils/taskmaster-websocket.js` | legacy/hidden TaskMaster install/status/tasks/PRD/template routes 和 websocket 支持。 |
 | Notifications | `server/services/notification-orchestrator.js`，`server/services/vapid-keys.js` | Web Push key/subscription 和通知投递。 |
 | Context budget | `server/services/context-budget-service.js`，`server/claude-sdk.js`，`server/projects.js`，`server/routes/messages.js` | 统一 Argus 实时 `modelUsage`、历史 JSONL 和 `/token-usage` 的 `ContextBudget` 口径；旧 `used/total` 字段只做兼容。 |
-| Runtime diagnostics | `server/index.js`, `src/components/chat/hooks/useChatRealtimeHandlers.ts`, `src/components/chat/view/ChatInterface.tsx`, `src/components/chat/view/subcomponents/AgentRuntimeDiagnosticsPanel.tsx` | ?????? emit `agent_runtime_debug`???? session ?????? session id ????? id ????OpenMythos ??????Subagents ????????????????????? |
+| Runtime diagnostics | `server/index.js`, `server/routes/brain.js`, `server/services/brain-*.js`, `src/components/chat/view/subcomponents/AgentRuntimeDiagnosticsPanel.tsx` | Emits `agent_runtime_debug`, Brain recall/capture/compaction diagnostics, Subagents gates, permissions, and timeline state. OpenMythos is not part of the active diagnostics surface. |
 
 ## 2026-04-26 Argus Agent Model Config Anchors
 

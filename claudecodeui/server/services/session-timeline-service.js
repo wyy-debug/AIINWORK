@@ -33,6 +33,22 @@ const redactPayload = (payload = {}) => {
   return redacted;
 };
 
+const listBrainEvents = (db, { sessionId, provider }) => {
+  try {
+    return db.prepare(`
+      SELECT * FROM brain_events
+      WHERE session_id = ? AND (? = '' OR provider = ?)
+      ORDER BY created_at_ms ASC
+      LIMIT 200
+    `).all(sessionId, provider, provider);
+  } catch (error) {
+    if (/no such table: brain_events/i.test(error?.message || '')) {
+      return [];
+    }
+    throw error;
+  }
+};
+
 function event(id, type, title, timestamp, payload = {}, severity = 'info') {
   return {
     id,
@@ -133,6 +149,23 @@ export function createSessionTimelineService({ db = defaultDb } = {}) {
           messageId: swarmEvent.message_id,
           eventType: swarmEvent.type,
           payload: safeJson(swarmEvent.payload_json, {}),
+        },
+      ));
+    }
+
+    const brainEvents = listBrainEvents(db, { sessionId, provider });
+    for (const brainEvent of brainEvents) {
+      events.push(event(
+        brainEvent.id,
+        'brain',
+        `Brain ${brainEvent.event_type}`,
+        new Date(Number(brainEvent.created_at_ms || Date.now())).toISOString(),
+        {
+          eventType: brainEvent.event_type,
+          checkpointId: brainEvent.checkpoint_id,
+          artifactId: brainEvent.artifact_id,
+          title: brainEvent.title,
+          payload: safeJson(brainEvent.payload_json, {}),
         },
       ));
     }

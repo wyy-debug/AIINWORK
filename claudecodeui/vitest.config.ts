@@ -26,7 +26,6 @@ export default defineConfig({
       'server/services/tests/knowledge-document-service.test.mjs',
       'server/services/tests/obsidian-context-service.test.mjs',
       'server/services/tests/obsidian-bridge-installer-service.test.mjs',
-      'server/services/tests/openmythos-runtime-env.test.ts',
       'server/services/tests/obsidian-bridge-service.test.mjs',
       'server/services/tests/obsidian-wiki-service.test.mjs',
       'server/services/tests/obsidian-bridge-ingress-service.test.mjs',
