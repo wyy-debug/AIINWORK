@@ -24,6 +24,21 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/audit/export', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({
+      success: true,
+      audit: defaultWorkflowStudioStore.exportApprovalAudit({
+        workflowId: req.query.workflowId || '',
+        runId: req.query.runId || '',
+      }),
+    });
+  } catch (error) {
+    sendApprovalError(res, error, 500, 'Failed to export workflow approval audit');
+  }
+});
+
 router.post('/:approvalId/decision', async (req, res) => {
   try {
     const run = await defaultWorkflowStudioStore.decideApproval(req.params.approvalId, req.body || {});

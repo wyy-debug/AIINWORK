@@ -380,6 +380,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [runEvents, setRunEvents] = useState<Record<string, WorkflowRunEvent[]>>({});
   const [nodeLogs, setNodeLogs] = useState<Record<string, WorkflowNodeLog[]>>({});
   const [approvalRequests, setApprovalRequests] = useState<Array<Record<string, unknown>>>([]);
+  const [workflowSecurity, setWorkflowSecurity] = useState<Record<string, any> | null>(null);
+  const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
   const [pinnedRunIds, setPinnedRunIds] = useState<string[]>(() => readStoredIds(pinnedRunStorageKey));
@@ -388,8 +390,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [retryFromNodePreview, setRetryFromNodePreview] = useState<{ runId: string; nodeId: string; affected: string[] } | null>(null);
   const [approvalDelegationTarget, setApprovalDelegationTarget] = useState('local-owner');
   const [permissionOverrideRequest, setPermissionOverrideRequest] = useState('');
-  const [secretVaultRefs, setSecretVaultRefs] = useState<string[]>(['secret://workflow/github-token', 'secret://workflow/redmine-token']);
-  const [mcpAllowlistRows, setMcpAllowlistRows] = useState<string[]>(['redmine.get_issue', 'crashsight.search_crashes']);
+  const [secretVaultRefs, setSecretVaultRefs] = useState<string[]>([]);
+  const [mcpAllowlistRows, setMcpAllowlistRows] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -517,34 +519,54 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     return attempts.map((nodeRun) => `${nodeRun.title}: attempt ${nodeRun.attempt} / ${nodeRun.status}`);
   }, [selectedRun]);
   const approvalRiskExplanation = useMemo(() => {
+    const approval = approvalRequests[0] as any;
+    if (approval?.riskExplanation?.reason) {
+      return `${approval.riskExplanation.riskLevel}: ${approval.riskExplanation.reason}`;
+    }
     const riskyNodes = draft.nodes.filter((node) => riskyNodeTypes.has(node.type));
     return riskyNodes.length > 0
       ? riskyNodes.map((node) => `${node.title}: ${node.type} uses ${node.permission || draft.permissionPreset}`).join('; ')
       : 'No high-risk nodes in this workflow.';
-  }, [draft.nodes, draft.permissionPreset]);
+  }, [approvalRequests, draft.nodes, draft.permissionPreset]);
   const approvalDiffSummary = useMemo(() => {
+    const approval = approvalRequests[0] as any;
+    if (approval?.diffSummary?.summary) return approval.diffSummary.summary;
     const changedFiles = selectedRun?.artifacts?.map((artifact) => String(artifact.path || artifact.title || artifact.id)).filter(Boolean) || [];
     return changedFiles.length > 0 ? changedFiles.slice(0, 3).join(', ') : 'No file diff attached yet; checkpoint diff will appear when a write node runs.';
-  }, [selectedRun]);
+  }, [approvalRequests, selectedRun]);
   const approvalTimeoutPolicy = 'Timeout policy: fail after 30 minutes, escalate after 10 minutes idle.';
+  const effectiveApprovalTimeoutPolicy = workflowSecurity?.timeoutPolicy
+    ? `Timeout policy: ${workflowSecurity.timeoutPolicy.action} after ${workflowSecurity.timeoutPolicy.timeoutMinutes} minutes, escalate after ${workflowSecurity.timeoutPolicy.escalateAfterMinutes} minutes idle.`
+    : approvalTimeoutPolicy;
+  const effectiveApprovalDelegationTargets = Array.isArray(workflowSecurity?.delegation?.allowedTargets)
+    ? workflowSecurity.delegation.allowedTargets
+    : ['local-owner', 'project-maintainer', 'security-reviewer'];
   const approvalAuditExport = useMemo(() => ({
     runId: selectedRun?.id || 'no-run',
-    decisions: approvalRequests.length,
+    decisions: Array.isArray(approvalAudit?.records) ? approvalAudit.records.length : approvalRequests.length,
     exportedFields: ['decision', 'actor', 'time', 'reason', 'run', 'node'],
-  }), [approvalRequests.length, selectedRun?.id]);
-  const permissionDryRunRows = useMemo(() => draft.nodes.map((node) => {
+  }), [approvalAudit, approvalRequests.length, selectedRun?.id]);
+  const permissionDryRunRows = useMemo<Array<{ node: Partial<WorkflowNode> & { id: string; title: string; type: string }; decision: string; reason: string }>>(() => Array.isArray(workflowSecurity?.permissionDryRun?.rows)
+    ? workflowSecurity.permissionDryRun.rows.map((row: any) => ({
+      node: draft.nodes.find((node) => node.id === row.nodeId) || { id: row.nodeId, title: row.title, type: row.type },
+      decision: row.decision,
+      reason: row.reason,
+    }))
+    : draft.nodes.map((node) => {
     const risky = riskyNodeTypes.has(node.type);
     const decision = draft.permissionPreset === 'enterprise-safe' && risky ? 'deny' : risky ? node.permission || 'ask' : 'allow';
     return { node, decision, reason: risky ? `${node.type} requires explicit permission` : 'read-only/control node' };
-  }), [draft.nodes, draft.permissionPreset]);
+  }), [draft.nodes, draft.permissionPreset, workflowSecurity]);
   const dangerousCommandPolicy = useMemo(() => {
+    const backendRow = workflowSecurity?.permissionDryRun?.rows?.find((row: any) => row.dangerousCommand);
+    if (backendRow) return backendRow.reason;
     const dangerous = draft.nodes
       .filter((node) => node.type === 'shell')
       .filter((node) => /\b(rm|del|Remove-Item|curl|wget|Invoke-WebRequest|git\s+reset)\b/i.test(node.command || ''));
     return dangerous.length > 0
       ? dangerous.map((node) => `${node.title}: force approval for ${node.command}`).join('; ')
       : 'No dangerous shell pattern detected; destructive/download/reset commands force approval.';
-  }, [draft.nodes]);
+  }, [draft.nodes, workflowSecurity]);
   const agentSessionLinks = useMemo(() => runs.flatMap((run) => Object.values(run.nodeRuns || {})
     .filter((nodeRun) => nodeRun.type === 'agent' || nodeRun.type === 'subagent')
     .map((nodeRun) => `${run.workflowName} / ${nodeRun.title}: ${nodeRun.status}`)).slice(0, 4), [runs]);
@@ -659,6 +681,30 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       void loadNodeTypes().catch(() => undefined);
     }
   }, [loadNodeTypes, nodeTypeDefinitions.length]);
+
+  useEffect(() => {
+    if (!draft.id) return;
+    let cancelled = false;
+    const loadSecurity = async () => {
+      const [securityResponse, auditResponse] = await Promise.all([
+        api.workflowSecurity(draft.id),
+        api.exportWorkflowApprovalAudit(draft.id, selectedRun?.id || ''),
+      ]);
+      const [securityData, auditData] = await Promise.all([securityResponse.json(), auditResponse.json()]);
+      if (cancelled) return;
+      if (securityResponse.ok) {
+        setWorkflowSecurity(securityData.security || null);
+        setSecretVaultRefs(Array.isArray(securityData.security?.secretRefs) ? securityData.security.secretRefs : []);
+        setMcpAllowlistRows(Array.isArray(securityData.security?.mcpAllowlist) ? securityData.security.mcpAllowlist : []);
+        setApprovalDelegationTarget(securityData.security?.delegation?.target || 'local-owner');
+      }
+      if (auditResponse.ok) setApprovalAudit(auditData.audit || null);
+    };
+    void loadSecurity().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.id, selectedRun?.id]);
 
   useEffect(() => {
     writeStoredIds(favoriteStorageKey, favoriteWorkflowIds);
@@ -1106,7 +1152,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setIsBusy(true);
     setError('');
     try {
-      const response = await api.decideWorkflowApproval(approvalId, { decision, approver: 'local-user' });
+      const response = await api.decideWorkflowApproval(approvalId, { decision, approver: 'local-user', delegatedTo: approvalDelegationTarget });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || 'Failed to decide workflow approval');
       await loadData();
@@ -1115,7 +1161,55 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     } finally {
       setIsBusy(false);
     }
-  }, [loadData]);
+  }, [approvalDelegationTarget, loadData]);
+
+  const saveWorkflowSecurity = useCallback(async (patch: Record<string, unknown>) => {
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.updateWorkflowSecurity(draft.id, {
+        timeoutPolicy: workflowSecurity?.timeoutPolicy,
+        delegation: workflowSecurity?.delegation,
+        secretRefs: secretVaultRefs,
+        mcpAllowlist: mcpAllowlistRows,
+        ...patch,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to update workflow security');
+      setWorkflowSecurity(data.security || null);
+      setSecretVaultRefs(Array.isArray(data.security?.secretRefs) ? data.security.secretRefs : []);
+      setMcpAllowlistRows(Array.isArray(data.security?.mcpAllowlist) ? data.security.mcpAllowlist : []);
+      setApprovalDelegationTarget(data.security?.delegation?.target || approvalDelegationTarget);
+    } catch (securityError) {
+      setError(securityError instanceof Error ? securityError.message : 'Failed to update workflow security');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [approvalDelegationTarget, draft.id, mcpAllowlistRows, secretVaultRefs, workflowSecurity]);
+
+  const createPermissionOverride = useCallback(async () => {
+    if (!permissionOverrideRequest.trim()) return;
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.createWorkflowPermissionOverride(draft.id, {
+        nodeId: selectedNodeId || draft.nodes.find((node) => riskyNodeTypes.has(node.type))?.id || '',
+        requestedDecision: 'allow',
+        reason: permissionOverrideRequest,
+        requester: 'local-user',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to create permission override request');
+      setPermissionOverrideRequest('');
+      const securityResponse = await api.workflowSecurity(draft.id);
+      const securityData = await securityResponse.json();
+      if (securityResponse.ok) setWorkflowSecurity(securityData.security || null);
+    } catch (overrideError) {
+      setError(overrideError instanceof Error ? overrideError.message : 'Failed to create permission override request');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [draft.id, draft.nodes, permissionOverrideRequest, selectedNodeId]);
 
   const smokeTemplate = useCallback(async (workflow: WorkflowDefinition) => {
     setIsBusy(true);
@@ -2351,15 +2445,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   </div>
                   <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-timeout-policy">
                     <span className="block font-semibold text-foreground">Timeout policy</span>
-                    <span className="mt-1 block text-amber-800">{approvalTimeoutPolicy}</span>
+                    <span className="mt-1 block text-amber-800">{effectiveApprovalTimeoutPolicy}</span>
                   </div>
                   <label className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-delegation">
                     <span className="block font-semibold text-foreground">Delegation</span>
                     <select value={approvalDelegationTarget} onChange={(event) => setApprovalDelegationTarget(event.target.value)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground">
-                      <option value="local-owner">Local owner</option>
-                      <option value="project-maintainer">Project maintainer</option>
-                      <option value="security-reviewer">Security reviewer</option>
+                      {effectiveApprovalDelegationTargets.map((target: string) => (
+                        <option key={target} value={target}>{target}</option>
+                      ))}
                     </select>
+                    <button type="button" onClick={() => void saveWorkflowSecurity({ delegation: { ...(workflowSecurity?.delegation || {}), target: approvalDelegationTarget } })} className="mt-2 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted">Save delegation</button>
                   </label>
                   <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-audit-export">
                     <span className="block font-semibold text-foreground">Audit export</span>
@@ -2430,7 +2525,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-permission-override-request">
               <span className="block font-semibold text-foreground">Permission override request</span>
               <textarea value={permissionOverrideRequest} onChange={(event) => setPermissionOverrideRequest(event.target.value)} placeholder="Explain why this denied node needs elevation" className="mt-2 min-h-16 w-full rounded border border-border bg-background p-2 text-xs text-foreground" />
-              <span className="mt-1 block">Requests are recorded, never auto-approved.</span>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span>Requests are recorded, never auto-approved.</span>
+                <button type="button" onClick={() => void createPermissionOverride()} disabled={!permissionOverrideRequest.trim() || isBusy} className="rounded border border-border px-2 py-1 text-[11px] hover:bg-muted disabled:opacity-50">Create request</button>
+              </div>
+              {Array.isArray(workflowSecurity?.overrideRequests) && workflowSecurity.overrideRequests.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {workflowSecurity.overrideRequests.slice(-3).map((request: any) => (
+                    <div key={request.id || request.reason} className="rounded border border-border px-2 py-1">{request.nodeId}: {request.status} - {request.reason}</div>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-secret-vault-integration">
               <span className="block font-semibold text-foreground">Secret vault</span>
@@ -2438,6 +2543,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 {secretVaultRefs.map((secret) => (
                   <div key={secret} className="rounded border border-border px-2 py-1 font-mono text-[11px]">{secret.replace(/[^/]+$/, '********')}</div>
                 ))}
+                {secretVaultRefs.length === 0 && <div className="rounded border border-border px-2 py-1">No secret refs configured.</div>}
               </div>
             </section>
             <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-mcp-allowlist-ui">
@@ -2449,6 +2555,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <span className="font-mono text-[11px]">{tool}</span>
                   </label>
                 ))}
+                {mcpAllowlistRows.length === 0 && <div className="rounded border border-border px-2 py-1">No MCP allowlist configured; workflow dry-run will surface missing policy.</div>}
               </div>
             </section>
             <section className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700" data-testid="workflow-dangerous-command-policy">

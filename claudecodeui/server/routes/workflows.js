@@ -64,6 +64,58 @@ router.post('/package/import', async (req, res) => {
   }
 });
 
+router.get('/:id/security', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const security = defaultWorkflowStudioStore.getWorkflowSecurityState(req.params.id);
+    if (!security) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, security });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to load workflow security state');
+  }
+});
+
+router.put('/:id/security', async (req, res) => {
+  try {
+    const security = await defaultWorkflowStudioStore.updateWorkflowSecurityState(req.params.id, req.body || {});
+    if (!security) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, security });
+  } catch (error) {
+    return sendWorkflowError(res, error, 400, 'Failed to update workflow security state');
+  }
+});
+
+router.get('/:id/permission-dry-run', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const dryRun = defaultWorkflowStudioStore.permissionDryRun(req.params.id);
+    if (!dryRun) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, dryRun });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to run workflow permission dry run');
+  }
+});
+
+router.post('/:id/permission-overrides', async (req, res) => {
+  try {
+    const request = await defaultWorkflowStudioStore.createPermissionOverrideRequest(req.params.id, req.body || {});
+    if (!request) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.status(201).json({ success: true, request });
+  } catch (error) {
+    return sendWorkflowError(res, error, 400, 'Failed to create permission override request');
+  }
+});
+
+router.get('/:id/approval-audit/export', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const audit = defaultWorkflowStudioStore.exportApprovalAudit({ workflowId: req.params.id, runId: req.query.runId || '' });
+    return res.json({ success: true, audit });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to export workflow approval audit');
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();

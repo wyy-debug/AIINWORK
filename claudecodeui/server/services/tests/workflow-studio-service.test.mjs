@@ -721,6 +721,88 @@ describe('workflow studio service', () => {
     ]));
   });
 
+  test('builds real workflow security state, permission dry-run, override requests, and audit export', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'security-flow',
+      name: 'Security Flow',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      metadata: {
+        security: {
+          timeoutPolicy: { action: 'fail', timeoutMinutes: 20, escalateAfterMinutes: 5 },
+          delegation: { target: 'security-reviewer', allowedTargets: ['local-owner', 'security-reviewer'] },
+          secretRefs: ['secret://workflow/github-token'],
+          mcpAllowlist: ['redmine.get_issue'],
+        },
+      },
+      nodes: [
+        { id: 'mcp', type: 'mcp', toolName: 'redmine.get_issue' },
+        { id: 'shell', type: 'shell', command: 'git reset --hard HEAD' },
+      ],
+      edges: [{ from: 'mcp', to: 'shell' }],
+    });
+
+    const security = store.getWorkflowSecurityState('security-flow');
+    expect(security).toMatchObject({
+      workflowId: 'security-flow',
+      timeoutPolicy: { action: 'fail', timeoutMinutes: 20, escalateAfterMinutes: 5 },
+      delegation: { target: 'security-reviewer' },
+      secretRefs: ['secret://workflow/github-token'],
+      mcpAllowlist: ['redmine.get_issue'],
+    });
+
+    const dryRun = store.permissionDryRun('security-flow');
+    expect(dryRun.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: 'mcp', decision: 'ask' }),
+      expect.objectContaining({
+        nodeId: 'shell',
+        decision: 'ask',
+        riskLevel: 'critical',
+        dangerousCommand: expect.objectContaining({ reason: 'destructive git workspace operation' }),
+      }),
+    ]));
+
+    const request = await store.createPermissionOverrideRequest('security-flow', {
+      nodeId: 'shell',
+      requestedDecision: 'allow',
+      reason: 'maintenance window',
+      requester: 'qa',
+    });
+    expect(request).toMatchObject({ status: 'requested', nodeId: 'shell', requester: 'qa' });
+    expect(store.getWorkflowSecurityState('security-flow').overrideRequests).toEqual([
+      expect.objectContaining({ id: request.id, reason: 'maintenance window' }),
+    ]);
+
+    const waiting = await store.createRun('security-flow');
+    const approval = store.listApprovalRequests()[0];
+    expect(approval).toMatchObject({
+      workflowId: 'security-flow',
+      timeoutPolicy: { timeoutMinutes: 20 },
+      delegation: { target: 'security-reviewer' },
+      riskExplanation: expect.objectContaining({ permissionDecision: 'ask' }),
+      diffSummary: expect.objectContaining({ summary: expect.any(String) }),
+    });
+
+    await store.decideApproval(approval.id, {
+      decision: 'reject',
+      reason: 'dangerous command',
+      approver: 'security',
+      delegatedTo: 'security-reviewer',
+    });
+    const audit = store.exportApprovalAudit({ workflowId: 'security-flow', runId: waiting.id });
+    expect(audit.records).toEqual([
+      expect.objectContaining({
+        workflowId: 'security-flow',
+        nodeId: 'mcp',
+        decision: 'reject',
+        approver: 'security',
+        delegatedTo: 'security-reviewer',
+        reason: 'dangerous command',
+      }),
+    ]);
+  });
+
   test('registers workflow node packages and validates missing dependencies', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     const registered = await store.installNodePackage({

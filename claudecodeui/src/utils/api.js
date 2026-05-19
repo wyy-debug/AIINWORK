@@ -327,6 +327,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  workflowSecurity: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/security`),
+  updateWorkflowSecurity: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/security`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  workflowPermissionDryRun: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/permission-dry-run`),
+  createWorkflowPermissionOverride: (workflowId, payload = {}) =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/permission-overrides`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  exportWorkflowApprovalAudit: (workflowId, runId = '') =>
+    apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/approval-audit/export${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`),
   cloneWorkflow: (workflowId, payload = {}) =>
     apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/clone`, {
       method: 'POST',
@@ -390,6 +404,13 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   workflowApprovals: () => apiFetch('/api/workflow-approvals'),
+  workflowApprovalAudit: ({ workflowId = '', runId = '' } = {}) => {
+    const params = new URLSearchParams();
+    if (workflowId) params.set('workflowId', workflowId);
+    if (runId) params.set('runId', runId);
+    const query = params.toString();
+    return apiFetch(`/api/workflow-approvals/audit/export${query ? `?${query}` : ''}`);
+  },
   decideWorkflowApproval: (approvalId, payload = {}) =>
     apiFetch(`/api/workflow-approvals/${encodeURIComponent(approvalId)}/decision`, {
       method: 'POST',

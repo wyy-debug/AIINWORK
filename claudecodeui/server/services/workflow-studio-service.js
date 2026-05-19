@@ -651,11 +651,123 @@ function summarizeNode(node) {
 }
 
 function resolveNodePermission(workflow, node) {
+  if (node.type === 'shell' && detectDangerousCommand(node.command || node.config?.command)) return 'ask';
   if (node.permission) return node.permission;
   if (workflow.permissionPreset === 'full-auto') return 'allow';
   if (workflow.permissionPreset === 'enterprise-safe') return RISKY_NODE_TYPES.has(node.type) ? 'deny' : 'allow';
   if (RISKY_NODE_TYPES.has(node.type)) return 'ask';
   return 'allow';
+}
+
+function detectDangerousCommand(command = '') {
+  const text = normalizeText(command, '', 4000);
+  const checks = [
+    { pattern: /\b(rm\s+-rf|Remove-Item\b[^|;]*-Recurse|del\s+\/[sq]|rd\s+\/s)\b/i, reason: 'recursive delete' },
+    { pattern: /\b(git\s+reset\s+--hard|git\s+clean\s+-fd|git\s+checkout\s+--)\b/i, reason: 'destructive git workspace operation' },
+    { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b/i, reason: 'network download or remote script fetch' },
+    { pattern: /(^|[;&|])\s*>\s*[^&|]+/i, reason: 'file overwrite redirection' },
+  ];
+  const match = checks.find((check) => check.pattern.test(text));
+  return match ? { dangerous: true, reason: match.reason, command: text } : null;
+}
+
+function normalizeStringArray(value = [], limit = 200) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => normalizeText(item, '', limit))
+    .filter(Boolean);
+}
+
+function getWorkflowSecurity(workflow) {
+  const security = asObject(workflow.metadata?.security);
+  return {
+    timeoutPolicy: {
+      action: normalizeText(security.timeoutPolicy?.action, 'fail', 40),
+      timeoutMinutes: normalizeInteger(security.timeoutPolicy?.timeoutMinutes, 30, 1, 24 * 60),
+      escalateAfterMinutes: normalizeInteger(security.timeoutPolicy?.escalateAfterMinutes, 10, 1, 24 * 60),
+    },
+    delegation: {
+      target: normalizeText(security.delegation?.target, 'local-owner', 120),
+      allowedTargets: normalizeStringArray(security.delegation?.allowedTargets || ['local-owner', 'project-maintainer', 'security-reviewer'], 120),
+    },
+    secretRefs: normalizeStringArray(security.secretRefs, 240),
+    mcpAllowlist: normalizeStringArray(security.mcpAllowlist, 240),
+  };
+}
+
+function collectWorkflowSecretRefs(workflow) {
+  const configured = getWorkflowSecurity(workflow).secretRefs;
+  const fromNodes = (workflow.nodes || [])
+    .flatMap((node) => [node.config?.secretKey, node.config?.secretRef, node.config?.tokenSecret])
+    .map((value) => normalizeText(value, '', 240))
+    .filter((value) => value.startsWith('secret://'));
+  return [...new Set([...configured, ...fromNodes])];
+}
+
+function buildPermissionDryRun(workflow) {
+  const security = getWorkflowSecurity(workflow);
+  return {
+    workflowId: workflow.id,
+    permissionPreset: workflow.permissionPreset,
+    generatedAt: nowIso(() => Date.now()),
+    rows: workflow.nodes.map((node) => {
+      const dangerous = detectDangerousCommand(node.command || node.config?.command);
+      const decision = resolveNodePermission(workflow, node);
+      const mcpAllowed = !security.mcpAllowlist.length || node.type !== 'mcp' || security.mcpAllowlist.includes(node.toolName);
+      return {
+        nodeId: node.id,
+        title: node.title,
+        type: node.type,
+        decision: mcpAllowed ? decision : 'deny',
+        reason: !mcpAllowed
+          ? `MCP tool ${node.toolName || 'unknown'} is not in workflow allowlist.`
+          : dangerous
+            ? `Dangerous command policy forces approval: ${dangerous.reason}.`
+            : RISKY_NODE_TYPES.has(node.type)
+              ? `${node.type} is controlled by ${workflow.permissionPreset}.`
+              : 'Read-only or control-flow node.',
+        riskLevel: dangerous ? 'critical' : RISKY_NODE_TYPES.has(node.type) ? 'high' : 'low',
+        requiresApproval: decision === 'ask',
+        dangerousCommand: dangerous,
+      };
+    }),
+  };
+}
+
+function buildApprovalRiskExplanation(workflow, run, nodeRun) {
+  const node = workflow.nodes.find((item) => item.id === nodeRun.nodeId) || {};
+  const dryRun = buildPermissionDryRun(workflow).rows.find((row) => row.nodeId === nodeRun.nodeId);
+  return {
+    riskLevel: dryRun?.riskLevel || (RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium'),
+    permissionPreset: workflow.permissionPreset,
+    permissionDecision: nodeRun.permissionDecision || dryRun?.decision || resolveNodePermission(workflow, node),
+    reason: nodeRun.waitingReason || dryRun?.reason || 'Workflow is waiting for human approval.',
+    command: node.command || nodeRun.input?.command || '',
+    toolName: node.toolName || nodeRun.input?.toolName || '',
+    dangerousCommand: dryRun?.dangerousCommand || null,
+    inputSummary: Object.keys(asObject(nodeRun.input)).join(', '),
+    runId: run.id,
+    nodeId: nodeRun.nodeId,
+  };
+}
+
+function buildApprovalDiffSummary(run, nodeRun) {
+  const checkpointRefs = Object.values(asObject(nodeRun.checkpoints))
+    .map((checkpoint) => checkpoint?.id || checkpoint?.checkpointId)
+    .filter(Boolean);
+  const artifactRefs = [
+    ...(run.artifacts || []),
+    ...(nodeRun.artifacts || []),
+  ].map((artifact) => artifact.path || artifact.title || artifact.id || artifact.refId).filter(Boolean);
+  return {
+    changedFiles: normalizeStringArray(nodeRun.output?.changedFiles || nodeRun.output?.files || [], 1000),
+    checkpointRefs,
+    artifactRefs,
+    summary: checkpointRefs.length
+      ? `Checkpoint diff refs: ${checkpointRefs.join(', ')}`
+      : artifactRefs.length
+        ? `Artifact refs: ${artifactRefs.slice(0, 3).join(', ')}`
+        : 'No workspace diff has been produced yet.',
+  };
 }
 
 function terminalStatus(status) {
@@ -900,6 +1012,7 @@ function validateWorkflowVariables(workflow) {
 
 function validateWorkflowDependencies(workflow) {
   const errors = [];
+  const security = getWorkflowSecurity(workflow);
   for (const node of workflow.nodes || []) {
     const decision = resolveNodePermission(workflow, node);
     if (decision === 'deny') {
@@ -908,6 +1021,15 @@ function validateWorkflowDependencies(workflow) {
         nodeId: node.id,
         field: 'permission',
         message: `Node ${node.id} is denied by ${workflow.permissionPreset}.`,
+      });
+    }
+    if (node.type === 'mcp' && security.mcpAllowlist.length > 0 && !security.mcpAllowlist.includes(node.toolName)) {
+      errors.push({
+        code: 'mcp_not_allowlisted',
+        nodeId: node.id,
+        field: 'toolName',
+        dependencyType: 'mcp',
+        message: `MCP tool ${node.toolName || 'unknown'} is not allowlisted for workflow ${workflow.id}.`,
       });
     }
     if (node.type === 'mcp' && !node.toolName) {
@@ -1774,6 +1896,8 @@ export function createWorkflowStudioStore({
   }
 
   function createApprovalRequest(run, nodeRun) {
+    const workflow = workflows.find((item) => item.id === run.workflowId) || {};
+    const security = getWorkflowSecurity(workflow);
     return {
       id: `workflow_approval_${run.id}_${nodeRun.nodeId}`,
       runId: run.id,
@@ -1785,6 +1909,13 @@ export function createWorkflowStudioStore({
       status: nodeRun.status === 'waiting_approval' ? 'pending' : nodeRun.status,
       riskLevel: RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium',
       reason: nodeRun.waitingReason || 'Workflow is waiting for human approval.',
+      riskExplanation: buildApprovalRiskExplanation(workflow, run, nodeRun),
+      diffSummary: buildApprovalDiffSummary(run, nodeRun),
+      timeoutPolicy: security.timeoutPolicy,
+      delegation: security.delegation,
+      auditTrail: (run.timelineEvents || [])
+        .filter((event) => event.type === 'workflow_approval_decision' && event.payload?.nodeId === nodeRun.nodeId)
+        .map(clone),
       input: clone(nodeRun.input || {}),
       output: clone(nodeRun.output || {}),
       projectPath: run.projectPath,
@@ -1816,6 +1947,7 @@ export function createWorkflowStudioStore({
       decision,
       reason: normalizeText(input.reason, '', 1000),
       approver: normalizeText(input.approver, 'local-user', 120),
+      delegatedTo: normalizeText(input.delegatedTo, '', 120),
     }, now));
     await saveRuns();
     return controlNode(runId, nodeId, decision === 'reject' ? { action: 'reject', reason: input.reason } : { action: 'continue' });
@@ -1925,6 +2057,112 @@ export function createWorkflowStudioStore({
 
     await saveRuns();
     return clone(run);
+  }
+
+  function getWorkflowSecurityState(workflowId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    return {
+      workflowId: workflow.id,
+      ...getWorkflowSecurity(workflow),
+      secretRefs: collectWorkflowSecretRefs(workflow),
+      permissionDryRun: buildPermissionDryRun(workflow),
+      overrideRequests: normalizeStringArray(workflow.metadata?.security?.overrideRequests, 2000).map((item) => {
+        try {
+          return JSON.parse(item);
+        } catch {
+          return { raw: item };
+        }
+      }),
+    };
+  }
+
+  async function updateWorkflowSecurityState(workflowId, input = {}) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const current = getWorkflowSecurity(workflow);
+    const next = {
+      timeoutPolicy: {
+        ...current.timeoutPolicy,
+        ...asObject(input.timeoutPolicy),
+      },
+      delegation: {
+        ...current.delegation,
+        ...asObject(input.delegation),
+        allowedTargets: normalizeStringArray(input.delegation?.allowedTargets || current.delegation.allowedTargets, 120),
+      },
+      secretRefs: normalizeStringArray(input.secretRefs || current.secretRefs, 240)
+        .filter((ref) => ref.startsWith('secret://')),
+      mcpAllowlist: normalizeStringArray(input.mcpAllowlist || current.mcpAllowlist, 240),
+      overrideRequests: normalizeStringArray(workflow.metadata?.security?.overrideRequests, 2000),
+    };
+    workflow.metadata = {
+      ...asObject(workflow.metadata),
+      security: next,
+    };
+    workflow.updatedAt = nowIso(now);
+    await saveWorkflows();
+    return getWorkflowSecurityState(workflow.id);
+  }
+
+  function permissionDryRun(workflowId) {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    return workflow ? buildPermissionDryRun(workflow) : null;
+  }
+
+  async function createPermissionOverrideRequest(workflowId, input = {}) {
+    await load();
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    const request = {
+      id: `workflow_permission_override_${crypto.randomUUID()}`,
+      workflowId: workflow.id,
+      nodeId: normalizeText(input.nodeId, '', 120),
+      requestedDecision: normalizePermission(input.requestedDecision, 'ask') || 'ask',
+      reason: normalizeText(input.reason, '', 2000),
+      requester: normalizeText(input.requester, 'local-user', 120),
+      status: 'requested',
+      createdAt: nowIso(now),
+    };
+    workflow.metadata = asObject(workflow.metadata);
+    workflow.metadata.security = {
+      ...asObject(workflow.metadata.security),
+      overrideRequests: [
+        ...normalizeStringArray(workflow.metadata.security?.overrideRequests, 2000),
+        JSON.stringify(request),
+      ],
+    };
+    workflow.updatedAt = nowIso(now);
+    await saveWorkflows();
+    return clone(request);
+  }
+
+  function exportApprovalAudit({ workflowId = '', runId = '' } = {}) {
+    const workflowFilter = normalizeText(workflowId, '', 120);
+    const runFilter = normalizeText(runId, '', 160);
+    const records = runs
+      .filter((run) => !workflowFilter || run.workflowId === workflowFilter)
+      .filter((run) => !runFilter || run.id === runFilter)
+      .flatMap((run) => (run.timelineEvents || [])
+        .filter((event) => event.type === 'workflow_approval_decision')
+        .map((event) => ({
+          runId: run.id,
+          workflowId: run.workflowId,
+          workflowName: run.workflowName,
+          sessionId: run.sessionId,
+          projectPath: run.projectPath,
+          nodeId: event.payload?.nodeId || '',
+          decision: event.payload?.decision || '',
+          approver: event.payload?.approver || '',
+          delegatedTo: event.payload?.delegatedTo || '',
+          reason: event.payload?.reason || '',
+          createdAt: event.createdAt,
+        })));
+    return {
+      generatedAt: nowIso(now),
+      records: records.map(clone),
+    };
   }
 
   async function exportWorkflow(workflowId, format = 'json') {
@@ -2132,6 +2370,11 @@ export function createWorkflowStudioStore({
     listNodeLogs,
     listApprovalRequests,
     decideApproval,
+    getWorkflowSecurityState,
+    updateWorkflowSecurityState,
+    permissionDryRun,
+    createPermissionOverrideRequest,
+    exportApprovalAudit,
     retryFromNode,
     controlRun,
     controlNode,
