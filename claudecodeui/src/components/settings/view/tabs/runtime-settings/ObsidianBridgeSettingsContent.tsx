@@ -139,6 +139,26 @@ type ObsidianBridgeHealth = {
     endpoint: string;
     pluginVersion: string;
   };
+  semanticIndex?: {
+    status: string;
+    fallbackMode: string;
+    provider?: {
+      id: string;
+      label: string;
+      available: boolean;
+      readOnly: boolean;
+    };
+    indexMetadata?: {
+      providerId: string;
+      embeddingModel: string;
+      itemCount: number;
+      dimensions: number;
+      lastIndexedAt: string;
+      storagePath: string;
+    };
+    states?: string[];
+    actions?: string[];
+  };
   repairActions: ObsidianHealthAction[];
   actions: string[];
   safeLogs: string[];
@@ -195,6 +215,12 @@ const OBSIDIAN_HEALTH_DEFAULT_ACTIONS: ObsidianHealthAction[] = [
   { id: 'run-test-query', label: 'Run test query', safe: true, enabled: true },
   { id: 'run-test-write', label: 'Run test write', safe: true, enabled: true },
 ];
+
+const OBSIDIAN_SEMANTIC_PROVIDER_LABELS: Record<string, string> = {
+  'smart-connections': 'Smart Connections',
+  'open-connections': 'Open Connections',
+  'bridge-keyword': 'Bridge keyword search',
+};
 
 const parseJson = async <T,>(response: Response): Promise<T> => {
   const data = await response.json();
@@ -638,6 +664,7 @@ export default function ObsidianBridgeSettingsContent({
     const states = health?.states?.length ? health.states : ['ok'];
     const actions = health?.repairActions?.length ? health.repairActions : OBSIDIAN_HEALTH_DEFAULT_ACTIONS;
     const contract = health?.contract;
+    const semanticIndex = health?.semanticIndex;
 
     return (
       <section className="rounded-lg border border-border/70 bg-background/70 p-4">
@@ -690,6 +717,35 @@ export default function ObsidianBridgeSettingsContent({
               {OBSIDIAN_HEALTH_STATE_LABELS[state] || state}
             </span>
           ))}
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Semantic index</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {semanticIndex?.status || 'unknown'}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Provider</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {semanticIndex?.provider?.label
+                || OBSIDIAN_SEMANTIC_PROVIDER_LABELS[semanticIndex?.provider?.id || '']
+                || 'Smart Connections / Open Connections'}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/25 p-3">
+            <div className="text-xs text-muted-foreground">Fallback</div>
+            <div className="mt-1 truncate text-sm font-medium text-foreground">
+              {semanticIndex?.fallbackMode || 'keyword-bridge-search'}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 text-xs text-muted-foreground">
+          {semanticIndex?.indexMetadata?.itemCount ?? 0} indexed notes
+          {semanticIndex?.indexMetadata?.embeddingModel ? ` / ${semanticIndex.indexMetadata.embeddingModel}` : ''}
+          {semanticIndex?.indexMetadata?.lastIndexedAt ? ` / ${formatDateTime(semanticIndex.indexMetadata.lastIndexedAt)}` : ''}
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">

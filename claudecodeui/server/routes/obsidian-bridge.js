@@ -11,6 +11,7 @@ import {
   getActiveObsidianNote,
   getObsidianBridgeHealth,
   getObsidianGraph,
+  getObsidianSemanticIndexState,
   archiveObsidianDuplicates,
   migrateObsidianWikiLegacy,
   ObsidianBridgeError,
@@ -20,6 +21,7 @@ import {
   saveObsidianBridgeConfig,
   scanObsidianDuplicates,
   searchObsidianBridge,
+  searchObsidianSemanticIndex,
   testObsidianBridgeConnection,
 } from '../services/obsidian-bridge-service.js';
 import {
@@ -179,6 +181,14 @@ router.get('/health', async (_req, res) => {
     res.json({ success: true, health: getObsidianBridgeHealth() });
   } catch (error) {
     sendBridgeError(res, error, 'Failed to read Obsidian bridge health');
+  }
+});
+
+router.get('/semantic-index/status', async (_req, res) => {
+  try {
+    res.json({ success: true, semanticIndex: getObsidianSemanticIndexState() });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to read Obsidian semantic index status');
   }
 });
 
@@ -448,6 +458,15 @@ router.post('/search', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (error) {
     sendBridgeError(res, error, 'Failed to search Obsidian bridge');
+  }
+});
+
+router.post('/semantic-index/query', async (req, res) => {
+  try {
+    const result = await searchObsidianSemanticIndex(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendBridgeError(res, error, 'Failed to query Obsidian semantic index');
   }
 });
 

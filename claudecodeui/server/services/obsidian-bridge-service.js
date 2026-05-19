@@ -3,6 +3,11 @@ import {
   listObsidianVaults as defaultListObsidianVaults,
   readObsidianBridgePluginData as defaultReadObsidianBridgePluginData,
 } from './obsidian-bridge-installer-service.js';
+import {
+  buildObsidianSemanticIndexState,
+  normalizeObsidianSemanticIndexMetadata,
+  queryObsidianSemanticIndex,
+} from './obsidian-semantic-index-service.js';
 
 const CONFIG_KEY = 'obsidian_bridge';
 const DEFAULT_PORT = '27177';
@@ -60,6 +65,9 @@ export const DEFAULT_OBSIDIAN_BRIDGE_CONFIG = {
   codegraphStorageRoot: '',
   codegraphExportLevel: 'structural',
   codegraphMaxEmbeddedSymbols: 200,
+  obsidianSemanticProvider: 'auto',
+  obsidianSemanticFallbackEnabled: true,
+  obsidianSemanticIndexMetadata: {},
   obsidianMainPathSwitchScope: MAIN_PATH_SWITCH_SCOPE,
   routingRules: {
     readingNotesMode: 'second-brain',
@@ -333,6 +341,9 @@ export const normalizeObsidianBridgeConfig = (value = {}) => {
     codegraphStorageRoot: normalizeCodeGraphStorageRoot(source.codegraphStorageRoot),
     codegraphExportLevel: normalizeCodeGraphExportLevel(source.codegraphExportLevel),
     codegraphMaxEmbeddedSymbols: normalizeNumberRange(source.codegraphMaxEmbeddedSymbols, DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphMaxEmbeddedSymbols, 1, 1000),
+    obsidianSemanticProvider: normalizeObsidianSemanticProvider(source.obsidianSemanticProvider),
+    obsidianSemanticFallbackEnabled: source.obsidianSemanticFallbackEnabled !== false,
+    obsidianSemanticIndexMetadata: normalizeObsidianSemanticIndexMetadata(source.obsidianSemanticIndexMetadata),
     obsidianMainPathSwitchScope: MAIN_PATH_SWITCH_SCOPE,
     routingRules: normalizeRoutingRules(source.routingRules),
     vaults,
@@ -382,6 +393,13 @@ const normalizeCodeGraphExportLevel = (value) => (
   ['structural', 'all'].includes(value) ? value : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.codegraphExportLevel
 );
 
+const normalizeObsidianSemanticProvider = (value) => {
+  const normalized = readString(value).toLowerCase().replace(/_/g, '-');
+  return ['auto', 'smart-connections', 'open-connections', 'bridge-keyword', 'disabled'].includes(normalized)
+    ? normalized
+    : DEFAULT_OBSIDIAN_BRIDGE_CONFIG.obsidianSemanticProvider;
+};
+
 const readStoredConfigRaw = () => {
   try {
     return configStore.get(CONFIG_KEY) || '';
@@ -393,6 +411,25 @@ const readStoredConfigRaw = () => {
 export const readObsidianBridgeConfig = ({ includeToken = false } = {}) => {
   const config = readStoredConfig();
   return includeToken ? config : toPublicConfig(config);
+};
+
+export const getObsidianSemanticIndexState = () => {
+  const config = readObsidianBridgeConfig({ includeToken: true });
+  const metadata = normalizeObsidianSemanticIndexMetadata(config.obsidianSemanticIndexMetadata);
+  const semanticProviders = metadata.providerId && metadata.providerId !== 'auto'
+    ? [{
+      id: metadata.providerId,
+      available: metadata.itemCount > 0,
+      readOnly: true,
+      itemCount: metadata.itemCount,
+      embeddingModel: metadata.embeddingModel,
+      lastIndexedAt: metadata.lastIndexedAt,
+    }]
+    : [];
+  return buildObsidianSemanticIndexState({
+    config,
+    status: { semanticProviders },
+  });
 };
 
 const hasAuthError = (value = '') => /\b(401|403|unauthori[sz]ed|forbidden|stale\s+token|token)\b/i.test(value);
@@ -411,6 +448,7 @@ const buildBridgeRepairActions = () => [
 export const getObsidianBridgeHealth = () => {
   const config = readObsidianBridgeConfig({ includeToken: true });
   const activeVault = activeVaultFromConfig(config);
+  const semanticIndex = getObsidianSemanticIndexState();
   const lastError = readString(config.lastError || activeVault?.lastError);
   const tokenConfigured = Boolean(config.token || activeVault?.token);
   const pluginVersion = readString(config.pluginVersion || activeVault?.pluginVersion);
@@ -468,6 +506,7 @@ export const getObsidianBridgeHealth = () => {
       endpoint: readString(config.endpoint),
       pluginVersion,
     },
+    semanticIndex,
     repairActions: buildBridgeRepairActions(),
     actions,
     safeLogs: [
@@ -1140,6 +1179,29 @@ export const buildObsidianContext = async (payload = {}, {
     method: 'POST',
     body: JSON.stringify(normalizeObsidianSearchPayload(payload, config)),
   }, config, fetchImpl);
+};
+
+export const searchObsidianSemanticIndex = async (payload = {}, {
+  fetchImpl = globalThis.fetch,
+} = {}) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new ObsidianBridgeError('Fetch implementation is unavailable.', {
+      code: 'OBSIDIAN_BRIDGE_UNAVAILABLE',
+      statusCode: 500,
+    });
+  }
+
+  const config = getConfiguredBridge({ requireEnabled: true, vaultId: payload.vaultId });
+  const state = getObsidianSemanticIndexState();
+  const normalizedPayload = normalizeObsidianSearchPayload(payload, config);
+  return queryObsidianSemanticIndex(normalizedPayload, {
+    state,
+    semanticSearch: (nextPayload) => callBridge('/argus/v1/semantic/search', {
+      method: 'POST',
+      body: JSON.stringify(nextPayload),
+    }, config, fetchImpl),
+    fallbackSearch: (nextPayload) => searchObsidianBridge(nextPayload, { fetchImpl }),
+  });
 };
 
 const encodeBooleanParam = (value) => (value === false ? 'false' : 'true');
