@@ -418,6 +418,85 @@ describe('workflow studio service', () => {
     expect(run.status).toBe('completed');
     expect(run.nodeRuns.explore.output.status).toBe('completed');
     expect(run.nodeRuns.explore.output.result).toBe('terminal result');
+    expect(run.nodeRuns.explore.output.sessionLink).toContain('subagent-run=');
+  });
+
+  test('exposes real agent bridge state, result contract, subagent cancellation, tool registry, mcp schemas, and browser screenshot artifacts', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-agent-bridge-'));
+    const artifactsDir = path.join(rootDir, 'artifacts');
+    const stopped = [];
+    const subagentStore = {
+      async createRun() {
+        return { id: 'subagent-run-cancel-me', status: 'running' };
+      },
+      async getRun() {
+        return { id: 'subagent-run-cancel-me', status: 'running' };
+      },
+      async controlRun(runId, input) {
+        stopped.push({ runId, action: input.action });
+        return { id: runId, status: 'stopped' };
+      },
+    };
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      subagentRunStore: subagentStore,
+      artifactsDir,
+    });
+    await store.upsertWorkflow({
+      id: 'agent-bridge-flow',
+      name: 'Agent Bridge Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      maxConcurrency: 4,
+      metadata: {
+        agentBridge: { subagentPoolLimit: 1 },
+        security: { mcpAllowlist: ['redmine.get_issue'] },
+      },
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text' }],
+      nodes: [
+        { id: 'agent', type: 'agent', prompt: 'Handle {{inputs.change_request}}' },
+        { id: 'shot', type: 'tool', toolName: 'browser-screenshot' },
+        { id: 'scout', type: 'subagent', agentId: 'subagent-scout', prompt: 'Scout {{inputs.change_request}}', timeoutMs: 1000 },
+      ],
+      edges: [{ from: 'agent', to: 'shot' }],
+    });
+
+    const bridge = store.getAgentBridgeState('agent-bridge-flow', { inputs: { change_request: 'preview me' } });
+    expect(bridge.subagentPoolLimit).toBe(1);
+    expect(bridge.agentNodes[0]).toMatchObject({
+      nodeId: 'agent',
+      promptPreview: 'Handle preview me',
+      resultContract: expect.arrayContaining(['summary', 'sessionLink']),
+    });
+
+    const run = await store.createRun('agent-bridge-flow', {
+      inputs: { change_request: 'ship bridge' },
+      sessionId: 'session-agent-1',
+      projectPath: rootDir,
+    });
+    expect(run.nodeRuns.agent.output).toMatchObject({
+      summary: expect.any(String),
+      status: 'completed',
+      sessionId: 'session-agent-1',
+      sessionLink: '#session=session-agent-1',
+    });
+    expect(run.nodeRuns.shot.output.screenshotPath).toMatch(/\.png$/);
+    await expect(fs.stat(run.nodeRuns.shot.output.screenshotPath)).resolves.toMatchObject({ size: expect.any(Number) });
+
+    const tools = store.getToolRegistry();
+    expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(['git-native-review', 'browser-screenshot']));
+    expect(store.getMcpToolCatalog('agent-bridge-flow')).toEqual([
+      expect.objectContaining({ toolName: 'redmine.get_issue', enabled: true, argumentSchema: expect.any(Object) }),
+    ]);
+    expect(store.buildMcpArgumentSchema('redmine.get_issue').fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'arguments', type: 'json' }),
+    ]));
+
+    await store.controlRun(run.id, { action: 'cancel' });
+    expect(stopped).toEqual([{ runId: 'subagent-run-cancel-me', action: 'stop' }]);
+
+    await fs.rm(rootDir, { recursive: true, force: true });
   });
 
   test('records checkpoint refs and exposes workflow timeline events', async () => {

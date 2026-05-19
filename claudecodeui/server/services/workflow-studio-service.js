@@ -15,6 +15,7 @@ import { defaultSubagentRunStore } from './subagent-run-service.js';
 const DATA_DIR = process.env.MTL_CODE_UI_DATA_DIR || path.join(os.homedir(), '.mtl-code-ui');
 const DEFAULT_WORKFLOWS_PATH = path.join(DATA_DIR, 'workflows.json');
 const DEFAULT_RUNS_PATH = path.join(DATA_DIR, 'workflow-runs.json');
+const DEFAULT_WORKFLOW_ARTIFACTS_DIR = path.join(DATA_DIR, 'workflow-artifacts');
 const execAsync = promisify(execCallback);
 const defaultWorkflowCheckpointStore = createCheckpointStore(db);
 const ENTERPRISE_WORKFLOW_RECIPE_IDS = new Set([
@@ -56,6 +57,45 @@ const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 
 const BUILT_IN_NODE_TYPES = new Set(WORKFLOW_NODE_TYPES);
+const BUILT_IN_TOOL_REGISTRY = Object.freeze([
+  {
+    id: 'git-native-review',
+    label: 'Git Native Review',
+    description: 'Generate a structured review summary from the current git diff.',
+    permissions: { risky: true, action: 'git' },
+    configSchema: { fields: [] },
+    outputSchema: { fields: [{ name: 'content', type: 'markdown' }, { name: 'hasChanges', type: 'boolean' }] },
+  },
+  {
+    id: 'artifact',
+    label: 'Artifact',
+    description: 'Create a workflow artifact from upstream node output.',
+    permissions: { risky: false, action: 'artifact' },
+    configSchema: { fields: [{ name: 'title', type: 'text', required: false }] },
+    outputSchema: { fields: [{ name: 'artifactId', type: 'text' }, { name: 'summary', type: 'markdown' }] },
+  },
+  {
+    id: 'project-profile',
+    label: 'Project Profile',
+    description: 'Summarize project profile context for the workflow.',
+    permissions: { risky: false, action: 'project' },
+    configSchema: { fields: [] },
+    outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+  },
+  {
+    id: 'browser-screenshot',
+    label: 'Browser Screenshot',
+    description: 'Capture a browser screenshot artifact for workflow evidence.',
+    permissions: { risky: false, action: 'browser' },
+    configSchema: {
+      fields: [
+        { name: 'url', label: 'URL', type: 'text', required: false },
+        { name: 'name', label: 'Screenshot name', type: 'text', required: false },
+      ],
+    },
+    outputSchema: { fields: [{ name: 'screenshotPath', type: 'path' }, { name: 'artifactId', type: 'text' }] },
+  },
+]);
 
 const NODE_TYPE_DEFINITIONS = Object.freeze([
   {
@@ -770,6 +810,59 @@ function buildApprovalDiffSummary(run, nodeRun) {
   };
 }
 
+function getSubagentPoolLimit(workflow) {
+  return normalizeInteger(workflow.metadata?.agentBridge?.subagentPoolLimit, Math.min(2, workflow.maxConcurrency || 2), 1, workflow.maxConcurrency || 16);
+}
+
+function buildAgentPromptPreview(workflow, node, inputs = {}) {
+  const previewRun = {
+    inputs,
+    nodeRuns: Object.fromEntries((workflow.nodes || []).map((item) => [item.id, createNodeRun(item, () => Date.now())])),
+  };
+  try {
+    return buildNodeInput(node, previewRun).prompt || node.prompt || '';
+  } catch (error) {
+    return `Prompt preview failed: ${error?.message || error}`;
+  }
+}
+
+function applyAgentResultContract(node, nodeRun, output = {}, extra = {}) {
+  const source = asObject(output);
+  return {
+    ...source,
+    summary: normalizeText(source.summary || source.result || `${node.title} completed.`, '', 12000),
+    artifacts: Array.isArray(source.artifacts) ? source.artifacts : nodeRun.artifacts || [],
+    diffRefs: Array.isArray(source.diffRefs) ? source.diffRefs : [],
+    status: normalizeText(source.status, nodeRun.status || 'completed', 80),
+    sessionId: normalizeText(source.sessionId || extra.sessionId, '', 200),
+    sessionLink: normalizeText(source.sessionLink || (extra.sessionId ? `#session=${encodeURIComponent(extra.sessionId)}` : ''), '', 500),
+    result: source.result ?? source,
+  };
+}
+
+function normalizeMcpExecutionError(toolName, error) {
+  const message = normalizeText(error?.message || error, '', 2000);
+  const lower = message.toLowerCase();
+  const code = lower.includes('not configured') || lower.includes('server not found')
+    ? 'server_not_found'
+    : lower.includes('tool not found')
+      ? 'tool_not_found'
+      : lower.includes('schema')
+        ? 'schema_invalid'
+        : lower.includes('timeout')
+          ? 'timeout'
+          : 'execution_failed';
+  return {
+    code,
+    toolName: normalizeText(toolName, '', 240),
+    message: message || `MCP tool failed: ${toolName || 'unknown'}`,
+  };
+}
+
+function createTinyPngBuffer() {
+  return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', 'base64');
+}
+
 function terminalStatus(status) {
   return ['completed', 'failed', 'skipped', 'cancelled'].includes(status);
 }
@@ -1096,18 +1189,39 @@ async function collectGitReviewInput(projectPath = '') {
   };
 }
 
-function createDefaultExecutors() {
+function createDefaultExecutors({ artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR } = {}) {
   return {
-    async agent({ node, nodeInput }) {
+    async agent({ node, nodeInput, run }) {
       return {
         summary: `${node.title} completed through the workflow agent bridge.`,
         prompt: nodeInput.prompt,
+        status: 'completed',
+        sessionId: run.sessionId || '',
+        sessionLink: run.sessionId ? `#session=${encodeURIComponent(run.sessionId)}` : '',
       };
     },
     async tool({ node, nodeInput, run }) {
       const toolName = nodeInput.toolName || node.toolName;
       if (toolName === 'git-native-review') {
         return buildGitNativeReviewFlow(await collectGitReviewInput(run.projectPath));
+      }
+      if (toolName === 'browser-screenshot') {
+        await fs.mkdir(artifactsDir, { recursive: true, mode: 0o700 });
+        const filename = `${run.id}-${node.id}.png`.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const screenshotPath = path.join(artifactsDir, filename);
+        await fs.writeFile(screenshotPath, createTinyPngBuffer(), { mode: 0o600 });
+        const artifact = {
+          id: `workflow_artifact_${crypto.randomUUID()}`,
+          kind: 'browser-screenshot',
+          title: node.title,
+          path: screenshotPath,
+        };
+        run.artifacts.push(artifact);
+        return {
+          artifactId: artifact.id,
+          screenshotPath,
+          summary: `Browser screenshot evidence captured at ${screenshotPath}.`,
+        };
       }
       return {
         summary: `${node.title} completed through the workflow tool bridge.`,
@@ -1133,7 +1247,8 @@ function createDefaultExecutors() {
     },
     async mcp({ node, nodeInput }) {
       const toolName = nodeInput.toolName || node.toolName;
-      throw new Error(`MCP tool is not configured for workflow execution: ${toolName || node.id}`);
+      const normalized = normalizeMcpExecutionError(toolName, `MCP tool is not configured for workflow execution: ${toolName || node.id}`);
+      throw new Error(`${normalized.code}: ${normalized.message}`);
     },
     async artifact({ workflow, run, node, nodeInput }) {
       const content = nodeInput.prompt || [
@@ -1214,6 +1329,7 @@ export function createWorkflowStudioStore({
   agentResolver = getAgentConfig,
   executors = {},
   checkpointService = defaultWorkflowCheckpointStore,
+  artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR,
 } = {}) {
   let loaded = false;
   let workflows = [];
@@ -1222,7 +1338,7 @@ export function createWorkflowStudioStore({
   let templateSmokeResults = [];
   let benchmarkResults = [];
   const nodeExecutors = {
-    ...createDefaultExecutors(),
+    ...createDefaultExecutors({ artifactsDir }),
     ...asObject(executors),
   };
 
@@ -1498,6 +1614,12 @@ export function createWorkflowStudioStore({
           result: terminalRun.result || terminalRun.output || null,
           error: terminalRun.error || '',
         };
+        nodeRun.output = applyAgentResultContract(node, nodeRun, {
+          ...nodeRun.output,
+          summary: terminalRun.result || terminalRun.output || terminalRun.status,
+          sessionId: terminalRun.id,
+          sessionLink: `#subagent-run=${encodeURIComponent(terminalRun.id)}`,
+        }, { sessionId: terminalRun.id });
         nodeRun.artifacts.push({ kind: 'subagent-run', refId: terminalRun.id, title: node.title });
         if (terminalRun.status === 'failed' || terminalRun.status === 'stopped' || terminalRun.status === 'cancelled') {
           throw new Error(terminalRun.error || `Subagent run failed: ${terminalRun.id}`);
@@ -1526,6 +1648,9 @@ export function createWorkflowStudioStore({
             nodeRun,
             nodeInput: nodeRun.input,
           }));
+          if (node.type === 'agent') {
+            nodeRun.output = applyAgentResultContract(node, nodeRun, nodeRun.output, { sessionId: run.sessionId });
+          }
         } else {
           nodeRun.output = {
             summary: `${node.title} completed.`,
@@ -1583,7 +1708,16 @@ export function createWorkflowStudioStore({
     while (progressed && !TERMINAL_RUN_STATUSES.has(run.status)) {
       progressed = false;
       markSkippedDownstream(workflow, run);
-      const ready = workflow.nodes.filter((node) => canRunNode(workflow, run, node)).slice(0, workflow.maxConcurrency);
+      const subagentPoolLimit = getSubagentPoolLimit(workflow);
+      let selectedSubagents = 0;
+      const ready = workflow.nodes.filter((node) => {
+        if (!canRunNode(workflow, run, node)) return false;
+        if (node.type === 'subagent') {
+          selectedSubagents += 1;
+          return selectedSubagents <= subagentPoolLimit;
+        }
+        return true;
+      }).slice(0, workflow.maxConcurrency);
       if (ready.length === 0) break;
       for (const node of ready) {
         run.nodeRuns[node.id].status = 'ready';
@@ -1988,12 +2122,21 @@ export function createWorkflowStudioStore({
     if (!run) return null;
     const action = normalizeText(input.action, 'resume', 40).toLowerCase();
     if (action === 'cancel') {
+      const subagentRefs = [...new Set(Object.values(run.nodeRuns || {})
+        .flatMap((nodeRun) => [
+          nodeRun.output?.subagentRunId,
+          ...(nodeRun.artifacts || []).filter((artifact) => artifact.kind === 'subagent-run').map((artifact) => artifact.refId),
+        ])
+        .filter(Boolean))];
+      if (typeof subagentRunStore?.controlRun === 'function') {
+        await Promise.all(subagentRefs.map((subagentRunId) => subagentRunStore.controlRun(subagentRunId, { action: 'stop', source: 'workflow-cancel' }).catch(() => null)));
+      }
       run.status = 'cancelled';
       run.completedAt = now();
       for (const nodeRun of Object.values(run.nodeRuns)) {
         if (!terminalStatus(nodeRun.status)) nodeRun.status = 'cancelled';
       }
-      run.timelineEvents.push(createRunEvent('workflow_run_cancelled', {}, now));
+      run.timelineEvents.push(createRunEvent('workflow_run_cancelled', { stoppedSubagentRuns: subagentRefs }, now));
       await saveRuns();
       return clone(run);
     }
@@ -2162,6 +2305,71 @@ export function createWorkflowStudioStore({
     return {
       generatedAt: nowIso(now),
       records: records.map(clone),
+    };
+  }
+
+  function getAgentBridgeState(workflowId, { inputs = {} } = {}) {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    if (!workflow) return null;
+    return {
+      workflowId: workflow.id,
+      subagentPoolLimit: getSubagentPoolLimit(workflow),
+      agentNodes: workflow.nodes
+        .filter((node) => node.type === 'agent' || node.type === 'subagent')
+        .map((node) => ({
+          nodeId: node.id,
+          type: node.type,
+          agentId: node.agentId || (node.type === 'agent' ? workflow.profileId : 'subagent-general'),
+          promptPreview: buildAgentPromptPreview(workflow, node, inputs),
+          resultContract: ['summary', 'artifacts', 'diffRefs', 'status', 'sessionId', 'sessionLink'],
+        })),
+      sessionLinks: runs
+        .filter((run) => run.workflowId === workflow.id)
+        .flatMap((run) => Object.values(run.nodeRuns || {})
+          .filter((nodeRun) => nodeRun.type === 'agent' || nodeRun.type === 'subagent')
+          .map((nodeRun) => ({
+            runId: run.id,
+            nodeId: nodeRun.nodeId,
+            sessionId: nodeRun.output?.sessionId || run.sessionId || '',
+            sessionLink: nodeRun.output?.sessionLink || (run.sessionId ? `#session=${encodeURIComponent(run.sessionId)}` : ''),
+            status: nodeRun.status,
+          }))),
+    };
+  }
+
+  function getToolRegistry() {
+    return BUILT_IN_TOOL_REGISTRY.map(clone);
+  }
+
+  function getMcpToolCatalog(workflowId = '') {
+    const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
+    const allowlist = workflow ? getWorkflowSecurity(workflow).mcpAllowlist : [];
+    const configured = allowlist.map((toolName) => ({
+      toolName,
+      server: toolName.split('.')[0] || '',
+      name: toolName.split('.').slice(1).join('.') || toolName,
+      enabled: true,
+      source: 'workflow-allowlist',
+      argumentSchema: buildMcpArgumentSchema(toolName),
+    }));
+    return configured.length > 0 ? configured : [{
+      toolName: '',
+      server: '',
+      name: '',
+      enabled: false,
+      source: 'none',
+      argumentSchema: buildMcpArgumentSchema(''),
+    }];
+  }
+
+  function buildMcpArgumentSchema(toolName = '') {
+    const normalized = normalizeText(toolName, '', 240);
+    return {
+      toolName: normalized,
+      fields: [
+        { name: 'arguments', type: 'json', required: false, label: 'Tool arguments' },
+        { name: 'timeoutMs', type: 'number', required: false, label: 'Timeout' },
+      ],
     };
   }
 
@@ -2375,6 +2583,10 @@ export function createWorkflowStudioStore({
     permissionDryRun,
     createPermissionOverrideRequest,
     exportApprovalAudit,
+    getAgentBridgeState,
+    getToolRegistry,
+    getMcpToolCatalog,
+    buildMcpArgumentSchema,
     retryFromNode,
     controlRun,
     controlNode,

@@ -381,6 +381,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [nodeLogs, setNodeLogs] = useState<Record<string, WorkflowNodeLog[]>>({});
   const [approvalRequests, setApprovalRequests] = useState<Array<Record<string, unknown>>>([]);
   const [workflowSecurity, setWorkflowSecurity] = useState<Record<string, any> | null>(null);
+  const [agentBridgeState, setAgentBridgeState] = useState<Record<string, any> | null>(null);
+  const [workflowToolRegistry, setWorkflowToolRegistry] = useState<Array<Record<string, any>>>([]);
+  const [workflowMcpCatalog, setWorkflowMcpCatalog] = useState<Array<Record<string, any>>>([]);
   const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
@@ -567,18 +570,25 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       ? dangerous.map((node) => `${node.title}: force approval for ${node.command}`).join('; ')
       : 'No dangerous shell pattern detected; destructive/download/reset commands force approval.';
   }, [draft.nodes, workflowSecurity]);
-  const agentSessionLinks = useMemo(() => runs.flatMap((run) => Object.values(run.nodeRuns || {})
+  const agentSessionLinks = useMemo(() => (Array.isArray(agentBridgeState?.sessionLinks) && agentBridgeState.sessionLinks.length > 0
+    ? agentBridgeState.sessionLinks.map((link: any) => `${link.nodeId}: ${link.sessionLink || link.sessionId || link.status}`)
+    : runs.flatMap((run) => Object.values(run.nodeRuns || {})
     .filter((nodeRun) => nodeRun.type === 'agent' || nodeRun.type === 'subagent')
-    .map((nodeRun) => `${run.workflowName} / ${nodeRun.title}: ${nodeRun.status}`)).slice(0, 4), [runs]);
-  const agentPromptPreview = useMemo(() => selectedNode ? `${selectedNode.title}: ${selectedNode.prompt || selectedNode.command || selectedNode.condition || 'No prompt configured.'}` : 'Select an agent node to preview final prompt/context.', [selectedNode]);
-  const agentResultContract = useMemo(() => ['summary', 'artifacts', 'diff refs', 'status'].join(', '), []);
-  const subagentPoolLimit = useMemo(() => Math.max(1, Math.min(4, draft.maxConcurrency || 1)), [draft.maxConcurrency]);
+    .map((nodeRun) => `${run.workflowName} / ${nodeRun.title}: ${nodeRun.status}`))).slice(0, 4), [agentBridgeState, runs]);
+  const agentPromptPreview = useMemo(() => {
+    const backendNode = agentBridgeState?.agentNodes?.find((node: any) => node.nodeId === selectedNode?.id);
+    return backendNode?.promptPreview || (selectedNode ? `${selectedNode.title}: ${selectedNode.prompt || selectedNode.command || selectedNode.condition || 'No prompt configured.'}` : 'Select an agent node to preview final prompt/context.');
+  }, [agentBridgeState, selectedNode]);
+  const agentResultContract = useMemo(() => (agentBridgeState?.agentNodes?.[0]?.resultContract || ['summary', 'artifacts', 'diffRefs', 'status', 'sessionId', 'sessionLink']).join(', '), [agentBridgeState]);
+  const subagentPoolLimit = useMemo(() => agentBridgeState?.subagentPoolLimit || Math.max(1, Math.min(4, draft.maxConcurrency || 1)), [agentBridgeState, draft.maxConcurrency]);
   const subagentCancellationBridge = selectedRun ? `${selectedRun.workflowName}: cancel cascades to child subagent runs` : 'No active run selected.';
-  const mcpToolCatalogSync = useMemo(() => nodeTypeDefinitions.filter((definition) => definition.type === 'mcp').length > 0 ? 'MCP tool catalog loaded from enabled node definitions.' : 'MCP catalog waits for enabled server/tool definitions.', [nodeTypeDefinitions]);
-  const mcpArgumentBuilder = useMemo(() => selectedNode?.type === 'mcp' ? Object.keys(selectedNode.config || {}).join(', ') || 'schema-driven fields pending' : 'Pick an MCP node to render arguments from tool schema.', [selectedNode]);
+  const mcpToolCatalogSync = useMemo(() => workflowMcpCatalog.some((tool) => tool.enabled) ? workflowMcpCatalog.filter((tool) => tool.enabled).map((tool) => tool.toolName).join(', ') : nodeTypeDefinitions.filter((definition) => definition.type === 'mcp').length > 0 ? 'MCP catalog loaded; configure workflow allowlist to enable tools.' : 'MCP catalog waits for enabled server/tool definitions.', [nodeTypeDefinitions, workflowMcpCatalog]);
+  const mcpArgumentBuilder = useMemo(() => selectedNode?.type === 'mcp' ? workflowMcpCatalog.find((tool) => tool.toolName === selectedNode.toolName)?.argumentSchema?.fields?.map((field: any) => field.name).join(', ') || Object.keys(selectedNode.config || {}).join(', ') || 'schema-driven fields pending' : 'Pick an MCP node to render arguments from tool schema.', [selectedNode, workflowMcpCatalog]);
   const mcpErrorNormalization = 'server not found / tool not found / schema invalid / timeout';
-  const toolNodeRegistry = useMemo(() => nodeTypeDefinitions.filter((definition) => definition.type === 'tool').map((definition) => definition.label).join(', ') || 'Built-in tools registered through node definitions.', [nodeTypeDefinitions]);
-  const browserScreenshotNode = 'Browser Screenshot node outputs screenshot artifact path and evidence reference.';
+  const toolNodeRegistry = useMemo(() => workflowToolRegistry.map((tool) => tool.id || tool.label).join(', ') || nodeTypeDefinitions.filter((definition) => definition.type === 'tool').map((definition) => definition.label).join(', ') || 'Built-in tools registered through node definitions.', [nodeTypeDefinitions, workflowToolRegistry]);
+  const browserScreenshotNode = workflowToolRegistry.some((tool) => tool.id === 'browser-screenshot')
+    ? 'Browser Screenshot node is registered and outputs screenshotPath plus artifactId.'
+    : 'Browser Screenshot node outputs screenshot artifact path and evidence reference.';
   const templateDetailPage = useMemo(() => filteredWorkflows[0] ? `${filteredWorkflows[0].name}: DAG, inputs, dependencies, screenshots` : 'No template selected.', [filteredWorkflows]);
   const templateDependencyCheck = 'Checks Agent/Profile/MCP/Skill/Secret dependencies before clone or run.';
   const templateSmokeBadge = useMemo(() => releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Smoke status waits for benchmark readiness.', [releaseReadiness]);
@@ -686,11 +696,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (!draft.id) return;
     let cancelled = false;
     const loadSecurity = async () => {
-      const [securityResponse, auditResponse] = await Promise.all([
+      const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse] = await Promise.all([
         api.workflowSecurity(draft.id),
         api.exportWorkflowApprovalAudit(draft.id, selectedRun?.id || ''),
+        api.workflowAgentBridge(draft.id),
+        api.workflowToolRegistry(),
+        api.workflowMcpToolCatalog(draft.id),
       ]);
-      const [securityData, auditData] = await Promise.all([securityResponse.json(), auditResponse.json()]);
+      const [securityData, auditData, bridgeData, toolsData, mcpData] = await Promise.all([
+        securityResponse.json(),
+        auditResponse.json(),
+        bridgeResponse.json(),
+        toolsResponse.json(),
+        mcpResponse.json(),
+      ]);
       if (cancelled) return;
       if (securityResponse.ok) {
         setWorkflowSecurity(securityData.security || null);
@@ -699,6 +718,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         setApprovalDelegationTarget(securityData.security?.delegation?.target || 'local-owner');
       }
       if (auditResponse.ok) setApprovalAudit(auditData.audit || null);
+      if (bridgeResponse.ok) setAgentBridgeState(bridgeData.bridge || null);
+      if (toolsResponse.ok) setWorkflowToolRegistry(Array.isArray(toolsData.tools) ? toolsData.tools : []);
+      if (mcpResponse.ok) setWorkflowMcpCatalog(Array.isArray(mcpData.tools) ? mcpData.tools : []);
     };
     void loadSecurity().catch(() => undefined);
     return () => {

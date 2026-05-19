@@ -311,6 +311,11 @@ export const api = {
     }),
   workflows: () => apiFetch('/api/workflows'),
   workflowNodeTypes: () => apiFetch('/api/workflows/node-types'),
+  workflowToolRegistry: () => apiFetch('/api/workflows/tool-registry'),
+  workflowMcpToolCatalog: (workflowId = '') =>
+    apiFetch(`/api/workflows/mcp-tool-catalog${workflowId ? `?workflowId=${encodeURIComponent(workflowId)}` : ''}`),
+  workflowMcpArgumentSchema: (toolName = '') =>
+    apiFetch(`/api/workflows/mcp-argument-schema${toolName ? `?toolName=${encodeURIComponent(toolName)}` : ''}`),
   workflow: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}`),
   saveWorkflow: (workflow) =>
     apiFetch(workflow?.id ? `/api/workflows/${encodeURIComponent(workflow.id)}` : '/api/workflows', {
@@ -328,6 +333,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   workflowSecurity: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/security`),
+  workflowAgentBridge: (workflowId) => apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/agent-bridge`),
   updateWorkflowSecurity: (workflowId, payload = {}) =>
     apiFetch(`/api/workflows/${encodeURIComponent(workflowId)}/security`, {
       method: 'PUT',

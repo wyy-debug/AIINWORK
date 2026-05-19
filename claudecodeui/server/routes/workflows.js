@@ -36,6 +36,33 @@ router.get('/node-types', (_req, res) => {
   res.json({ success: true, nodeTypes: getWorkflowNodeTypeDefinitions() });
 });
 
+router.get('/tool-registry', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, tools: defaultWorkflowStudioStore.getToolRegistry() });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow tool registry');
+  }
+});
+
+router.get('/mcp-tool-catalog', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, tools: defaultWorkflowStudioStore.getMcpToolCatalog(req.query.workflowId || '') });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow MCP tool catalog');
+  }
+});
+
+router.get('/mcp-argument-schema', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, schema: defaultWorkflowStudioStore.buildMcpArgumentSchema(req.query.toolName || '') });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow MCP argument schema');
+  }
+});
+
 router.post('/import', async (req, res) => {
   try {
     const workflow = await defaultWorkflowStudioStore.importWorkflow(req.body?.content || req.body?.workflow || req.body || {});
@@ -72,6 +99,17 @@ router.get('/:id/security', async (req, res) => {
     return res.json({ success: true, security });
   } catch (error) {
     return sendWorkflowError(res, error, 500, 'Failed to load workflow security state');
+  }
+});
+
+router.get('/:id/agent-bridge', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const bridge = defaultWorkflowStudioStore.getAgentBridgeState(req.params.id, { inputs: req.query || {} });
+    if (!bridge) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    return res.json({ success: true, bridge });
+  } catch (error) {
+    return sendWorkflowError(res, error, 500, 'Failed to load workflow agent bridge state');
   }
 });
 
