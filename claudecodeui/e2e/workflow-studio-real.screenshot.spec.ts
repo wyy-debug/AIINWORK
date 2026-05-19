@@ -68,6 +68,35 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('workflow-studio')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('workflow-command-center')).toBeVisible();
+  await expect(page.getByTestId('workflow-home-overview')).toBeVisible();
+  await expect(page.getByTestId('workflow-first-run-wizard')).toBeVisible();
+  await expect(page.getByTestId('workflow-recent-objects')).toBeVisible();
+  await expect(page.getByTestId('workflow-favorites')).toBeVisible();
+  await expect(page.getByTestId('workflow-breadcrumb')).toBeVisible();
+  await expect(page.getByTestId('workflow-status-taxonomy')).toBeVisible();
+  await screenshot(page, 'REQ-082-workflow-home-overview.png');
+  await screenshot(page, 'REQ-084-workflow-first-run-wizard.png');
+  await screenshot(page, 'REQ-086-workflow-recent-objects.png');
+  await screenshot(page, 'REQ-087-workflow-favorites.png');
+  await screenshot(page, 'REQ-088-workflow-breadcrumb-and-deep-link.png');
+  await screenshot(page, 'REQ-089-workflow-status-taxonomy.png');
+
+  await page.getByTestId('workflow-command-center').getByRole('button', { name: 'Command' }).click();
+  await expect(page.getByTestId('workflow-command-palette')).toBeVisible();
+  await screenshot(page, 'REQ-085-workflow-command-palette.png');
+  await page.keyboard.press('Escape');
+
+  await page.getByTitle('Workflow help').click();
+  await expect(page.getByTestId('workflow-help-overlay')).toBeVisible();
+  await screenshot(page, 'REQ-090-workflow-help-overlay.png');
+  await page.keyboard.press('Escape');
+
+  await page.getByTitle('Keyboard shortcuts').click();
+  await expect(page.getByTestId('workflow-keyboard-shortcuts')).toBeVisible();
+  await screenshot(page, 'REQ-091-workflow-keyboard-shortcuts-panel.png');
+  await page.keyboard.press('Escape');
+
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
   await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-editor.png');
@@ -78,7 +107,7 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await expect(page.getByTestId('workflow-inspector-tabs')).toBeVisible();
   await screenshot(page, 'REQ-081-inspector-node-config.png');
 
-  await page.getByRole('button', { name: 'Library' }).click();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Library' }).click();
   await expect(page.getByTestId('workflow-library-gallery')).toBeVisible();
   await expect(page.getByTestId('workflow-template-preview')).toBeVisible();
   await expect(page.getByTestId('workflow-template-manifest').first()).toBeVisible();
@@ -86,12 +115,12 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await screenshot(page, 'REQ-064-real-template-library-clone.png');
   await screenshot(page, 'REQ-081-library-template-gallery.png');
 
-  await page.getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await page.getByTestId('workflow-dry-run-debugger').first().click();
   await expect(page.getByTestId('workflow-dry-run-debugger').last()).toBeVisible();
   await screenshot(page, 'REQ-064-real-editor-dry-run-debugger.png');
 
-  await page.getByRole('button', { name: 'Runs' }).click();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
   await expect(page.getByTestId('workflow-runs').getByText('waiting_approval').first()).toBeVisible();
   await expect(page.getByTestId('workflow-run-console')).toBeVisible();
   await expect(page.getByTestId('workflow-approval-inbox-panel')).toBeVisible();
@@ -111,7 +140,7 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   expect(continueResponse.ok()).toBe(true);
 
   await page.getByTestId('workflow-studio').getByRole('button', { name: 'Refresh' }).click();
-  await page.getByRole('button', { name: 'Runs' }).click();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
   await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-completed-history.png');
 
@@ -138,7 +167,7 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   expect(permissionRun.ok()).toBe(true);
 
   await page.getByTestId('workflow-studio').getByRole('button', { name: 'Refresh' }).click();
-  await page.getByRole('button', { name: 'Runs' }).click();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
   await expect(page.getByText(/permission boundary/i).first()).toBeVisible();
   await screenshot(page, 'REQ-064-real-permission-deny.png');
 

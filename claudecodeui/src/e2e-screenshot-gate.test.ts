@@ -46,6 +46,16 @@ describe('E2E screenshot evidence gate', () => {
       'REQ-081-inspector-node-config.png',
       'REQ-081-run-console-approval.png',
       'REQ-081-mobile-run-approval.png',
+      'REQ-082-workflow-home-overview.png',
+      'REQ-083-workflow-empty-state-guide.png',
+      'REQ-084-workflow-first-run-wizard.png',
+      'REQ-085-workflow-command-palette.png',
+      'REQ-086-workflow-recent-objects.png',
+      'REQ-087-workflow-favorites.png',
+      'REQ-088-workflow-breadcrumb-and-deep-link.png',
+      'REQ-089-workflow-status-taxonomy.png',
+      'REQ-090-workflow-help-overlay.png',
+      'REQ-091-workflow-keyboard-shortcuts-panel.png',
     ].forEach((screenshotName) => {
       const workflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
       const realWorkflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio-real.screenshot.spec.ts'), 'utf8');

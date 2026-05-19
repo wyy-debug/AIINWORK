@@ -65,7 +65,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page) {
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } = {}) {
   let runState = waitingRun;
 
   await page.addInitScript(() => {
@@ -78,7 +78,7 @@ async function installMockApi(page: Page) {
 
     if (path === '/api/projects') return json(route, [project]);
     if (path.startsWith('/api/conversations')) return json(route, { project: { ...project, name: 'Conversations', sessions: [] } });
-    if (path === '/api/workflows') return json(route, { success: true, workflows: [workflow] });
+    if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [workflow] });
     if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
     if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
@@ -114,10 +114,13 @@ test('REQ-049 captures Workflow Studio editor, runner, approval, and history @sc
   await installMockApi(page);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await expect(page.getByTestId('workflow-home-overview')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
   await screenshot(page, 'REQ-049-workflow-editor.png');
 
   await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
   await expect(page.getByTestId('workflow-runs')).toBeVisible();
   await expect(page.getByTestId('workflow-runs').getByText('waiting_approval').first()).toBeVisible();
   await screenshot(page, 'REQ-049-workflow-runner-approval.png');
@@ -125,4 +128,12 @@ test('REQ-049 captures Workflow Studio editor, runner, approval, and history @sc
   await page.getByTestId('workflow-approve-node').click();
   await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
   await screenshot(page, 'REQ-049-workflow-history-completed.png');
+});
+
+test('REQ-083 captures Workflow Studio empty state guide @screenshot', async ({ page }) => {
+  await installMockApi(page, { emptyWorkflows: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await expect(page.getByTestId('workflow-empty-state-guide')).toBeVisible();
+  await screenshot(page, 'REQ-083-workflow-empty-state-guide.png');
 });

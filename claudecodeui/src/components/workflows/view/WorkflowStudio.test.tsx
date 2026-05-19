@@ -72,6 +72,18 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('autoLayoutNodes');
     expect(source).toContain('workflow-mobile-run');
     expect(source).toContain('Agent Workflow Studio');
+    expect(source).toContain('data-testid="workflow-home-overview"');
+    expect(source).toContain('data-testid="workflow-empty-state-guide"');
+    expect(source).toContain('data-testid="workflow-first-run-wizard"');
+    expect(source).toContain('data-testid="workflow-command-palette"');
+    expect(source).toContain('data-testid="workflow-recent-objects"');
+    expect(source).toContain('data-testid="workflow-favorites"');
+    expect(source).toContain('data-testid="workflow-breadcrumb"');
+    expect(source).toContain('data-testid="workflow-status-taxonomy"');
+    expect(source).toContain('data-testid="workflow-help-overlay"');
+    expect(source).toContain('data-testid="workflow-keyboard-shortcuts"');
+    expect(source).toContain('toggleFavoriteWorkflow');
+    expect(source).toContain('openWorkflowDeepLink');
   });
 
   it('keeps legacy swarm language out of the workflow UI', () => {

@@ -24,11 +24,16 @@ import {
   ChevronRight,
   CircleDot,
   ClipboardCheck,
+  Command,
   Copy,
   Download,
+  ExternalLink,
   FileText,
   GitBranch,
+  HelpCircle,
   History,
+  Home,
+  Keyboard,
   LibraryBig,
   Link2,
   Play,
@@ -37,8 +42,10 @@ import {
   Save,
   Search,
   Square,
+  Star,
   Trash2,
   Upload,
+  Wand2,
   X,
   Zap,
 } from 'lucide-react';
@@ -64,7 +71,7 @@ type WorkflowStudioProps = {
   sessionId?: string | null;
 };
 
-type StudioView = 'Library' | 'Editor' | 'Runs';
+type StudioView = 'Home' | 'Library' | 'Editor' | 'Runs';
 type WorkflowInspectorTab = 'Config' | 'Data' | 'Permissions' | 'Runtime';
 type WorkflowLibraryFilter = 'All' | 'Built-in' | 'Enterprise' | 'Needs setup' | 'Recently used';
 
@@ -83,7 +90,7 @@ interface WorkflowFlowNodeData extends Record<string, unknown> {
 type WorkflowFlowNode = Node<WorkflowFlowNodeData, 'workflowNode'>;
 type WorkflowFlowEdge = Edge<{ mode?: WorkflowEdge['mode'] }>;
 
-const views: StudioView[] = ['Library', 'Editor', 'Runs'];
+const views: StudioView[] = ['Home', 'Library', 'Editor', 'Runs'];
 
 const baseNodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot; description: string }> = [
   { type: 'agent', label: 'Agent', icon: Bot, description: 'Primary agent step' },
@@ -107,6 +114,19 @@ const paletteGroups: WorkflowPaletteGroup[] = [
 
 const inspectorTabs: WorkflowInspectorTab[] = ['Config', 'Data', 'Permissions', 'Runtime'];
 const libraryFilters: WorkflowLibraryFilter[] = ['All', 'Built-in', 'Enterprise', 'Needs setup', 'Recently used'];
+const favoriteStorageKey = 'workflowStudio.favoriteWorkflowIds';
+const recentStorageKey = 'workflowStudio.recentWorkflowIds';
+
+const statusTaxonomy = [
+  { status: 'queued', label: 'Queued', description: 'Waiting for a worker lease.' },
+  { status: 'running', label: 'Running', description: 'Actively executing nodes.' },
+  { status: 'recovering', label: 'Recovering', description: 'Resuming stale or interrupted work.' },
+  { status: 'waiting_approval', label: 'Waiting', description: 'Paused for human approval.' },
+  { status: 'completed', label: 'Completed', description: 'Finished successfully.' },
+  { status: 'failed', label: 'Failed', description: 'Stopped by an error or policy.' },
+  { status: 'stale', label: 'Stale', description: 'Worker heartbeat is missing.' },
+  { status: 'cancelled', label: 'Cancelled', description: 'Stopped by user action.' },
+];
 
 const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
   agent: Bot,
@@ -121,12 +141,15 @@ const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
 };
 
 const statusTone: Record<string, string> = {
+  queued: 'border-slate-200 bg-slate-50 text-slate-700',
   pending: 'border-slate-200 bg-slate-50 text-slate-700',
   ready: 'border-blue-200 bg-blue-50 text-blue-700',
   running: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  recovering: 'border-cyan-200 bg-cyan-50 text-cyan-700',
   waiting_approval: 'border-amber-200 bg-amber-50 text-amber-700',
   completed: 'border-green-200 bg-green-50 text-green-700',
   failed: 'border-red-200 bg-red-50 text-red-700',
+  stale: 'border-orange-200 bg-orange-50 text-orange-700',
   skipped: 'border-slate-200 bg-slate-50 text-slate-500',
   cancelled: 'border-zinc-200 bg-zinc-50 text-zinc-600',
 };
@@ -169,6 +192,21 @@ function getTemplateManifest(workflow: WorkflowDefinition) {
   return manifest && typeof manifest === 'object' && !Array.isArray(manifest)
     ? manifest as { version?: string; tags?: string[]; dependencies?: Record<string, unknown>; expectedOutputs?: unknown[] }
     : {};
+}
+
+function readStoredIds(key: string) {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredIds(key: string, value: string[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(key, JSON.stringify([...new Set(value)].slice(0, 12)));
 }
 
 function createBlankWorkflow(project: Project): WorkflowDefinition {
@@ -243,7 +281,7 @@ function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
 const reactFlowNodeTypes = { workflowNode: WorkflowFlowNodeCard };
 
 export default function WorkflowStudio({ selectedProject, sessionId = null }: WorkflowStudioProps) {
-  const [activeView, setActiveView] = useState<StudioView>('Editor');
+  const [activeView, setActiveView] = useState<StudioView>('Home');
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -256,6 +294,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [libraryFilter, setLibraryFilter] = useState<WorkflowLibraryFilter>('All');
   const [inspectorTab, setInspectorTab] = useState<WorkflowInspectorTab>('Config');
   const [isRunSetupOpen, setIsRunSetupOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [favoriteWorkflowIds, setFavoriteWorkflowIds] = useState<string[]>(() => readStoredIds(favoriteStorageKey));
+  const [recentWorkflowIds, setRecentWorkflowIds] = useState<string[]>(() => readStoredIds(recentStorageKey));
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
   const [runEvents, setRunEvents] = useState<Record<string, WorkflowRunEvent[]>>({});
@@ -323,6 +367,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     return [...new Set(matches.filter((variable) => !availableVariables.includes(variable)))];
   }, [availableVariables, selectedNodeTemplateText]);
   const permissionSource = useMemo(() => describePermissionSource(draft, selectedNode), [draft, selectedNode]);
+  const failedRuns = useMemo(() => runs.filter((run) => run.status === 'failed'), [runs]);
+  const pendingApprovalRuns = useMemo(() => runs.filter((run) => run.status === 'waiting_approval' || Object.values(run.nodeRuns || {}).some((nodeRun) => nodeRun.status === 'waiting_approval')), [runs]);
+  const favoriteWorkflows = useMemo(() => favoriteWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow)), [favoriteWorkflowIds, workflows]);
+  const recentWorkflows = useMemo(() => {
+    const fromStorage = recentWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
+    const fromRuns = runs.map((run) => workflows.find((workflow) => workflow.id === run.workflowId)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
+    return [...new Map([...fromStorage, ...fromRuns].map((workflow) => [workflow.id, workflow])).values()].slice(0, 6);
+  }, [recentWorkflowIds, runs, workflows]);
 
   const loadNodeTypes = useCallback(async () => {
     const response = await api.workflowNodeTypes();
@@ -380,14 +432,101 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }
   }, [loadNodeTypes, nodeTypeDefinitions.length]);
 
+  useEffect(() => {
+    writeStoredIds(favoriteStorageKey, favoriteWorkflowIds);
+  }, [favoriteWorkflowIds]);
+
+  useEffect(() => {
+    writeStoredIds(recentStorageKey, recentWorkflowIds);
+  }, [recentWorkflowIds]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isCommandKey = event.ctrlKey || event.metaKey;
+      if (isCommandKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setIsCommandPaletteOpen((current) => !current);
+      }
+      if (event.key === '?') {
+        setIsShortcutsOpen(true);
+      }
+      if (event.key === 'Escape') {
+        setIsCommandPaletteOpen(false);
+        setIsHelpOpen(false);
+        setIsShortcutsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const selectWorkflow = useCallback((workflow: WorkflowDefinition) => {
     setSelectedWorkflowId(workflow.id);
     setDraft(workflow);
     setSelectedNodeId(workflow.nodes[0]?.id || '');
     setRunInputs(Object.fromEntries((workflow.inputs || []).map((input) => [input.id, String(input.defaultValue ?? '')])));
     setValidationMessages([]);
+    setRecentWorkflowIds((current) => [workflow.id, ...current.filter((id) => id !== workflow.id)].slice(0, 12));
     setActiveView('Editor');
   }, []);
+
+  const openWorkflowDeepLink = useCallback((workflowId: string, view: StudioView = 'Editor') => {
+    const workflow = workflows.find((item) => item.id === workflowId);
+    if (workflow) {
+      selectWorkflow(workflow);
+      setActiveView(view);
+      setIsCommandPaletteOpen(false);
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(null, '', `#workflow=${encodeURIComponent(workflow.id)}&view=${encodeURIComponent(view)}`);
+      }
+    }
+  }, [selectWorkflow, workflows]);
+
+  const toggleFavoriteWorkflow = useCallback((workflowId: string) => {
+    setFavoriteWorkflowIds((current) => (
+      current.includes(workflowId)
+        ? current.filter((id) => id !== workflowId)
+        : [workflowId, ...current].slice(0, 12)
+    ));
+  }, []);
+
+  const commandPaletteItems = useMemo(() => {
+    const workflowItems = workflows.map((workflow) => ({
+      id: `workflow:${workflow.id}`,
+      label: workflow.name,
+      meta: `Workflow / ${workflow.profileId}`,
+      action: () => openWorkflowDeepLink(workflow.id),
+    }));
+    const runItems = runs.slice(0, 8).map((run) => ({
+      id: `run:${run.id}`,
+      label: run.workflowName,
+      meta: `Run / ${run.status}`,
+      action: () => {
+        setActiveView('Runs');
+        setIsCommandPaletteOpen(false);
+      },
+    }));
+    const actionItems = [
+      { id: 'action:new', label: 'Create blank workflow', meta: 'Action', action: () => selectWorkflow(createBlankWorkflow(selectedProject)) },
+      { id: 'action:run', label: 'Run current workflow', meta: 'Action', action: () => setIsRunSetupOpen(true) },
+      { id: 'action:help', label: 'Open help overlay', meta: 'Action', action: () => setIsHelpOpen(true) },
+      { id: 'action:shortcuts', label: 'Open keyboard shortcuts', meta: 'Action', action: () => setIsShortcutsOpen(true) },
+    ];
+    const query = commandQuery.trim().toLowerCase();
+    return [...actionItems, ...workflowItems, ...runItems]
+      .filter((item) => !query || `${item.label} ${item.meta}`.toLowerCase().includes(query))
+      .slice(0, 12);
+  }, [commandQuery, openWorkflowDeepLink, runs, selectWorkflow, selectedProject, workflows]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || workflows.length === 0) return;
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const workflowId = params.get('workflow');
+    const view = params.get('view') as StudioView | null;
+    if (workflowId && workflowId !== selectedWorkflowId && views.includes(view || 'Editor')) {
+      openWorkflowDeepLink(workflowId, view || 'Editor');
+    }
+  }, [openWorkflowDeepLink, selectedWorkflowId, workflows.length]);
 
   const updateDraft = useCallback((patch: Partial<WorkflowDefinition>) => {
     setDraft((current) => ({ ...current, ...patch }));
@@ -857,12 +996,89 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="workflow-studio">
+      {isCommandPaletteOpen && (
+        <div className="fixed inset-0 z-50 bg-black/20 p-4" data-testid="workflow-command-palette" onClick={() => setIsCommandPaletteOpen(false)}>
+          <div className="mx-auto mt-24 max-w-2xl rounded-md border border-border bg-background shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              <Command className="h-4 w-4 text-primary" />
+              <input
+                autoFocus
+                value={commandQuery}
+                onChange={(event) => setCommandQuery(event.target.value)}
+                placeholder="Search workflows, runs, approvals, and actions"
+                className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              />
+            </div>
+            <div className="max-h-80 overflow-auto p-2">
+              {commandPaletteItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={item.action}
+                  className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-foreground">{item.label}</span>
+                    <span className="block text-xs text-muted-foreground">{item.meta}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </button>
+              ))}
+              {commandPaletteItems.length === 0 && <div className="p-6 text-center text-sm text-muted-foreground">No matching command.</div>}
+            </div>
+          </div>
+        </div>
+      )}
+      {(isHelpOpen || isShortcutsOpen) && (
+        <div className="fixed inset-0 z-50 bg-black/20 p-4" onClick={() => { setIsHelpOpen(false); setIsShortcutsOpen(false); }}>
+          <div
+            className="ml-auto mt-16 max-w-md rounded-md border border-border bg-background p-4 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-foreground">{isHelpOpen ? 'Workflow help' : 'Keyboard shortcuts'}</h3>
+              <button type="button" onClick={() => { setIsHelpOpen(false); setIsShortcutsOpen(false); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-muted">Close</button>
+            </div>
+            {isHelpOpen ? (
+              <div className="mt-3 space-y-2 text-sm text-muted-foreground" data-testid="workflow-help-overlay">
+                <p>Home shows active work, Library manages templates, Editor changes the DAG, and Runs diagnoses execution.</p>
+                <p>Use favorites and recent objects to keep production workflows close without changing backend runtime behavior.</p>
+              </div>
+            ) : (
+              <div className="mt-3 grid gap-2 text-sm" data-testid="workflow-keyboard-shortcuts">
+                {[
+                  ['Ctrl/⌘ K', 'Open command palette'],
+                  ['?', 'Open shortcuts'],
+                  ['Esc', 'Close overlays'],
+                  ['Save button', 'Persist current workflow'],
+                  ['Run button', 'Open run setup'],
+                ].map(([key, label]) => (
+                  <div key={key} className="flex items-center justify-between rounded border border-border px-3 py-2">
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="font-mono text-xs text-foreground">{key}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="border-b border-border bg-gradient-to-r from-background via-card to-background px-5 py-4" data-testid="workflow-command-center">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
               <GitBranch className="h-5 w-5 text-primary" />
               <h1 className="text-lg font-semibold text-foreground">Agent Workflow Studio</h1>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="workflow-breadcrumb">
+              <button type="button" onClick={() => setActiveView('Home')} className="hover:text-foreground">Workflows</button>
+              <ChevronRight className="h-3 w-3" />
+              <button type="button" onClick={() => setActiveView(activeView)} className="hover:text-foreground">{activeView}</button>
+              <ChevronRight className="h-3 w-3" />
+              <button type="button" onClick={() => openWorkflowDeepLink(draft.id, activeView)} className="inline-flex items-center gap-1 hover:text-foreground">
+                {draft.name}
+                <ExternalLink className="h-3 w-3" />
+              </button>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Compose Agent, Subagent, MCP, Tool, Shell, Artifact, Approval, Condition, and Join nodes as a visual DAG.</p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -883,6 +1099,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               </div>
             )}
             <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setIsCommandPaletteOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+              <Command className="h-4 w-4" />
+              Command
+            </button>
             <button type="button" onClick={() => void loadData().catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Failed to refresh'))} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
               <RefreshCw className="h-4 w-4" />
               Refresh
@@ -899,12 +1119,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <Play className="h-4 w-4" />
               Mobile run
             </button>
+            <button type="button" onClick={() => setIsHelpOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted" title="Workflow help">
+              <HelpCircle className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={() => setIsShortcutsOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted" title="Keyboard shortcuts">
+              <Keyboard className="h-4 w-4" />
+            </button>
             </div>
           </div>
         </div>
-        <div className="mt-4 flex gap-2">
+        <div className="mt-4 flex gap-2" data-testid="workflow-view-tabs">
           {views.map((view) => {
-            const Icon = view === 'Library' ? LibraryBig : view === 'Editor' ? GitBranch : History;
+            const Icon = view === 'Home' ? Home : view === 'Library' ? LibraryBig : view === 'Editor' ? GitBranch : History;
             return (
               <button
                 key={view}
@@ -969,6 +1195,134 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         </div>
       )}
 
+      {activeView === 'Home' && (
+        <div className="min-h-0 flex-1 overflow-auto p-5" data-testid="workflow-home-overview">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <main className="space-y-4">
+              <section className="grid gap-3 md:grid-cols-4">
+                {[
+                  ['Workflows', workflows.length],
+                  ['Recent runs', runs.length],
+                  ['Failed work', failedRuns.length],
+                  ['Approvals', pendingApprovalRuns.length],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-md border border-border bg-card p-4 shadow-sm">
+                    <div className="text-xs text-muted-foreground">{label}</div>
+                    <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
+                  </div>
+                ))}
+              </section>
+
+              {workflows.length === 0 && (
+                <section className="rounded-md border border-dashed border-primary/40 bg-primary/5 p-4" data-testid="workflow-empty-state-guide">
+                  <h2 className="text-sm font-semibold text-foreground">Start your first workflow</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Choose the fastest path for this project: template, blank workflow, or package import.</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setActiveView('Library')} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">
+                      <LibraryBig className="h-4 w-4" />
+                      Start from template
+                    </button>
+                    <button type="button" onClick={() => selectWorkflow(createBlankWorkflow(selectedProject))} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                      <Plus className="h-4 w-4" />
+                      New blank
+                    </button>
+                    <button type="button" onClick={importFromClipboard} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                      <Upload className="h-4 w-4" />
+                      Import package
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              <section className="rounded-md border border-border bg-card p-4 shadow-sm" data-testid="workflow-first-run-wizard">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold text-foreground">First run wizard</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">Pick a workflow, confirm profile and inputs, then run a minimal approval-to-artifact path.</p>
+                  </div>
+                  <button type="button" onClick={() => setIsRunSetupOpen(true)} disabled={draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
+                    <Wand2 className="h-4 w-4" />
+                    Prepare first run
+                  </button>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded border border-border bg-background p-3 text-xs">
+                    <span className="font-semibold text-foreground">1. Workflow</span>
+                    <span className="mt-1 block text-muted-foreground">{draft.name}</span>
+                  </div>
+                  <div className="rounded border border-border bg-background p-3 text-xs">
+                    <span className="font-semibold text-foreground">2. Profile</span>
+                    <span className="mt-1 block text-muted-foreground">{draft.profileId} / {draft.permissionPreset}</span>
+                  </div>
+                  <div className="rounded border border-border bg-background p-3 text-xs">
+                    <span className="font-semibold text-foreground">3. Inputs</span>
+                    <span className="mt-1 block text-muted-foreground">{draft.inputs.length} field{draft.inputs.length === 1 ? '' : 's'} required before run.</span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-md border border-border bg-card p-4 shadow-sm" data-testid="workflow-recent-objects">
+                  <h2 className="text-sm font-semibold text-foreground">Recent objects</h2>
+                  <div className="mt-3 space-y-2">
+                    {recentWorkflows.map((workflow) => (
+                      <button key={workflow.id} type="button" onClick={() => openWorkflowDeepLink(workflow.id)} className="flex w-full items-center justify-between rounded border border-border px-3 py-2 text-left text-sm hover:bg-muted">
+                        <span className="truncate">{workflow.name}</span>
+                        <span className="text-xs text-muted-foreground">{workflow.nodes.length} nodes</span>
+                      </button>
+                    ))}
+                    {recentWorkflows.length === 0 && <div className="rounded border border-dashed border-border p-4 text-sm text-muted-foreground">Recent workflows appear after you open or run one.</div>}
+                  </div>
+                </div>
+                <div className="rounded-md border border-border bg-card p-4 shadow-sm" data-testid="workflow-favorites">
+                  <h2 className="text-sm font-semibold text-foreground">Favorites</h2>
+                  <div className="mt-3 space-y-2">
+                    {favoriteWorkflows.map((workflow) => (
+                      <button key={workflow.id} type="button" onClick={() => openWorkflowDeepLink(workflow.id)} className="flex w-full items-center justify-between rounded border border-border px-3 py-2 text-left text-sm hover:bg-muted">
+                        <span className="truncate">{workflow.name}</span>
+                        <Star className="h-4 w-4 fill-amber-400 text-amber-500" />
+                      </button>
+                    ))}
+                    {favoriteWorkflows.length === 0 && <div className="rounded border border-dashed border-border p-4 text-sm text-muted-foreground">Star workflows in Library to keep them here.</div>}
+                  </div>
+                </div>
+              </section>
+            </main>
+
+            <aside className="space-y-4">
+              <section className="rounded-md border border-border bg-card p-4 shadow-sm" data-testid="workflow-status-taxonomy">
+                <h2 className="text-sm font-semibold text-foreground">Status taxonomy</h2>
+                <div className="mt-3 space-y-2">
+                  {statusTaxonomy.map((item) => (
+                    <div key={item.status} className="rounded border border-border bg-background p-2 text-xs">
+                      <span className={cn('inline-flex rounded-full border px-2 py-0.5', statusTone[item.status] || statusTone.pending)}>{item.label}</span>
+                      <p className="mt-1 text-muted-foreground">{item.description}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section className="rounded-md border border-border bg-card p-4 shadow-sm">
+                <h2 className="text-sm font-semibold text-foreground">Next actions</h2>
+                <div className="mt-3 grid gap-2">
+                  <button type="button" onClick={() => setIsCommandPaletteOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                    <Command className="h-4 w-4" />
+                    Search commands
+                  </button>
+                  <button type="button" onClick={() => setActiveView('Runs')} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                    <History className="h-4 w-4" />
+                    Review failed work
+                  </button>
+                  <button type="button" onClick={() => setIsHelpOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                    <HelpCircle className="h-4 w-4" />
+                    Open help
+                  </button>
+                </div>
+              </section>
+            </aside>
+          </div>
+        </div>
+      )}
+
       {activeView === 'Library' && (
         <div className="min-h-0 flex-1 overflow-auto p-5" data-testid="workflow-library">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1020,7 +1374,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   workflow.id === selectedWorkflowId ? 'border-primary' : 'border-border',
                 )}
               >
-                <h3 className="truncate text-sm font-semibold text-foreground">{workflow.name}</h3>
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="truncate text-sm font-semibold text-foreground">{workflow.name}</h3>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFavoriteWorkflow(workflow.id);
+                    }}
+                    className="rounded border border-border p-1 hover:bg-muted"
+                    title={favoriteWorkflowIds.includes(workflow.id) ? 'Remove favorite' : 'Add favorite'}
+                  >
+                    <Star className={cn('h-3.5 w-3.5', favoriteWorkflowIds.includes(workflow.id) ? 'fill-amber-400 text-amber-500' : 'text-muted-foreground')} />
+                  </button>
+                </div>
                 <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{workflow.description || 'No description.'}</p>
                 <div className="mt-3 rounded border border-border bg-muted/20 p-2 text-[11px] text-muted-foreground" data-testid="workflow-template-manifest">
                   <span className="font-semibold text-foreground">Template</span>
