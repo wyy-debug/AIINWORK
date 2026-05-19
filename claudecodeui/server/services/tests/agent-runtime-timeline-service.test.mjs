@@ -6,7 +6,7 @@ import {
 } from '../agent-runtime-timeline-service.js';
 
 describe('agent-runtime-timeline-service', () => {
-  it('aggregates tool, permission, token, subagent, and checkpoint events', () => {
+  it('aggregates tool, permission, token, subagent, checkpoint, and workflow events', () => {
     const timeline = aggregateAgentRuntimeTimeline({
       sessionId: 's-1',
       provider: 'claude',
@@ -21,19 +21,35 @@ describe('agent-runtime-timeline-service', () => {
       checkpoints: [
         { id: 'c1', sessionId: 's-1', phase: 'after', rollbackAvailable: true, hasChanges: true, createdAt: '2026-05-18T01:00:06.000Z' },
       ],
+      workflowEvents: [
+        {
+          id: 'wf1',
+          type: 'workflow_node_waiting_approval',
+          title: 'Workflow node waiting approval',
+          status: 'blocked',
+          severity: 'warning',
+          workflowId: 'delivery-review',
+          workflowName: 'Delivery Review',
+          runId: 'run-1',
+          nodeId: 'approval',
+          timestamp: '2026-05-18T01:00:07.000Z',
+        },
+      ],
     });
 
     expect(timeline.summary).toMatchObject({
-      total: 7,
+      total: 8,
       tools: 2,
       failures: 1,
-      permissionBlocks: 1,
+      permissionBlocks: 2,
       checkpoints: 1,
       subagents: 1,
+      workflows: 1,
     });
     expect(timeline.events.map((event) => event.type)).toContain('tool_failed');
     expect(timeline.events.map((event) => event.type)).toContain('permission_blocked');
     expect(timeline.events.map((event) => event.type)).toContain('checkpoint');
+    expect(timeline.events.map((event) => event.category)).toContain('workflow');
   });
 
   it('redacts sensitive fields in event details', () => {

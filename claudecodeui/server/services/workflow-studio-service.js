@@ -17,6 +17,12 @@ const DEFAULT_WORKFLOWS_PATH = path.join(DATA_DIR, 'workflows.json');
 const DEFAULT_RUNS_PATH = path.join(DATA_DIR, 'workflow-runs.json');
 const execAsync = promisify(execCallback);
 const defaultWorkflowCheckpointStore = createCheckpointStore(db);
+const ENTERPRISE_WORKFLOW_RECIPE_IDS = new Set([
+  'crashsight-analysis',
+  'redmine-review',
+  'code-impact-analysis',
+  'pr-description',
+]);
 
 export const WORKFLOW_NODE_TYPES = Object.freeze([
   'agent',
@@ -190,6 +196,32 @@ export function recipeToWorkflow(recipe) {
     edges: [],
     metadata: { source: 'recipe', recipeId: recipe.id },
   });
+}
+
+export function validateWorkflowPackage(value = {}) {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Workflow package must be an object');
+  }
+  const workflows = Array.isArray(value.workflows)
+    ? value.workflows.map((workflow) => normalizeWorkflowDefinition(workflow))
+    : [];
+  if (workflows.length === 0) {
+    throw new Error('Workflow package requires at least one workflow');
+  }
+  for (const workflow of workflows) {
+    const result = validateWorkflowDefinition(workflow);
+    if (!result.validation.valid) {
+      const error = new Error(`Invalid workflow ${workflow.id}: ${result.validation.errors.map((entry) => entry.message).join('; ')}`);
+      error.validation = result.validation;
+      throw error;
+    }
+  }
+  return {
+    schemaVersion: 1,
+    kind: 'workflow-package',
+    exportedAt: value.exportedAt || nowIso(Date.now),
+    workflows,
+  };
 }
 
 export function createStarterWorkflow() {
@@ -639,7 +671,7 @@ export function createWorkflowStudioStore({
     if (workflows.length === 0) {
       workflows = [
         createStarterWorkflow(),
-        ...listBuiltInRecipes().slice(0, 3).map(recipeToWorkflow),
+        ...listBuiltInRecipes().filter((recipe) => ENTERPRISE_WORKFLOW_RECIPE_IDS.has(recipe.id)).map(recipeToWorkflow),
       ];
     }
   }
@@ -997,12 +1029,16 @@ export function createWorkflowStudioStore({
     return executeReadyNodes(workflow, run);
   }
 
-  function listRuns({ workflowId = '', status = '', limit = 50 } = {}) {
+  function listRuns({ workflowId = '', status = '', sessionId = '', projectPath = '', limit = 50 } = {}) {
     const normalizedWorkflowId = normalizeText(workflowId).toLowerCase();
     const normalizedStatus = normalizeText(status).toLowerCase();
+    const normalizedSessionId = normalizeText(sessionId);
+    const normalizedProjectPath = normalizeText(projectPath);
     return runs
       .filter((run) => !normalizedWorkflowId || run.workflowId.toLowerCase() === normalizedWorkflowId)
       .filter((run) => !normalizedStatus || run.status.toLowerCase() === normalizedStatus)
+      .filter((run) => !normalizedSessionId || run.sessionId === normalizedSessionId)
+      .filter((run) => !normalizedProjectPath || run.projectPath === normalizedProjectPath)
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, Math.max(1, Math.min(Number(limit) || 50, 200)))
       .map(clone);
@@ -1153,6 +1189,20 @@ export function createWorkflowStudioStore({
     };
   }
 
+  async function importWorkflowPackage(value = {}) {
+    await load();
+    const pkg = validateWorkflowPackage(value);
+    const imported = [];
+    for (const workflow of pkg.workflows) {
+      const saved = await upsertWorkflow(workflow);
+      imported.push(saved.id);
+    }
+    return {
+      imported,
+      workflows: imported.map((id) => getWorkflow(id)).filter(Boolean),
+    };
+  }
+
   return {
     async ready() {
       await load();
@@ -1173,6 +1223,7 @@ export function createWorkflowStudioStore({
     exportWorkflow,
     importWorkflow,
     exportWorkflowPackage,
+    importWorkflowPackage,
     listTimelineEvents,
   };
 }

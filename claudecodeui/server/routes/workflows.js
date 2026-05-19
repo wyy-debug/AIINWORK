@@ -51,6 +51,15 @@ router.post('/package/export', async (req, res) => {
   }
 });
 
+router.post('/package/import', async (req, res) => {
+  try {
+    const result = await defaultWorkflowStudioStore.importWorkflowPackage(req.body?.package || req.body || {});
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    sendWorkflowError(res, error, 400, 'Failed to import workflow package');
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();

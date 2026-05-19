@@ -276,14 +276,47 @@ function createCheckpointEvent(checkpoint, index, context) {
   };
 }
 
+function createWorkflowEvent(event, index, context) {
+  const type = normalizeString(event.type, 'workflow_event');
+  const status = normalizeString(event.status, type.includes('failed') ? 'error' : 'info');
+  const severity = normalizeString(event.severity, status === 'error' ? 'error' : status === 'blocked' ? 'warning' : 'info');
+  return {
+    id: `workflow:${event.runId || event.workflowId || index}:${event.nodeId || type}:${event.id || index}`,
+    sessionId: event.sessionId || context.sessionId,
+    provider: context.provider,
+    timestamp: normalizeTimestamp(event.timestamp || event.createdAt, new Date(index)),
+    type,
+    category: 'workflow',
+    status,
+    severity,
+    title: normalizeString(event.title, type.replace(/_/g, ' ')),
+    summary: truncateText(event.summary || event.workflowName || event.nodeTitle || event.nodeId || ''),
+    details: redactSensitive({
+      workflowId: event.workflowId,
+      workflowName: event.workflowName,
+      runId: event.runId,
+      nodeId: event.nodeId,
+      nodeTitle: event.nodeTitle,
+      error: event.error,
+      payload: event.payload || event.details,
+    }),
+    refs: {
+      workflowId: event.workflowId,
+      workflowRunId: event.runId,
+      workflowNodeId: event.nodeId,
+    },
+  };
+}
+
 function buildSummary(events) {
   return {
     total: events.length,
     tools: events.filter((event) => event.category === 'tool').length,
     failures: events.filter((event) => event.status === 'error').length,
-    permissionBlocks: events.filter((event) => event.category === 'permission').length,
+    permissionBlocks: events.filter((event) => event.category === 'permission' || event.status === 'blocked').length,
     checkpoints: events.filter((event) => event.category === 'checkpoint').length,
     subagents: events.filter((event) => event.category === 'subagent').length,
+    workflows: events.filter((event) => event.category === 'workflow').length,
   };
 }
 
@@ -292,6 +325,7 @@ export function aggregateAgentRuntimeTimeline({
   provider = 'claude',
   messages = [],
   checkpoints = [],
+  workflowEvents = [],
 } = {}) {
   const context = {
     sessionId: normalizeString(sessionId),
@@ -301,7 +335,8 @@ export function aggregateAgentRuntimeTimeline({
     .map((message, index) => createMessageEvent(asObject(message), index, context))
     .filter(Boolean);
   const checkpointEvents = checkpoints.map((checkpoint, index) => createCheckpointEvent(asObject(checkpoint), index, context));
-  const events = [...messageEvents, ...checkpointEvents]
+  const normalizedWorkflowEvents = workflowEvents.map((event, index) => createWorkflowEvent(asObject(event), index, context));
+  const events = [...messageEvents, ...checkpointEvents, ...normalizedWorkflowEvents]
     .sort((left, right) => {
       const diff = new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime();
       return diff || String(left.id).localeCompare(String(right.id));

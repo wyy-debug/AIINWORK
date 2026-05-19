@@ -2,7 +2,9 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const CAPABILITY_KINDS = new Set(['skill', 'mcp-server', 'recipe', 'agent-template']);
+import { listBuiltInRecipes } from '../../shared/recipes.js';
+
+const CAPABILITY_KINDS = new Set(['skill', 'mcp-server', 'recipe', 'workflow', 'agent-template']);
 
 function normalizeString(value, fallback = '', maxLength = 240) {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -22,6 +24,7 @@ function normalizeKind(value) {
   const kind = normalizeString(value, 'skill', 40).toLowerCase();
   if (kind === 'mcp' || kind === 'mcp_server' || kind === 'mcp-server-template') return 'mcp-server';
   if (kind === 'agent' || kind === 'template') return 'agent-template';
+  if (kind === 'workflow-package') return 'workflow';
   return CAPABILITY_KINDS.has(kind) ? kind : 'skill';
 }
 
@@ -45,6 +48,7 @@ function normalizeDependencies(value = {}) {
     skills: normalizeStringArray(value.skills || value.requiredSkills),
     mcpServers: normalizeStringArray(value.mcpServers || value.requiredMcpServers || value.mcp),
     recipes: normalizeStringArray(value.recipes || value.requiredRecipes),
+    workflows: normalizeStringArray(value.workflows || value.requiredWorkflows),
   };
 }
 
@@ -88,7 +92,7 @@ function hasRequiredConfiguration(setupFields = [], configuration = {}) {
 export function normalizeCapabilityMarketplaceItem(value = {}, options = {}) {
   const kind = normalizeKind(value.kind || value.type);
   const rawId = value.id || value.itemId || value.name || value.title;
-  const slug = sanitizeSlug(String(rawId || '').replace(/^(skill|mcp-server|recipe|agent-template)-/, ''), kind);
+  const slug = sanitizeSlug(String(rawId || '').replace(/^(skill|mcp-server|recipe|workflow|agent-template)-/, ''), kind);
   const id = `${kind}-${slug}`;
   const setupFields = normalizeSetupFields(value.setupFields || value.mcp?.setupFields || value.configurationFields);
   const installed = options.installed === true || value.installState === 'installed' || value.installed === true;
@@ -120,7 +124,7 @@ export function normalizeCapabilityMarketplaceItem(value = {}, options = {}) {
 }
 
 export function getBuiltInEnterpriseCapabilities() {
-  return [
+  const enterpriseMcp = [
     {
       kind: 'mcp-server',
       id: 'redmine',
@@ -166,7 +170,30 @@ export function getBuiltInEnterpriseCapabilities() {
         { key: 'CODE_SEARCH_URL', label: 'Search endpoint', required: true },
       ],
     },
-  ].map((item) => normalizeCapabilityMarketplaceItem(item));
+  ];
+  const recipeById = new Map(listBuiltInRecipes().map((recipe) => [recipe.id, recipe]));
+  const enterpriseWorkflows = [
+    ['crashsight-analysis', 'crashsight-analysis', ['workflow', 'crash', 'enterprise']],
+    ['redmine-review', 'redmine-review', ['workflow', 'ticket', 'enterprise']],
+    ['code-impact-analysis', 'code-impact-analysis', ['workflow', 'impact', 'enterprise']],
+    ['publish-pr', 'pr-description', ['workflow', 'git', 'delivery']],
+  ].map(([id, recipeId, tags]) => {
+    const recipe = recipeById.get(recipeId);
+    return {
+      kind: 'workflow',
+      id,
+      name: id === 'publish-pr' ? 'Publish PR' : recipe?.title || id,
+      description: recipe?.description || 'Install a built-in workflow template.',
+      source: 'MTL workflow templates',
+      tags,
+      dependencies: {
+        skills: (recipe?.dependencies?.skills || []).map((item) => item.name || item).filter(Boolean),
+        mcpServers: (recipe?.dependencies?.mcpServers || []).map((item) => item.name || item).filter(Boolean),
+        recipes: [recipeId],
+      },
+    };
+  });
+  return [...enterpriseMcp, ...enterpriseWorkflows].map((item) => normalizeCapabilityMarketplaceItem(item));
 }
 
 async function readJson(filePath, fallback) {
@@ -218,6 +245,7 @@ function mergeItems(items) {
         skills: normalizeStringArray([...(existing.dependencies?.skills || []), ...(item.dependencies?.skills || [])]),
         mcpServers: normalizeStringArray([...(existing.dependencies?.mcpServers || []), ...(item.dependencies?.mcpServers || [])]),
         recipes: normalizeStringArray([...(existing.dependencies?.recipes || []), ...(item.dependencies?.recipes || [])]),
+        workflows: normalizeStringArray([...(existing.dependencies?.workflows || []), ...(item.dependencies?.workflows || [])]),
       },
       installState: existing.installState === 'installed' || item.installState === 'installed' ? 'installed' : 'available',
       enabled: Boolean(existing.enabled || item.enabled),

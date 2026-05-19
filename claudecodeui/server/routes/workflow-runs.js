@@ -20,6 +20,8 @@ router.get('/', async (req, res) => {
       runs: defaultWorkflowStudioStore.listRuns({
         workflowId: req.query.workflowId || '',
         status: req.query.status || '',
+        sessionId: req.query.sessionId || '',
+        projectPath: req.query.projectPath || '',
         limit: req.query.limit || 50,
       }),
     });

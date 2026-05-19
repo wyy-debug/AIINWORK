@@ -56,6 +56,10 @@ describe('capability marketplace service', () => {
     expect(ids).toContain('mcp-server-wechat');
     expect(ids).toContain('mcp-server-crashsight');
     expect(ids).toContain('mcp-server-internal-code-search');
+    expect(ids).toContain('workflow-crashsight-analysis');
+    expect(ids).toContain('workflow-redmine-review');
+    expect(ids).toContain('workflow-code-impact-analysis');
+    expect(ids).toContain('workflow-publish-pr');
   });
 
   it('combines built-in, repository, installed skill, and installed MCP entries', async () => {

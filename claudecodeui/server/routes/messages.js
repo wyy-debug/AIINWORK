@@ -14,6 +14,7 @@ import { sessionsService } from '../modules/providers/services/sessions.service.
 import { db } from '../database/db.js';
 import { createCheckpointStore } from '../services/checkpoint-service.js';
 import { aggregateAgentRuntimeTimeline } from '../services/agent-runtime-timeline-service.js';
+import { defaultWorkflowStudioStore } from '../services/workflow-studio-service.js';
 
 const router = express.Router();
 const checkpointStore = createCheckpointStore(db);
@@ -93,11 +94,18 @@ router.get('/:sessionId/timeline', async (req, res) => {
       projectPath,
       limit: 200,
     });
+    await defaultWorkflowStudioStore.ready();
+    const workflowEvents = defaultWorkflowStudioStore.listTimelineEvents({
+      sessionId,
+      projectPath,
+      limit: 200,
+    });
     const timeline = aggregateAgentRuntimeTimeline({
       sessionId,
       provider,
       messages: Array.isArray(history?.messages) ? history.messages : [],
       checkpoints,
+      workflowEvents,
     });
 
     return res.json({ success: true, timeline });

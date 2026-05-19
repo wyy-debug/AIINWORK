@@ -446,7 +446,7 @@ describe('workflow studio service', () => {
     expect(timeline.some((event) => event.category === 'workflow' && event.type === 'workflow_node_completed')).toBe(true);
   });
 
-  test('exports shareable workflow packages with manifest metadata', async () => {
+  test('exports and imports shareable workflow packages with manifest metadata', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.upsertWorkflow({
       id: 'package-flow',
@@ -462,5 +462,23 @@ describe('workflow studio service', () => {
     expect(pkg.schemaVersion).toBe(1);
     expect(pkg.kind).toBe('workflow-package');
     expect(pkg.workflows[0].metadata.dependencies.skills).toEqual(['playwright']);
+
+    const imported = await store.importWorkflowPackage(pkg);
+    expect(imported.imported).toContain('package-flow');
+    expect(store.getWorkflow('package-flow')?.metadata?.dependencies?.skills).toEqual(['playwright']);
+  });
+
+  test('seeds enterprise recipe workflows as built-in templates', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.ready();
+
+    const ids = store.listWorkflows().map((workflow) => workflow.id);
+
+    expect(ids).toEqual(expect.arrayContaining([
+      'recipe-crashsight-analysis',
+      'recipe-redmine-review',
+      'recipe-code-impact-analysis',
+      'recipe-pr-description',
+    ]));
   });
 });

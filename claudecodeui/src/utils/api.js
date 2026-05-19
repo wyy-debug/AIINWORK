@@ -328,6 +328,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ workflowIds }),
       }),
+    importWorkflowPackage: (workflowPackage) =>
+      apiFetch('/api/workflows/package/import', {
+        method: 'POST',
+        body: JSON.stringify({ package: workflowPackage }),
+      }),
     importWorkflow: (content) =>
       apiFetch('/api/workflows/import', {
         method: 'POST',

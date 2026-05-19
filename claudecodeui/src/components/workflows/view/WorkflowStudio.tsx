@@ -7,20 +7,27 @@ import {
   ChevronRight,
   CircleDot,
   ClipboardCheck,
+  Copy,
   Download,
   FileText,
   GitBranch,
   History,
   LibraryBig,
   Link2,
+  Map,
+  Maximize2,
   Play,
   Plus,
   RefreshCw,
   Save,
+  Search,
   Square,
+  Trash2,
   Upload,
   X,
   Zap,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 
 import { api } from '../../../utils/api';
@@ -135,6 +142,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [selectedNodeId, setSelectedNodeId] = useState('');
   const [connectFrom, setConnectFrom] = useState('');
   const [draggingNodeId, setDraggingNodeId] = useState('');
+  const [selectedEdgeId, setSelectedEdgeId] = useState('');
+  const [nodeSearch, setNodeSearch] = useState('');
+  const [canvasZoom, setCanvasZoom] = useState(1);
+  const [showMinimap, setShowMinimap] = useState(true);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
@@ -142,7 +153,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const selectedRun = runs[0] || null;
   const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === selectedNodeId) || null, [draft.nodes, selectedNodeId]);
+  const selectedEdge = useMemo(() => draft.edges.find((edge) => edge.id === selectedEdgeId) || null, [draft.edges, selectedEdgeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
+  const filteredNodeTypes = useMemo(() => {
+    const query = nodeSearch.trim().toLowerCase();
+    if (!query) return nodeTypes;
+    return nodeTypes.filter((item) => [item.type, item.label, item.description].join(' ').toLowerCase().includes(query));
+  }, [nodeSearch]);
   const availableVariables = useMemo(() => {
     const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
     if (!selectedNode) return inputVariables;
@@ -218,6 +235,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }));
   }, []);
 
+  const updateEdge = useCallback((edgeId: string, patch: Partial<WorkflowEdge>) => {
+    setDraft((current) => ({
+      ...current,
+      edges: current.edges.map((edge) => (edge.id === edgeId ? { ...edge, ...patch } : edge)),
+    }));
+  }, []);
+
   const addNode = useCallback((type: WorkflowNodeType) => {
     setDraft((current) => {
       const count = current.nodes.filter((node) => node.type === type).length;
@@ -250,6 +274,34 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       edges: current.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId),
     }));
     setSelectedNodeId('');
+  }, []);
+
+  const duplicateNode = useCallback((nodeId: string) => {
+    setDraft((current) => {
+      const source = current.nodes.find((node) => node.id === nodeId);
+      if (!source) return current;
+      const copy: WorkflowNode = {
+        ...source,
+        id: makeId(`${source.type}-copy`, current.nodes.length),
+        title: `${source.title} Copy`,
+        position: { x: source.position.x + 36, y: source.position.y + 36 },
+      };
+      setSelectedNodeId(copy.id);
+      return { ...current, nodes: [...current.nodes, copy] };
+    });
+  }, []);
+
+  const autoLayoutNodes = useCallback(() => {
+    setDraft((current) => ({
+      ...current,
+      nodes: current.nodes.map((node, index) => ({
+        ...node,
+        position: {
+          x: 80 + (index % 4) * 230,
+          y: 110 + Math.floor(index / 4) * 150,
+        },
+      })),
+    }));
   }, []);
 
   const insertVariable = useCallback((variable: string) => {
@@ -289,6 +341,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const removeEdge = useCallback((edgeId: string) => {
     setDraft((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) }));
+    setSelectedEdgeId((current) => current === edgeId ? '' : current);
   }, []);
 
   const saveWorkflow = useCallback(async () => {
@@ -422,15 +475,44 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const rect = event.currentTarget.getBoundingClientRect();
     updateNode(draggingNodeId, {
       position: {
-        x: Math.max(20, event.clientX - rect.left - 90),
-        y: Math.max(20, event.clientY - rect.top - 35),
+        x: Math.max(20, (event.clientX - rect.left) / canvasZoom - 90),
+        y: Math.max(20, (event.clientY - rect.top) / canvasZoom - 35),
       },
     });
-  }, [draggingNodeId, updateNode]);
+  }, [canvasZoom, draggingNodeId, updateNode]);
+
+  const fitCanvas = useCallback(() => {
+    const maxX = Math.max(980, ...draft.nodes.map((node) => node.position.x + 220));
+    const maxY = Math.max(520, ...draft.nodes.map((node) => node.position.y + 120));
+    const nextZoom = Math.max(0.65, Math.min(1, 980 / maxX, 520 / maxY));
+    setCanvasZoom(Number(nextZoom.toFixed(2)));
+  }, [draft.nodes]);
 
   const renderCanvas = (run: WorkflowRun | null = null) => {
     const nodeRuns = run?.nodeRuns || {};
     return (
+      <div className="relative">
+        <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="workflow-canvas-controls">
+          <button type="button" onClick={() => setCanvasZoom((value) => Math.max(0.5, Number((value - 0.1).toFixed(2))))} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-muted" title="Zoom out">
+            <ZoomOut className="h-4 w-4" />
+          </button>
+          <span className="min-w-14 text-center text-xs text-muted-foreground">{Math.round(canvasZoom * 100)}%</span>
+          <button type="button" onClick={() => setCanvasZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-muted" title="Zoom in">
+            <ZoomIn className="h-4 w-4" />
+          </button>
+          <button type="button" onClick={fitCanvas} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Fit view">
+            <Maximize2 className="h-3.5 w-3.5" />
+            Fit
+          </button>
+          <button type="button" onClick={autoLayoutNodes} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Auto layout">
+            <GitBranch className="h-3.5 w-3.5" />
+            Layout
+          </button>
+          <button type="button" onClick={() => setShowMinimap((value) => !value)} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Toggle minimap">
+            <Map className="h-3.5 w-3.5" />
+            Map
+          </button>
+        </div>
       <div
         className="relative h-[520px] min-w-[980px] overflow-hidden rounded-md border border-border bg-[linear-gradient(#eef2f7_1px,transparent_1px),linear-gradient(90deg,#eef2f7_1px,transparent_1px)] bg-[size:24px_24px]"
         data-testid="workflow-dag-canvas"
@@ -438,6 +520,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         onMouseUp={() => setDraggingNodeId('')}
         onMouseLeave={() => setDraggingNodeId('')}
       >
+        <div
+          className="absolute inset-0 origin-top-left"
+          style={{ transform: `scale(${canvasZoom})`, width: `${100 / canvasZoom}%`, height: `${100 / canvasZoom}%` }}
+        >
         <svg className="pointer-events-none absolute inset-0 h-full w-full">
           {draft.edges.map((edge) => {
             const from = draft.nodes.find((node) => node.id === edge.from);
@@ -451,7 +537,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 key={edge.id}
                 d={`M ${start.x} ${start.y} C ${midX} ${start.y}, ${midX} ${end.y}, ${end.x} ${end.y}`}
                 fill="none"
-                stroke="#94a3b8"
+                stroke={selectedEdgeId === edge.id ? '#2563eb' : '#94a3b8'}
                 strokeWidth="2"
                 markerEnd="url(#workflow-arrow)"
               />
@@ -463,6 +549,32 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </marker>
           </defs>
         </svg>
+        {draft.edges.map((edge) => {
+          const from = draft.nodes.find((node) => node.id === edge.from);
+          const to = draft.nodes.find((node) => node.id === edge.to);
+          if (!from || !to) return null;
+          const start = nodeCenter(from);
+          const end = nodeCenter(to);
+          return (
+            <button
+              key={`edge-${edge.id}`}
+              type="button"
+              data-testid="workflow-edge-editor"
+              onClick={() => {
+                setSelectedEdgeId(edge.id);
+                setSelectedNodeId('');
+              }}
+              className={cn(
+                'absolute rounded-full border bg-background px-2 py-0.5 text-[10px] shadow-sm hover:bg-muted',
+                selectedEdgeId === edge.id ? 'border-primary text-primary' : 'border-border text-muted-foreground',
+              )}
+              style={{ left: (start.x + end.x) / 2 - 28, top: (start.y + end.y) / 2 - 12 }}
+              title={`${edge.from} -> ${edge.to}`}
+            >
+              {edge.mode || 'success'}
+            </button>
+          );
+        })}
 
         {draft.nodes.map((node) => {
           const Icon = nodeTypes.find((item) => item.type === node.type)?.icon || Bot;
@@ -514,6 +626,25 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </div>
           );
         })}
+        </div>
+        {showMinimap && (
+          <div className="absolute bottom-3 right-3 h-28 w-44 rounded-md border border-border bg-background/90 p-2 shadow-sm" data-testid="workflow-minimap">
+            <div className="mb-1 flex items-center justify-between text-[10px] font-medium text-muted-foreground">
+              <span>Minimap</span>
+              <span>{draft.nodes.length} nodes</span>
+            </div>
+            <div className="relative h-20 overflow-hidden rounded bg-muted/40">
+              {draft.nodes.map((node) => (
+                <span
+                  key={`mini-${node.id}`}
+                  className={cn('absolute h-2 w-3 rounded-sm', selectedNodeId === node.id ? 'bg-primary' : 'bg-muted-foreground/60')}
+                  style={{ left: `${Math.min(92, Math.max(0, node.position.x / 10))}%`, top: `${Math.min(88, Math.max(0, node.position.y / 6))}%` }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
       </div>
     );
   };
@@ -537,6 +668,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             <button type="button" data-testid="workflow-run" onClick={startRun} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
               <Play className="h-4 w-4" />
               Run
+            </button>
+            <button type="button" data-testid="workflow-mobile-run" onClick={startRun} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted disabled:opacity-50 sm:hidden">
+              <Play className="h-4 w-4" />
+              Mobile run
             </button>
           </div>
         </div>
@@ -639,11 +774,21 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       )}
 
       {activeView === 'Editor' && (
-        <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1fr)_300px] overflow-hidden" data-testid="workflow-editor">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[260px_minmax(0,1fr)_300px] lg:overflow-hidden" data-testid="workflow-editor">
           <aside className="min-h-0 overflow-auto border-r border-border p-4">
             <h3 className="text-sm font-semibold text-foreground">Node palette</h3>
+            <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground">
+              <Search className="h-4 w-4" />
+              <input
+                data-testid="workflow-node-search"
+                value={nodeSearch}
+                onChange={(event) => setNodeSearch(event.target.value)}
+                placeholder="Search nodes"
+                className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+              />
+            </label>
             <div className="mt-3 grid gap-2">
-              {nodeTypes.map((item) => (
+              {filteredNodeTypes.map((item) => (
                 <button
                   key={item.type}
                   type="button"
@@ -742,10 +887,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <span className="mt-2 block text-amber-700">Risky node: shell, MCP, tool, git/write-style actions may ask or deny before execution.</span>
                   )}
                 </div>
-                <button type="button" onClick={() => deleteNode(selectedNode.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50">
-                  <X className="h-4 w-4" />
-                  Delete node
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => duplicateNode(selectedNode.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                    <Copy className="h-4 w-4" />
+                    Duplicate
+                  </button>
+                  <button type="button" onClick={() => deleteNode(selectedNode.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50">
+                    <X className="h-4 w-4" />
+                    Delete node
+                  </button>
+                </div>
                 <div>
                   <h4 className="mb-2 text-xs font-semibold text-muted-foreground">Edges</h4>
                   {draft.edges.filter((edge) => edge.from === selectedNode.id || edge.to === selectedNode.id).map((edge) => (
@@ -776,6 +927,29 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   )}
                 </div>
               </div>
+            ) : selectedEdge ? (
+              <div className="mt-3 space-y-3" data-testid="workflow-edge-editor">
+                <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  <span className="block font-semibold text-foreground">Edge</span>
+                  <span className="mt-1 block">{selectedEdge.from} {'->'} {selectedEdge.to}</span>
+                </div>
+                <label className="block text-xs font-medium text-muted-foreground">
+                  Branch mode
+                  <select value={selectedEdge.mode || 'success'} onChange={(event) => updateEdge(selectedEdge.id, { mode: event.target.value as WorkflowEdge['mode'] })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground">
+                    <option value="success">success</option>
+                    <option value="failure">failure</option>
+                    <option value="always">always</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-medium text-muted-foreground">
+                  Condition label
+                  <input value={selectedEdge.condition || ''} onChange={(event) => updateEdge(selectedEdge.id, { condition: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
+                </label>
+                <button type="button" onClick={() => removeEdge(selectedEdge.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50">
+                  <Trash2 className="h-4 w-4" />
+                  Delete edge
+                </button>
+              </div>
             ) : (
               <p className="mt-3 text-sm text-muted-foreground">Select a node to edit its runtime contract.</p>
             )}
@@ -784,7 +958,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       )}
 
       {activeView === 'Runs' && (
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] overflow-hidden" data-testid="workflow-runs">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[minmax(0,1fr)_360px] lg:overflow-hidden" data-testid="workflow-runs">
           <main className="min-h-0 overflow-auto p-4">
             {selectedRun ? renderCanvas(selectedRun) : (
               <div className="rounded-md border border-dashed border-border p-10 text-center text-sm text-muted-foreground">No workflow run yet.</div>

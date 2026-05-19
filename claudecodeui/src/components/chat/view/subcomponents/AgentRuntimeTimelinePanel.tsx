@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   FileCode2,
+  GitBranch,
   Loader2,
   RefreshCcw,
   ShieldAlert,
@@ -39,6 +40,7 @@ type RuntimeTimeline = {
     permissionBlocks?: number;
     checkpoints?: number;
     subagents?: number;
+    workflows?: number;
   };
   events?: RuntimeTimelineEvent[];
 };
@@ -63,6 +65,7 @@ function eventIcon(category: RuntimeTimelineEvent['category']) {
   if (category === 'permission') return ShieldAlert;
   if (category === 'checkpoint') return FileCode2;
   if (category === 'subagent') return Bot;
+  if (category === 'workflow') return GitBranch;
   if (category === 'model') return Sparkles;
   return Clock3;
 }
@@ -177,7 +180,7 @@ export default function AgentRuntimeTimelinePanel({
             <div className="grid grid-cols-3 gap-1.5">
               <SummaryPill label="Events" value={summary.total || events.length} />
               <SummaryPill label="Blocks" value={summary.permissionBlocks || 0} tone={(summary.permissionBlocks || 0) > 0 ? 'warning' : undefined} />
-              <SummaryPill label="Fails" value={summary.failures || 0} tone={(summary.failures || 0) > 0 ? 'danger' : undefined} />
+              <SummaryPill label={(summary.workflows || 0) > 0 ? 'Workflows' : 'Fails'} value={(summary.workflows || 0) > 0 ? summary.workflows || 0 : summary.failures || 0} tone={(summary.workflows || 0) > 0 ? undefined : (summary.failures || 0) > 0 ? 'danger' : undefined} />
             </div>
 
             <div className="space-y-2">

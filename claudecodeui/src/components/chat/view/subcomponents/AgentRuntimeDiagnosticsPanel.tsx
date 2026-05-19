@@ -5,6 +5,7 @@ import {
   BracesIcon,
   ClipboardIcon,
   GaugeIcon,
+  GitBranchIcon,
   SparklesIcon,
   WrenchIcon,
   XIcon,
@@ -392,6 +393,40 @@ function BrainWorkbenchSection({ inspector }: { inspector?: BrainInspector | nul
   );
 }
 
+function WorkflowRuntimeSection({ workflowEvents }: { workflowEvents: RuntimeTimelineEvent[] }) {
+  const latest = workflowEvents[workflowEvents.length - 1];
+  const blocked = workflowEvents.filter((event) => event.severity === 'warning' || event.payload?.status === 'blocked').length;
+  const failed = workflowEvents.filter((event) => event.severity === 'error' || event.payload?.status === 'failed').length;
+  const activeRunIds = Array.from(new Set(workflowEvents
+    .map((event) => typeof event.payload?.runId === 'string' ? event.payload.runId : '')
+    .filter(Boolean)));
+
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+        <GitBranchIcon className="h-4 w-4 text-primary" />
+        Workflow Runtime
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Workflow events" value={formatNumber(workflowEvents.length)} />
+        <Field label="Active runs" value={formatNumber(activeRunIds.length)} />
+        <Field label="Blocked nodes" value={formatNumber(blocked)} />
+        <Field label="Failed nodes" value={formatNumber(failed)} />
+      </div>
+      {latest ? (
+        <div className="mt-3 rounded-md border border-border bg-card/70 px-3 py-2 text-xs">
+          <div className="font-medium text-foreground">{latest.title}</div>
+          <div className="mt-1 text-muted-foreground">
+            {formatText(latest.payload?.workflowName)} / {formatText(latest.payload?.eventType)}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 text-xs text-muted-foreground">No workflow run events linked to this session yet.</div>
+      )}
+    </section>
+  );
+}
+
 export default function AgentRuntimeDiagnosticsPanel({
   diagnostics,
   contextBudget,
@@ -420,6 +455,7 @@ export default function AgentRuntimeDiagnosticsPanel({
     const params = new URLSearchParams({
       provider: effectiveProvider,
       projectName: effectiveProjectName,
+      projectPath: effectiveProjectPath,
     });
     void apiFetch(`/api/session-timeline/${encodeURIComponent(effectiveSessionId)}?${params.toString()}`)
       .then((response) => response.ok ? response.json() : null)
@@ -459,10 +495,14 @@ export default function AgentRuntimeDiagnosticsPanel({
     return () => {
       cancelled = true;
     };
-  }, [effectiveProvider, effectiveProjectName, effectiveSessionId]);
+  }, [effectiveProvider, effectiveProjectName, effectiveProjectPath, effectiveSessionId]);
 
   const brainTimelineCount = useMemo(
     () => timelineEvents.filter((event) => event.type === 'brain').length,
+    [timelineEvents],
+  );
+  const workflowEvents = useMemo(
+    () => timelineEvents.filter((event) => event.type === 'workflow' || String(event.payload?.eventType || '').startsWith('workflow_')),
     [timelineEvents],
   );
 
@@ -515,6 +555,7 @@ export default function AgentRuntimeDiagnosticsPanel({
 
           <BrainRuntimeSection diagnostics={diagnostics} brain={brain} />
           <BrainWorkbenchSection inspector={brain?.inspector} />
+          <WorkflowRuntimeSection workflowEvents={workflowEvents} />
 
           <section className="mt-4 rounded-lg border border-border bg-background/60 p-3">
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -522,7 +563,7 @@ export default function AgentRuntimeDiagnosticsPanel({
               Runtime Timeline
             </div>
             <div className="mb-2 text-xs text-muted-foreground">
-              Brain events in timeline: {brainTimelineCount}
+              Brain events in timeline: {brainTimelineCount} / Workflow events: {workflowEvents.length}
             </div>
             {timelineEvents.length === 0 ? (
               <div className="text-xs text-muted-foreground">No runtime timeline events captured yet.</div>

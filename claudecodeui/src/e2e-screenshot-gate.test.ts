@@ -17,8 +17,10 @@ describe('E2E screenshot evidence gate', () => {
     expect(existsSync(resolve(root, 'e2e/runtime-panels.screenshot.spec.ts'))).toBe(true);
     expect(existsSync(resolve(root, 'e2e/agent-capabilities.screenshot.spec.ts'))).toBe(true);
     expect(existsSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'))).toBe(true);
+    expect(existsSync(resolve(root, 'e2e/workflow-studio-real.screenshot.spec.ts'))).toBe(true);
     expect(existsSync(resolve(root, '../docs/verification/screenshot-evidence-gate.md'))).toBe(true);
     expect(existsSync(resolve(root, '../docs/verification/req-001-008-screenshot-backfill.md'))).toBe(true);
+    expect(existsSync(resolve(root, '../docs/verification/workflow-real-screenshot-gate.md'))).toBe(true);
 
     const spec = readFileSync(resolve(root, 'e2e/agent-capabilities.screenshot.spec.ts'), 'utf8');
     [
@@ -36,9 +38,17 @@ describe('E2E screenshot evidence gate', () => {
       'REQ-049-workflow-editor.png',
       'REQ-049-workflow-runner-approval.png',
       'REQ-049-workflow-history-completed.png',
+      'REQ-057-real-workflow-editor.png',
+      'REQ-057-real-workflow-approval.png',
+      'REQ-057-real-workflow-completed-history.png',
     ].forEach((screenshotName) => {
       const workflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
-      expect(`${spec}\n${workflowSpec}`).toContain(screenshotName);
+      const realWorkflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio-real.screenshot.spec.ts'), 'utf8');
+      expect(`${spec}\n${workflowSpec}\n${realWorkflowSpec}`).toContain(screenshotName);
     });
+
+    const realWorkflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio-real.screenshot.spec.ts'), 'utf8');
+    expect(realWorkflowSpec).not.toContain("page.route('**/api/**'");
+    expect(realWorkflowSpec).not.toContain('installMockApi');
   });
 });

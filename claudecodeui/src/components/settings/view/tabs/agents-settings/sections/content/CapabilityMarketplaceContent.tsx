@@ -21,13 +21,14 @@ import { cn } from '../../../../../../../lib/utils';
 import { api } from '../../../../../../../utils/api';
 import type { SettingsProject } from '../../../../../types/types';
 
-type CapabilityKind = 'all' | 'skill' | 'mcp-server' | 'recipe' | 'agent-template';
+type CapabilityKind = 'all' | 'skill' | 'mcp-server' | 'recipe' | 'workflow' | 'agent-template';
 type ConcreteCapabilityKind = Exclude<CapabilityKind, 'all'>;
 
 type CapabilityDependencyMap = {
   skills?: string[];
   mcpServers?: string[];
   recipes?: string[];
+  workflows?: string[];
 };
 
 type CapabilityMarketplaceItem = {
@@ -76,6 +77,7 @@ const KIND_OPTIONS: Array<{ value: CapabilityKind; label: string }> = [
   { value: 'skill', label: 'Skills' },
   { value: 'mcp-server', label: 'MCP' },
   { value: 'recipe', label: 'Recipes' },
+  { value: 'workflow', label: 'Workflows' },
   { value: 'agent-template', label: 'Agents' },
 ];
 
@@ -93,8 +95,9 @@ function normalizeKind(value?: string): ConcreteCapabilityKind {
   const kind = String(value || '').trim().toLowerCase();
   if (kind === 'mcp' || kind === 'mcp_server' || kind === 'mcp-server-template') return 'mcp-server';
   if (kind === 'agent' || kind === 'template') return 'agent-template';
+  if (kind === 'workflow' || kind === 'workflow-package') return 'workflow';
   if (kind === 'recipe') return 'recipe';
-  if (kind === 'agent-template' || kind === 'skill' || kind === 'mcp-server') return kind;
+  if (kind === 'agent-template' || kind === 'skill' || kind === 'mcp-server' || kind === 'workflow') return kind;
   return 'skill';
 }
 
@@ -143,12 +146,13 @@ function mergeMarketplaceItems(items: CapabilityMarketplaceItem[]) {
 }
 
 function dependencyCount(dependencies?: CapabilityDependencyMap) {
-  return (dependencies?.skills || []).length + (dependencies?.mcpServers || []).length + (dependencies?.recipes || []).length;
+  return (dependencies?.skills || []).length + (dependencies?.mcpServers || []).length + (dependencies?.recipes || []).length + (dependencies?.workflows || []).length;
 }
 
 function kindLabel(kind: ConcreteCapabilityKind) {
   if (kind === 'mcp-server') return 'MCP';
   if (kind === 'agent-template') return 'Agent';
+  if (kind === 'workflow') return 'Workflow';
   if (kind === 'recipe') return 'Recipe';
   return 'Skill';
 }
@@ -317,7 +321,7 @@ export default function CapabilityMarketplaceContent({ projects }: CapabilityMar
             <h2 className="text-lg font-semibold text-foreground">Capability Marketplace</h2>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Discover, install, enable, and disable Skills, MCP servers, recipes, and agent templates from one place.
+            Discover, install, enable, and disable Skills, MCP servers, recipes, workflows, and agent templates from one place.
           </p>
         </div>
         <button
@@ -407,7 +411,7 @@ export default function CapabilityMarketplaceContent({ projects }: CapabilityMar
             const canInstall = item.installState !== 'installed';
             const canConfigure = hasSetupFields;
             const busy = busyKey === `toggle:${item.id}` || busyKey === `install:${item.id}`;
-            const Icon = item.kind === 'mcp-server' ? PlugZap : item.kind === 'agent-template' ? Bot : item.kind === 'skill' ? Wrench : Sparkles;
+             const Icon = item.kind === 'mcp-server' ? PlugZap : item.kind === 'agent-template' ? Bot : item.kind === 'skill' ? Wrench : item.kind === 'workflow' ? PackageCheck : Sparkles;
             return (
               <div key={item.id} className="rounded-lg border border-border bg-card p-4">
                 <div className="flex min-w-0 items-start justify-between gap-3">

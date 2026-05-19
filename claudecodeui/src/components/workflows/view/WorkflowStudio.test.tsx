@@ -26,6 +26,13 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-permission-source"');
     expect(source).toContain('data-testid="workflow-checkpoint-actions"');
     expect(source).toContain('rollbackCheckpoint');
+    expect(source).toContain('data-testid="workflow-canvas-controls"');
+    expect(source).toContain('data-testid="workflow-minimap"');
+    expect(source).toContain('data-testid="workflow-edge-editor"');
+    expect(source).toContain('data-testid="workflow-node-search"');
+    expect(source).toContain('duplicateNode');
+    expect(source).toContain('autoLayoutNodes');
+    expect(source).toContain('workflow-mobile-run');
     expect(source).toContain('Agent Workflow Studio');
   });
 

@@ -17,4 +17,11 @@ describe('CapabilityMarketplaceContent wiring', () => {
     expect(source).toContain('toggleEnabled');
     expect(apiSource).toContain('installCapabilityMarketplaceItem');
   });
+
+  it('surfaces workflow packages as a first-class marketplace kind', () => {
+    const source = readFileSync(resolve(currentDir, 'CapabilityMarketplaceContent.tsx'), 'utf8');
+
+    expect(source).toContain("'workflow'");
+    expect(source).toContain('Workflows');
+  });
 });
