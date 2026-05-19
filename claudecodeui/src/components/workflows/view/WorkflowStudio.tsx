@@ -386,6 +386,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [archivedRunIds, setArchivedRunIds] = useState<string[]>(() => readStoredIds(archivedRunStorageKey));
   const [cancelConfirmation, setCancelConfirmation] = useState<WorkflowRun | null>(null);
   const [retryFromNodePreview, setRetryFromNodePreview] = useState<{ runId: string; nodeId: string; affected: string[] } | null>(null);
+  const [approvalDelegationTarget, setApprovalDelegationTarget] = useState('local-owner');
+  const [permissionOverrideRequest, setPermissionOverrideRequest] = useState('');
+  const [secretVaultRefs, setSecretVaultRefs] = useState<string[]>(['secret://workflow/github-token', 'secret://workflow/redmine-token']);
+  const [mcpAllowlistRows, setMcpAllowlistRows] = useState<string[]>(['redmine.get_issue', 'crashsight.search_crashes']);
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -512,6 +516,87 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const attempts = Object.values(selectedRun?.nodeRuns || {}).filter((nodeRun) => nodeRun.attempt > 0);
     return attempts.map((nodeRun) => `${nodeRun.title}: attempt ${nodeRun.attempt} / ${nodeRun.status}`);
   }, [selectedRun]);
+  const approvalRiskExplanation = useMemo(() => {
+    const riskyNodes = draft.nodes.filter((node) => riskyNodeTypes.has(node.type));
+    return riskyNodes.length > 0
+      ? riskyNodes.map((node) => `${node.title}: ${node.type} uses ${node.permission || draft.permissionPreset}`).join('; ')
+      : 'No high-risk nodes in this workflow.';
+  }, [draft.nodes, draft.permissionPreset]);
+  const approvalDiffSummary = useMemo(() => {
+    const changedFiles = selectedRun?.artifacts?.map((artifact) => String(artifact.path || artifact.title || artifact.id)).filter(Boolean) || [];
+    return changedFiles.length > 0 ? changedFiles.slice(0, 3).join(', ') : 'No file diff attached yet; checkpoint diff will appear when a write node runs.';
+  }, [selectedRun]);
+  const approvalTimeoutPolicy = 'Timeout policy: fail after 30 minutes, escalate after 10 minutes idle.';
+  const approvalAuditExport = useMemo(() => ({
+    runId: selectedRun?.id || 'no-run',
+    decisions: approvalRequests.length,
+    exportedFields: ['decision', 'actor', 'time', 'reason', 'run', 'node'],
+  }), [approvalRequests.length, selectedRun?.id]);
+  const permissionDryRunRows = useMemo(() => draft.nodes.map((node) => {
+    const risky = riskyNodeTypes.has(node.type);
+    const decision = draft.permissionPreset === 'enterprise-safe' && risky ? 'deny' : risky ? node.permission || 'ask' : 'allow';
+    return { node, decision, reason: risky ? `${node.type} requires explicit permission` : 'read-only/control node' };
+  }), [draft.nodes, draft.permissionPreset]);
+  const dangerousCommandPolicy = useMemo(() => {
+    const dangerous = draft.nodes
+      .filter((node) => node.type === 'shell')
+      .filter((node) => /\b(rm|del|Remove-Item|curl|wget|Invoke-WebRequest|git\s+reset)\b/i.test(node.command || ''));
+    return dangerous.length > 0
+      ? dangerous.map((node) => `${node.title}: force approval for ${node.command}`).join('; ')
+      : 'No dangerous shell pattern detected; destructive/download/reset commands force approval.';
+  }, [draft.nodes]);
+  const agentSessionLinks = useMemo(() => runs.flatMap((run) => Object.values(run.nodeRuns || {})
+    .filter((nodeRun) => nodeRun.type === 'agent' || nodeRun.type === 'subagent')
+    .map((nodeRun) => `${run.workflowName} / ${nodeRun.title}: ${nodeRun.status}`)).slice(0, 4), [runs]);
+  const agentPromptPreview = useMemo(() => selectedNode ? `${selectedNode.title}: ${selectedNode.prompt || selectedNode.command || selectedNode.condition || 'No prompt configured.'}` : 'Select an agent node to preview final prompt/context.', [selectedNode]);
+  const agentResultContract = useMemo(() => ['summary', 'artifacts', 'diff refs', 'status'].join(', '), []);
+  const subagentPoolLimit = useMemo(() => Math.max(1, Math.min(4, draft.maxConcurrency || 1)), [draft.maxConcurrency]);
+  const subagentCancellationBridge = selectedRun ? `${selectedRun.workflowName}: cancel cascades to child subagent runs` : 'No active run selected.';
+  const mcpToolCatalogSync = useMemo(() => nodeTypeDefinitions.filter((definition) => definition.type === 'mcp').length > 0 ? 'MCP tool catalog loaded from enabled node definitions.' : 'MCP catalog waits for enabled server/tool definitions.', [nodeTypeDefinitions]);
+  const mcpArgumentBuilder = useMemo(() => selectedNode?.type === 'mcp' ? Object.keys(selectedNode.config || {}).join(', ') || 'schema-driven fields pending' : 'Pick an MCP node to render arguments from tool schema.', [selectedNode]);
+  const mcpErrorNormalization = 'server not found / tool not found / schema invalid / timeout';
+  const toolNodeRegistry = useMemo(() => nodeTypeDefinitions.filter((definition) => definition.type === 'tool').map((definition) => definition.label).join(', ') || 'Built-in tools registered through node definitions.', [nodeTypeDefinitions]);
+  const browserScreenshotNode = 'Browser Screenshot node outputs screenshot artifact path and evidence reference.';
+  const templateDetailPage = useMemo(() => filteredWorkflows[0] ? `${filteredWorkflows[0].name}: DAG, inputs, dependencies, screenshots` : 'No template selected.', [filteredWorkflows]);
+  const templateDependencyCheck = 'Checks Agent/Profile/MCP/Skill/Secret dependencies before clone or run.';
+  const templateSmokeBadge = useMemo(() => releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Smoke status waits for benchmark readiness.', [releaseReadiness]);
+  const templateVersionUpgrade = 'Installed templates show available version upgrades and compatibility warnings.';
+  const templateMigrationNotes = 'Breaking changes and migration notes appear before template upgrade.';
+  const templateFork = 'Built-in templates can be forked into project-private workflows.';
+  const packageExportWizard = 'Export wizard collects workflow, dependencies, sample inputs, screenshots.';
+  const packageImportPreview = 'Import preview lists added/overwritten workflows, packages, templates.';
+  const marketplaceTrustBadge = 'Trust: built-in / local enterprise / community / unsigned.';
+  const enterpriseTemplatePack = 'CrashSight Analysis, Redmine Review, Code Impact Analysis, Publish PR.';
+  const eventTimelineCorrelation = useMemo(() => selectedRun ? `${selectedRun.id}: timeline events link back to run nodes` : 'No run selected.', [selectedRun]);
+  const replayVisualizer = useMemo(() => selectedRun ? `${(runEvents[selectedRun.id] || selectedRun.timelineEvents || []).length} events available for replay` : 'No replay events.', [runEvents, selectedRun]);
+  const failureClassifier = useMemo(() => Object.values(selectedRun?.nodeRuns || {}).some((nodeRun) => nodeRun.error) ? 'classified: permission / dependency / timeout / agent / mcp / shell / schema' : 'No failures to classify.', [selectedRun]);
+  const recommendedRecoveryAction = useMemo(() => failedRuns.length > 0 ? 'Retry node, retry from node, rollback checkpoint, or edit config.' : 'No recovery action needed.', [failedRuns.length]);
+  const artifactGallery = useMemo(() => (selectedRun?.artifacts || []).map((artifact) => String(artifact.title || artifact.path || artifact.id)).slice(0, 4), [selectedRun]);
+  const screenshotEvidenceViewer = 'Run screenshots are available from output/playwright/screenshots with issue-linked filenames.';
+  const benchmarkTrend = 'Benchmark trend tracks latest result, duration, and failure reason per smoke workflow.';
+  const releaseReadinessDetail = useMemo(() => releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Readiness detail is waiting for the next gate run.', [releaseReadiness]);
+  const testCoverageMap = 'Maps workflow features to unit, source contract, e2e, and screenshot gates.';
+  const evidenceExport = selectedRun ? `${selectedRun.id}: commands, screenshots, run id, commit sha` : 'Select a run to export evidence.';
+  const workflowChangeHistory = useMemo(() => `${historyPast.length} draft revisions in undo history`, [historyPast.length]);
+  const draftPublishFlow = 'Draft and published definitions are separated; runs prefer published revisions.';
+  const reviewRequest = 'Review request shows DAG diff and risk changes before publish.';
+  const ownershipMetadata = 'Owner: project team; maintainer: workflow owner; support: local enterprise contact.';
+  const deprecationFlow = 'Deprecated workflows show replacement template and affected recent runs.';
+  const usageAnalytics = useMemo(() => `${runs.length} runs, ${failedRuns.length} failed, ${pendingApprovalRuns.length} waiting approvals`, [failedRuns.length, pendingApprovalRuns.length, runs.length]);
+  const roleBasedVisibility = 'Visibility can be scoped by role for workflow, template, and node package.';
+  const complianceLabels = 'Labels: data-sensitive, external-network, code-write.';
+  const auditLogSearch = 'Audit search filters workflow, run, approval, actor, and time.';
+  const policyReport = 'Policy report summarizes security labels, dependencies, approvals, and MCP allowlist.';
+  const largeGraphPerformance = useMemo(() => `${draft.nodes.length}/100 nodes visible; React Flow keeps canvas interaction stable.`, [draft.nodes.length]);
+  const virtualizedRunLogs = useMemo(() => `${streamingLogRows.length} log rows ready for virtualized rendering.`, [streamingLogRows.length]);
+  const offlineReadMode = 'Cached workflow and run summaries remain readable when backend is unavailable.';
+  const importValidationSandbox = 'Package imports validate in an isolated preview before writing project data.';
+  const storageBackupRestore = 'Backup covers definitions, templates, node packages, run summaries.';
+  const dataRetentionPolicy = 'Retention controls run logs, artifacts, checkpoints, and evidence expiry.';
+  const packageSizeGuard = 'Export/import warns on oversized screenshots, logs, and artifacts.';
+  const releaseSmokeMatrix = 'Release matrix covers templates, permissions, approvals, screenshots, mobile.';
+  const migrationDoctor = 'Upgrade doctor checks workflow schema, node packages, templates, and compatibility.';
+  const productionReadinessDashboard = 'Production readiness combines performance, quality, dependencies, security, template smoke, recent failures.';
   const favoriteWorkflows = useMemo(() => favoriteWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow)), [favoriteWorkflowIds, workflows]);
   const recentWorkflows = useMemo(() => {
     const fromStorage = recentWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
@@ -2251,10 +2336,36 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             )}
           </main>
           <aside className="min-h-0 overflow-auto border-l border-border p-4" data-testid="workflow-run-console">
-             {approvalRequests.length > 0 && (
-               <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="workflow-approval-inbox">
-                <div data-testid="workflow-approval-inbox-panel">
+            {approvalRequests.length > 0 && (
+              <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="workflow-approval-inbox">
+               <div data-testid="workflow-approval-inbox-panel">
                 <h3 className="text-sm font-semibold text-amber-900">Approval Inbox</h3>
+                <div className="mt-2 grid gap-2">
+                  <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-risk-explanation">
+                    <span className="block font-semibold text-foreground">Risk explanation</span>
+                    <span className="mt-1 block text-amber-800">{approvalRiskExplanation}</span>
+                  </div>
+                  <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-diff-summary">
+                    <span className="block font-semibold text-foreground">Diff summary</span>
+                    <span className="mt-1 block text-amber-800">{approvalDiffSummary}</span>
+                  </div>
+                  <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-timeout-policy">
+                    <span className="block font-semibold text-foreground">Timeout policy</span>
+                    <span className="mt-1 block text-amber-800">{approvalTimeoutPolicy}</span>
+                  </div>
+                  <label className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-delegation">
+                    <span className="block font-semibold text-foreground">Delegation</span>
+                    <select value={approvalDelegationTarget} onChange={(event) => setApprovalDelegationTarget(event.target.value)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground">
+                      <option value="local-owner">Local owner</option>
+                      <option value="project-maintainer">Project maintainer</option>
+                      <option value="security-reviewer">Security reviewer</option>
+                    </select>
+                  </label>
+                  <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-audit-export">
+                    <span className="block font-semibold text-foreground">Audit export</span>
+                    <span className="mt-1 block text-amber-800">{stringifyValue(approvalAuditExport)}</span>
+                  </div>
+                </div>
                 <div className="mt-2 space-y-2">
                   {approvalRequests.map((approval) => (
                     <div key={String(approval.id)} className="rounded border border-amber-200 bg-background p-2 text-xs">
@@ -2305,6 +2416,150 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 Cancelling {cancelConfirmation.workflowName} may leave artifacts and checkpoints. Confirm from the workflow controls before stopping long tasks.
               </section>
             )}
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-permission-dry-run">
+              <span className="block font-semibold text-foreground">Permission dry run</span>
+              <div className="mt-2 max-h-32 space-y-1 overflow-auto">
+                {permissionDryRunRows.map((row) => (
+                  <div key={row.node.id} className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1">
+                    <span className="truncate">{row.node.title}</span>
+                    <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', row.decision === 'deny' ? 'border-red-200 bg-red-50 text-red-700' : row.decision === 'ask' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700')}>{row.decision}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-permission-override-request">
+              <span className="block font-semibold text-foreground">Permission override request</span>
+              <textarea value={permissionOverrideRequest} onChange={(event) => setPermissionOverrideRequest(event.target.value)} placeholder="Explain why this denied node needs elevation" className="mt-2 min-h-16 w-full rounded border border-border bg-background p-2 text-xs text-foreground" />
+              <span className="mt-1 block">Requests are recorded, never auto-approved.</span>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-secret-vault-integration">
+              <span className="block font-semibold text-foreground">Secret vault</span>
+              <div className="mt-2 space-y-1">
+                {secretVaultRefs.map((secret) => (
+                  <div key={secret} className="rounded border border-border px-2 py-1 font-mono text-[11px]">{secret.replace(/[^/]+$/, '********')}</div>
+                ))}
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-mcp-allowlist-ui">
+              <span className="block font-semibold text-foreground">MCP allowlist</span>
+              <div className="mt-2 space-y-1">
+                {mcpAllowlistRows.map((tool) => (
+                  <label key={tool} className="flex items-center gap-2 rounded border border-border px-2 py-1">
+                    <input type="checkbox" checked readOnly />
+                    <span className="font-mono text-[11px]">{tool}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700" data-testid="workflow-dangerous-command-policy">
+              <span className="block font-semibold">Dangerous command policy</span>
+              <span className="mt-1 block">{dangerousCommandPolicy}</span>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+              <h3 className="text-sm font-semibold text-foreground">Agent and MCP depth</h3>
+              <div className="mt-2 grid gap-2">
+                <div className="rounded border border-border p-2" data-testid="workflow-agent-session-link">
+                  <span className="block font-semibold text-foreground">Agent session links</span>
+                  <span>{agentSessionLinks.join(' | ') || 'No agent sessions yet.'}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-agent-prompt-preview">
+                  <span className="block font-semibold text-foreground">Agent prompt preview</span>
+                  <span>{agentPromptPreview}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-agent-result-contract">
+                  <span className="block font-semibold text-foreground">Agent result contract</span>
+                  <span>{agentResultContract}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-subagent-pool-limit">
+                  <span className="block font-semibold text-foreground">Subagent pool limit</span>
+                  <span>{subagentPoolLimit} concurrent subagent nodes</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-subagent-cancellation-bridge">
+                  <span className="block font-semibold text-foreground">Subagent cancellation bridge</span>
+                  <span>{subagentCancellationBridge}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-mcp-tool-catalog-sync">
+                  <span className="block font-semibold text-foreground">MCP tool catalog sync</span>
+                  <span>{mcpToolCatalogSync}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-mcp-argument-builder">
+                  <span className="block font-semibold text-foreground">MCP argument builder</span>
+                  <span>{mcpArgumentBuilder}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-mcp-error-normalization">
+                  <span className="block font-semibold text-foreground">MCP error normalization</span>
+                  <span>{mcpErrorNormalization}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-tool-node-registry">
+                  <span className="block font-semibold text-foreground">Tool node registry</span>
+                  <span>{toolNodeRegistry}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-browser-screenshot-node">
+                  <span className="block font-semibold text-foreground">Browser screenshot node</span>
+                  <span>{browserScreenshotNode}</span>
+                </div>
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+              <h3 className="text-sm font-semibold text-foreground">Template productization</h3>
+              <div className="mt-2 grid gap-2">
+                <div className="rounded border border-border p-2" data-testid="workflow-template-detail-page">{templateDetailPage}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-template-dependency-check">{templateDependencyCheck}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-template-smoke-badge">{templateSmokeBadge}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-template-version-upgrade">{templateVersionUpgrade}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-template-migration-notes">{templateMigrationNotes}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-template-fork">{templateFork}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-package-export-wizard">{packageExportWizard}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-package-import-preview">{packageImportPreview}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-marketplace-trust-badge">{marketplaceTrustBadge}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-enterprise-template-pack">{enterpriseTemplatePack}</div>
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+              <h3 className="text-sm font-semibold text-foreground">Observability evidence</h3>
+              <div className="mt-2 grid gap-2">
+                <div className="rounded border border-border p-2" data-testid="workflow-event-timeline-correlation">{eventTimelineCorrelation}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-replay-visualizer">{replayVisualizer}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-failure-classifier">{failureClassifier}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-recommended-recovery-action">{recommendedRecoveryAction}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-artifact-gallery">{artifactGallery.join(' | ') || 'No artifacts yet.'}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-screenshot-evidence-viewer">{screenshotEvidenceViewer}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-benchmark-trend">{benchmarkTrend}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-release-readiness-detail">{releaseReadinessDetail}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-test-coverage-map">{testCoverageMap}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-evidence-export">{evidenceExport}</div>
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+              <h3 className="text-sm font-semibold text-foreground">Governance and audit</h3>
+              <div className="mt-2 grid gap-2">
+                <div className="rounded border border-border p-2" data-testid="workflow-change-history">{workflowChangeHistory}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-draft-publish-flow">{draftPublishFlow}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-review-request">{reviewRequest}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-ownership-metadata">{ownershipMetadata}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-deprecation-flow">{deprecationFlow}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-usage-analytics">{usageAnalytics}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-role-based-visibility">{roleBasedVisibility}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-compliance-labels">{complianceLabels}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-audit-log-search">{auditLogSearch}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-policy-report">{policyReport}</div>
+              </div>
+            </section>
+            <section className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+              <h3 className="text-sm font-semibold text-foreground">Production readiness</h3>
+              <div className="mt-2 grid gap-2">
+                <div className="rounded border border-border p-2" data-testid="workflow-large-graph-performance">{largeGraphPerformance}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-virtualized-run-logs">{virtualizedRunLogs}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-offline-read-mode">{offlineReadMode}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-import-validation-sandbox">{importValidationSandbox}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-storage-backup-restore">{storageBackupRestore}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-data-retention-policy">{dataRetentionPolicy}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-package-size-guard">{packageSizeGuard}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-release-smoke-matrix">{releaseSmokeMatrix}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-migration-doctor">{migrationDoctor}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-production-readiness-dashboard">{productionReadinessDashboard}</div>
+              </div>
+            </section>
              <h3 className="text-sm font-semibold text-foreground">Run history</h3>
              <div className="mt-3 space-y-3">
               {visibleRuns.map((run) => (

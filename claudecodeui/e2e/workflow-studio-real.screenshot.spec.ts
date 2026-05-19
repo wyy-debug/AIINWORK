@@ -177,6 +177,83 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await expect(page.getByTestId('workflow-run-console')).toBeVisible();
   await expect(page.getByTestId('workflow-approval-inbox-panel')).toBeVisible();
   await expect(page.getByTestId('workflow-run-events').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-approval-risk-explanation')).toBeVisible();
+  await screenshot(page, 'REQ-122-workflow-approval-risk-explanation.png');
+  await expect(page.getByTestId('workflow-approval-diff-summary')).toBeVisible();
+  await screenshot(page, 'REQ-123-workflow-approval-diff-summary.png');
+  await expect(page.getByTestId('workflow-approval-timeout-policy')).toBeVisible();
+  await screenshot(page, 'REQ-124-workflow-approval-timeout-policy.png');
+  await expect(page.getByTestId('workflow-approval-delegation')).toBeVisible();
+  await screenshot(page, 'REQ-125-workflow-approval-delegation.png');
+  await expect(page.getByTestId('workflow-approval-audit-export')).toBeVisible();
+  await screenshot(page, 'REQ-126-workflow-approval-audit-export.png');
+  await expect(page.getByTestId('workflow-permission-dry-run')).toBeVisible();
+  await screenshot(page, 'REQ-127-workflow-permission-dry-run.png');
+  await expect(page.getByTestId('workflow-permission-override-request')).toBeVisible();
+  await screenshot(page, 'REQ-128-workflow-permission-override-request.png');
+  await expect(page.getByTestId('workflow-secret-vault-integration')).toBeVisible();
+  await screenshot(page, 'REQ-129-workflow-secret-vault-integration.png');
+  await expect(page.getByTestId('workflow-mcp-allowlist-ui')).toBeVisible();
+  await screenshot(page, 'REQ-130-workflow-mcp-allowlist-ui.png');
+  await expect(page.getByTestId('workflow-dangerous-command-policy')).toBeVisible();
+  await screenshot(page, 'REQ-131-workflow-dangerous-command-policy.png');
+  const remainingBacklogScreenshots = [
+    ['workflow-agent-session-link', 'REQ-132-workflow-agent-session-link.png'],
+    ['workflow-agent-prompt-preview', 'REQ-133-workflow-agent-prompt-preview.png'],
+    ['workflow-agent-result-contract', 'REQ-134-workflow-agent-result-contract.png'],
+    ['workflow-subagent-pool-limit', 'REQ-135-workflow-subagent-pool-limit.png'],
+    ['workflow-subagent-cancellation-bridge', 'REQ-136-workflow-subagent-cancellation-bridge.png'],
+    ['workflow-mcp-tool-catalog-sync', 'REQ-137-workflow-mcp-tool-catalog-sync.png'],
+    ['workflow-mcp-argument-builder', 'REQ-138-workflow-mcp-argument-builder.png'],
+    ['workflow-mcp-error-normalization', 'REQ-139-workflow-mcp-error-normalization.png'],
+    ['workflow-tool-node-registry', 'REQ-140-workflow-tool-node-registry.png'],
+    ['workflow-browser-screenshot-node', 'REQ-141-workflow-browser-screenshot-node.png'],
+    ['workflow-template-detail-page', 'REQ-142-workflow-template-detail-page.png'],
+    ['workflow-template-dependency-check', 'REQ-143-workflow-template-dependency-check.png'],
+    ['workflow-template-smoke-badge', 'REQ-144-workflow-template-smoke-badge.png'],
+    ['workflow-template-version-upgrade', 'REQ-145-workflow-template-version-upgrade.png'],
+    ['workflow-template-migration-notes', 'REQ-146-workflow-template-migration-notes.png'],
+    ['workflow-template-fork', 'REQ-147-workflow-template-fork.png'],
+    ['workflow-package-export-wizard', 'REQ-148-workflow-package-export-wizard.png'],
+    ['workflow-package-import-preview', 'REQ-149-workflow-package-import-preview.png'],
+    ['workflow-marketplace-trust-badge', 'REQ-150-workflow-marketplace-trust-badge.png'],
+    ['workflow-enterprise-template-pack', 'REQ-151-workflow-enterprise-template-pack.png'],
+    ['workflow-event-timeline-correlation', 'REQ-152-workflow-event-timeline-correlation.png'],
+    ['workflow-replay-visualizer', 'REQ-153-workflow-replay-visualizer.png'],
+    ['workflow-failure-classifier', 'REQ-154-workflow-failure-classifier.png'],
+    ['workflow-recommended-recovery-action', 'REQ-155-workflow-recommended-recovery-action.png'],
+    ['workflow-artifact-gallery', 'REQ-156-workflow-artifact-gallery.png'],
+    ['workflow-screenshot-evidence-viewer', 'REQ-157-workflow-screenshot-evidence-viewer.png'],
+    ['workflow-benchmark-trend', 'REQ-158-workflow-benchmark-trend.png'],
+    ['workflow-release-readiness-detail', 'REQ-159-workflow-release-readiness-detail.png'],
+    ['workflow-test-coverage-map', 'REQ-160-workflow-test-coverage-map.png'],
+    ['workflow-evidence-export', 'REQ-161-workflow-evidence-export.png'],
+    ['workflow-change-history', 'REQ-162-workflow-change-history.png'],
+    ['workflow-draft-publish-flow', 'REQ-163-workflow-draft-publish-flow.png'],
+    ['workflow-review-request', 'REQ-164-workflow-review-request.png'],
+    ['workflow-ownership-metadata', 'REQ-165-workflow-ownership-metadata.png'],
+    ['workflow-deprecation-flow', 'REQ-166-workflow-deprecation-flow.png'],
+    ['workflow-usage-analytics', 'REQ-167-workflow-usage-analytics.png'],
+    ['workflow-role-based-visibility', 'REQ-168-workflow-role-based-visibility.png'],
+    ['workflow-compliance-labels', 'REQ-169-workflow-compliance-labels.png'],
+    ['workflow-audit-log-search', 'REQ-170-workflow-audit-log-search.png'],
+    ['workflow-policy-report', 'REQ-171-workflow-policy-report.png'],
+    ['workflow-large-graph-performance', 'REQ-172-workflow-large-graph-performance.png'],
+    ['workflow-virtualized-run-logs', 'REQ-173-workflow-virtualized-run-logs.png'],
+    ['workflow-offline-read-mode', 'REQ-174-workflow-offline-read-mode.png'],
+    ['workflow-import-validation-sandbox', 'REQ-175-workflow-import-validation-sandbox.png'],
+    ['workflow-storage-backup-restore', 'REQ-176-workflow-storage-backup-restore.png'],
+    ['workflow-data-retention-policy', 'REQ-177-workflow-data-retention-policy.png'],
+    ['workflow-package-size-guard', 'REQ-178-workflow-package-size-guard.png'],
+    ['workflow-release-smoke-matrix', 'REQ-179-workflow-release-smoke-matrix.png'],
+    ['workflow-migration-doctor', 'REQ-180-workflow-migration-doctor.png'],
+    ['workflow-production-readiness-dashboard', 'REQ-181-workflow-production-readiness-dashboard.png'],
+  ] as const;
+  for (const [testId, screenshotName] of remainingBacklogScreenshots) {
+    await expect(page.getByTestId(testId)).toBeVisible();
+    await page.getByTestId(testId).scrollIntoViewIfNeeded();
+    await screenshot(page, screenshotName);
+  }
   await expect(page.getByTestId('workflow-run-live-polling-strategy')).toBeVisible();
   await screenshot(page, 'REQ-112-workflow-run-live-polling-strategy.png');
   await expect(page.getByTestId('workflow-run-streaming-logs')).toBeVisible();

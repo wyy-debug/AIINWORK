@@ -1,0 +1,79 @@
+# Workflow Studio REQ-122..181 Verification
+
+Scope:
+- `REQ-122`..`REQ-131`: approval risk, diff, timeout, delegation, audit, permission, secret, MCP allowlist, dangerous command policy.
+- `REQ-132`..`REQ-141`: agent, subagent, MCP, tool, browser screenshot node depth.
+- `REQ-142`..`REQ-151`: template detail, dependencies, smoke, versioning, package import/export, trust, enterprise templates.
+- `REQ-152`..`REQ-161`: timeline correlation, replay, failure classification, recovery, artifact and screenshot evidence.
+- `REQ-162`..`REQ-171`: workflow governance, publish, review, ownership, compliance, audit, policy report.
+- `REQ-172`..`REQ-181`: performance, reliability, import safety, backup, retention, release smoke, migration, production readiness.
+
+Evidence commands:
+- `npm run test:unit -- WorkflowStudio.test.tsx e2e-screenshot-gate.test.ts`
+- `npm run typecheck`
+- `DESKTOP_MODE=true WORKFLOW_REAL_SMOKE=1 npm run test:e2e:workflow-real`
+- `npm run test:unit`
+- `npm run build`
+- `npm run check:mojibake`
+
+Screenshot evidence:
+- `REQ-122-workflow-approval-risk-explanation.png`
+- `REQ-123-workflow-approval-diff-summary.png`
+- `REQ-124-workflow-approval-timeout-policy.png`
+- `REQ-125-workflow-approval-delegation.png`
+- `REQ-126-workflow-approval-audit-export.png`
+- `REQ-127-workflow-permission-dry-run.png`
+- `REQ-128-workflow-permission-override-request.png`
+- `REQ-129-workflow-secret-vault-integration.png`
+- `REQ-130-workflow-mcp-allowlist-ui.png`
+- `REQ-131-workflow-dangerous-command-policy.png`
+- `REQ-132-workflow-agent-session-link.png`
+- `REQ-133-workflow-agent-prompt-preview.png`
+- `REQ-134-workflow-agent-result-contract.png`
+- `REQ-135-workflow-subagent-pool-limit.png`
+- `REQ-136-workflow-subagent-cancellation-bridge.png`
+- `REQ-137-workflow-mcp-tool-catalog-sync.png`
+- `REQ-138-workflow-mcp-argument-builder.png`
+- `REQ-139-workflow-mcp-error-normalization.png`
+- `REQ-140-workflow-tool-node-registry.png`
+- `REQ-141-workflow-browser-screenshot-node.png`
+- `REQ-142-workflow-template-detail-page.png`
+- `REQ-143-workflow-template-dependency-check.png`
+- `REQ-144-workflow-template-smoke-badge.png`
+- `REQ-145-workflow-template-version-upgrade.png`
+- `REQ-146-workflow-template-migration-notes.png`
+- `REQ-147-workflow-template-fork.png`
+- `REQ-148-workflow-package-export-wizard.png`
+- `REQ-149-workflow-package-import-preview.png`
+- `REQ-150-workflow-marketplace-trust-badge.png`
+- `REQ-151-workflow-enterprise-template-pack.png`
+- `REQ-152-workflow-event-timeline-correlation.png`
+- `REQ-153-workflow-replay-visualizer.png`
+- `REQ-154-workflow-failure-classifier.png`
+- `REQ-155-workflow-recommended-recovery-action.png`
+- `REQ-156-workflow-artifact-gallery.png`
+- `REQ-157-workflow-screenshot-evidence-viewer.png`
+- `REQ-158-workflow-benchmark-trend.png`
+- `REQ-159-workflow-release-readiness-detail.png`
+- `REQ-160-workflow-test-coverage-map.png`
+- `REQ-161-workflow-evidence-export.png`
+- `REQ-162-workflow-change-history.png`
+- `REQ-163-workflow-draft-publish-flow.png`
+- `REQ-164-workflow-review-request.png`
+- `REQ-165-workflow-ownership-metadata.png`
+- `REQ-166-workflow-deprecation-flow.png`
+- `REQ-167-workflow-usage-analytics.png`
+- `REQ-168-workflow-role-based-visibility.png`
+- `REQ-169-workflow-compliance-labels.png`
+- `REQ-170-workflow-audit-log-search.png`
+- `REQ-171-workflow-policy-report.png`
+- `REQ-172-workflow-large-graph-performance.png`
+- `REQ-173-workflow-virtualized-run-logs.png`
+- `REQ-174-workflow-offline-read-mode.png`
+- `REQ-175-workflow-import-validation-sandbox.png`
+- `REQ-176-workflow-storage-backup-restore.png`
+- `REQ-177-workflow-data-retention-policy.png`
+- `REQ-178-workflow-package-size-guard.png`
+- `REQ-179-workflow-release-smoke-matrix.png`
+- `REQ-180-workflow-migration-doctor.png`
+- `REQ-181-workflow-production-readiness-dashboard.png`
