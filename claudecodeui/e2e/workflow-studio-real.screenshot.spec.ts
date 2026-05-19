@@ -67,14 +67,24 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('workflow-studio')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-command-center')).toBeVisible();
   await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
+  await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-editor.png');
   await screenshot(page, 'REQ-064-real-editor-create-save-reopen.png');
+  await screenshot(page, 'REQ-081-editor-react-flow-canvas.png');
+
+  await page.getByTestId('workflow-node').first().click();
+  await expect(page.getByTestId('workflow-inspector-tabs')).toBeVisible();
+  await screenshot(page, 'REQ-081-inspector-node-config.png');
 
   await page.getByRole('button', { name: 'Library' }).click();
+  await expect(page.getByTestId('workflow-library-gallery')).toBeVisible();
+  await expect(page.getByTestId('workflow-template-preview')).toBeVisible();
   await expect(page.getByTestId('workflow-template-manifest').first()).toBeVisible();
   await expect(page.getByTestId('workflow-clone-template').first()).toBeVisible();
   await screenshot(page, 'REQ-064-real-template-library-clone.png');
+  await screenshot(page, 'REQ-081-library-template-gallery.png');
 
   await page.getByRole('button', { name: 'Editor' }).click();
   await page.getByTestId('workflow-dry-run-debugger').first().click();
@@ -84,9 +94,16 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await page.getByRole('button', { name: 'Runs' }).click();
   await expect(page.getByTestId('workflow-runs').getByText('waiting_approval').first()).toBeVisible();
   await expect(page.getByTestId('workflow-run-console')).toBeVisible();
+  await expect(page.getByTestId('workflow-approval-inbox-panel')).toBeVisible();
   await expect(page.getByTestId('workflow-run-events').first()).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-approval.png');
   await screenshot(page, 'REQ-064-real-runtime-approval-console.png');
+  await screenshot(page, 'REQ-081-run-console-approval.png');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId('workflow-approval-inbox-panel')).toBeVisible();
+  await screenshot(page, 'REQ-081-mobile-run-approval.png');
+  await page.setViewportSize({ width: 1920, height: 1080 });
 
   const continueResponse = await request.post(`/api/workflow-runs/${runId}/nodes/approval/control`, {
     data: { action: 'continue' },

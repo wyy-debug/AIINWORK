@@ -1,4 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  Background,
+  Controls,
+  Handle,
+  MarkerType,
+  MiniMap,
+  Position,
+  ReactFlow,
+  ReactFlowProvider,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type Node,
+  type NodeChange,
+  type NodeProps,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import {
   AlertTriangle,
   Bot,
@@ -14,8 +31,6 @@ import {
   History,
   LibraryBig,
   Link2,
-  Map,
-  Maximize2,
   Play,
   Plus,
   RefreshCw,
@@ -26,8 +41,6 @@ import {
   Upload,
   X,
   Zap,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react';
 
 import { api } from '../../../utils/api';
@@ -39,6 +52,7 @@ import type {
   WorkflowEdge,
   WorkflowNode,
   WorkflowNodeLog,
+  WorkflowNodeRun,
   WorkflowNodeType,
   WorkflowNodeTypeDefinition,
   WorkflowRun,
@@ -51,10 +65,27 @@ type WorkflowStudioProps = {
 };
 
 type StudioView = 'Library' | 'Editor' | 'Runs';
+type WorkflowInspectorTab = 'Config' | 'Data' | 'Permissions' | 'Runtime';
+type WorkflowLibraryFilter = 'All' | 'Built-in' | 'Enterprise' | 'Needs setup' | 'Recently used';
+
+type WorkflowPaletteGroup = {
+  id: string;
+  label: string;
+  types: WorkflowNodeType[];
+};
+
+interface WorkflowFlowNodeData extends Record<string, unknown> {
+  workflowNode: WorkflowNode;
+  runState: WorkflowNodeRun | null;
+  permissionPreset: string;
+}
+
+type WorkflowFlowNode = Node<WorkflowFlowNodeData, 'workflowNode'>;
+type WorkflowFlowEdge = Edge<{ mode?: WorkflowEdge['mode'] }>;
 
 const views: StudioView[] = ['Library', 'Editor', 'Runs'];
 
-const nodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot; description: string }> = [
+const baseNodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot; description: string }> = [
   { type: 'agent', label: 'Agent', icon: Bot, description: 'Primary agent step' },
   { type: 'subagent', label: 'Subagent', icon: GitBranch, description: 'Focused side agent' },
   { type: 'mcp', label: 'MCP', icon: Zap, description: 'MCP server tool' },
@@ -65,6 +96,17 @@ const nodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot
   { type: 'condition', label: 'Condition', icon: ChevronRight, description: 'Branch rule' },
   { type: 'join', label: 'Join', icon: Link2, description: 'Wait for inputs' },
 ];
+
+const paletteGroups: WorkflowPaletteGroup[] = [
+  { id: 'agents', label: 'Agents', types: ['agent', 'subagent'] },
+  { id: 'integrations', label: 'Integrations', types: ['mcp', 'tool'] },
+  { id: 'execution', label: 'Execution', types: ['shell', 'approval'] },
+  { id: 'control', label: 'Control Flow', types: ['condition', 'join'] },
+  { id: 'outputs', label: 'Outputs', types: ['artifact'] },
+];
+
+const inspectorTabs: WorkflowInspectorTab[] = ['Config', 'Data', 'Permissions', 'Runtime'];
+const libraryFilters: WorkflowLibraryFilter[] = ['All', 'Built-in', 'Enterprise', 'Needs setup', 'Recently used'];
 
 const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
   agent: Bot,
@@ -153,12 +195,52 @@ function describePermissionSource(workflow: WorkflowDefinition, node: WorkflowNo
   return `Profile baseline: ${workflow.permissionPreset || 'inherit'}`;
 }
 
-function nodeCenter(node: WorkflowNode) {
-  return {
-    x: node.position.x + 92,
-    y: node.position.y + 42,
-  };
+function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
+  const node = data.workflowNode;
+  const runState = data.runState;
+  const Icon = nodeIconByType[node.type] || Bot;
+  const isRisky = riskyNodeTypes.has(node.type);
+  return (
+    <div
+      data-testid="workflow-node"
+      data-node-id={node.id}
+      className={cn(
+        'min-h-[112px] w-[220px] rounded-md border bg-card p-3 shadow-sm transition-all',
+        nodeTone[node.type],
+        selected && 'ring-2 ring-primary/50',
+      )}
+    >
+      <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Icon className="h-4 w-4 flex-shrink-0" />
+            <h3 className="truncate text-sm font-semibold">{node.title}</h3>
+          </div>
+          <p className="mt-1 truncate text-[11px] opacity-75">{node.type}</p>
+        </div>
+        <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', isRisky ? 'border-amber-300 bg-amber-100 text-amber-800' : 'border-current/20 bg-white/40')}>
+          {isRisky ? 'risk' : 'ready'}
+        </span>
+      </div>
+      <div className="mt-3 text-[10px] opacity-80" data-testid="workflow-node-dependency-status">
+        {isRisky
+          ? `Permission: ${node.permission || data.permissionPreset}`
+          : node.type === 'mcp' && !node.toolName
+            ? 'Missing MCP tool'
+            : 'Dependencies ready'}
+      </div>
+      {runState && (
+        <span className={cn('mt-3 inline-flex rounded-full border px-2 py-0.5 text-[11px]', statusTone[runState.status] || statusTone.pending)}>
+          {runState.status}
+        </span>
+      )}
+      <Handle type="source" position={Position.Right} data-testid="workflow-connect-node" className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
+    </div>
+  );
 }
+
+const reactFlowNodeTypes = { workflowNode: WorkflowFlowNodeCard };
 
 export default function WorkflowStudio({ selectedProject, sessionId = null }: WorkflowStudioProps) {
   const [activeView, setActiveView] = useState<StudioView>('Editor');
@@ -169,12 +251,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
   const [draft, setDraft] = useState<WorkflowDefinition>(() => createBlankWorkflow(selectedProject));
   const [selectedNodeId, setSelectedNodeId] = useState('');
-  const [connectFrom, setConnectFrom] = useState('');
-  const [draggingNodeId, setDraggingNodeId] = useState('');
   const [selectedEdgeId, setSelectedEdgeId] = useState('');
   const [nodeSearch, setNodeSearch] = useState('');
-  const [canvasZoom, setCanvasZoom] = useState(1);
-  const [showMinimap, setShowMinimap] = useState(true);
+  const [libraryFilter, setLibraryFilter] = useState<WorkflowLibraryFilter>('All');
+  const [inspectorTab, setInspectorTab] = useState<WorkflowInspectorTab>('Config');
+  const [isRunSetupOpen, setIsRunSetupOpen] = useState(false);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
   const [runEvents, setRunEvents] = useState<Record<string, WorkflowRunEvent[]>>({});
@@ -190,7 +271,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const selectedEdge = useMemo(() => draft.edges.find((edge) => edge.id === selectedEdgeId) || null, [draft.edges, selectedEdgeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
   const paletteNodeTypes = useMemo(() => {
-    if (nodeTypeDefinitions.length === 0) return nodeTypes;
+    if (nodeTypeDefinitions.length === 0) return baseNodeTypes;
     return nodeTypeDefinitions.map((definition) => ({
       type: definition.type,
       label: definition.label,
@@ -207,6 +288,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (!query) return paletteNodeTypes;
     return paletteNodeTypes.filter((item) => [item.type, item.label, item.description].join(' ').toLowerCase().includes(query));
   }, [nodeSearch, paletteNodeTypes]);
+  const filteredWorkflows = useMemo(() => workflows.filter((workflow) => {
+    const manifest = getTemplateManifest(workflow);
+    const tags = Array.isArray(manifest.tags) ? manifest.tags.map((tag) => tag.toLowerCase()) : [];
+    if (libraryFilter === 'Built-in') return Boolean(workflow.metadata?.templateManifest);
+    if (libraryFilter === 'Enterprise') return tags.includes('enterprise') || tags.includes('redmine') || tags.includes('crashsight');
+    if (libraryFilter === 'Needs setup') return Boolean(manifest.dependencies && Object.keys(manifest.dependencies).length > 0);
+    if (libraryFilter === 'Recently used') return runs.some((run) => run.workflowId === workflow.id);
+    return true;
+  }), [libraryFilter, runs, workflows]);
   const availableVariables = useMemo(() => {
     const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
     if (!selectedNode) return inputVariables;
@@ -324,7 +414,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       const node: WorkflowNode = {
         id,
         type,
-        title: `${nodeTypes.find((item) => item.type === type)?.label || type} ${count + 1}`,
+        title: `${baseNodeTypes.find((item) => item.type === type)?.label || type} ${count + 1}`,
         description: '',
         agentId: type === 'subagent' ? 'subagent-general' : type === 'agent' ? current.profileId : '',
         toolName: type === 'tool' ? 'git-native-review' : '',
@@ -390,29 +480,6 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       updateNode(selectedNode.id, { prompt: `${selectedNode.prompt || ''}${selectedNode.prompt ? ' ' : ''}${token}` });
     }
   }, [selectedNode, updateNode]);
-
-  const connectNode = useCallback((nodeId: string) => {
-    if (!connectFrom) {
-      setConnectFrom(nodeId);
-      return;
-    }
-    if (connectFrom === nodeId) {
-      setConnectFrom('');
-      return;
-    }
-    setDraft((current) => {
-      const exists = current.edges.some((edge) => edge.from === connectFrom && edge.to === nodeId);
-      if (exists) return current;
-      const edge: WorkflowEdge = {
-        id: `${connectFrom}-${nodeId}`,
-        from: connectFrom,
-        to: nodeId,
-        mode: 'success',
-      };
-      return { ...current, edges: [...current.edges, edge] };
-    });
-    setConnectFrom('');
-  }, [connectFrom]);
 
   const removeEdge = useCallback((edgeId: string) => {
     setDraft((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) }));
@@ -667,208 +734,155 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setActiveView('Editor');
   }, [draft]);
 
-  const handleDragStart = useCallback((nodeId: string) => {
-    setDraggingNodeId(nodeId);
+  const toFlowNodes = useCallback((run: WorkflowRun | null): WorkflowFlowNode[] => {
+    const nodeRuns = run?.nodeRuns || {};
+    return draft.nodes.map((node) => ({
+      id: node.id,
+      type: 'workflowNode',
+      position: node.position,
+      data: {
+        workflowNode: node,
+        runState: nodeRuns[node.id] || null,
+        permissionPreset: draft.permissionPreset,
+      },
+    }));
+  }, [draft.nodes, draft.permissionPreset]);
+
+  const toFlowEdges = useCallback((run: WorkflowRun | null): WorkflowFlowEdge[] => draft.edges.map((edge) => {
+    const targetRun = run?.nodeRuns?.[edge.to];
+    return {
+      id: edge.id,
+      source: edge.from,
+      target: edge.to,
+      type: 'smoothstep',
+      label: edge.mode || 'success',
+      data: { mode: edge.mode },
+      animated: targetRun?.status === 'running' || targetRun?.status === 'waiting_approval',
+      markerEnd: { type: MarkerType.ArrowClosed },
+      className: selectedEdgeId === edge.id ? 'workflow-edge-selected' : undefined,
+    };
+  }), [draft.edges, selectedEdgeId]);
+
+  const handleFlowNodesChange = useCallback((changes: NodeChange<WorkflowFlowNode>[]) => {
+    setDraft((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => {
+        const positionChange = changes.find((change) => 'id' in change && change.id === node.id && change.type === 'position');
+        if (positionChange && 'position' in positionChange && positionChange.position) {
+          return { ...node, position: positionChange.position };
+        }
+        return node;
+      }),
+    }));
+    const selectedChange = changes.find((change) => 'id' in change && change.type === 'select' && change.selected);
+    if (selectedChange && 'id' in selectedChange) {
+      setSelectedNodeId(selectedChange.id);
+      setSelectedEdgeId('');
+    }
   }, []);
 
-  const handleCanvasMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!draggingNodeId) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    updateNode(draggingNodeId, {
-      position: {
-        x: Math.max(20, (event.clientX - rect.left) / canvasZoom - 90),
-        y: Math.max(20, (event.clientY - rect.top) / canvasZoom - 35),
-      },
-    });
-  }, [canvasZoom, draggingNodeId, updateNode]);
+  const handleFlowEdgesChange = useCallback((changes: EdgeChange<WorkflowFlowEdge>[]) => {
+    const removed = new Set(changes.filter((change) => 'id' in change && change.type === 'remove').map((change) => change.id));
+    if (removed.size > 0) {
+      setDraft((current) => ({ ...current, edges: current.edges.filter((edge) => !removed.has(edge.id)) }));
+    }
+    const selectedChange = changes.find((change) => 'id' in change && change.type === 'select' && change.selected);
+    if (selectedChange && 'id' in selectedChange) {
+      setSelectedEdgeId(selectedChange.id);
+      setSelectedNodeId('');
+    }
+  }, []);
 
-  const fitCanvas = useCallback(() => {
-    const maxX = Math.max(980, ...draft.nodes.map((node) => node.position.x + 220));
-    const maxY = Math.max(520, ...draft.nodes.map((node) => node.position.y + 120));
-    const nextZoom = Math.max(0.65, Math.min(1, 980 / maxX, 520 / maxY));
-    setCanvasZoom(Number(nextZoom.toFixed(2)));
-  }, [draft.nodes]);
+  const handleFlowConnect = useCallback((connection: Connection) => {
+    if (!connection.source || !connection.target) return;
+    setDraft((current) => {
+      const exists = current.edges.some((edge) => edge.from === connection.source && edge.to === connection.target);
+      if (exists) return current;
+      const edge: WorkflowEdge = {
+        id: `${connection.source}-${connection.target}-${Date.now()}`,
+        from: connection.source!,
+        to: connection.target!,
+        mode: 'success',
+      };
+      return { ...current, edges: [...current.edges, edge] };
+    });
+  }, []);
 
   const renderCanvas = (run: WorkflowRun | null = null) => {
-    const nodeRuns = run?.nodeRuns || {};
+    const flowNodes = toFlowNodes(run);
+    const flowEdges = toFlowEdges(run);
     return (
-      <div className="relative">
-        <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="workflow-canvas-controls">
-          <button type="button" onClick={() => setCanvasZoom((value) => Math.max(0.5, Number((value - 0.1).toFixed(2))))} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-muted" title="Zoom out">
-            <ZoomOut className="h-4 w-4" />
-          </button>
-          <span className="min-w-14 text-center text-xs text-muted-foreground">{Math.round(canvasZoom * 100)}%</span>
-          <button type="button" onClick={() => setCanvasZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-muted" title="Zoom in">
-            <ZoomIn className="h-4 w-4" />
-          </button>
-          <button type="button" onClick={fitCanvas} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Fit view">
-            <Maximize2 className="h-3.5 w-3.5" />
-            Fit
-          </button>
+      <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2" data-testid="workflow-canvas-controls">
+          <div className="text-xs text-muted-foreground">
+            {flowNodes.length} nodes / {flowEdges.length} edges
+          </div>
           <button type="button" onClick={autoLayoutNodes} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Auto layout">
             <GitBranch className="h-3.5 w-3.5" />
             Layout
           </button>
-          <button type="button" onClick={() => setShowMinimap((value) => !value)} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Toggle minimap">
-            <Map className="h-3.5 w-3.5" />
-            Map
-          </button>
         </div>
-      <div
-        className="relative h-[520px] min-w-[980px] overflow-hidden rounded-md border border-border bg-[linear-gradient(#eef2f7_1px,transparent_1px),linear-gradient(90deg,#eef2f7_1px,transparent_1px)] bg-[size:24px_24px]"
-        data-testid="workflow-dag-canvas"
-        onMouseMove={handleCanvasMouseMove}
-        onMouseUp={() => setDraggingNodeId('')}
-        onMouseLeave={() => setDraggingNodeId('')}
-      >
-        <div
-          className="absolute inset-0 origin-top-left"
-          style={{ transform: `scale(${canvasZoom})`, width: `${100 / canvasZoom}%`, height: `${100 / canvasZoom}%` }}
-        >
-        <svg className="pointer-events-none absolute inset-0 h-full w-full">
-          {draft.edges.map((edge) => {
-            const from = draft.nodes.find((node) => node.id === edge.from);
-            const to = draft.nodes.find((node) => node.id === edge.to);
-            if (!from || !to) return null;
-            const start = nodeCenter(from);
-            const end = nodeCenter(to);
-            const midX = (start.x + end.x) / 2;
-            return (
-              <path
-                key={edge.id}
-                d={`M ${start.x} ${start.y} C ${midX} ${start.y}, ${midX} ${end.y}, ${end.x} ${end.y}`}
-                fill="none"
-                stroke={selectedEdgeId === edge.id ? '#2563eb' : '#94a3b8'}
-                strokeWidth="2"
-                markerEnd="url(#workflow-arrow)"
-              />
-            );
-          })}
-          <defs>
-            <marker id="workflow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M 0 0 L 8 4 L 0 8 z" fill="#94a3b8" />
-            </marker>
-          </defs>
-        </svg>
-        {draft.edges.map((edge) => {
-          const from = draft.nodes.find((node) => node.id === edge.from);
-          const to = draft.nodes.find((node) => node.id === edge.to);
-          if (!from || !to) return null;
-          const start = nodeCenter(from);
-          const end = nodeCenter(to);
-          return (
-            <button
-              key={`edge-${edge.id}`}
-              type="button"
-              data-testid="workflow-edge-editor"
-              onClick={() => {
-                setSelectedEdgeId(edge.id);
-                setSelectedNodeId('');
-              }}
-              className={cn(
-                'absolute rounded-full border bg-background px-2 py-0.5 text-[10px] shadow-sm hover:bg-muted',
-                selectedEdgeId === edge.id ? 'border-primary text-primary' : 'border-border text-muted-foreground',
-              )}
-              style={{ left: (start.x + end.x) / 2 - 28, top: (start.y + end.y) / 2 - 12 }}
-              title={`${edge.from} -> ${edge.to}`}
-            >
-              {edge.mode || 'success'}
-            </button>
-          );
-        })}
-
-        {draft.nodes.map((node) => {
-          const Icon = nodeTypes.find((item) => item.type === node.type)?.icon || Bot;
-          const runState = nodeRuns[node.id];
-          const isSelected = selectedNodeId === node.id;
-          return (
-            <div
-              key={node.id}
-              data-testid="workflow-node"
-              data-node-id={node.id}
-              className={cn(
-                'absolute w-[184px] cursor-default rounded-md border bg-card p-3 shadow-sm transition-shadow',
-                nodeTone[node.type],
-                isSelected && 'ring-2 ring-primary/40',
-              )}
-              style={{ left: node.position.x, top: node.position.y }}
-              onMouseDown={(event) => {
-                if ((event.target as HTMLElement).closest('button')) return;
-                setSelectedNodeId(node.id);
-                handleDragStart(node.id);
-              }}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Icon className="h-4 w-4 flex-shrink-0" />
-                    <h3 className="truncate text-sm font-semibold">{node.title}</h3>
-                  </div>
-                  <p className="mt-1 truncate text-[11px] opacity-75">{node.type}</p>
-                </div>
-                <button
-                  type="button"
-                  aria-label="Connect node"
-                  data-testid="workflow-connect-node"
-                  onClick={() => connectNode(node.id)}
-                  className={cn(
-                    'rounded border border-current/20 p-1 hover:bg-white/60',
-                    connectFrom === node.id && 'bg-primary text-primary-foreground',
-                  )}
-                >
-                  <Link2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div className="mt-2 text-[10px] opacity-80" data-testid="workflow-node-dependency-status">
-                {riskyNodeTypes.has(node.type)
-                  ? `Permission: ${node.permission || draft.permissionPreset}`
-                  : node.type === 'mcp' && !node.toolName
-                    ? 'Missing MCP tool'
-                    : 'Dependencies ready'}
-              </div>
-              {runState && (
-                <span className={cn('mt-3 inline-flex rounded-full border px-2 py-0.5 text-[11px]', statusTone[runState.status] || statusTone.pending)}>
-                  {runState.status}
-                </span>
-              )}
+        <div className="h-[560px] min-w-[980px] overflow-hidden rounded-md border border-border bg-background" data-testid="workflow-dag-canvas">
+          <ReactFlowProvider>
+            <div className="h-full w-full" data-testid="workflow-react-flow-canvas">
+              <ReactFlow
+                nodes={flowNodes}
+                edges={flowEdges}
+                nodeTypes={reactFlowNodeTypes}
+                onNodesChange={handleFlowNodesChange}
+                onEdgesChange={handleFlowEdgesChange}
+                onConnect={handleFlowConnect}
+                onNodeClick={(_: ReactMouseEvent, node: WorkflowFlowNode) => {
+                  setSelectedNodeId(node.id);
+                  setSelectedEdgeId('');
+                }}
+                onEdgeClick={(_: ReactMouseEvent, edge: WorkflowFlowEdge) => {
+                  setSelectedEdgeId(edge.id);
+                  setSelectedNodeId('');
+                }}
+                fitView
+                minZoom={0.35}
+                maxZoom={1.6}
+              >
+                <Background gap={24} color="#e2e8f0" />
+                <Controls />
+                <MiniMap data-testid="workflow-minimap" pannable zoomable nodeStrokeWidth={2} />
+              </ReactFlow>
             </div>
-          );
-        })}
+          </ReactFlowProvider>
         </div>
-        {showMinimap && (
-          <div className="absolute bottom-3 right-3 h-28 w-44 rounded-md border border-border bg-background/90 p-2 shadow-sm" data-testid="workflow-minimap">
-            <div className="mb-1 flex items-center justify-between text-[10px] font-medium text-muted-foreground">
-              <span>Minimap</span>
-              <span>{draft.nodes.length} nodes</span>
-            </div>
-            <div className="relative h-20 overflow-hidden rounded bg-muted/40">
-              {draft.nodes.map((node) => (
-                <span
-                  key={`mini-${node.id}`}
-                  className={cn('absolute h-2 w-3 rounded-sm', selectedNodeId === node.id ? 'bg-primary' : 'bg-muted-foreground/60')}
-                  style={{ left: `${Math.min(92, Math.max(0, node.position.x / 10))}%`, top: `${Math.min(88, Math.max(0, node.position.y / 6))}%` }}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
       </div>
     );
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="workflow-studio">
-      <div className="border-b border-border px-5 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="border-b border-border bg-gradient-to-r from-background via-card to-background px-5 py-4" data-testid="workflow-command-center">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
               <GitBranch className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">Agent Workflow Studio</h2>
+              <h1 className="text-lg font-semibold text-foreground">Agent Workflow Studio</h1>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Compose Agent, Subagent, MCP, Tool, Shell, Artifact, Approval, Condition, and Join nodes as a visual DAG.</p>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Compose Agent, Subagent, MCP, Tool, Shell, Artifact, Approval, Condition, and Join nodes as a visual DAG.</p>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span className="rounded-md border border-border bg-background px-2 py-1">Workflow: {draft.name}</span>
+              <span className="rounded-md border border-border bg-background px-2 py-1">Profile: {draft.profileId}</span>
+              <span className="rounded-md border border-border bg-background px-2 py-1">Permission: {draft.permissionPreset}</span>
+              <span className="rounded-md border border-border bg-background px-2 py-1">Latest run: {selectedRun?.status || 'none'}</span>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex max-w-xl flex-col items-start gap-3 sm:items-end">
+            {releaseReadiness && (
+              <div className="flex flex-wrap justify-start gap-2 text-xs text-muted-foreground sm:justify-end" data-testid="workflow-release-readiness">
+                {((releaseReadiness.gates as Array<Record<string, unknown>> | undefined) || []).map((gate) => (
+                  <span key={String(gate.id)} className="rounded-md border border-border bg-background px-2 py-1">
+                    {String(gate.label)}: {String(gate.status)}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => void loadData().catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Failed to refresh'))} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
               <RefreshCw className="h-4 w-4" />
               Refresh
@@ -877,25 +891,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <ClipboardCheck className="h-4 w-4" />
               Benchmarks
             </button>
-            <button type="button" data-testid="workflow-run" onClick={startRun} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
+            <button type="button" data-testid="workflow-run" onClick={() => setIsRunSetupOpen(true)} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
               <Play className="h-4 w-4" />
               Run
             </button>
-            <button type="button" data-testid="workflow-mobile-run" onClick={startRun} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted disabled:opacity-50 sm:hidden">
+            <button type="button" data-testid="workflow-mobile-run" onClick={() => setIsRunSetupOpen(true)} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted disabled:opacity-50 sm:hidden">
               <Play className="h-4 w-4" />
               Mobile run
             </button>
+            </div>
           </div>
         </div>
-        {releaseReadiness && (
-          <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground" data-testid="workflow-release-readiness">
-            {((releaseReadiness.gates as Array<Record<string, unknown>> | undefined) || []).map((gate) => (
-              <span key={String(gate.id)} className="rounded-md border border-border bg-card px-2 py-1">
-                {String(gate.label)}: {String(gate.status)}
-              </span>
-            ))}
-          </div>
-        )}
         <div className="mt-4 flex gap-2">
           {views.map((view) => {
             const Icon = view === 'Library' ? LibraryBig : view === 'Editor' ? GitBranch : History;
@@ -915,13 +921,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             );
           })}
         </div>
-        {draft.inputs?.length > 0 && (
-          <div className="mt-4 rounded-md border border-border bg-card p-3" data-testid="workflow-run-inputs">
+        {isRunSetupOpen && (
+          <div className="mt-4 rounded-md border border-primary/30 bg-background p-3 shadow-sm" data-testid="workflow-run-setup-drawer">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-foreground">Run inputs</h3>
-              <span className="text-xs text-muted-foreground">{draft.inputs.length} field{draft.inputs.length === 1 ? '' : 's'}</span>
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Run setup</h3>
+                <p className="text-xs text-muted-foreground">{draft.inputs.length} input field{draft.inputs.length === 1 ? '' : 's'} before execution.</p>
+              </div>
+              <button type="button" onClick={() => setIsRunSetupOpen(false)} className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted">Close</button>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" data-testid="workflow-run-inputs">
               {draft.inputs.map((input) => (
                 <label key={input.id} className="text-xs font-medium text-muted-foreground">
                   {input.label || input.id}{input.required ? ' *' : ''}
@@ -943,6 +952,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 </label>
               ))}
             </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => setIsRunSetupOpen(false)} className="inline-flex h-9 items-center rounded-md border border-border px-3 text-sm hover:bg-muted">Cancel</button>
+              <button type="button" onClick={() => void startRun().then(() => setIsRunSetupOpen(false))} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
+                <Play className="h-4 w-4" />
+                Start run
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -955,22 +971,41 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
       {activeView === 'Library' && (
         <div className="min-h-0 flex-1 overflow-auto p-5" data-testid="workflow-library">
-          <div className="mb-4 flex flex-wrap gap-2">
-            <button type="button" onClick={() => selectWorkflow(createBlankWorkflow(selectedProject))} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
-              <Plus className="h-4 w-4" />
-              New workflow
-            </button>
-            <button type="button" onClick={duplicateWorkflow} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
-              <ClipboardCheck className="h-4 w-4" />
-              Duplicate
-            </button>
-            <button type="button" onClick={importFromClipboard} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
-              <Upload className="h-4 w-4" />
-              Import
-            </button>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">Template gallery</h2>
+              <p className="text-sm text-muted-foreground">Choose a workflow, inspect dependencies, then run or clone it into this project.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => selectWorkflow(createBlankWorkflow(selectedProject))} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                <Plus className="h-4 w-4" />
+                New workflow
+              </button>
+              <button type="button" onClick={duplicateWorkflow} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                <ClipboardCheck className="h-4 w-4" />
+                Duplicate
+              </button>
+              <button type="button" onClick={importFromClipboard} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                <Upload className="h-4 w-4" />
+                Import
+              </button>
+            </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {workflows.map((workflow) => (
+          <div className="mb-4 flex flex-wrap gap-2">
+            {libraryFilters.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => setLibraryFilter(filter)}
+                className={cn('rounded-md border px-3 py-1.5 text-xs', libraryFilter === filter ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted')}
+              >
+                {filter}
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3" data-testid="workflow-library-gallery">
+            {filteredWorkflows.map((workflow) => (
               <div
                 role="button"
                 tabIndex={0}
@@ -981,7 +1016,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   if (event.key === 'Enter' || event.key === ' ') selectWorkflow(workflow);
                 }}
                 className={cn(
-                  'rounded-md border bg-card p-4 text-left transition-colors hover:bg-muted/40',
+                  'rounded-md border bg-card p-4 text-left shadow-sm transition-colors hover:bg-muted/40',
                   workflow.id === selectedWorkflowId ? 'border-primary' : 'border-border',
                 )}
               >
@@ -1000,32 +1035,60 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   <span className="rounded border border-border px-2 py-1">{workflow.edges.length} edges</span>
                   <span className="rounded border border-border px-2 py-1">{workflow.profileId}</span>
                 </div>
-                <button
-                  type="button"
-                  data-testid="workflow-clone-template"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void cloneWorkflow(workflow);
-                  }}
-                  className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-muted"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  Clone
-                </button>
-                <button
-                  type="button"
-                  data-testid="workflow-smoke-template"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void smokeTemplate(workflow);
-                  }}
-                  className="ml-2 mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-muted"
-                >
-                  <Check className="h-3.5 w-3.5" />
-                  Smoke
-                </button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      selectWorkflow(workflow);
+                      setIsRunSetupOpen(true);
+                    }}
+                    className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    Run
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="workflow-clone-template"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void cloneWorkflow(workflow);
+                    }}
+                    className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-muted"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Clone
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="workflow-smoke-template"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void smokeTemplate(workflow);
+                    }}
+                    className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-muted"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    Smoke
+                  </button>
+                </div>
               </div>
             ))}
+          </div>
+          <aside className="rounded-md border border-border bg-card p-4 shadow-sm" data-testid="workflow-template-preview">
+            <h3 className="text-sm font-semibold text-foreground">{draft.name}</h3>
+            <p className="mt-2 text-xs text-muted-foreground">{draft.description || 'No description.'}</p>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+              <span className="rounded border border-border px-2 py-1">{draft.nodes.length} nodes</span>
+              <span className="rounded border border-border px-2 py-1">{draft.edges.length} edges</span>
+              <span className="rounded border border-border px-2 py-1">{draft.permissionPreset}</span>
+              <span className="rounded border border-border px-2 py-1">{draft.inputs.length} inputs</span>
+            </div>
+            <div className="mt-4 rounded border border-border bg-muted/20 p-3 text-[11px] text-muted-foreground">
+              Expected outputs: {(draft.outputs || []).map((output) => output.label || output.id).join(', ') || 'summary'}
+            </div>
+          </aside>
           </div>
         </div>
       )}
@@ -1044,23 +1107,35 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
               />
             </label>
-            <div className="mt-3 grid gap-2">
-              {filteredNodeTypes.map((item) => (
-                <button
-                  key={item.type}
-                  type="button"
-                  data-testid="workflow-add-node"
-                  data-node-type={item.type}
-                  onClick={() => addNode(item.type)}
-                  className="flex items-start gap-3 rounded-md border border-border p-3 text-left hover:bg-muted"
-                >
-                  <item.icon className="mt-0.5 h-4 w-4 text-primary" />
-                  <span>
-                    <span className="block text-sm font-medium text-foreground">{item.label}</span>
-                    <span className="block text-xs text-muted-foreground">{item.description}</span>
-                  </span>
-                </button>
-              ))}
+            <div className="mt-3 space-y-4">
+              {paletteGroups.map((group) => {
+                const items = filteredNodeTypes.filter((item) => group.types.includes(item.type));
+                if (items.length === 0) return null;
+                return (
+                  <section key={group.id}>
+                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</h4>
+                    <div className="grid gap-2">
+                      {items.map((item) => (
+                        <button
+                          key={item.type}
+                          type="button"
+                          data-testid="workflow-add-node"
+                          data-node-type={item.type}
+                          onClick={() => addNode(item.type)}
+                          className="flex items-start gap-3 rounded-md border border-border bg-card p-3 text-left shadow-sm hover:bg-muted"
+                        >
+                          <item.icon className="mt-0.5 h-4 w-4 text-primary" />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-foreground">{item.label}</span>
+                            <span className="block text-xs text-muted-foreground">{item.description}</span>
+                            {riskyNodeTypes.has(item.type) && <span className="mt-2 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">permission gate</span>}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
           </aside>
 
@@ -1101,7 +1176,6 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <Download className="h-4 w-4" />
                 Export
               </button>
-              {connectFrom && <span className="inline-flex h-9 items-center rounded-md border border-primary/30 bg-primary/10 px-3 text-sm text-primary">Connect from {connectFrom}</span>}
             </div>
             {validationMessages.length > 0 && (
               <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -1119,8 +1193,24 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
           <aside className="min-h-0 overflow-auto border-l border-border p-4" data-testid="workflow-node-inspector">
             <h3 className="text-sm font-semibold text-foreground">Inspector</h3>
+            <div className="mt-3 grid grid-cols-2 gap-1 rounded-md border border-border bg-muted/20 p-1" data-testid="workflow-inspector-tabs">
+              {inspectorTabs.map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setInspectorTab(tab)}
+                  className={cn('rounded px-2 py-1 text-xs', inspectorTab === tab ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/60')}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
             {selectedNode ? (
               <div className="mt-3 space-y-3">
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+                  <span className="font-semibold text-foreground">{selectedNode.type} / {inspectorTab}</span>
+                  <span className="mt-1 block">Configure this node without changing the workflow storage contract.</span>
+                </div>
                 <label className="block text-xs font-medium text-muted-foreground">
                   Title
                   <input value={selectedNode.title} onChange={(event) => updateNode(selectedNode.id, { title: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
@@ -1206,7 +1296,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         onClick={() => insertVariable(variable)}
                         className="block w-full rounded border border-border bg-muted/40 px-2 py-1 text-left text-[11px] text-foreground hover:bg-muted"
                       >
-                        {'{{'}{variable}{'}}'}
+                        <span className="font-mono">{'{{'}{variable}{'}}'}</span>
+                        <span className="ml-2 text-muted-foreground">{variable.startsWith('inputs.') ? 'input' : 'upstream output'}</span>
                       </button>
                     ))}
                   </div>
@@ -1248,7 +1339,30 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       )}
 
       {activeView === 'Runs' && (
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[minmax(0,1fr)_360px] lg:overflow-hidden" data-testid="workflow-runs">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[300px_minmax(0,1fr)_400px] lg:overflow-hidden" data-testid="workflow-runs">
+          <aside className="min-h-0 overflow-auto border-r border-border p-4">
+            <h3 className="text-sm font-semibold text-foreground">Run list</h3>
+            <div className="mt-3 space-y-2">
+              {runs.map((run) => {
+                const failedCount = Object.values(run.nodeRuns || {}).filter((nodeRun) => nodeRun.status === 'failed').length;
+                const approvalCount = Object.values(run.nodeRuns || {}).filter((nodeRun) => nodeRun.status === 'waiting_approval').length;
+                return (
+                  <button key={`run-list-${run.id}`} type="button" className="block w-full rounded-md border border-border bg-card p-3 text-left text-xs hover:bg-muted">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-semibold text-foreground">{run.workflowName}</span>
+                      <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                      <span>{Object.keys(run.nodeRuns || {}).length} nodes</span>
+                      <span>{failedCount} failed</span>
+                      <span>{approvalCount} approvals</span>
+                      <span>{run.queue?.workerId || 'no worker'}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
           <main className="min-h-0 overflow-auto p-4">
             {selectedRun ? renderCanvas(selectedRun) : (
               <div className="rounded-md border border-dashed border-border p-10 text-center text-sm text-muted-foreground">No workflow run yet.</div>
@@ -1257,18 +1371,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
           <aside className="min-h-0 overflow-auto border-l border-border p-4" data-testid="workflow-run-console">
             {approvalRequests.length > 0 && (
               <section className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="workflow-approval-inbox">
+                <div data-testid="workflow-approval-inbox-panel">
                 <h3 className="text-sm font-semibold text-amber-900">Approval Inbox</h3>
                 <div className="mt-2 space-y-2">
                   {approvalRequests.map((approval) => (
                     <div key={String(approval.id)} className="rounded border border-amber-200 bg-background p-2 text-xs">
                       <div className="font-semibold text-foreground">{String(approval.nodeTitle || approval.nodeId)}</div>
-                      <div className="mt-1 text-amber-700">{String(approval.riskLevel || 'medium')} · {String(approval.reason || 'Waiting for approval')}</div>
+                      <div className="mt-1 text-amber-700">{String(approval.riskLevel || 'medium')} - {String(approval.reason || 'Waiting for approval')}</div>
                       <div className="mt-2 flex gap-2">
                         <button type="button" onClick={() => void decideApproval(String(approval.id), 'approve')} className="rounded bg-primary px-2 py-1 text-[11px] text-primary-foreground">Approve</button>
                         <button type="button" onClick={() => void decideApproval(String(approval.id), 'reject')} className="rounded border border-border px-2 py-1 text-[11px] hover:bg-muted">Reject</button>
                       </div>
                     </div>
                   ))}
+                </div>
                 </div>
               </section>
             )}
@@ -1312,7 +1428,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         {nodeRun.error && <p className="mt-1 text-xs text-red-700">{nodeRun.error}</p>}
                         {nodeRun.error && (
                           <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-[11px] text-red-700" data-testid="workflow-failure-diagnosis">
+                            <span data-testid="workflow-run-diagnosis-panel" className="block">
                             Failure diagnosis: inspect node input/output, permission decision {nodeRun.permissionDecision || 'n/a'}, then retry from this node or rollback an attached checkpoint.
+                            </span>
                           </div>
                         )}
                         {nodeRun.logs?.length ? <p className="mt-1 text-xs text-muted-foreground">{nodeRun.logs.at(-1)}</p> : null}

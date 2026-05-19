@@ -11,6 +11,20 @@ describe('WorkflowStudio source contract', () => {
     const source = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
 
     expect(source).toContain('data-testid="workflow-studio"');
+    expect(source).toContain("from '@xyflow/react'");
+    expect(source).toContain('ReactFlow');
+    expect(source).toContain('MiniMap');
+    expect(source).toContain('Controls');
+    expect(source).toContain('Handle');
+    expect(source).toContain('ReactFlowProvider');
+    expect(source).toContain('data-testid="workflow-command-center"');
+    expect(source).toContain('data-testid="workflow-react-flow-canvas"');
+    expect(source).toContain('data-testid="workflow-run-setup-drawer"');
+    expect(source).toContain('data-testid="workflow-library-gallery"');
+    expect(source).toContain('data-testid="workflow-template-preview"');
+    expect(source).toContain('data-testid="workflow-inspector-tabs"');
+    expect(source).toContain('data-testid="workflow-approval-inbox-panel"');
+    expect(source).toContain('data-testid="workflow-run-diagnosis-panel"');
     expect(source).toContain('data-testid="workflow-editor"');
     expect(source).toContain('data-testid="workflow-dag-canvas"');
     expect(source).toContain('data-testid="workflow-add-node"');
