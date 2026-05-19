@@ -385,6 +385,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [workflowToolRegistry, setWorkflowToolRegistry] = useState<Array<Record<string, any>>>([]);
   const [workflowMcpCatalog, setWorkflowMcpCatalog] = useState<Array<Record<string, any>>>([]);
   const [templateProductState, setTemplateProductState] = useState<Record<string, any> | null>(null);
+  const [observabilityState, setObservabilityState] = useState<Record<string, any> | null>(null);
   const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
@@ -613,15 +614,27 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const marketplaceTrustBadge = templateProductState?.detail?.trust ? `Trust: ${templateProductState.detail.trust}` : 'Trust: built-in / local enterprise / community / unsigned.';
   const enterpriseTemplatePack = workflows.filter((workflow) => ['recipe-crashsight-analysis', 'recipe-redmine-review', 'recipe-code-impact-analysis', 'recipe-pr-description'].includes(workflow.id)).map((workflow) => workflow.name).join(', ') || 'CrashSight Analysis, Redmine Review, Code Impact Analysis, Publish PR.';
   const eventTimelineCorrelation = useMemo(() => selectedRun ? `${selectedRun.id}: timeline events link back to run nodes` : 'No run selected.', [selectedRun]);
-  const replayVisualizer = useMemo(() => selectedRun ? `${(runEvents[selectedRun.id] || selectedRun.timelineEvents || []).length} events available for replay` : 'No replay events.', [runEvents, selectedRun]);
-  const failureClassifier = useMemo(() => Object.values(selectedRun?.nodeRuns || {}).some((nodeRun) => nodeRun.error) ? 'classified: permission / dependency / timeout / agent / mcp / shell / schema' : 'No failures to classify.', [selectedRun]);
-  const recommendedRecoveryAction = useMemo(() => failedRuns.length > 0 ? 'Retry node, retry from node, rollback checkpoint, or edit config.' : 'No recovery action needed.', [failedRuns.length]);
-  const artifactGallery = useMemo(() => (selectedRun?.artifacts || []).map((artifact) => String(artifact.title || artifact.path || artifact.id)).slice(0, 4), [selectedRun]);
-  const screenshotEvidenceViewer = 'Run screenshots are available from output/playwright/screenshots with issue-linked filenames.';
-  const benchmarkTrend = 'Benchmark trend tracks latest result, duration, and failure reason per smoke workflow.';
-  const releaseReadinessDetail = useMemo(() => releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Readiness detail is waiting for the next gate run.', [releaseReadiness]);
-  const testCoverageMap = 'Maps workflow features to unit, source contract, e2e, and screenshot gates.';
-  const evidenceExport = selectedRun ? `${selectedRun.id}: commands, screenshots, run id, commit sha` : 'Select a run to export evidence.';
+  const replayVisualizer = useMemo(() => selectedRun ? `${observabilityState?.evidenceBundle?.replay?.events?.length ?? (runEvents[selectedRun.id] || selectedRun.timelineEvents || []).length} events available for replay` : 'No replay events.', [observabilityState, runEvents, selectedRun]);
+  const failureClassifier = useMemo(() => observabilityState?.failures?.failures?.length
+    ? observabilityState.failures.failures.map((failure: any) => `${failure.nodeId}:${failure.category}`).join(', ')
+    : Object.values(selectedRun?.nodeRuns || {}).some((nodeRun) => nodeRun.error) ? 'classified: permission / dependency / timeout / agent / mcp / shell / schema' : 'No failures to classify.', [observabilityState, selectedRun]);
+  const recommendedRecoveryAction = useMemo(() => observabilityState?.recovery?.actions?.length
+    ? observabilityState.recovery.actions.flatMap((item: any) => item.recommendations || []).slice(0, 3).join(', ')
+    : failedRuns.length > 0 ? 'Retry node, retry from node, rollback checkpoint, or edit config.' : 'No recovery action needed.', [failedRuns.length, observabilityState]);
+  const artifactGallery = useMemo(() => (observabilityState?.artifacts?.artifacts || selectedRun?.artifacts || []).map((artifact: any) => String(artifact.title || artifact.path || artifact.id)).slice(0, 4), [observabilityState, selectedRun]);
+  const screenshotEvidenceViewer = observabilityState?.evidence?.screenshots?.length
+    ? `${observabilityState.evidence.screenshots.length} screenshot evidence file(s) available.`
+    : 'Run screenshots are available from output/playwright/screenshots with issue-linked filenames.';
+  const benchmarkTrend = observabilityState?.trend?.results?.length
+    ? `${observabilityState.trend.results.length} benchmark trend point(s), latest ${observabilityState.trend.results.at(-1)?.status || 'unknown'}.`
+    : 'Benchmark trend tracks latest result, duration, and failure reason per smoke workflow.';
+  const releaseReadinessDetail = useMemo(() => observabilityState?.evidenceBundle?.releaseReadiness
+    ? stringifyValue(observabilityState.evidenceBundle.releaseReadiness).slice(0, 120)
+    : releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Readiness detail is waiting for the next gate run.', [observabilityState, releaseReadiness]);
+  const testCoverageMap = observabilityState?.coverageMap?.coverage?.length
+    ? observabilityState.coverageMap.coverage.map((item: any) => item.file).join(', ')
+    : 'Maps workflow features to unit, source contract, e2e, and screenshot gates.';
+  const evidenceExport = selectedRun ? `${selectedRun.id}: ${observabilityState?.evidenceBundle ? 'bundle ready' : 'commands, screenshots, run id, commit sha'}` : 'Select a run to export evidence.';
   const workflowChangeHistory = useMemo(() => `${historyPast.length} draft revisions in undo history`, [historyPast.length]);
   const draftPublishFlow = 'Draft and published definitions are separated; runs prefer published revisions.';
   const reviewRequest = 'Review request shows DAG diff and risk changes before publish.';
@@ -745,6 +758,37 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         upgrade: upgradeResponse.ok ? upgradeData.status : null,
         exportPreview: exportPreviewResponse.ok ? exportPreviewData.preview : null,
       });
+      if (selectedRun?.id) {
+        const [failuresResponse, recoveryResponse, artifactsResponse, evidenceResponse, trendResponse, coverageResponse, bundleResponse] = await Promise.all([
+          api.workflowRunFailures(selectedRun.id),
+          api.workflowRecoveryActions(selectedRun.id),
+          api.workflowRunArtifacts(selectedRun.id),
+          api.workflowRunEvidence(selectedRun.id),
+          api.workflowBenchmarkTrend(),
+          api.workflowCoverageMap(),
+          api.exportWorkflowRunEvidence(selectedRun.id),
+        ]);
+        const [failuresData, recoveryData, artifactsData, evidenceData, trendData, coverageData, bundleData] = await Promise.all([
+          failuresResponse.json(),
+          recoveryResponse.json(),
+          artifactsResponse.json(),
+          evidenceResponse.json(),
+          trendResponse.json(),
+          coverageResponse.json(),
+          bundleResponse.json(),
+        ]);
+        if (!cancelled) {
+          setObservabilityState({
+            failures: failuresResponse.ok ? failuresData.failures : null,
+            recovery: recoveryResponse.ok ? recoveryData.recovery : null,
+            artifacts: artifactsResponse.ok ? artifactsData.artifacts : null,
+            evidence: evidenceResponse.ok ? evidenceData.evidence : null,
+            trend: trendResponse.ok ? trendData.trend : null,
+            coverageMap: coverageResponse.ok ? coverageData.coverageMap : null,
+            evidenceBundle: bundleResponse.ok ? bundleData.bundle : null,
+          });
+        }
+      }
     };
     void loadSecurity().catch(() => undefined);
     return () => {

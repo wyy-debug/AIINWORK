@@ -991,4 +991,61 @@ describe('workflow studio service', () => {
     expect(upgraded.upgraded).toBe(true);
     expect(store.getTemplateUpgradeStatus('template-installed').updateAvailable).toBe(false);
   });
+
+  test('exports real observability, replay, failure, artifact, screenshot, benchmark, coverage, and evidence data', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-observe-'));
+    const screenshotDir = path.join(rootDir, 'screenshots');
+    await fs.mkdir(screenshotDir, { recursive: true });
+    await fs.writeFile(path.join(screenshotDir, 'REQ-157-workflow-screenshot-evidence-viewer.png'), 'png');
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      screenshotDir,
+      executors: {
+        agent: async () => {
+          throw new Error('schema invalid: missing output.summary');
+        },
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'observe-flow',
+      name: 'Observe Flow',
+      profileId: 'build',
+      nodes: [
+        { id: 'agent', type: 'agent', prompt: 'fail' },
+        { id: 'artifact', type: 'artifact' },
+      ],
+      edges: [],
+    });
+
+    const run = await store.createRun('observe-flow');
+    const failures = store.classifyRunFailures(run.id);
+    const recovery = store.getRecommendedRecoveryActions(run.id);
+    const artifacts = store.listRunArtifacts(run.id);
+    const evidence = await store.listRunEvidence(run.id);
+    const bundle = await store.exportEvidenceBundle(run.id);
+    await store.runBenchmarks({ limit: 1 });
+    const trend = store.getBenchmarkTrend();
+    const coverage = store.getTestCoverageMap();
+
+    expect(store.replayRun(run.id).events.map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_failed']));
+    expect(failures.failures).toEqual([expect.objectContaining({ nodeId: 'agent', category: 'schema' })]);
+    expect(recovery.actions[0].recommendations).toEqual(expect.arrayContaining(['fix node mapping']));
+    expect(artifacts.artifacts.length).toBeGreaterThan(0);
+    expect(evidence.screenshots).toEqual([
+      expect.objectContaining({ name: 'REQ-157-workflow-screenshot-evidence-viewer.png', kind: 'playwright-screenshot' }),
+    ]);
+    expect(bundle).toMatchObject({
+      run: expect.objectContaining({ id: run.id }),
+      replay: expect.objectContaining({ runId: run.id }),
+      releaseReadiness: expect.any(Object),
+      coverageMap: expect.any(Object),
+    });
+    expect(trend.results.length).toBeGreaterThan(0);
+    expect(coverage.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ file: 'server/services/tests/workflow-studio-service.test.mjs' }),
+    ]));
+
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
 });

@@ -400,6 +400,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   replayWorkflowRun: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/replay`),
+  workflowRunFailures: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/failures`),
+  workflowRecoveryActions: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/recovery-actions`),
+  workflowRunArtifacts: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/artifacts`),
+  workflowRunEvidence: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/evidence`),
+  exportWorkflowRunEvidence: (runId) => apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/evidence/export`),
   workflowNodeIo: (runId, nodeId) =>
     apiFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/io`),
   workflowNodeLogs: (runId, nodeId) =>
@@ -457,6 +462,8 @@ export const api = {
       body: JSON.stringify({}),
     }),
   workflowBenchmarkReadiness: () => apiFetch('/api/workflow-benchmarks'),
+  workflowBenchmarkTrend: () => apiFetch('/api/workflow-benchmarks/trend'),
+  workflowCoverageMap: () => apiFetch('/api/workflow-benchmarks/coverage-map'),
   runWorkflowBenchmarks: (payload = {}) =>
     apiFetch('/api/workflow-benchmarks/runs', {
       method: 'POST',

@@ -84,6 +84,61 @@ router.get('/:runId/replay', async (req, res) => {
   }
 });
 
+router.get('/:runId/failures', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const failures = defaultWorkflowStudioStore.classifyRunFailures(req.params.runId);
+    if (!failures) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, failures });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to classify workflow run failures');
+  }
+});
+
+router.get('/:runId/recovery-actions', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const recovery = defaultWorkflowStudioStore.getRecommendedRecoveryActions(req.params.runId);
+    if (!recovery) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, recovery });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to recommend workflow recovery actions');
+  }
+});
+
+router.get('/:runId/artifacts', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const artifacts = defaultWorkflowStudioStore.listRunArtifacts(req.params.runId);
+    if (!artifacts) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, artifacts });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to list workflow run artifacts');
+  }
+});
+
+router.get('/:runId/evidence', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const evidence = await defaultWorkflowStudioStore.listRunEvidence(req.params.runId);
+    if (!evidence) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, evidence });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to list workflow run evidence');
+  }
+});
+
+router.get('/:runId/evidence/export', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const bundle = await defaultWorkflowStudioStore.exportEvidenceBundle(req.params.runId);
+    if (!bundle) return res.status(404).json({ success: false, error: 'Workflow run not found' });
+    return res.json({ success: true, bundle });
+  } catch (error) {
+    return sendRunError(res, error, 500, 'Failed to export workflow evidence bundle');
+  }
+});
+
 router.get('/:runId/nodes/:nodeId/logs', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();

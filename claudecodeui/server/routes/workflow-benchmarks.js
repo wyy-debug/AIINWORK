@@ -21,6 +21,24 @@ router.get('/', async (_req, res) => {
   }
 });
 
+router.get('/trend', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, trend: defaultWorkflowStudioStore.getBenchmarkTrend({ limit: req.query.limit || 20 }) });
+  } catch (error) {
+    sendBenchmarkError(res, error, 500, 'Failed to read workflow benchmark trend');
+  }
+});
+
+router.get('/coverage-map', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, coverageMap: defaultWorkflowStudioStore.getTestCoverageMap() });
+  } catch (error) {
+    sendBenchmarkError(res, error, 500, 'Failed to read workflow test coverage map');
+  }
+});
+
 router.post('/runs', async (req, res) => {
   try {
     const benchmarks = await defaultWorkflowStudioStore.runBenchmarks(req.body || {});
