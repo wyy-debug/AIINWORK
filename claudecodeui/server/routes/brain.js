@@ -4,6 +4,7 @@ import {
   brainQualityBaselineService,
   formatBrainQualityReport,
 } from '../services/brain-quality-baseline-service.js';
+import { brainPostTurnExtractionService } from '../services/brain-post-turn-extraction-service.js';
 import { brainSymbolicCanvasService } from '../services/brain-symbolic-canvas-service.js';
 import { brainStore } from '../services/brain-store-service.js';
 import { readResolvedBrainRuntimeConfig } from '../services/mtl-code-model-service.js';
@@ -11,6 +12,7 @@ import { readResolvedBrainRuntimeConfig } from '../services/mtl-code-model-servi
 export function createBrainRouter({
   store = brainStore,
   qualityBaselineService = brainQualityBaselineService,
+  postTurnExtractionService = brainPostTurnExtractionService,
   symbolicCanvasService = brainSymbolicCanvasService,
   readConfig = readResolvedBrainRuntimeConfig,
 } = {}) {
@@ -87,6 +89,35 @@ export function createBrainRouter({
     } catch (error) {
       console.error('Brain node evidence error:', error);
       res.status(500).json({ error: error.message || 'Failed to load Brain node evidence' });
+    }
+  });
+
+  router.post('/atom/:atomId/control', async (req, res) => {
+    try {
+      const config = await readConfig();
+      if (config.enabled === false) {
+        res.json({
+          success: true,
+          atom: {
+            enabled: false,
+            status: 'disabled',
+          },
+        });
+        return;
+      }
+      const atom = postTurnExtractionService.controlAtom({
+        atomId: req.params.atomId,
+        action: String(req.body?.action || ''),
+        targetAtomId: String(req.body?.targetAtomId || ''),
+      });
+      if (!atom) {
+        res.status(404).json({ error: 'Brain atom control target not found' });
+        return;
+      }
+      res.json({ success: true, atom });
+    } catch (error) {
+      console.error('Brain atom control error:', error);
+      res.status(500).json({ error: error.message || 'Failed to update Brain atom' });
     }
   });
 

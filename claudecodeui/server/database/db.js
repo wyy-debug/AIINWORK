@@ -325,6 +325,18 @@ const runMigrations = () => {
     db.exec(BRAIN_COMPACTIONS_SESSION_INDEX_SQL);
     db.exec(BRAIN_COMPACTIONS_PROJECT_INDEX_SQL);
     db.exec(BRAIN_ATOMS_TABLE_SQL);
+    const brainAtomColumns = db.prepare("PRAGMA table_info(brain_atoms)").all();
+    const brainAtomColumnNames = brainAtomColumns.map(col => col.name);
+    for (const [columnName, columnSql] of [
+      ['pinned', 'ALTER TABLE brain_atoms ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0'],
+      ['superseded_by_id', 'ALTER TABLE brain_atoms ADD COLUMN superseded_by_id TEXT'],
+      ['conflict_reason', 'ALTER TABLE brain_atoms ADD COLUMN conflict_reason TEXT'],
+    ]) {
+      if (!brainAtomColumnNames.includes(columnName)) {
+        console.log(`Running migration: Adding ${columnName} column to brain_atoms`);
+        db.exec(columnSql);
+      }
+    }
     db.exec(BRAIN_ATOMS_SESSION_INDEX_SQL);
     db.exec(BRAIN_ATOMS_PROJECT_INDEX_SQL);
     db.exec(BRAIN_ATOMS_STABLE_INDEX_SQL);

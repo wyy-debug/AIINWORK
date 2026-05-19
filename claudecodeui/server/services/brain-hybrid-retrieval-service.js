@@ -30,6 +30,7 @@ function normalizeDocuments({ atoms = [], scenarios = [], projectProfile = null 
       title: atom.title,
       summary: atom.summary,
       status: atom.status,
+      atomType: atom.atomType,
       confidence: atom.confidence,
       entities: atom.entities || [],
       updatedAtMs: atom.updatedAtMs || atom.createdAtMs || 0,
@@ -41,6 +42,7 @@ function normalizeDocuments({ atoms = [], scenarios = [], projectProfile = null 
       title: scenario.title,
       summary: scenario.summary,
       status: scenario.status,
+      atomType: '',
       confidence: 0.8,
       entities: [],
       updatedAtMs: scenario.updatedAtMs || scenario.createdAtMs || 0,
@@ -52,6 +54,7 @@ function normalizeDocuments({ atoms = [], scenarios = [], projectProfile = null 
       title: projectProfile.profileType || 'Project workflow profile',
       summary: projectProfile.summary,
       status: 'active',
+      atomType: '',
       confidence: 0.76,
       entities: extractBrainEntities(projectProfile.summary),
       updatedAtMs: projectProfile.updatedAtMs || projectProfile.createdAtMs || 0,
@@ -126,6 +129,7 @@ export function createBrainHybridRetrievalService({
     const projectProfile = projectName ? store.getProjectProfile({ projectName, provider }) : null;
     const documents = normalizeDocuments({ atoms, scenarios, projectProfile });
     const queryTokens = tokenizeBrainText(query);
+    const queryLooksLikeFailure = /\b(fail|failed|failure|error|rollback|leak|timeout|conflict|vitest|test)\b/i.test(query);
     const queryEntities = extractBrainEntities(query).map((entity) => entity.toLowerCase());
     const newest = documents.reduce((max, document) => Math.max(max, Number(document.updatedAtMs || 0)), 0) || clock();
 
@@ -145,6 +149,9 @@ export function createBrainHybridRetrievalService({
       }),
       rankedSignal('task-status', documents, (document) => (document.status === 'active' ? 1 : 0.3)),
       rankedSignal('source-confidence', documents, (document) => Number(document.confidence || 0.5)),
+      rankedSignal('lesson-fit', documents, (document) => (
+        queryLooksLikeFailure && document.atomType === 'lesson' ? 1 : 0
+      )),
     ];
 
     if (vectorAdapter?.enabled && typeof vectorAdapter.search === 'function') {

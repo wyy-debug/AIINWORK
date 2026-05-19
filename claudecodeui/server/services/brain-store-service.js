@@ -117,6 +117,9 @@ const mapAtom = (row) => row && ({
   status: row.status || 'active',
   stableKey: row.stable_key,
   confidence: Number(row.confidence || 1),
+  pinned: Boolean(row.pinned),
+  supersededById: row.superseded_by_id || '',
+  conflictReason: row.conflict_reason || '',
   entities: parseJson(row.entities_json, []),
   sourceEventIds: parseJson(row.source_event_ids_json, []),
   refIds: parseJson(row.ref_ids_json, []),
@@ -508,6 +511,9 @@ export function createBrainStore({ db = defaultDb } = {}) {
     status = 'active',
     stableKey = '',
     confidence = 1,
+    pinned = false,
+    supersededById = '',
+    conflictReason = '',
     entities = [],
     sourceEventIds = [],
     refIds = [],
@@ -524,10 +530,10 @@ export function createBrainStore({ db = defaultDb } = {}) {
     db.prepare(`
       INSERT INTO brain_atoms (
         id, session_id, provider, project_name, atom_type, title, summary, status,
-        stable_key, confidence, entities_json, source_event_ids_json, ref_ids_json,
-        created_at_ms, updated_at_ms
+        stable_key, confidence, pinned, superseded_by_id, conflict_reason,
+        entities_json, source_event_ids_json, ref_ids_json, created_at_ms, updated_at_ms
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, provider, stable_key) DO UPDATE SET
         project_name = excluded.project_name,
         atom_type = excluded.atom_type,
@@ -535,6 +541,9 @@ export function createBrainStore({ db = defaultDb } = {}) {
         summary = excluded.summary,
         status = excluded.status,
         confidence = MAX(brain_atoms.confidence, excluded.confidence),
+        pinned = excluded.pinned,
+        superseded_by_id = excluded.superseded_by_id,
+        conflict_reason = excluded.conflict_reason,
         entities_json = excluded.entities_json,
         source_event_ids_json = excluded.source_event_ids_json,
         ref_ids_json = excluded.ref_ids_json,
@@ -550,6 +559,9 @@ export function createBrainStore({ db = defaultDb } = {}) {
       status || 'active',
       cleanStableKey,
       Number.isFinite(Number(confidence)) ? Number(confidence) : 1,
+      pinned ? 1 : 0,
+      supersededById || null,
+      conflictReason || null,
       safeJson(Array.isArray(entities) ? entities : []),
       safeJson(Array.isArray(sourceEventIds) ? sourceEventIds : []),
       safeJson(Array.isArray(refIds) ? refIds : []),
@@ -561,6 +573,53 @@ export function createBrainStore({ db = defaultDb } = {}) {
       WHERE session_id = ? AND provider = ? AND stable_key = ?
       LIMIT 1
     `).get(cleanSessionId, provider || 'claude', cleanStableKey));
+  };
+
+  const getAtom = ({ atomId = '' } = {}) => (
+    mapAtom(db.prepare('SELECT * FROM brain_atoms WHERE id = ?').get(atomId))
+  );
+
+  const updateAtom = ({
+    atomId = '',
+    status,
+    pinned,
+    supersededById,
+    conflictReason,
+    sourceEventIds,
+    refIds,
+    updatedAtMs = nowMs(),
+  } = {}) => {
+    const existing = getAtom({ atomId });
+    if (!existing) {
+      return null;
+    }
+    const nextStatus = readString(status) || existing.status;
+    const nextPinned = typeof pinned === 'boolean' ? pinned : existing.pinned;
+    const nextSupersededById = typeof supersededById === 'string' ? supersededById : existing.supersededById;
+    const nextConflictReason = typeof conflictReason === 'string' ? conflictReason : existing.conflictReason;
+    const nextSourceEventIds = Array.isArray(sourceEventIds) ? sourceEventIds : existing.sourceEventIds;
+    const nextRefIds = Array.isArray(refIds) ? refIds : existing.refIds;
+    db.prepare(`
+      UPDATE brain_atoms
+      SET status = ?,
+          pinned = ?,
+          superseded_by_id = ?,
+          conflict_reason = ?,
+          source_event_ids_json = ?,
+          ref_ids_json = ?,
+          updated_at_ms = ?
+      WHERE id = ?
+    `).run(
+      nextStatus,
+      nextPinned ? 1 : 0,
+      nextSupersededById || null,
+      nextConflictReason || null,
+      safeJson(nextSourceEventIds, []),
+      safeJson(nextRefIds, []),
+      updatedAtMs,
+      atomId,
+    );
+    return getAtom({ atomId });
   };
 
   const listAtoms = ({
@@ -1217,6 +1276,7 @@ export function createBrainStore({ db = defaultDb } = {}) {
     exportSession,
     getDiagnostics,
     getLatestCompaction,
+    getAtom,
     getNodeDetail,
     getProjectProfile,
     importSession,
@@ -1231,6 +1291,7 @@ export function createBrainStore({ db = defaultDb } = {}) {
     previewRetention,
     pruneRetention,
     repairSession,
+    updateAtom,
     upsertAtom,
     upsertProjectProfile,
     upsertScenario,

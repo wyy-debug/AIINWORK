@@ -11,4 +11,7 @@ test('chat finalization materializes Brain L1/L2/L3 layers after post-turn captu
   assert.match(source, /brainLayeredMemoryService/);
   assert.match(source, /materializeSessionLayers\(/);
   assert.match(source, /layered\.atoms\.length/);
+  assert.match(source, /brainPostTurnExtractionService/);
+  assert.match(source, /extractPostTurn\(/);
+  assert.match(source, /brain_post_turn_extraction/);
 });

@@ -118,6 +118,7 @@ import {
 import { brainCaptureService } from './services/brain-capture-service.js';
 import { brainCompactionService } from './services/brain-compaction-service.js';
 import { brainLayeredMemoryService } from './services/brain-layered-memory-service.js';
+import { brainPostTurnExtractionService } from './services/brain-post-turn-extraction-service.js';
 import { brainRecallService } from './services/brain-recall-service.js';
 import { brainStore } from './services/brain-store-service.js';
 import { getRequestIpAddress } from './services/hub-usage-service.js';
@@ -2754,20 +2755,30 @@ async function finalizeBrainForChatCommand({ writer, data, provider, checkpoint 
     if (!sessionId) {
         return null;
     }
-    brainCaptureService.captureRuntimeEvents({
+    const capturedRuntimeEvents = brainCaptureService.captureRuntimeEvents({
         data,
         provider,
         events: runtimeEvents,
         checkpoint,
         config,
     });
-    brainCaptureService.captureCheckpoint({
+    const capturedCheckpointEvent = brainCaptureService.captureCheckpoint({
         data,
         provider,
         checkpoint,
         config,
     });
     const projectName = checkpoint?.projectName || data?.options?.projectName || data?.projectName || '';
+    const postTurn = brainPostTurnExtractionService.extractPostTurn({
+        sessionId,
+        provider,
+        projectName,
+        events: [
+            ...(Array.isArray(capturedRuntimeEvents) ? capturedRuntimeEvents : []),
+            ...(capturedCheckpointEvent ? [capturedCheckpointEvent] : []),
+        ],
+        syncEventThreshold: config.postTurnExtraction?.syncEventThreshold || 30,
+    });
     const layered = brainLayeredMemoryService.materializeSessionLayers({
         sessionId,
         provider,
@@ -2812,6 +2823,21 @@ async function finalizeBrainForChatCommand({ writer, data, provider, checkpoint 
                 scenarioCount: layered.scenarios?.length || 0,
                 hasProjectProfile: Boolean(layered.projectProfile),
                 missingRefCount: layered.evidence?.missingRefCount || 0,
+            },
+        }));
+    }
+    if (writer && postTurn?.extractedAtoms?.length) {
+        writer.send(createNormalizedMessage({
+            kind: 'status',
+            status: 'brain_post_turn_extraction',
+            content: `Argus Brain extracted ${postTurn.extractedAtoms.length} post-turn atom(s).`,
+            sessionId,
+            provider,
+            brain: {
+                atomCount: postTurn.extractedAtoms.length,
+                dedupedCount: postTurn.dedupedCount || 0,
+                conflictCount: postTurn.conflicts?.length || 0,
+                mode: postTurn.mode || 'sync',
             },
         }));
     }
