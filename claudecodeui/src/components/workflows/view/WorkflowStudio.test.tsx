@@ -13,8 +13,14 @@ function readFlowGramNativeSource() {
     'flowgram/FlowGramWorkflowNodeRegistry.tsx',
     'flowgram/FlowGramWorkflowFormMeta.tsx',
     'flowgram/FlowGramWorkflowVariableCatalog.ts',
+    'flowgram/FlowGramWorkflowVariablePanelAdapter.ts',
     'flowgram/FlowGramRuntimeVisualBridge.ts',
     'flowgram/FlowGramWorkflowNodeRenderer.tsx',
+    'flowgram/FlowGramWorkflowEditorProps.tsx',
+    'flowgram/FlowGramWorkflowMaterials.tsx',
+    'flowgram/FlowGramWorkflowLineGuards.ts',
+    'flowgram/FlowGramWorkflowVisualConfig.ts',
+    'flowgram/FlowGramWorkflowShortcuts.ts',
   ].map((file) => readFileSync(resolve(currentDir, file), 'utf8')).join('\n');
 }
 
@@ -23,6 +29,8 @@ describe('WorkflowStudio source contract', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
     const compatibilityWrapperSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
     const shellSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorShell.tsx'), 'utf8');
+    const editorPropsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorProps.tsx'), 'utf8');
+    const materialsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowMaterials.tsx'), 'utf8');
     const registrySource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRegistry.tsx'), 'utf8');
     const formMetaSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowFormMeta.tsx'), 'utf8');
     const variableSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowVariableCatalog.ts'), 'utf8');
@@ -34,11 +42,22 @@ describe('WorkflowStudio source contract', () => {
     expect(compatibilityWrapperSource).not.toContain('const workflowNodeFormMeta');
 
     expect(shellSource).toContain('FreeLayoutEditor');
-    expect(shellSource).toContain('createFreeLinesPlugin');
-    expect(shellSource).toContain('createFreeNodePanelPlugin');
-    expect(shellSource).toContain('buildFlowGramWorkflowNodeRegistries');
-    expect(shellSource).toContain('createFlowGramWorkflowNode');
-    expect(shellSource).toContain('buildFlowGramRuntimeVisualState');
+    expect(shellSource).toContain('useWorkflowFlowGramEditorProps');
+    expect(shellSource).not.toContain('useMemo<FreeLayoutProps>');
+    expect(shellSource).not.toContain('function FlowGramLineInsertButton');
+    expect(shellSource).not.toContain('function FlowGramNodePanel');
+    expect(editorPropsSource).toContain('useWorkflowFlowGramEditorProps');
+    expect(editorPropsSource).toContain('createFreeLinesPlugin');
+    expect(editorPropsSource).toContain('createFreeNodePanelPlugin');
+    expect(editorPropsSource).toContain('buildFlowGramWorkflowNodeRegistries');
+    expect(editorPropsSource).toContain('createFlowGramWorkflowNode');
+    expect(editorPropsSource).toContain('buildFlowGramRuntimeVisualState');
+    expect(editorPropsSource).toContain('canAddWorkflowLine');
+    expect(editorPropsSource).toContain('workflowFlowGramI18n');
+    expect(editorPropsSource).toContain('workflowFlowGramShortcuts');
+    expect(editorPropsSource).toContain('workflowFlowGramSelectBox');
+    expect(materialsSource).toContain('FlowGramLineInsertButton');
+    expect(materialsSource).toContain('FlowGramNodePanel');
 
     expect(registrySource).toContain('flowGramWorkflowNodeTypes');
     expect(registrySource).toContain('onAdd');
@@ -107,6 +126,7 @@ describe('WorkflowStudio source contract', () => {
 
     expect(flowGramSource).toContain('buildWorkflowFlowGramFormValues');
     expect(flowGramSource).toContain('buildWorkflowFlowGramVariableCatalog');
+    expect(flowGramSource).toContain('buildWorkflowFlowGramVariablePanelState');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-form-inspector"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-variable-catalog"');
     expect(flowGramSource).not.toContain('data-testid="workflow-flowgram-form-meta"');
@@ -136,6 +156,8 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).toContain('setLineClassName');
     expect(flowGramSource).toContain('isErrorLine');
     expect(flowGramSource).toContain('isDisabledLine');
+    expect(flowGramSource).toContain('canDeleteWorkflowNode');
+    expect(flowGramSource).toContain('canResetWorkflowLine');
 
     expect(mainContentSource).not.toContain("import WorkflowStudio from '../../workflows/view/WorkflowStudio'");
     expect(mainContentSource).toContain("lazy(() => import('../../workflows/view/WorkflowStudio'))");
