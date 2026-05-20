@@ -21,7 +21,9 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-react-flow-canvas"');
     expect(source).toContain('data-testid="workflow-flowgram-adapter"');
     expect(source).toContain('data-testid="workflow-migration-compatibility"');
+    expect(source).toContain('data-testid="workflow-migration-doctor-local"');
     expect(source).toContain('data-testid="workflow-runtime-state-bridge"');
+    expect(source).toContain('data-testid="workflow-flowing-lines"');
     expect(source).toContain('data-testid="workflow-run-setup-drawer"');
     expect(source).toContain('data-testid="workflow-library-gallery"');
     expect(source).toContain('data-testid="workflow-template-preview"');
@@ -96,6 +98,8 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('duplicateSelectedSubgraph');
     expect(source).toContain('undoWorkflowEdit');
     expect(source).toContain('redoWorkflowEdit');
+    expect(source).toContain('onWorkflowEditorShortcut');
+    expect(source).toContain('deleteSelectedGraphItems');
     expect(source).toContain('layoutMode');
     expect(source).toContain('lockedNodeIds');
     expect(source).toContain('edgeRouteStyle');
@@ -107,6 +111,7 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-secret-field-type"');
     expect(source).toContain('data-testid="workflow-json-config-editor"');
     expect(source).toContain('data-testid="workflow-typed-variable-picker"');
+    expect(source).toContain('data-testid="workflow-flow-reference-validation"');
     expect(source).toContain('data-testid="workflow-mapping-preview"');
     expect(source).toContain('data-testid="workflow-transform-functions"');
     expect(source).toContain('data-testid="workflow-output-contract-test"');

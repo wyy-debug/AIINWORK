@@ -136,13 +136,21 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await expect(page.getByTestId('workflow-studio')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-adapter')).toContainText('mtl-flowgram-v1');
   await expect(page.getByTestId('workflow-migration-compatibility')).toContainText('Compatibility');
+  await expect(page.getByTestId('workflow-migration-doctor-local')).toContainText('Migration doctor');
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
   await expect(page.getByTestId('workflow-line-add-node').first()).toBeVisible();
   await screenshot(page, 'REQ-183-workgraph-command-center.png');
 
+  await page.getByTitle('Keyboard shortcuts').click();
+  await expect(page.getByTestId('workflow-keyboard-shortcuts')).toContainText('Ctrl/Cmd Z');
+  await screenshot(page, 'REQ-183-plugin-shortcuts-minimap.png');
+  await page.keyboard.press('Escape');
+
   await page.getByTestId('workflow-line-add-node').first().click();
   await expect(page.getByTestId('workflow-form-meta-inspector')).toBeVisible();
+  await expect(page.getByTestId('workflow-flow-reference-validation')).toContainText('Typed references');
+  await expect(page.getByTestId('workflow-flowing-lines')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-adapter')).toContainText('4 nodes');
   await screenshot(page, 'REQ-183-line-add-formmeta-inspector.png');
 });

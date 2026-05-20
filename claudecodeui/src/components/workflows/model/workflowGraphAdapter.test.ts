@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowDefinition } from '../../../types/workflow';
 import {
   analyzeWorkflowGraphCompatibility,
+  buildWorkflowFlowReferenceCatalog,
+  collectWorkflowFlowValueRefs,
   flowGramDocumentToWorkflowDefinition,
   formatWorkflowFlowValue,
   parseWorkflowFlowValue,
+  validateWorkflowFlowReferences,
   workflowDefinitionToFlowGramDocument,
 } from './workflowGraphAdapter';
 
@@ -62,6 +65,7 @@ describe('workflowGraphAdapter', () => {
 
     const template = parseWorkflowFlowValue('Review {{nodes.explore.output.summary}} for {{inputs.change_request}}');
     expect(template.kind).toBe('template');
+    expect(collectWorkflowFlowValueRefs(template)).toEqual(['nodes.explore.output.summary', 'inputs.change_request']);
     expect(formatWorkflowFlowValue(template)).toBe('Review {{nodes.explore.output.summary}} for {{inputs.change_request}}');
   });
 
@@ -97,5 +101,32 @@ describe('workflowGraphAdapter', () => {
     expect(report.ok).toBe(true);
     expect(report.unsupportedNodeTypes).toEqual([]);
     expect(report.warnings).toContain('Preserved unknown metadata key: customLegacyFlag');
+  });
+
+  it('builds typed reference catalog and validates missing refs for a selected node', () => {
+    const catalog = buildWorkflowFlowReferenceCatalog(sampleWorkflow, 'review', [], {
+      change_request: 'fix the issue',
+    });
+
+    expect(catalog.map((ref) => [ref.path, ref.source, ref.valueType])).toContainEqual([
+      'inputs.change_request',
+      'workflow-input',
+      'textarea',
+    ]);
+    expect(catalog.map((ref) => ref.path)).toContain('nodes.explore.output.summary');
+    expect(validateWorkflowFlowReferences(sampleWorkflow, 'review').valid).toBe(true);
+
+    const invalidWorkflow: WorkflowDefinition = {
+      ...sampleWorkflow,
+      nodes: sampleWorkflow.nodes.map((node) => (
+        node.id === 'review'
+          ? { ...node, prompt: '{{nodes.missing.output.summary}}' }
+          : node
+      )),
+    };
+    expect(validateWorkflowFlowReferences(invalidWorkflow, 'review')).toEqual({
+      valid: false,
+      missing: [{ nodeId: 'review', field: 'prompt', path: 'nodes.missing.output.summary' }],
+    });
   });
 });

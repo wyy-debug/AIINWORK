@@ -7,6 +7,21 @@ import type {
 } from '../../../types/workflow';
 import { createWorkflowNodeRegistry } from './workflowNodeRegistry';
 
+export type WorkflowFlowReference = {
+  path: string;
+  source: 'workflow-input' | 'upstream-node-output';
+  valueType: string;
+  label: string;
+  example: unknown;
+  nodeId?: string;
+  fieldName?: string;
+};
+
+export type WorkflowFlowReferenceValidation = {
+  valid: boolean;
+  missing: Array<{ nodeId: string; field: string; path: string }>;
+};
+
 export type WorkflowFlowValue =
   | { kind: 'constant'; value: unknown }
   | { kind: 'ref'; path: string; valueType?: string }
@@ -143,6 +158,15 @@ export function formatWorkflowFlowValue(value: WorkflowFlowValue | undefined): s
   return value.segments.map((segment) => (segment.kind === 'text' ? segment.text : `{{${segment.path}}}`)).join('');
 }
 
+export function collectWorkflowFlowValueRefs(value: WorkflowFlowValue | undefined): string[] {
+  if (!value) return [];
+  if (value.kind === 'ref') return [value.path];
+  if (value.kind === 'template') {
+    return value.segments.flatMap((segment) => (segment.kind === 'ref' ? [segment.path] : []));
+  }
+  return [];
+}
+
 function buildFlowValues(node: WorkflowNode) {
   const flowValues: Record<string, WorkflowFlowValue> = {};
   for (const field of flowFieldNames) {
@@ -155,6 +179,65 @@ function buildFlowValues(node: WorkflowNode) {
     }
   }
   return flowValues;
+}
+
+export function buildWorkflowFlowReferenceCatalog(
+  workflow: WorkflowDefinition,
+  nodeId: string,
+  definitions: WorkflowNodeTypeDefinition[] = [],
+  inputExamples: Record<string, unknown> = {},
+): WorkflowFlowReference[] {
+  const registry = createWorkflowNodeRegistry(definitions);
+  const inputRefs: WorkflowFlowReference[] = (workflow.inputs || []).map((input) => ({
+    path: `inputs.${input.id}`,
+    source: 'workflow-input',
+    valueType: input.type || 'string',
+    label: input.label || input.id,
+    example: inputExamples[input.id] ?? input.defaultValue ?? 'user input',
+    fieldName: input.id,
+  }));
+  const upstreamIds = (workflow.edges || [])
+    .filter((edge) => edge.to === nodeId)
+    .map((edge) => edge.from);
+  const upstreamRefs = upstreamIds.flatMap((upstreamId) => {
+    const upstreamNode = workflow.nodes.find((node) => node.id === upstreamId);
+    if (!upstreamNode) return [];
+    const definition = registry.byType.get(upstreamNode.type);
+    const fields = definition?.outputSchema?.fields?.length
+      ? definition.outputSchema.fields
+      : [
+        { name: 'summary', type: 'markdown', label: 'Summary' },
+        { name: 'artifactId', type: 'string', label: 'Artifact ID' },
+        { name: 'stdout', type: 'string', label: 'stdout' },
+      ];
+    return fields.map((field) => ({
+      path: `nodes.${upstreamId}.output.${field.name}`,
+      source: 'upstream-node-output' as const,
+      valueType: field.type || 'string',
+      label: `${upstreamNode.title || upstreamId} / ${field.label || field.name}`,
+      example: field.type === 'markdown' ? 'completed summary' : field.name === 'exitCode' ? 0 : 'completed output',
+      nodeId: upstreamId,
+      fieldName: field.name,
+    }));
+  });
+  return [...inputRefs, ...upstreamRefs];
+}
+
+export function validateWorkflowFlowReferences(
+  workflow: WorkflowDefinition,
+  nodeId: string,
+  definitions: WorkflowNodeTypeDefinition[] = [],
+): WorkflowFlowReferenceValidation {
+  const node = workflow.nodes.find((item) => item.id === nodeId);
+  if (!node) return { valid: false, missing: [{ nodeId, field: 'node', path: nodeId }] };
+  const available = new Set(buildWorkflowFlowReferenceCatalog(workflow, nodeId, definitions).map((ref) => ref.path));
+  const flowValues = buildFlowValues(node);
+  const missing = Object.entries(flowValues).flatMap(([field, value]) => (
+    collectWorkflowFlowValueRefs(value)
+      .filter((path) => !available.has(path))
+      .map((path) => ({ nodeId, field, path }))
+  ));
+  return { valid: missing.length === 0, missing };
 }
 
 function applyFlowValues(node: WorkflowNode, flowValues: Record<string, WorkflowFlowValue>) {

@@ -71,7 +71,9 @@ import type {
 } from '../../../types/workflow';
 import {
   analyzeWorkflowGraphCompatibility,
+  buildWorkflowFlowReferenceCatalog,
   flowGramDocumentToWorkflowDefinition,
+  validateWorkflowFlowReferences,
   workflowDefinitionToFlowGramDocument,
 } from '../model/workflowGraphAdapter';
 import {
@@ -79,6 +81,7 @@ import {
   defaultWorkflowPaletteGroups,
 } from '../model/workflowNodeRegistry';
 import { buildWorkGraphRuntimeState } from '../model/workflowRuntimeStateBridge';
+import { buildWorkflowMigrationDoctorReport } from '../model/workflowMigrationDoctor';
 
 type WorkflowStudioProps = {
   selectedProject: Project;
@@ -330,6 +333,12 @@ function getNodeValidationBadges(workflow: WorkflowDefinition, node: WorkflowNod
   return badges.slice(0, 3);
 }
 
+function isEditableShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
+}
+
 function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const node = data.workflowNode;
   const runState = data.runState;
@@ -530,6 +539,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const workGraphDocument = useMemo(() => workflowDefinitionToFlowGramDocument(draft), [draft]);
   const workGraphRoundtrip = useMemo(() => flowGramDocumentToWorkflowDefinition(workGraphDocument, draft), [draft, workGraphDocument]);
   const workGraphCompatibility = useMemo(() => analyzeWorkflowGraphCompatibility(draft, nodeTypeDefinitions), [draft, nodeTypeDefinitions]);
+  const localMigrationDoctor = useMemo(() => buildWorkflowMigrationDoctorReport(workflows.length > 0 ? workflows : [draft], nodeTypeDefinitions), [draft, nodeTypeDefinitions, workflows]);
   const selectedWorkGraphRuntimeState = useMemo(() => buildWorkGraphRuntimeState(draft, selectedRun), [draft, selectedRun]);
   const schemaVersion = selectedNodeDefinition?.ui?.schemaVersion || selectedNode?.config?.schemaVersion || '1.0';
   const requiredFieldErrors = useMemo(() => {
@@ -546,20 +556,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     return errors;
   }, [selectedNode, selectedNodeDefinition]);
   const typedVariablePicker = useMemo(() => {
-    const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
-    const upstreamIds = selectedNode ? draft.edges.filter((edge) => edge.to === selectedNode.id).map((edge) => edge.from) : [];
-    const upstreamVariables = upstreamIds.flatMap((nodeId) => [
-      `nodes.${nodeId}.output.summary`,
-      `nodes.${nodeId}.output.artifactId`,
-      `nodes.${nodeId}.output.stdout`,
-    ]);
-    return [...inputVariables, ...upstreamVariables].map((variable) => ({
-      token: `{{${variable}}}`,
-      source: variable.startsWith('inputs.') ? 'workflow input' : 'upstream node output',
-      type: variable.endsWith('.summary') ? 'markdown' : variable.endsWith('.status') ? 'status' : 'string',
-      example: variable.startsWith('inputs.') ? runInputs[variable.replace('inputs.', '')] || 'user input' : 'completed output',
+    if (!selectedNode) return [];
+    return buildWorkflowFlowReferenceCatalog(draft, selectedNode.id, nodeTypeDefinitions, runInputs).map((variable) => ({
+      token: `{{${variable.path}}}`,
+      path: variable.path,
+      source: variable.source === 'workflow-input' ? 'workflow input' : 'upstream node output',
+      type: variable.valueType,
+      label: variable.label,
+      example: variable.example,
     }));
-  }, [draft.edges, draft.inputs, runInputs, selectedNode]);
+  }, [draft, nodeTypeDefinitions, runInputs, selectedNode]);
   const mappingPreview = useMemo(() => draft.nodes.map((node) => ({
     node,
     input: {
@@ -589,22 +595,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     if (libraryFilter === 'Recently used') return runs.some((run) => run.workflowId === workflow.id);
     return true;
   }), [libraryFilter, runs, workflows]);
-  const availableVariables = useMemo(() => {
-    const inputVariables = (draft.inputs || []).map((input) => `inputs.${input.id}`);
-    if (!selectedNode) return inputVariables;
-    const upstreamIds = draft.edges.filter((edge) => edge.to === selectedNode.id).map((edge) => edge.from);
-    const upstreamVariables = upstreamIds.flatMap((nodeId) => {
-      const upstreamNode = draft.nodes.find((node) => node.id === nodeId);
-      const definition = nodeTypeDefinitions.find((item) => item.type === upstreamNode?.type);
-      const fields = definition?.outputSchema?.fields?.map((field) => `nodes.${nodeId}.output.${field.name}`) || [];
-      return fields.length > 0 ? fields : [
-        `nodes.${nodeId}.output.summary`,
-        `nodes.${nodeId}.output.artifactId`,
-        `nodes.${nodeId}.output.stdout`,
-      ];
-    });
-    return [...inputVariables, ...upstreamVariables];
-  }, [draft.edges, draft.inputs, draft.nodes, nodeTypeDefinitions, selectedNode]);
+  const availableVariables = useMemo(() => typedVariablePicker.map((variable) => variable.path), [typedVariablePicker]);
   const selectedNodeTemplateText = selectedNode?.type === 'shell'
     ? selectedNode.command || ''
     : selectedNode?.type === 'condition'
@@ -614,6 +605,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const matches = [...selectedNodeTemplateText.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)].map((match) => match[1]);
     return [...new Set(matches.filter((variable) => !availableVariables.includes(variable)))];
   }, [availableVariables, selectedNodeTemplateText]);
+  const flowReferenceValidation = useMemo(() => selectedNode
+    ? validateWorkflowFlowReferences(draft, selectedNode.id, nodeTypeDefinitions)
+    : { valid: true, missing: [] }, [draft, nodeTypeDefinitions, selectedNode]);
   const permissionSource = useMemo(() => describePermissionSource(draft, selectedNode), [draft, selectedNode]);
   const failedRuns = useMemo(() => runs.filter((run) => run.status === 'failed'), [runs]);
   const pendingApprovalRuns = useMemo(() => runs.filter((run) => run.status === 'waiting_approval' || Object.values(run.nodeRuns || {}).some((nodeRun) => nodeRun.status === 'waiting_approval')), [runs]);
@@ -1374,6 +1368,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setSelectedEdgeId((current) => current === edgeId ? '' : current);
   }, [commitDraft]);
 
+  const deleteSelectedGraphItems = useCallback(() => {
+    if (selectedEdgeId) {
+      removeEdge(selectedEdgeId);
+      return;
+    }
+    const ids = selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+    ids.forEach((id) => deleteNode(id));
+  }, [deleteNode, removeEdge, selectedEdgeId, selectedNodeId, selectedNodeIds]);
+
   const insertNodeOnEdge = useCallback((edgeId: string, type: WorkflowNodeType) => {
     commitDraft((current) => {
       const edge = current.edges.find((item) => item.id === edgeId);
@@ -1474,6 +1477,51 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setIsBusy(false);
     }
   }, [draft.id, loadData, runInputs, selectedProject.fullPath, selectedProject.path, sessionId]);
+
+  useEffect(() => {
+    const onWorkflowEditorShortcut = (event: KeyboardEvent) => {
+      const isCommandKey = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      const editableTarget = isEditableShortcutTarget(event.target);
+      if (editableTarget && !(isCommandKey && ['s', 'enter'].includes(key))) return;
+      if (isCommandKey && key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undoWorkflowEdit();
+      } else if ((isCommandKey && key === 'y') || (isCommandKey && event.shiftKey && key === 'z')) {
+        event.preventDefault();
+        redoWorkflowEdit();
+      } else if (isCommandKey && key === 'c' && activeView === 'Editor') {
+        event.preventDefault();
+        copySelectedNodes();
+      } else if (isCommandKey && key === 'v' && activeView === 'Editor') {
+        event.preventDefault();
+        pasteCopiedNodes();
+      } else if (isCommandKey && key === 'd' && activeView === 'Editor') {
+        event.preventDefault();
+        duplicateSelectedSubgraph();
+      } else if ((event.key === 'Delete' || event.key === 'Backspace') && activeView === 'Editor') {
+        event.preventDefault();
+        deleteSelectedGraphItems();
+      } else if (isCommandKey && key === 's') {
+        event.preventDefault();
+        void saveWorkflow();
+      } else if (isCommandKey && key === 'enter') {
+        event.preventDefault();
+        setIsRunSetupOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onWorkflowEditorShortcut);
+    return () => window.removeEventListener('keydown', onWorkflowEditorShortcut);
+  }, [
+    activeView,
+    copySelectedNodes,
+    deleteSelectedGraphItems,
+    duplicateSelectedSubgraph,
+    pasteCopiedNodes,
+    redoWorkflowEdit,
+    saveWorkflow,
+    undoWorkflowEdit,
+  ]);
 
   const controlNode = useCallback(async (run: WorkflowRun, nodeId: string, action: string) => {
     setIsBusy(true);
@@ -1956,6 +2004,19 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </button>
           </div>
         </div>
+        <div className="mb-3 grid gap-2 md:grid-cols-4" data-testid="workflow-flowing-lines">
+          {[
+            ['Running', selectedWorkGraphRuntimeState?.summary.running || 0],
+            ['Waiting', selectedWorkGraphRuntimeState?.summary.waiting || 0],
+            ['Failed', selectedWorkGraphRuntimeState?.summary.failed || 0],
+            ['Artifacts', selectedWorkGraphRuntimeState?.summary.artifacts || 0],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-md border border-border bg-background px-3 py-2 text-xs">
+              <span className="block text-muted-foreground">{label}</span>
+              <span className="mt-1 block text-base font-semibold text-foreground">{value}</span>
+            </div>
+          ))}
+        </div>
         <div className="h-[560px] min-w-[980px] overflow-hidden rounded-md border border-border bg-background" data-testid="workflow-dag-canvas">
           <ReactFlowProvider>
             <div className="relative h-full w-full" data-testid="workflow-react-flow-canvas">
@@ -2067,11 +2128,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             ) : (
               <div className="mt-3 grid gap-2 text-sm" data-testid="workflow-keyboard-shortcuts">
                 {[
-                  ['Ctrl/⌘ K', 'Open command palette'],
+                  ['Ctrl/Cmd K', 'Open command palette'],
+                  ['Ctrl/Cmd Z', 'Undo graph edit'],
+                  ['Ctrl/Cmd Y', 'Redo graph edit'],
+                  ['Ctrl/Cmd C', 'Copy selected nodes'],
+                  ['Ctrl/Cmd V', 'Paste copied nodes'],
+                  ['Ctrl/Cmd D', 'Duplicate selected subgraph'],
+                  ['Delete', 'Delete selected node or edge'],
+                  ['Ctrl/Cmd S', 'Save workflow'],
+                  ['Ctrl/Cmd Enter', 'Open run setup'],
                   ['?', 'Open shortcuts'],
                   ['Esc', 'Close overlays'],
-                  ['Save button', 'Persist current workflow'],
-                  ['Run button', 'Open run setup'],
                 ].map(([key, label]) => (
                   <div key={key} className="flex items-center justify-between rounded border border-border px-3 py-2">
                     <span className="text-muted-foreground">{label}</span>
@@ -2111,6 +2178,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               </span>
               <span className={cn('rounded-md border px-2 py-1', workGraphCompatibility.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700')} data-testid="workflow-migration-compatibility">
                 Compatibility: {workGraphCompatibility.ok ? 'ready' : 'needs review'} ({workGraphCompatibility.warnings.length})
+              </span>
+              <span className={cn('rounded-md border px-2 py-1', localMigrationDoctor.status === 'pass' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : localMigrationDoctor.status === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-red-200 bg-red-50 text-red-700')} data-testid="workflow-migration-doctor-local">
+                Migration doctor: {localMigrationDoctor.status} / {localMigrationDoctor.checked} checked / {localMigrationDoctor.findings.length} findings
               </span>
               <span className="rounded-md border border-border bg-background px-2 py-1" data-testid="workflow-runtime-state-bridge">
                 Runtime: {selectedWorkGraphRuntimeState ? `${selectedWorkGraphRuntimeState.summary.running} running / ${selectedWorkGraphRuntimeState.summary.waiting} waiting / ${selectedWorkGraphRuntimeState.summary.failed} failed` : 'no run state'}
@@ -2842,9 +2912,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         className="block w-full rounded border border-border bg-muted/30 px-2 py-1 text-left text-[11px] hover:bg-muted"
                       >
                         <span className="font-mono text-foreground">{variable.token}</span>
-                        <span className="ml-2 text-muted-foreground">{variable.type} / {variable.source} / {String(variable.example).slice(0, 32)}</span>
+                        <span className="ml-2 text-muted-foreground">{variable.type} / {variable.source} / {variable.label} / {String(variable.example).slice(0, 32)}</span>
                       </button>
                     ))}
+                  </div>
+                  <div className={cn('mb-3 rounded-md border p-2 text-xs', flowReferenceValidation.valid ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700')} data-testid="workflow-flow-reference-validation">
+                    {flowReferenceValidation.valid
+                      ? 'Typed references valid for this node.'
+                      : `Missing refs: ${flowReferenceValidation.missing.map((item) => `${item.field}:${item.path}`).join(', ')}`}
                   </div>
                   <div className="space-y-1">
                     {availableVariables.map((variable) => (
