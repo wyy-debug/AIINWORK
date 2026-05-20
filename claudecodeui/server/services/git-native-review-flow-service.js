@@ -1,4 +1,9 @@
+import path from 'path';
+import { promises as fs } from 'fs';
+
 const MAX_DIFF_PREVIEW = 16000;
+export const MAX_UNTRACKED_FILE_PREVIEW_BYTES = 64 * 1024;
+export const MAX_UNTRACKED_FILE_PREVIEW_LINES = 800;
 const RISK_PATTERNS = [
   { pattern: /(auth|login|permission|security|credential|token|secret)/i, label: 'Security or permission-sensitive code changed' },
   { pattern: /(migration|schema|database|db\/|sql)/i, label: 'Database or schema behavior changed' },
@@ -24,6 +29,72 @@ function changedLineCount(diff) {
     .split('\n')
     .filter((line) => (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')))
     .length;
+}
+
+export function isLikelyBinaryBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return false;
+  if (buffer.includes(0)) return true;
+  const sampleLength = Math.min(buffer.length, 8000);
+  let suspicious = 0;
+  for (let index = 0; index < sampleLength; index += 1) {
+    const byte = buffer[index];
+    const isAllowedControl = byte === 9 || byte === 10 || byte === 13;
+    if (byte < 32 && !isAllowedControl) suspicious += 1;
+  }
+  return suspicious / sampleLength > 0.1;
+}
+
+export async function buildUntrackedFileDiff(repositoryRootPath, filePath, {
+  stat = fs.stat,
+  readFile = fs.readFile,
+} = {}) {
+  const root = path.resolve(repositoryRootPath);
+  const resolved = path.resolve(root, filePath);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error('Untracked file path is outside the repository');
+  }
+
+  const stats = await stat(resolved);
+  const normalizedPath = String(filePath || '').replace(/\\/g, '/');
+  if (stats.isDirectory()) {
+    return `diff --git a/${normalizedPath} b/${normalizedPath}\nnew directory: ${normalizedPath}\n`;
+  }
+
+  if (stats.size > MAX_UNTRACKED_FILE_PREVIEW_BYTES) {
+    return [
+      `diff --git a/${normalizedPath} b/${normalizedPath}`,
+      'new file mode 100644',
+      '--- /dev/null',
+      `+++ b/${normalizedPath}`,
+      '@@ -0,0 +1 @@',
+      `+Preview skipped: untracked file is ${stats.size} bytes, above the ${MAX_UNTRACKED_FILE_PREVIEW_BYTES} byte review preview limit.`,
+    ].join('\n');
+  }
+
+  const buffer = await readFile(resolved);
+  if (isLikelyBinaryBuffer(buffer)) {
+    return [
+      `diff --git a/${normalizedPath} b/${normalizedPath}`,
+      'new file mode 100644',
+      '--- /dev/null',
+      `+++ b/${normalizedPath}`,
+      '@@ -0,0 +1 @@',
+      `+Preview skipped: untracked file appears to be binary (${stats.size} bytes).`,
+    ].join('\n');
+  }
+
+  const content = buffer.toString('utf8');
+  const allLines = content.split('\n');
+  const lines = allLines.slice(0, MAX_UNTRACKED_FILE_PREVIEW_LINES);
+  return [
+    `diff --git a/${normalizedPath} b/${normalizedPath}`,
+    'new file mode 100644',
+    '--- /dev/null',
+    `+++ b/${normalizedPath}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    ...lines.map((line) => `+${line}`),
+    allLines.length > lines.length ? '+... file preview truncated ...' : '',
+  ].filter(Boolean).join('\n');
 }
 
 function fileKindCounts(files) {

@@ -9,7 +9,7 @@ import { spawnCursor } from '../cursor-cli.js';
 import { db } from '../database/db.js';
 import { createArtifact } from '../services/artifact-service.js';
 import { createCheckpointStore } from '../services/checkpoint-service.js';
-import { buildGitNativeReviewFlow } from '../services/git-native-review-flow-service.js';
+import { buildGitNativeReviewFlow, buildUntrackedFileDiff } from '../services/git-native-review-flow-service.js';
 
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
@@ -733,25 +733,6 @@ router.get('/review-summary', async (req, res) => {
     res.status(500).json({ error: error.stderr || error.message || 'Failed to build review summary' });
   }
 });
-
-async function buildUntrackedFileDiff(repositoryRootPath, filePath) {
-  const resolved = path.join(repositoryRootPath, filePath);
-  const stats = await fs.stat(resolved);
-  if (stats.isDirectory()) {
-    return `diff --git a/${filePath} b/${filePath}\nnew directory: ${filePath}\n`;
-  }
-  const content = await fs.readFile(resolved, 'utf8');
-  const lines = content.split('\n').slice(0, 800);
-  return [
-    `diff --git a/${filePath} b/${filePath}`,
-    'new file mode 100644',
-    '--- /dev/null',
-    `+++ b/${filePath}`,
-    `@@ -0,0 +1,${lines.length} @@`,
-    ...lines.map((line) => `+${line}`),
-    content.split('\n').length > lines.length ? '+... file preview truncated ...' : '',
-  ].filter(Boolean).join('\n');
-}
 
 router.post('/review-flow', async (req, res) => {
   const { project, checkpointId } = req.body || {};

@@ -108,6 +108,8 @@ const FILE_KIND_META: Record<ReviewFileKind, { label: string; shortLabel: string
   },
 };
 
+export const MAX_RENDERED_DIFF_ROWS = 1500;
+
 const asStringArray = (value: unknown): string[] => {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 };
@@ -203,39 +205,52 @@ const getDiffLineClassName = (line: string) => {
   return 'text-foreground';
 };
 
-const getRenderedDiffRows = (diff: string) => {
+export const getRenderedDiffRows = (diff: string, maxRows = Number.POSITIVE_INFINITY) => {
   if (!diff) {
-    return [];
+    return { rows: [], totalRows: 0, hiddenRows: 0 };
   }
 
+  const lines = diff.split('\n');
+  const rows: Array<{ index: number; line: string; lineNumber: number | null }> = [];
   let oldLine = 0;
   let newLine = 0;
+  const limit = Number.isFinite(maxRows) ? Math.max(0, maxRows) : lines.length;
 
-  return diff.split('\n').map((line, index) => {
+  for (let index = 0; index < lines.length && rows.length < limit; index += 1) {
+    const line = lines[index];
     const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
       oldLine = Number(hunkMatch[1]);
       newLine = Number(hunkMatch[2]);
-      return { index, line, lineNumber: null as number | null };
+      rows.push({ index, line, lineNumber: null });
+      continue;
     }
 
     if (line.startsWith('-')) {
       const lineNumber = oldLine;
       oldLine += 1;
-      return { index, line, lineNumber };
+      rows.push({ index, line, lineNumber });
+      continue;
     }
 
     if (line.startsWith('+')) {
       const lineNumber = newLine;
       newLine += 1;
-      return { index, line, lineNumber };
+      rows.push({ index, line, lineNumber });
+      continue;
     }
 
     const lineNumber = newLine || oldLine || null;
     if (oldLine) oldLine += 1;
     if (newLine) newLine += 1;
-    return { index, line, lineNumber };
-  });
+    rows.push({ index, line, lineNumber });
+  }
+
+  return {
+    rows,
+    totalRows: lines.length,
+    hiddenRows: Math.max(0, lines.length - rows.length),
+  };
 };
 
 export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
@@ -263,7 +278,10 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
   const changedFiles = useMemo(() => getChangedFiles(status), [status]);
   const selectedFile = changedFiles.find((file) => file.path === selectedFilePath) || null;
   const visibleDiff = checkpointDiff || diff;
-  const diffRows = useMemo(() => getRenderedDiffRows(visibleDiff), [visibleDiff]);
+  const renderedDiff = useMemo(() => getRenderedDiffRows(visibleDiff, MAX_RENDERED_DIFF_ROWS), [visibleDiff]);
+  const diffRows = renderedDiff.rows;
+  const hiddenDiffRows = renderedDiff.hiddenRows;
+  const totalDiffRows = renderedDiff.totalRows;
   const diffHunks = useMemo(() => getDiffHunks(visibleDiff), [visibleDiff]);
 	  const stagedFiles = useMemo(() => changedFiles.filter((file) => file.staged), [changedFiles]);
 	  const unstagedFiles = useMemo(() => changedFiles.filter((file) => file.unstaged || !file.staged), [changedFiles]);
@@ -910,6 +928,12 @@ export default function ReviewPanel({ selectedProject }: ReviewPanelProps) {
                 <AlertTitle>Diff unavailable</AlertTitle>
                 <AlertDescription>{diffError}</AlertDescription>
               </Alert>
+            </div>
+          )}
+
+          {hiddenDiffRows > 0 && (
+            <div className="border-b border-border/70 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200" data-testid="review-diff-truncation-notice">
+              Showing first {diffRows.length.toLocaleString()} of {totalDiffRows.toLocaleString()} diff rows. Use the generated review package or command line for the full diff.
             </div>
           )}
 

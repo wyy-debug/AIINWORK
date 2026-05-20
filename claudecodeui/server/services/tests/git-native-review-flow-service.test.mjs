@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { buildGitNativeReviewFlow } from '../git-native-review-flow-service.js';
+import {
+  buildGitNativeReviewFlow,
+  buildUntrackedFileDiff,
+  MAX_UNTRACKED_FILE_PREVIEW_BYTES,
+} from '../git-native-review-flow-service.js';
 
 describe('git-native-review-flow-service', () => {
   it('builds a review package with summary, risks, tests, commit message, and PR body', () => {
@@ -28,5 +32,38 @@ describe('git-native-review-flow-service', () => {
     expect(review.hasChanges).toBe(false);
     expect(review.content).toContain('nothing to review');
     expect(review.commitMessage).toBe('');
+  });
+
+  it('skips large untracked file previews without reading the file body', async () => {
+    const readFile = vi.fn();
+    const diff = await buildUntrackedFileDiff('/repo', 'large.bin', {
+      stat: async () => ({ isDirectory: () => false, size: MAX_UNTRACKED_FILE_PREVIEW_BYTES + 1 }),
+      readFile,
+    });
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(diff).toContain('Preview skipped');
+    expect(diff).toContain('above the');
+  });
+
+  it('summarizes binary untracked file previews safely', async () => {
+    const diff = await buildUntrackedFileDiff('/repo', 'asset.dat', {
+      stat: async () => ({ isDirectory: () => false, size: 4 }),
+      readFile: async () => Buffer.from([0, 1, 2, 3]),
+    });
+
+    expect(diff).toContain('appears to be binary');
+    expect(diff).not.toContain('\u0000');
+  });
+
+  it('keeps bounded text previews for normal untracked files', async () => {
+    const diff = await buildUntrackedFileDiff('/repo', 'notes.txt', {
+      stat: async () => ({ isDirectory: () => false, size: 12 }),
+      readFile: async () => Buffer.from('hello\nworld'),
+    });
+
+    expect(diff).toContain('+++ b/notes.txt');
+    expect(diff).toContain('+hello');
+    expect(diff).toContain('+world');
   });
 });
