@@ -240,3 +240,28 @@ test('BUG-UI-019 to BUG-UI-021 capture desktop-only Workflow Studio polish @scre
   await expect(page.getByTestId('workflow-runs-approval-focus')).toBeVisible();
   await screenshot(page, 'BUG-UI-021-runs-approval-focus.png');
 });
+
+test('BUG-UI-022 to BUG-UI-024 capture modern desktop Workflow Studio polish @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+
+  await expect(page.getByTestId('workflow-modern-desktop-shell')).toBeVisible();
+  await expect(page.getByTestId('workflow-command-rail')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-quick-path')).toBeVisible();
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-022-modern-desktop-shell.png');
+
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-properties-panel')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-node-summary')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-more-actions')).toBeVisible();
+  await screenshot(page, 'BUG-UI-023-inspector-properties-panel.png');
+
+  await expect(page.getByTestId('workflow-canvas-surface-modern')).toBeVisible();
+  await expect(page.getByTestId('workflow-canvas-surface-titlebar')).toBeVisible();
+  await expect(page.getByTestId('workflow-canvas-operation-polish')).toBeVisible();
+  await expect(page.getByTestId('workflow-node-modern-block').first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-024-canvas-surface-node-polish.png');
+});

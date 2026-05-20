@@ -528,4 +528,28 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).not.toContain('BUG-UI-020-mobile');
     expect(screenshotSpec).not.toContain('BUG-UI-021-mobile');
   });
+
+  it('applies a modern desktop product shell without adding mobile gates', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
+    const nodeRendererSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRenderer.tsx'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(studioSource).toContain('data-testid="workflow-modern-desktop-shell"');
+    expect(studioSource).toContain('data-testid="workflow-command-rail"');
+    expect(studioSource).toContain('data-testid="workflow-editor-quick-path"');
+    expect(studioSource).toContain('data-testid="workflow-properties-panel"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-node-summary"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-more-actions"');
+    expect(flowGramSource).toContain('data-testid="workflow-canvas-surface-modern"');
+    expect(flowGramSource).toContain('data-testid="workflow-canvas-surface-titlebar"');
+    expect(nodeRendererSource).toContain('data-testid="workflow-node-modern-block"');
+    expect(nodeRendererSource).toContain('workflow node status dot');
+    expect(screenshotSpec).toContain('BUG-UI-022-modern-desktop-shell.png');
+    expect(screenshotSpec).toContain('BUG-UI-023-inspector-properties-panel.png');
+    expect(screenshotSpec).toContain('BUG-UI-024-canvas-surface-node-polish.png');
+    expect(screenshotSpec).not.toContain('BUG-UI-022-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-023-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-024-mobile');
+  });
 });

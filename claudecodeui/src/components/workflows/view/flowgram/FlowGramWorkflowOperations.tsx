@@ -117,20 +117,20 @@ export function FlowGramOperationToolbar({
   return (
     <div className="pointer-events-auto flex flex-col gap-1.5" data-testid="workflow-canvas-operation-polish">
       <div
-        className="flex h-10 items-center gap-1 rounded-md border border-slate-200 bg-white/90 px-1.5 shadow-[0_1px_4px_rgba(15,23,42,0.05)] backdrop-blur"
+        className="flex h-10 items-center gap-1 rounded-md border border-slate-200 bg-white/95 px-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur"
         data-testid="workflow-flowgram-primary-actions"
       >
         <button
           type="button"
           data-testid="workflow-flowgram-add-node-operation"
-          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-slate-950 px-2.5 text-xs font-medium text-white transition hover:bg-slate-800"
           onClick={(event) => {
             event.stopPropagation();
             onOpenNodePanel();
           }}
         >
           <Plus className="h-3.5 w-3.5" />
-          Add
+          Add step
         </button>
         <OperationButton testId="workflow-flowgram-fit-view" title="Fit view" onClick={onFitView}>
           <LocateFixed className="h-4 w-4" />
@@ -142,8 +142,10 @@ export function FlowGramOperationToolbar({
           <MoreHorizontal className="h-4 w-4" />
         </OperationButton>
       </div>
-      <div className="inline-flex h-7 max-w-[260px] items-center rounded-md border border-slate-200 bg-white/80 px-2 text-[11px] text-slate-500 shadow-[0_1px_3px_rgba(15,23,42,0.04)]" data-testid="workflow-flowgram-operation-toolbar">
-        <span className="truncate">{humanFeedback} / {operationFeedback}</span>
+      <div className="inline-flex h-7 max-w-[300px] items-center gap-1.5 rounded-md border border-slate-200 bg-white/90 px-2 text-[11px] text-slate-500 shadow-[0_1px_3px_rgba(15,23,42,0.04)]" data-testid="workflow-flowgram-operation-toolbar">
+        <span className="truncate font-medium text-slate-700">{humanFeedback}</span>
+        <span className="text-slate-300">|</span>
+        <span className="truncate">{operationFeedback}</span>
       </div>
       {isMoreOpen && (
         <div
@@ -307,7 +309,7 @@ export function FlowGramNativeOperationLayer({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30" data-testid="workflow-flowgram-operation-layer">
-      <div className="absolute left-3 top-3">
+      <div className="absolute left-3 top-16">
         <FlowGramOperationToolbar
           zoomPercent={Math.round((tools.zoom || 1) * 100)}
           lineType={String(tools.lineType || 'default')}

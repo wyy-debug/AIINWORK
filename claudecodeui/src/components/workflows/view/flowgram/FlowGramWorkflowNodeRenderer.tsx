@@ -35,28 +35,41 @@ export function FlowGramWorkflowNode({
   const workflowNode = json.data?.workflowNode;
   const runtimeNode = runtimeVisualState?.nodes?.[json.id];
   const status = getRuntimeNodeStatus(runtimeVisualState, selectedRun, json.id);
+  const statusClassName = status === 'running'
+    ? 'bg-blue-500'
+    : status === 'waiting_approval'
+      ? 'bg-amber-500'
+      : status === 'failed'
+        ? 'bg-red-500'
+        : status === 'completed'
+          ? 'bg-emerald-500'
+          : 'bg-slate-300';
   return (
     <WorkflowNodeRenderer node={node} className="workflow-flowgram-node-renderer">
       <div data-testid="workflow-node">
       <button
         type="button"
         className={cn(
-          'w-[230px] rounded-[10px] border bg-white p-3 text-left shadow-sm transition hover:border-primary/60 hover:shadow-md',
-          selectedNodeId === json.id ? 'border-primary ring-2 ring-primary/15' : 'border-border',
-          status === 'running' && 'border-blue-400 bg-blue-50',
-          status === 'waiting_approval' && 'border-amber-400 bg-amber-50',
-          status === 'failed' && 'border-red-400 bg-red-50',
-          status === 'completed' && 'border-emerald-400 bg-emerald-50',
+          'w-[248px] rounded-md border bg-white p-3 text-left shadow-[0_10px_30px_rgba(15,23,42,0.08)] transition hover:border-slate-400 hover:shadow-[0_14px_34px_rgba(15,23,42,0.12)]',
+          selectedNodeId === json.id ? 'border-slate-900 ring-2 ring-slate-900/10' : 'border-slate-200',
+          status === 'running' && 'border-blue-300 bg-blue-50/70',
+          status === 'waiting_approval' && 'border-amber-300 bg-amber-50/70',
+          status === 'failed' && 'border-red-300 bg-red-50/70',
+          status === 'completed' && 'border-emerald-300 bg-emerald-50/70',
         )}
         data-testid={`workflow-flowgram-node-${json.id}`}
         onClick={() => onSelectNode(json.id)}
       >
+        <div data-testid="workflow-node-modern-block">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-foreground">{json.data?.title || workflowNode?.title || json.type}</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{json.type}</div>
+            <div className="flex items-center gap-2">
+              <span className={cn('h-2 w-2 rounded-full', statusClassName)} aria-label="workflow node status dot" />
+              <div className="truncate text-sm font-semibold text-slate-950">{json.data?.title || workflowNode?.title || json.type}</div>
+            </div>
+            <div className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">{json.type}</div>
           </div>
-          <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{status}</span>
+          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600">{status}</span>
         </div>
         <div className="sr-only" data-testid="workflow-flowgram-runtime-node-state">
           attempt {runtimeNode?.attempt ?? 0}, checkpoints {runtimeNode?.checkpointCount ?? 0}, artifacts {runtimeNode?.artifactCount ?? 0}
@@ -72,6 +85,7 @@ export function FlowGramWorkflowNode({
           {runtimeNode?.artifactCount ? <span className="rounded border border-border px-1.5 py-0.5">{runtimeNode.artifactCount} artifacts</span> : null}
           {runtimeNode?.error ? <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-red-700">error</span> : null}
           {runtimeNode?.waitingReason ? <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-700">approval</span> : null}
+        </div>
         </div>
       </button>
       </div>

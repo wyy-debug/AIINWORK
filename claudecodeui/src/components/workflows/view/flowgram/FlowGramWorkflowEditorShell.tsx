@@ -82,10 +82,24 @@ const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, Wor
 
   return (
     <div
-      className="relative h-[640px] min-w-0 overflow-hidden rounded-md border border-border bg-background"
+      className="relative h-[680px] min-w-0 overflow-hidden rounded-md border border-slate-200 bg-slate-950/5 shadow-sm"
       data-testid="workflow-dag-canvas"
     >
-      <div className="h-full w-full" data-testid="workflow-flowgram-free-layout-editor">
+      <div
+        className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.12)_1px,transparent_0)] [background-size:22px_22px]"
+        data-testid="workflow-canvas-surface-modern"
+      />
+      <div className="absolute left-3 right-3 top-3 z-20 flex h-10 items-center justify-between rounded-md border border-slate-200 bg-white/92 px-3 shadow-sm backdrop-blur" data-testid="workflow-canvas-surface-titlebar">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-slate-950">{workflow.name}</div>
+          <div className="text-[11px] text-slate-500">{workflow.nodes.length} steps / {workflow.edges.length} connections</div>
+        </div>
+        <div className="hidden items-center gap-1 text-[11px] text-slate-500 md:flex">
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">FlowGram canvas</span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">{props.selectedRun?.status || 'draft'}</span>
+        </div>
+      </div>
+      <div className="h-full w-full pt-10" data-testid="workflow-flowgram-free-layout-editor">
         <FreeLayoutEditor ref={flowGramContextRef} key={`${workflow.id}:${workflow.nodes.map((node) => node.id).join(',')}:${workflow.edges.map((edge) => edge.id).join(',')}`} {...editorProps}>
           <FlowGramNativeOperationLayer
             workflow={workflow}

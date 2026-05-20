@@ -22,6 +22,7 @@ export const workflowFlowGramSnap = {
 };
 
 export const workflowFlowGramMinimap = {
+  disableLayer: true,
   canvasStyle: {
     canvasWidth: 180,
     canvasHeight: 112,
