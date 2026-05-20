@@ -78,6 +78,9 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-layout-lock"');
     expect(source).toContain('data-testid="workflow-edge-route-style"');
     expect(source).toContain('data-testid="workflow-edge-branch-labels"');
+    expect(source).toContain('data-testid="workflow-edge-insert-node"');
+    expect(source).toContain('insertNodeOnEdge');
+    expect(source).toContain('edgeInsertType');
     expect(source).toContain('data-testid="workflow-minimap-filters"');
     expect(source).toContain('data-testid="workflow-graph-validation-badges"');
     expect(source).toContain('selectedNodeIds');

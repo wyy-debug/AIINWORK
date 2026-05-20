@@ -184,6 +184,37 @@ function makeId(prefix: string, count: number) {
   return `${prefix}-${count + 1}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
+function makeUniqueNodeId(nodes: WorkflowNode[], type: WorkflowNodeType) {
+  let count = nodes.filter((node) => node.type === type).length;
+  let id = makeId(type, count);
+  while (nodes.some((node) => node.id === id)) {
+    count += 1;
+    id = makeId(type, count);
+  }
+  return { id, count };
+}
+
+function buildWorkflowNode(type: WorkflowNodeType, current: WorkflowDefinition, position: { x: number; y: number }) {
+  const { id, count } = makeUniqueNodeId(current.nodes, type);
+  const label = baseNodeTypes.find((item) => item.type === type)?.label || type;
+  return {
+    id,
+    type,
+    title: `${label} ${count + 1}`,
+    description: '',
+    agentId: type === 'subagent' ? 'subagent-general' : type === 'agent' ? current.profileId : '',
+    toolName: type === 'tool' ? 'git-native-review' : '',
+    command: type === 'shell' ? 'npm test' : '',
+    prompt: '',
+    condition: '',
+    permission: type === 'shell' || type === 'mcp' || type === 'tool' ? 'ask' : '',
+    retryLimit: 0,
+    timeoutMs: 120000,
+    config: {},
+    position,
+  } satisfies WorkflowNode;
+}
+
 function formatTime(value?: number | string | null) {
   if (!value) return 'n/a';
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -392,6 +423,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
   const [selectedRunId, setSelectedRunId] = useState('');
+  const [edgeInsertType, setEdgeInsertType] = useState<WorkflowNodeType>('tool');
   const [pinnedRunIds, setPinnedRunIds] = useState<string[]>(() => readStoredIds(pinnedRunStorageKey));
   const [archivedRunIds, setArchivedRunIds] = useState<string[]>(() => readStoredIds(archivedRunStorageKey));
   const [cancelConfirmation, setCancelConfirmation] = useState<WorkflowRun | null>(null);
@@ -1100,24 +1132,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const addNode = useCallback((type: WorkflowNodeType) => {
     commitDraft((current) => {
-      const count = current.nodes.filter((node) => node.type === type).length;
-      const id = makeId(type, count);
-      const node: WorkflowNode = {
-        id,
-        type,
-        title: `${baseNodeTypes.find((item) => item.type === type)?.label || type} ${count + 1}`,
-        description: '',
-        agentId: type === 'subagent' ? 'subagent-general' : type === 'agent' ? current.profileId : '',
-        toolName: type === 'tool' ? 'git-native-review' : '',
-        command: type === 'shell' ? 'npm test' : '',
-        prompt: '',
-        condition: '',
-        permission: type === 'shell' || type === 'mcp' || type === 'tool' ? 'ask' : '',
-        retryLimit: 0,
-        timeoutMs: 120000,
-        config: {},
-        position: { x: 80 + current.nodes.length * 220, y: 120 + (current.nodes.length % 2) * 140 },
-      };
+      const node = buildWorkflowNode(type, current, { x: 80 + current.nodes.length * 220, y: 120 + (current.nodes.length % 2) * 140 });
       setSelectedNodeId(node.id);
       setSelectedNodeIds([node.id]);
       return { ...current, nodes: [...current.nodes, node] };
@@ -1262,6 +1277,42 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const removeEdge = useCallback((edgeId: string) => {
     commitDraft((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) }));
     setSelectedEdgeId((current) => current === edgeId ? '' : current);
+  }, [commitDraft]);
+
+  const insertNodeOnEdge = useCallback((edgeId: string, type: WorkflowNodeType) => {
+    commitDraft((current) => {
+      const edge = current.edges.find((item) => item.id === edgeId);
+      if (!edge) return current;
+      const sourceNode = current.nodes.find((node) => node.id === edge.from);
+      const targetNode = current.nodes.find((node) => node.id === edge.to);
+      const position = sourceNode && targetNode
+        ? {
+          x: Math.round((sourceNode.position.x + targetNode.position.x) / 2),
+          y: Math.round((sourceNode.position.y + targetNode.position.y) / 2),
+        }
+        : { x: 160 + current.nodes.length * 80, y: 160 };
+      const node = buildWorkflowNode(type, current, position);
+      const firstEdge: WorkflowEdge = {
+        ...edge,
+        id: makeId(`${edge.from}-${node.id}`, current.edges.length),
+        to: node.id,
+      };
+      const secondEdge: WorkflowEdge = {
+        ...edge,
+        id: makeId(`${node.id}-${edge.to}`, current.edges.length + 1),
+        from: node.id,
+        mode: 'success',
+        condition: '',
+      };
+      setSelectedNodeId(node.id);
+      setSelectedNodeIds([node.id]);
+      setSelectedEdgeId('');
+      return {
+        ...current,
+        nodes: [...current.nodes, node],
+        edges: current.edges.flatMap((item) => (item.id === edgeId ? [firstEdge, secondEdge] : [item])),
+      };
+    });
   }, [commitDraft]);
 
   const saveWorkflow = useCallback(async () => {
@@ -2666,6 +2717,30 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   Condition label
                   <input value={selectedEdge.condition || ''} onChange={(event) => updateEdge(selectedEdge.id, { condition: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
                 </label>
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-edge-insert-node">
+                  <span className="block font-semibold text-foreground">Insert node on edge</span>
+                  <span className="mt-1 block">Borrowed from FlowGram's line-add pattern: split this edge and place a new step between both endpoints.</span>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <select
+                      value={edgeInsertType}
+                      onChange={(event) => setEdgeInsertType(event.target.value as WorkflowNodeType)}
+                      className="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                      data-testid="workflow-edge-insert-node-type"
+                    >
+                      {paletteNodeTypes.map((nodeType) => (
+                        <option key={nodeType.type} value={nodeType.type}>{nodeType.label}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => insertNodeOnEdge(selectedEdge.id, edgeInsertType)}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Insert
+                    </button>
+                  </div>
+                </div>
                 <button type="button" onClick={() => removeEdge(selectedEdge.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50">
                   <Trash2 className="h-4 w-4" />
                   Delete edge
