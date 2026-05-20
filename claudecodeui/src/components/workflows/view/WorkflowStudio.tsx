@@ -59,8 +59,8 @@ import {
   createWorkflowNodeRegistry,
   defaultWorkflowPaletteGroups,
 } from '../model/workflowNodeRegistry';
-import { buildWorkGraphRuntimeState } from '../model/workflowRuntimeStateBridge';
 import { buildWorkflowMigrationDoctorReport } from '../model/workflowMigrationDoctor';
+import { buildFlowGramRuntimeVisualState } from './flowgram/FlowGramRuntimeVisualBridge';
 import type { WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor';
 
 const WorkflowFlowGramEditor = lazy(() => import('./WorkflowFlowGramEditor'));
@@ -305,8 +305,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [nodeSearch, setNodeSearch] = useState('');
   const [copiedNodes, setCopiedNodes] = useState<WorkflowNode[]>([]);
   const [copiedEdges, setCopiedEdges] = useState<WorkflowEdge[]>([]);
-  const [historyPast, setHistoryPast] = useState<WorkflowDefinition[]>([]);
-  const [historyFuture, setHistoryFuture] = useState<WorkflowDefinition[]>([]);
+  const [externalDraftUndo, setExternalDraftUndo] = useState<{ past: WorkflowDefinition | null; future: WorkflowDefinition | null }>({ past: null, future: null });
   const [layoutMode, setLayoutMode] = useState<WorkflowLayoutMode>('left-to-right');
   const [lockedNodeIds, setLockedNodeIds] = useState<string[]>([]);
   const [minimapFilter, setMinimapFilter] = useState<WorkflowMinimapFilter>('all');
@@ -356,7 +355,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     () => runs.find((run) => run.id === selectedRunId) || runs[0] || null,
     [runs, selectedRunId],
   );
-  const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === selectedNodeId) || null, [draft.nodes, selectedNodeId]);
+  const effectiveSelectedNodeId = useMemo(() => {
+    if (draft.nodes.some((node) => node.id === selectedNodeId)) return selectedNodeId;
+    return selectedNodeIds.find((id) => draft.nodes.some((node) => node.id === id)) || '';
+  }, [draft.nodes, selectedNodeId, selectedNodeIds]);
+  const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === effectiveSelectedNodeId) || null, [draft.nodes, effectiveSelectedNodeId]);
   const selectedEdge = useMemo(() => draft.edges.find((edge) => edge.id === selectedEdgeId) || null, [draft.edges, selectedEdgeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
   const activeNodeRegistry = useMemo(() => createWorkflowNodeRegistry(nodeTypeDefinitions), [nodeTypeDefinitions]);
@@ -376,7 +379,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const workGraphRoundtrip = useMemo(() => flowGramDocumentToWorkflowDefinition(workGraphDocument, draft), [draft, workGraphDocument]);
   const workGraphCompatibility = useMemo(() => analyzeWorkflowGraphCompatibility(draft, nodeTypeDefinitions), [draft, nodeTypeDefinitions]);
   const localMigrationDoctor = useMemo(() => buildWorkflowMigrationDoctorReport(workflows.length > 0 ? workflows : [draft], nodeTypeDefinitions), [draft, nodeTypeDefinitions, workflows]);
-  const selectedWorkGraphRuntimeState = useMemo(() => buildWorkGraphRuntimeState(draft, selectedRun), [draft, selectedRun]);
+  const selectedWorkGraphRuntimeState = useMemo(() => buildFlowGramRuntimeVisualState(draft, selectedRun), [draft, selectedRun]);
   const shouldLoadExtendedWorkflowState = activeView === 'Library' || activeView === 'Runs';
   const schemaVersion = selectedNodeDefinition?.ui?.schemaVersion || selectedNode?.config?.schemaVersion || '1.0';
   const requiredFieldErrors = useMemo(() => {
@@ -583,8 +586,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const revisions = governanceState?.history?.revisions || governanceState?.governance?.revisions || [];
     return revisions.length > 0
       ? `${revisions.length} saved revision(s), latest ${revisions[0]?.currentDigest || governanceState?.history?.latestDigest || 'unknown'}`
-      : `${historyPast.length} local undo revision(s), backend history not loaded yet`;
-  }, [governanceState, historyPast.length]);
+      : 'Canvas undo/redo is handled by FlowGram HistoryService; backend history not loaded yet';
+  }, [governanceState]);
   const draftPublishFlow = useMemo(() => {
     const governance = governanceState?.governance;
     return governance
@@ -939,8 +942,6 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const commitDraft = useCallback((updater: (current: WorkflowDefinition) => WorkflowDefinition) => {
     setDraft((current) => {
-      setHistoryPast((history) => [...history, current].slice(-30));
-      setHistoryFuture([]);
       return updater(current);
     });
   }, []);
@@ -951,31 +952,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const undoWorkflowEdit = useCallback(async () => {
     if (await flowGramEditorRef.current?.undo()) return;
-    setHistoryPast((history) => {
-      const previous = history.at(-1);
-      if (!previous) return history;
-      setHistoryFuture((future) => [draft, ...future].slice(0, 30));
-      setDraft(previous);
-      setSelectedNodeId('');
-      setSelectedNodeIds([]);
-      setSelectedEdgeId('');
-      return history.slice(0, -1);
-    });
-  }, [draft]);
+    if (!externalDraftUndo.past) return;
+    setDraft(externalDraftUndo.past);
+    setExternalDraftUndo({ past: null, future: draft });
+  }, [draft, externalDraftUndo.past]);
 
   const redoWorkflowEdit = useCallback(async () => {
     if (await flowGramEditorRef.current?.redo()) return;
-    setHistoryFuture((future) => {
-      const next = future[0];
-      if (!next) return future;
-      setHistoryPast((history) => [...history, draft].slice(-30));
-      setDraft(next);
-      setSelectedNodeId('');
-      setSelectedNodeIds([]);
-      setSelectedEdgeId('');
-      return future.slice(1);
-    });
-  }, [draft]);
+    if (!externalDraftUndo.future) return;
+    setDraft(externalDraftUndo.future);
+    setExternalDraftUndo({ past: draft, future: null });
+  }, [draft, externalDraftUndo.future]);
 
   const updateNode = useCallback((nodeId: string, patch: Partial<WorkflowNode>) => {
     commitDraft((current) => ({
@@ -1157,6 +1144,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const nodesToCopy = draft.nodes.filter((node) => ids.includes(node.id));
     const edgesToCopy = draft.edges.filter((edge) => ids.includes(edge.from) && ids.includes(edge.to));
     if (nodesToCopy.length === 0) return;
+    setExternalDraftUndo({ past: draft, future: null });
     commitDraft((current) => {
       const idMap = new Map<string, string>();
       const copies = nodesToCopy.map((node, index) => {
@@ -1180,7 +1168,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setSelectedNodeIds(copyIds);
       return { ...current, nodes: [...current.nodes, ...copies], edges: [...current.edges, ...edgeCopies] };
     });
-  }, [commitDraft, copySelectedNodes, draft.edges, draft.nodes, selectedNodeId, selectedNodeIds]);
+  }, [commitDraft, copySelectedNodes, draft, selectedNodeId, selectedNodeIds]);
 
   const toggleLayoutLock = useCallback(() => {
     const ids = selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
@@ -1217,41 +1205,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     ids.forEach((id) => deleteNode(id));
   }, [deleteNode, removeEdge, selectedEdgeId, selectedNodeId, selectedNodeIds]);
 
-  const insertNodeOnEdge = useCallback((edgeId: string, type: WorkflowNodeType) => {
-    commitDraft((current) => {
-      const edge = current.edges.find((item) => item.id === edgeId);
-      if (!edge) return current;
-      const sourceNode = current.nodes.find((node) => node.id === edge.from);
-      const targetNode = current.nodes.find((node) => node.id === edge.to);
-      const position = sourceNode && targetNode
-        ? {
-          x: Math.round((sourceNode.position.x + targetNode.position.x) / 2),
-          y: Math.round((sourceNode.position.y + targetNode.position.y) / 2),
-        }
-        : { x: 160 + current.nodes.length * 80, y: 160 };
-      const node = buildWorkflowNode(type, current, position);
-      const firstEdge: WorkflowEdge = {
-        ...edge,
-        id: makeId(`${edge.from}-${node.id}`, current.edges.length),
-        to: node.id,
-      };
-      const secondEdge: WorkflowEdge = {
-        ...edge,
-        id: makeId(`${node.id}-${edge.to}`, current.edges.length + 1),
-        from: node.id,
-        mode: 'success',
-        condition: '',
-      };
-      setSelectedNodeId(node.id);
-      setSelectedNodeIds([node.id]);
-      setSelectedEdgeId('');
-      return {
-        ...current,
-        nodes: [...current.nodes, node],
-        edges: current.edges.flatMap((item) => (item.id === edgeId ? [firstEdge, secondEdge] : [item])),
-      };
-    });
-  }, [commitDraft]);
+  const requestFlowGramEdgeInsert = useCallback((edgeId: string, type: WorkflowNodeType) => {
+    void flowGramEditorRef.current?.insertNodeOnEdge(edgeId, type);
+  }, []);
 
   const saveWorkflow = useCallback(async () => {
     setIsBusy(true);
@@ -1683,8 +1639,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const renderCanvas = (run: WorkflowRun | null = null) => {
     const selectedCount = selectedNodeIds.length;
-    const canUndoWorkflow = historyPast.length > 0 || Boolean(flowGramEditorRef.current?.canUndo());
-    const canRedoWorkflow = historyFuture.length > 0 || Boolean(flowGramEditorRef.current?.canRedo());
+    const canUndoWorkflow = Boolean(flowGramEditorRef.current?.canUndo()) || Boolean(externalDraftUndo.past);
+    const canRedoWorkflow = Boolean(flowGramEditorRef.current?.canRedo()) || Boolean(externalDraftUndo.future);
     return (
       <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2" data-testid="workflow-canvas-controls">
@@ -1767,7 +1723,6 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               setSelectedEdgeId(edgeId);
               setSelectedNodeId('');
             }}
-            onInsertNodeOnEdge={insertNodeOnEdge}
           />
         </Suspense>
       </div>
@@ -2693,7 +2648,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     </select>
                     <button
                       type="button"
-                      onClick={() => insertNodeOnEdge(selectedEdge.id, edgeInsertType)}
+                      onClick={() => requestFlowGramEdgeInsert(selectedEdge.id, edgeInsertType)}
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted"
                     >
                       <Plus className="h-4 w-4" />

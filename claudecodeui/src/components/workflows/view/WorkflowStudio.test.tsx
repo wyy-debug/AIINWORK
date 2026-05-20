@@ -6,10 +6,74 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
+function readFlowGramNativeSource() {
+  return [
+    'WorkflowFlowGramEditor.tsx',
+    'flowgram/FlowGramWorkflowEditorShell.tsx',
+    'flowgram/FlowGramWorkflowNodeRegistry.tsx',
+    'flowgram/FlowGramWorkflowFormMeta.tsx',
+    'flowgram/FlowGramWorkflowVariableCatalog.ts',
+    'flowgram/FlowGramRuntimeVisualBridge.ts',
+    'flowgram/FlowGramWorkflowNodeRenderer.tsx',
+  ].map((file) => readFileSync(resolve(currentDir, file), 'utf8')).join('\n');
+}
+
 describe('WorkflowStudio source contract', () => {
+  it('keeps FlowGram code-level parity logic in dedicated native modules', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const compatibilityWrapperSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const shellSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorShell.tsx'), 'utf8');
+    const registrySource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRegistry.tsx'), 'utf8');
+    const formMetaSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowFormMeta.tsx'), 'utf8');
+    const variableSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowVariableCatalog.ts'), 'utf8');
+    const runtimeBridgeSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramRuntimeVisualBridge.ts'), 'utf8');
+
+    expect(compatibilityWrapperSource).toContain('FlowGramWorkflowEditorShell');
+    expect(compatibilityWrapperSource).not.toContain('function buildNodeRegistries');
+    expect(compatibilityWrapperSource).not.toContain('function FlowGramLineInsertButton');
+    expect(compatibilityWrapperSource).not.toContain('const workflowNodeFormMeta');
+
+    expect(shellSource).toContain('FreeLayoutEditor');
+    expect(shellSource).toContain('createFreeLinesPlugin');
+    expect(shellSource).toContain('createFreeNodePanelPlugin');
+    expect(shellSource).toContain('buildFlowGramWorkflowNodeRegistries');
+    expect(shellSource).toContain('createFlowGramWorkflowNode');
+    expect(shellSource).toContain('buildFlowGramRuntimeVisualState');
+
+    expect(registrySource).toContain('flowGramWorkflowNodeTypes');
+    expect(registrySource).toContain('onAdd');
+    expect(registrySource).toContain('defaultFlowGramWorkflowNodeMeta');
+    expect(formMetaSource).toContain('validateTrigger');
+    expect(formMetaSource).toContain('formatOnSubmit');
+    expect(variableSource).toContain('buildWorkflowFlowGramVariableCatalog');
+    expect(runtimeBridgeSource).toContain('setLineClassName');
+
+    expect(studioSource).not.toContain('const [historyPast');
+    expect(studioSource).not.toContain('const [historyFuture');
+    expect(studioSource).not.toContain('const insertNodeOnEdge');
+    expect(studioSource).not.toContain('historyPast.length > 0 || Boolean(flowGramEditorRef.current?.canUndo())');
+  });
+
+  it('keeps FlowGram MIT attribution visible for code-level architecture replication', () => {
+    const notice = readFileSync(resolve(currentDir, '../../../../NOTICE'), 'utf8');
+
+    expect(notice).toContain('FlowGram.AI');
+    expect(notice).toContain('https://github.com/bytedance/flowgram.ai');
+    expect(notice).toContain('licensed under the MIT License');
+  });
+
+  it('records the FlowGram parity audit as a closeable engineering artifact', () => {
+    const audit = readFileSync(resolve(currentDir, '../../../../docs/workflow-flowgram-parity-audit.md'), 'utf8');
+
+    expect(audit).toContain('REQ-197');
+    expect(audit).toContain('FlowGram native');
+    expect(audit).toContain('MTL runtime');
+    expect(audit).toContain('WorkflowFlowGramEditor.tsx is a compatibility wrapper');
+  });
+
   it('keeps the FlowGram migration clean and native-first', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
-    const flowGramSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
     const packageJson = readFileSync(resolve(currentDir, '../../../../package.json'), 'utf8');
 
     expect(studioSource).not.toContain("from '@xyflow" + "/react'");
@@ -32,14 +96,14 @@ describe('WorkflowStudio source contract', () => {
 
   it('uses FlowGram-native form, variable, line insertion, history, runtime state, and route loading', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
-    const flowGramSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
     const mainContentSource = readFileSync(resolve(currentDir, '../../main-content/view/MainContent.tsx'), 'utf8');
 
-    expect(flowGramSource).toContain('export type WorkflowFlowGramEditorHandle');
-    expect(flowGramSource).toContain('export type WorkflowFlowGramFormValues');
-    expect(flowGramSource).toContain('export type WorkflowFlowGramVariableCatalog');
-    expect(flowGramSource).toContain('export type WorkflowRuntimeVisualState');
-    expect(flowGramSource).toContain('export type WorkflowLineInsertRequest');
+    expect(flowGramSource).toContain('WorkflowFlowGramEditorHandle');
+    expect(flowGramSource).toContain('WorkflowFlowGramFormValues');
+    expect(flowGramSource).toContain('WorkflowFlowGramVariableCatalog');
+    expect(flowGramSource).toContain('WorkflowRuntimeVisualState');
+    expect(flowGramSource).toContain('WorkflowLineInsertRequest');
 
     expect(flowGramSource).toContain('buildWorkflowFlowGramFormValues');
     expect(flowGramSource).toContain('buildWorkflowFlowGramVariableCatalog');
@@ -76,12 +140,14 @@ describe('WorkflowStudio source contract', () => {
     expect(mainContentSource).not.toContain("import WorkflowStudio from '../../workflows/view/WorkflowStudio'");
     expect(mainContentSource).toContain("lazy(() => import('../../workflows/view/WorkflowStudio'))");
     expect(mainContentSource).toContain('data-testid="workflow-route-lazy-boundary"');
+    expect(studioSource).toContain("import type { WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor'");
+    expect(studioSource).not.toContain("import { buildFlowGramRuntimeVisualState, type WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor'");
   });
 
   it('exposes visual DAG editor, runner, approval, and history hooks', () => {
     const source = [
       readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8'),
-      readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8'),
+      readFlowGramNativeSource(),
     ].join('\n');
 
     expect(source).toContain('data-testid="workflow-studio"');
