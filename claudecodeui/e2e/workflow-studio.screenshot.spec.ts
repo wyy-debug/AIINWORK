@@ -139,6 +139,19 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await expect(page.getByTestId('workflow-migration-doctor-local')).toContainText('Migration doctor');
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-shortcut-hints')).toBeVisible();
+  await page.getByTestId('workflow-flowgram-zoom-in').click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Zoomed in');
+  await page.getByTestId('workflow-flowgram-zoom-out').click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Zoomed out');
+  await page.getByTestId('workflow-flowgram-fit-view').click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Fit view');
+  await screenshot(page, 'REQ-213-flowgram-operation-toolbar.png');
+  await screenshot(page, 'BUG-UI-011-flowgram-visual-parity.png');
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-flowgram-selection-panel')).toContainText('Explore Subagent');
+  await screenshot(page, 'REQ-214-flowgram-selection-panel.png');
   await expect(page.getByTestId('workflow-flowgram-line-insert').first()).toBeVisible();
   await screenshot(page, 'REQ-183-workgraph-command-center.png');
 
@@ -148,10 +161,13 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await page.keyboard.press('Escape');
 
   await page.getByTestId('workflow-flowgram-line-insert').first().click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toBeVisible();
   await expect(page.getByTestId('workflow-form-meta-inspector')).toBeVisible();
   await expect(page.getByTestId('workflow-flow-reference-validation')).toContainText('Typed references');
   await expect(page.getByTestId('workflow-flowing-lines')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-adapter')).toContainText('4 nodes');
+  await screenshot(page, 'REQ-215-flowgram-line-insert-operation.png');
+  await screenshot(page, 'REQ-216-flowgram-shortcut-feedback.png');
   await screenshot(page, 'REQ-183-line-add-formmeta-inspector.png');
 });
 

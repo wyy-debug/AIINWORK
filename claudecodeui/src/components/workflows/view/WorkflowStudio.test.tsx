@@ -21,6 +21,7 @@ function readFlowGramNativeSource() {
     'flowgram/FlowGramWorkflowLineGuards.ts',
     'flowgram/FlowGramWorkflowVisualConfig.ts',
     'flowgram/FlowGramWorkflowShortcuts.ts',
+    'flowgram/FlowGramWorkflowOperations.tsx',
   ].map((file) => readFileSync(resolve(currentDir, file), 'utf8')).join('\n');
 }
 
@@ -31,6 +32,7 @@ describe('WorkflowStudio source contract', () => {
     const shellSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorShell.tsx'), 'utf8');
     const editorPropsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorProps.tsx'), 'utf8');
     const materialsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowMaterials.tsx'), 'utf8');
+    const operationsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowOperations.tsx'), 'utf8');
     const registrySource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRegistry.tsx'), 'utf8');
     const formMetaSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowFormMeta.tsx'), 'utf8');
     const variableSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowVariableCatalog.ts'), 'utf8');
@@ -58,6 +60,10 @@ describe('WorkflowStudio source contract', () => {
     expect(editorPropsSource).toContain('workflowFlowGramSelectBox');
     expect(materialsSource).toContain('FlowGramLineInsertButton');
     expect(materialsSource).toContain('FlowGramNodePanel');
+    expect(operationsSource).toContain('FlowGramOperationToolbar');
+    expect(operationsSource).toContain('FlowGramSelectionOperationPanel');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-selection-panel"');
 
     expect(registrySource).toContain('flowGramWorkflowNodeTypes');
     expect(registrySource).toContain('onAdd');
@@ -158,6 +164,13 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).toContain('isDisabledLine');
     expect(flowGramSource).toContain('canDeleteWorkflowNode');
     expect(flowGramSource).toContain('canResetWorkflowLine');
+    expect(flowGramSource).toContain('zoomIn');
+    expect(flowGramSource).toContain('zoomOut');
+    expect(flowGramSource).toContain('autoLayout');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-shortcut-hints"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-feedback"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-selection-panel"');
 
     expect(mainContentSource).not.toContain("import WorkflowStudio from '../../workflows/view/WorkflowStudio'");
     expect(mainContentSource).toContain("lazy(() => import('../../workflows/view/WorkflowStudio'))");

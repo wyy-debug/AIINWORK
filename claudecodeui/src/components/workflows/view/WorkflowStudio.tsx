@@ -1723,6 +1723,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               setSelectedEdgeId(edgeId);
               setSelectedNodeId('');
             }}
+            onAddNode={addNode}
+            onCopySelection={copySelectedNodes}
+            onDuplicateSelection={duplicateSelectedSubgraph}
+            onDeleteSelection={deleteSelectedGraphItems}
           />
         </Suspense>
       </div>

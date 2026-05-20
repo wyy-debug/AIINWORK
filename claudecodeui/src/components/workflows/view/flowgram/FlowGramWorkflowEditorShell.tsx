@@ -10,6 +10,7 @@ import type {
   WorkflowRuntimeVisualState,
 } from './FlowGramWorkflowTypes';
 import { useWorkflowFlowGramEditorProps } from './FlowGramWorkflowEditorProps';
+import { FlowGramNativeOperationLayer } from './FlowGramWorkflowOperations';
 
 type WorkflowFlowGramEditorProps = {
   workflow: WorkflowDefinition;
@@ -20,6 +21,10 @@ type WorkflowFlowGramEditorProps = {
   onWorkflowChange: (workflow: WorkflowDefinition) => void;
   onSelectNode: (nodeId: string) => void;
   onSelectEdge: (edgeId: string) => void;
+  onAddNode?: (type: WorkflowDefinition['nodes'][number]['type']) => void;
+  onCopySelection?: () => void;
+  onDuplicateSelection?: () => void;
+  onDeleteSelection?: () => void;
 };
 
 const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, WorkflowFlowGramEditorProps>(function FlowGramWorkflowEditorShell(props, ref) {
@@ -59,6 +64,18 @@ const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, Wor
     async fitView() {
       await flowGramContextRef.current?.tools?.fitView?.(true);
     },
+    async zoomIn() {
+      const playgroundConfig = (flowGramContextRef.current as unknown as { playground?: { config?: { zoomin?: (easing?: boolean) => void } } } | null)?.playground?.config;
+      playgroundConfig?.zoomin?.(true);
+    },
+    async zoomOut() {
+      const playgroundConfig = (flowGramContextRef.current as unknown as { playground?: { config?: { zoomout?: (easing?: boolean) => void } } } | null)?.playground?.config;
+      playgroundConfig?.zoomout?.(true);
+    },
+    async autoLayout() {
+      await flowGramContextRef.current?.tools?.autoLayout?.({});
+      syncContextWorkflow(flowGramContextRef.current);
+    },
     insertNodeOnEdge,
   }), [flowGramContextRef, insertNodeOnEdge, syncContextWorkflow]);
 
@@ -68,7 +85,19 @@ const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, Wor
       data-testid="workflow-dag-canvas"
     >
       <div className="h-full w-full" data-testid="workflow-flowgram-free-layout-editor">
-        <FreeLayoutEditor ref={flowGramContextRef} key={`${workflow.id}:${workflow.nodes.map((node) => node.id).join(',')}:${workflow.edges.map((edge) => edge.id).join(',')}`} {...editorProps} />
+        <FreeLayoutEditor ref={flowGramContextRef} key={`${workflow.id}:${workflow.nodes.map((node) => node.id).join(',')}:${workflow.edges.map((edge) => edge.id).join(',')}`} {...editorProps}>
+          <FlowGramNativeOperationLayer
+            workflow={workflow}
+            selectedNodeId={props.selectedNodeId}
+            selectedEdgeId={props.selectedEdgeId}
+            onAddNodeFallback={props.onAddNode}
+            onCopySelection={props.onCopySelection}
+            onDuplicateSelection={props.onDuplicateSelection}
+            onDeleteSelection={props.onDeleteSelection}
+            onFitSelection={() => void flowGramContextRef.current?.tools?.fitView?.(true)}
+            onOperationComplete={syncContextWorkflow}
+          />
+        </FreeLayoutEditor>
       </div>
       <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-emerald-200 bg-emerald-50/90 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700 shadow-sm" data-testid="workflow-flowgram-runtime-boundary">
         FlowGram edits / MTL runtime executes

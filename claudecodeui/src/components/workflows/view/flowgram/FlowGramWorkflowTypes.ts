@@ -9,6 +9,9 @@ export type WorkflowFlowGramEditorHandle = {
   canUndo: () => boolean;
   canRedo: () => boolean;
   fitView: () => Promise<void>;
+  zoomIn: () => Promise<void>;
+  zoomOut: () => Promise<void>;
+  autoLayout: () => Promise<void>;
   insertNodeOnEdge: (edgeId: string, nodeType: WorkflowNodeType) => Promise<boolean>;
 };
 
