@@ -1,25 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import {
-  Background,
-  BaseEdge,
-  Controls,
-  EdgeLabelRenderer,
-  Handle,
-  MarkerType,
-  MiniMap,
-  Position,
-  ReactFlow,
-  ReactFlowProvider,
-  type Connection,
-  type Edge,
-  type EdgeChange,
-  type EdgeProps,
-  type Node,
-  type NodeChange,
-  type NodeProps,
-  getSmoothStepPath,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -103,25 +82,6 @@ type WorkflowPaletteGroup = {
   types: WorkflowNodeType[];
 };
 
-interface WorkflowFlowNodeData extends Record<string, unknown> {
-  workflowNode: WorkflowNode;
-  runState: WorkflowNodeRun | null;
-  permissionPreset: string;
-  validationBadges: string[];
-  isLocked: boolean;
-}
-
-type WorkflowFlowNode = Node<WorkflowFlowNodeData, 'workflowNode'>;
-interface WorkflowFlowEdgeData extends Record<string, unknown> {
-  mode?: WorkflowEdge['mode'];
-  routeStyle?: WorkflowEdge['routeStyle'];
-  insertType?: WorkflowNodeType;
-  onInsert?: (edgeId: string, type: WorkflowNodeType) => void;
-  runStatus?: string;
-}
-
-type WorkflowFlowEdge = Edge<WorkflowFlowEdgeData, 'workflowEdge'>;
-
 const views: StudioView[] = ['Home', 'Library', 'Editor', 'Runs'];
 
 const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
@@ -182,18 +142,6 @@ const statusTone: Record<string, string> = {
   stale: 'border-orange-200 bg-orange-50 text-orange-700',
   skipped: 'border-slate-200 bg-slate-50 text-slate-500',
   cancelled: 'border-zinc-200 bg-zinc-50 text-zinc-600',
-};
-
-const nodeTone: Record<WorkflowNodeType, string> = {
-  agent: 'border-blue-200 bg-blue-50 text-blue-900',
-  subagent: 'border-cyan-200 bg-cyan-50 text-cyan-900',
-  mcp: 'border-violet-200 bg-violet-50 text-violet-900',
-  tool: 'border-indigo-200 bg-indigo-50 text-indigo-900',
-  shell: 'border-amber-200 bg-amber-50 text-amber-900',
-  artifact: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-  approval: 'border-orange-200 bg-orange-50 text-orange-900',
-  condition: 'border-pink-200 bg-pink-50 text-pink-900',
-  join: 'border-slate-200 bg-slate-50 text-slate-900',
 };
 
 const riskyNodeTypes = new Set<WorkflowNodeType>(['shell', 'mcp', 'tool']);
@@ -340,122 +288,6 @@ function isEditableShortcutTarget(target: EventTarget | null) {
   const tagName = target.tagName.toLowerCase();
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
 }
-
-function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
-  const node = data.workflowNode;
-  const runState = data.runState;
-  const Icon = nodeIconByType[node.type] || Bot;
-  const isRisky = riskyNodeTypes.has(node.type);
-  const validationBadges = data.validationBadges || [];
-  return (
-    <div
-      data-testid="workflow-node"
-      data-node-id={node.id}
-      className={cn(
-        'min-h-[112px] w-[220px] rounded-md border bg-card p-3 shadow-sm transition-all',
-        nodeTone[node.type],
-        selected && 'ring-2 ring-primary/50',
-      )}
-    >
-      <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Icon className="h-4 w-4 flex-shrink-0" />
-            <h3 className="truncate text-sm font-semibold">{node.title}</h3>
-          </div>
-          <p className="mt-1 truncate text-[11px] opacity-75">{node.type}</p>
-        </div>
-        <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', isRisky ? 'border-amber-300 bg-amber-100 text-amber-800' : 'border-current/20 bg-white/40')}>
-          {isRisky ? 'risk' : 'ready'}
-        </span>
-      </div>
-      <div className="mt-3 text-[10px] opacity-80" data-testid="workflow-node-dependency-status">
-        {isRisky
-          ? `Permission: ${node.permission || data.permissionPreset}`
-          : node.type === 'mcp' && !node.toolName
-            ? 'Missing MCP tool'
-            : 'Dependencies ready'}
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1" data-testid="workflow-graph-validation-badges">
-        {validationBadges.length > 0 ? validationBadges.map((badge) => (
-          <span key={badge} className="rounded border border-current/20 bg-white/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wide">
-            {badge}
-          </span>
-        )) : (
-          <span className="rounded border border-current/20 bg-white/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wide">valid</span>
-        )}
-      </div>
-      {data.isLocked && <span className="mt-2 block text-[10px] font-medium opacity-75">layout locked</span>}
-      {runState && (
-        <span className={cn('mt-3 inline-flex rounded-full border px-2 py-0.5 text-[11px]', statusTone[runState.status] || statusTone.pending)}>
-          {runState.status}
-        </span>
-      )}
-      <Handle type="source" position={Position.Right} data-testid="workflow-connect-node" className="!h-3 !w-3 !border-2 !border-background !bg-primary" />
-    </div>
-  );
-}
-
-const reactFlowNodeTypes = { workflowNode: WorkflowFlowNodeCard };
-
-function WorkflowFlowEdgeWithAddButton({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
-  markerEnd,
-  style,
-  data,
-  selected,
-}: EdgeProps<WorkflowFlowEdge>) {
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
-  const isActive = data?.runStatus === 'active';
-  return (
-    <>
-      <BaseEdge
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={{
-          ...style,
-          strokeWidth: selected || isActive ? 2.5 : 1.5,
-          stroke: isActive ? '#059669' : selected ? '#2563eb' : '#94a3b8',
-          strokeDasharray: data?.routeStyle === 'step' ? '6 4' : undefined,
-        }}
-      />
-      <EdgeLabelRenderer>
-        <button
-          type="button"
-          data-testid="workflow-line-add-node-label"
-          aria-label="Insert node on edge"
-          onClick={(event) => {
-            event.stopPropagation();
-            data?.onInsert?.(id, data.insertType || 'tool');
-          }}
-          className={cn(
-            'nodrag nopan pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-foreground shadow-sm transition',
-            selected || isActive ? 'border-primary opacity-100' : 'border-border opacity-80 hover:opacity-100',
-          )}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </EdgeLabelRenderer>
-    </>
-  );
-}
-
-const reactFlowEdgeTypes = { workflowEdge: WorkflowFlowEdgeWithAddButton };
 
 export default function WorkflowStudio({ selectedProject, sessionId = null }: WorkflowStudioProps) {
   const [activeView, setActiveView] = useState<StudioView>('Home');
@@ -1843,133 +1675,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setActiveView('Editor');
   }, [draft]);
 
-  const toFlowNodes = useCallback((run: WorkflowRun | null): WorkflowFlowNode[] => {
-    const nodeRuns = run?.nodeRuns || {};
-    return draft.nodes.map((node) => ({
-      id: node.id,
-      type: 'workflowNode',
-      position: node.position,
-      selected: selectedNodeIds.includes(node.id),
-      data: {
-        workflowNode: node,
-        runState: nodeRuns[node.id] || null,
-        permissionPreset: draft.permissionPreset,
-        validationBadges: getNodeValidationBadges(draft, node, lockedNodeIds),
-        isLocked: lockedNodeIds.includes(node.id),
-      },
-    }));
-  }, [draft, lockedNodeIds, selectedNodeIds]);
-
-  const toFlowEdges = useCallback((run: WorkflowRun | null): WorkflowFlowEdge[] => {
-    const runtimeState = buildWorkGraphRuntimeState(draft, run);
-    return draft.edges.map((edge) => {
-      const edgeRuntimeState = runtimeState?.edges[edge.id];
-      return {
-        id: edge.id,
-        source: edge.from,
-        target: edge.to,
-        type: 'workflowEdge',
-        label: edge.condition ? `${edge.mode || 'success'}: ${edge.condition}` : edge.mode || 'success',
-        data: {
-          mode: edge.mode,
-          routeStyle: edge.routeStyle || 'smoothstep',
-          insertType: edgeInsertType,
-          onInsert: insertNodeOnEdge,
-          runStatus: edgeRuntimeState?.status,
-        },
-        animated: false,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        className: selectedEdgeId === edge.id ? 'workflow-edge-selected' : undefined,
-      };
-    });
-  }, [draft, edgeInsertType, insertNodeOnEdge, selectedEdgeId]);
-
-  const edgeInsertOverlays = useMemo(() => draft.edges.map((edge) => {
-    const sourceNode = draft.nodes.find((node) => node.id === edge.from);
-    const targetNode = draft.nodes.find((node) => node.id === edge.to);
-    if (!sourceNode || !targetNode) return null;
-    return {
-      edge,
-      x: Math.round((sourceNode.position.x + 220 + targetNode.position.x) / 2),
-      y: Math.round((sourceNode.position.y + 56 + targetNode.position.y + 56) / 2),
-    };
-  }).filter((item): item is { edge: WorkflowEdge; x: number; y: number } => Boolean(item)), [draft.edges, draft.nodes]);
-
-  const handleFlowNodesChange = useCallback((changes: NodeChange<WorkflowFlowNode>[]) => {
-    setDraft((current) => ({
-      ...current,
-      nodes: current.nodes.map((node) => {
-        const positionChange = changes.find((change) => 'id' in change && change.id === node.id && change.type === 'position');
-        if (positionChange && 'position' in positionChange && positionChange.position) {
-          return { ...node, position: positionChange.position };
-        }
-        return node;
-      }),
-    }));
-    const selectionChanges = changes.filter((change) => 'id' in change && change.type === 'select');
-    if (selectionChanges.length > 0) {
-      setSelectedNodeIds((current) => {
-        const next = new Set(current);
-        selectionChanges.forEach((change) => {
-          if ('id' in change && change.type === 'select') {
-            if (change.selected) next.add(change.id);
-            else next.delete(change.id);
-          }
-        });
-        const ids = [...next];
-        setSelectedNodeId(ids.at(-1) || '');
-        return ids;
-      });
-      setSelectedEdgeId('');
-    }
-  }, []);
-
-  const handleFlowEdgesChange = useCallback((changes: EdgeChange<WorkflowFlowEdge>[]) => {
-    const removed = new Set(changes.filter((change) => 'id' in change && change.type === 'remove').map((change) => change.id));
-    if (removed.size > 0) {
-      setDraft((current) => ({ ...current, edges: current.edges.filter((edge) => !removed.has(edge.id)) }));
-    }
-    const selectedChange = changes.find((change) => 'id' in change && change.type === 'select' && change.selected);
-    if (selectedChange && 'id' in selectedChange) {
-      setSelectedEdgeId(selectedChange.id);
-      setSelectedNodeId('');
-      setSelectedNodeIds([]);
-    }
-  }, []);
-
-  const handleFlowConnect = useCallback((connection: Connection) => {
-    if (!connection.source || !connection.target) return;
-    commitDraft((current) => {
-      const exists = current.edges.some((edge) => edge.from === connection.source && edge.to === connection.target);
-      if (exists) return current;
-      const edge: WorkflowEdge = {
-        id: `${connection.source}-${connection.target}-${Date.now()}`,
-        from: connection.source!,
-        to: connection.target!,
-        mode: 'success',
-        routeStyle: 'smoothstep',
-      };
-      return { ...current, edges: [...current.edges, edge] };
-    });
-  }, [commitDraft]);
-
   const renderCanvas = (run: WorkflowRun | null = null) => {
-    const flowNodes = toFlowNodes(run);
-    const flowEdges = toFlowEdges(run);
     const selectedCount = selectedNodeIds.length;
-    const minimapNodeColor = (node: WorkflowFlowNode) => {
-      const workflowNode = node.data.workflowNode;
-      const runStatus = node.data.runState?.status;
-      if (minimapFilter === 'risk') return riskyNodeTypes.has(workflowNode.type) ? '#f59e0b' : '#cbd5e1';
-      if (minimapFilter === 'type') return workflowNode.type === 'subagent' || workflowNode.type === 'agent' ? '#38bdf8' : '#a78bfa';
-      if (minimapFilter === 'status') return runStatus === 'failed' ? '#ef4444' : runStatus === 'completed' ? '#22c55e' : '#94a3b8';
-      return riskyNodeTypes.has(workflowNode.type) ? '#fbbf24' : '#93c5fd';
-    };
     return (
       <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2" data-testid="workflow-canvas-controls">
           <div className="text-xs text-muted-foreground" data-testid="workflow-multi-select">
-            {flowNodes.length} nodes / {flowEdges.length} edges
+            {draft.nodes.length} nodes / {draft.edges.length} edges
             <span className="ml-2 rounded border border-border bg-background px-2 py-1">{selectedCount} selected</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1982,8 +1694,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               Subgraph
             </button>
             <div className="inline-flex items-center gap-1 rounded-md border border-border bg-background p-1" data-testid="workflow-undo-redo">
-              <button type="button" onClick={undoWorkflowEdit} disabled={historyPast.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Undo</button>
-              <button type="button" onClick={redoWorkflowEdit} disabled={historyFuture.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Redo</button>
+              <button type="button" onClick={undoWorkflowEdit} disabled={historyPast.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Definition undo</button>
+              <button type="button" onClick={redoWorkflowEdit} disabled={historyFuture.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Definition redo</button>
             </div>
             <label className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs" data-testid="workflow-layout-mode">
               Layout
@@ -2019,8 +1731,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </div>
           ))}
         </div>
+        <div className="mb-3 flex flex-wrap gap-1 text-[10px] text-muted-foreground" data-testid="workflow-graph-validation-badges">
+          {(selectedNode ? getNodeValidationBadges(draft, selectedNode, lockedNodeIds) : ['FlowGram validation ready']).map((badge) => (
+            <span key={badge} className="rounded border border-border bg-background px-2 py-1">{badge}</span>
+          ))}
+        </div>
         <Suspense fallback={(
-          <div className="flex h-[560px] min-w-[980px] items-center justify-center rounded-md border border-border bg-background text-sm text-muted-foreground" data-testid="workflow-flowgram-loading">
+          <div className="flex h-[560px] min-w-0 items-center justify-center rounded-md border border-border bg-background text-sm text-muted-foreground" data-testid="workflow-flowgram-loading">
             Loading FlowGram editor...
           </div>
         )}
@@ -2101,8 +1818,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <div className="mt-3 grid gap-2 text-sm" data-testid="workflow-keyboard-shortcuts">
                 {[
                   ['Ctrl/Cmd K', 'Open command palette'],
-                  ['Ctrl/Cmd Z', 'Undo graph edit'],
-                  ['Ctrl/Cmd Y', 'Redo graph edit'],
+                  ['Ctrl/Cmd Z', 'Definition undo'],
+                  ['Ctrl/Cmd Y', 'Definition redo'],
                   ['Ctrl/Cmd C', 'Copy selected nodes'],
                   ['Ctrl/Cmd V', 'Paste copied nodes'],
                   ['Ctrl/Cmd D', 'Duplicate selected subgraph'],

@@ -206,7 +206,7 @@ test('BUG-UI-001 desktop Workflow Studio editor has no horizontal page overflow 
   await installApi(page, 'workflows');
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
-  await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.getByTestId('workflow-dry-run-debugger').click();
   await expect(page.getByTestId('workflow-dry-run-debugger').first()).toBeVisible();

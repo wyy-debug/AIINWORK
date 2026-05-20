@@ -13,6 +13,7 @@ import {
   type WorkflowNodeRegistry,
 } from '@flowgram.ai/free-layout-editor';
 import { createFreeLinesPlugin } from '@flowgram.ai/free-lines-plugin';
+import { createFreeNodePanelPlugin, type NodePanelRenderProps } from '@flowgram.ai/free-node-panel-plugin';
 import { createFreeSnapPlugin } from '@flowgram.ai/free-snap-plugin';
 import { createFreeStackPlugin } from '@flowgram.ai/free-stack-plugin';
 import { createMinimapPlugin } from '@flowgram.ai/minimap-plugin';
@@ -40,6 +41,24 @@ type FlowGramNodeData = {
   title?: string;
   description?: string;
   workflowNode?: WorkflowDefinition['nodes'][number];
+};
+
+const nodePanelTypes: Array<WorkflowDefinition['nodes'][number]['type']> = ['agent', 'subagent', 'tool', 'approval', 'condition', 'artifact'];
+
+const defaultFlowGramNodeMeta = {
+  defaultExpanded: true,
+  size: { width: 250, height: 112 },
+  defaultPorts: [
+    { type: 'input' },
+    { type: 'output' },
+  ],
+} satisfies NonNullable<WorkflowNodeRegistry['meta']>;
+
+const workflowNodeFormMeta = {
+  render: () => <div className="hidden" data-testid="workflow-flowgram-form-meta" />,
+  defaultValues: {},
+  formatOnInit: (value: unknown) => value || {},
+  formatOnSubmit: (value: unknown) => value || {},
 };
 
 function getNodeRunStatus(run: WorkflowRun | null, nodeId: string) {
@@ -103,15 +122,32 @@ function buildNodeRegistries(workflow: WorkflowDefinition): WorkflowNodeRegistry
   const types = Array.from(new Set(workflow.nodes.map((node) => node.type)));
   return types.map((type) => ({
     type,
-    meta: {
-      defaultExpanded: true,
-      size: { width: 250, height: 112 },
-      defaultPorts: [
-        { type: 'input' },
-        { type: 'output' },
-      ],
-    },
+    meta: defaultFlowGramNodeMeta,
+    formMeta: workflowNodeFormMeta,
   }));
+}
+
+function FlowGramNodePanel({ onSelect, onClose }: NodePanelRenderProps) {
+  return (
+    <div className="w-56 rounded-md border border-border bg-background p-2 shadow-xl" data-testid="workflow-flowgram-node-panel">
+      <div className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Add workflow node</div>
+      <div className="grid gap-1">
+        {nodePanelTypes.map((type) => (
+          <button
+            key={type}
+            type="button"
+            className="rounded px-2 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            onClick={(selectEvent) => onSelect({ nodeType: type, selectEvent })}
+          >
+            {type}
+          </button>
+        ))}
+      </div>
+      <button type="button" className="mt-2 w-full rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted" onClick={onClose}>
+        Close
+      </button>
+    </div>
+  );
 }
 
 function edgeMidpoint(workflow: WorkflowDefinition, edge: WorkflowEdge) {
@@ -158,6 +194,13 @@ export default function WorkflowFlowGramEditor({
   const editorProps = useMemo<FreeLayoutProps>(() => ({
     initialData,
     nodeRegistries,
+    getNodeDefaultRegistry(type) {
+      return {
+        type,
+        meta: defaultFlowGramNodeMeta,
+        formMeta: workflowNodeFormMeta,
+      };
+    },
     background: true,
     readonly: false,
     twoWayConnection: true,
@@ -171,10 +214,10 @@ export default function WorkflowFlowGramEditor({
       enableScrollLimit: false,
     },
     nodeEngine: {
-      enable: false,
+      enable: true,
     },
     variableEngine: {
-      enable: false,
+      enable: true,
     },
     lineColor: {
       hidden: 'transparent',
@@ -211,6 +254,9 @@ export default function WorkflowFlowGramEditor({
     plugins: () => [
       createFreeStackPlugin({}),
       createFreeLinesPlugin({}),
+      createFreeNodePanelPlugin({
+        renderer: FlowGramNodePanel,
+      }),
       createFreeSnapPlugin({
         edgeColor: 'rgba(37, 99, 235, 0.55)',
         alignColor: 'rgba(16, 185, 129, 0.7)',
@@ -234,11 +280,14 @@ export default function WorkflowFlowGramEditor({
 
   return (
     <div
-      className="relative h-[560px] min-w-[980px] overflow-hidden rounded-md border border-border bg-background"
+      className="relative h-[560px] min-w-0 overflow-hidden rounded-md border border-border bg-background"
       data-testid="workflow-dag-canvas"
     >
       <div className="h-full w-full" data-testid="workflow-flowgram-free-layout-editor">
         <FreeLayoutEditor key={`${workflow.id}:${workflow.nodes.map((node) => node.id).join(',')}:${workflow.edges.map((edge) => edge.id).join(',')}`} {...editorProps} />
+      </div>
+      <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-emerald-200 bg-emerald-50/90 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700 shadow-sm" data-testid="workflow-flowgram-runtime-boundary">
+        FlowGram edits / MTL runtime executes
       </div>
       <div className="pointer-events-none absolute bottom-3 right-3 z-20 rounded-md border border-border bg-background/85 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm" data-testid="workflow-minimap">
         FlowGram minimap

@@ -7,6 +7,29 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 describe('WorkflowStudio source contract', () => {
+  it('keeps the FlowGram migration clean and native-first', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const packageJson = readFileSync(resolve(currentDir, '../../../../package.json'), 'utf8');
+
+    expect(studioSource).not.toContain("from '@xyflow" + "/react'");
+    expect(studioSource).not.toContain("'@xyflow" + "/react/dist/style.css'");
+    expect(studioSource).not.toContain('<React' + 'Flow');
+    expect(studioSource).not.toContain('workflow-react' + '-flow-canvas');
+    expect(packageJson).not.toContain('"@xyflow' + '/react"');
+
+    expect(studioSource).toContain("lazy(() => import('./WorkflowFlowGramEditor'))");
+    expect(flowGramSource).toContain('createFreeNodePanelPlugin');
+    expect(flowGramSource).toContain('createFreeNodePanelPlugin({');
+    expect(flowGramSource).toContain('nodeEngine: {');
+    expect(flowGramSource).toContain('enable: true');
+    expect(flowGramSource).toContain('variableEngine: {');
+    expect(flowGramSource).toContain('getNodeDefaultRegistry');
+    expect(flowGramSource).toContain('formMeta');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-runtime-boundary"');
+    expect(flowGramSource).not.toContain('createRuntimePlugin');
+  });
+
   it('exposes visual DAG editor, runner, approval, and history hooks', () => {
     const source = [
       readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8'),
@@ -38,7 +61,7 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-editor"');
     expect(source).toContain('data-testid="workflow-dag-canvas"');
     expect(source).toContain('data-testid="workflow-add-node"');
-    expect(source).toContain('data-testid="workflow-connect-node"');
+    expect(source).toContain('workflow-flowgram-node-');
     expect(source).toContain('data-testid="workflow-approve-node"');
     expect(source).toContain('data-testid="workflow-run-card"');
     expect(source).toContain('data-testid="workflow-run-inputs"');
