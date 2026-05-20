@@ -11,3 +11,12 @@ Contributions by Siteboon AI B.V. prior to commit 004135ef were originally
 published under GPL-3.0 and are hereby relicensed to AGPL-3.0-or-later.
 Contributions by other authors prior to that commit remain under GPL-3.0
 and are incorporated into this work as permitted by GPL-3.0 Section 13.
+
+Workflow Studio WorkGraph parity references FlowGram.AI
+(https://github.com/bytedance/flowgram.ai), Copyright (c) 2025 Bytedance Ltd.
+and/or its affiliates, licensed under the MIT License. The current integration
+uses FlowGram.AI as a design and architecture reference for WorkGraph document
+shape, node registry, form metadata, typed references, and runtime-state
+visualization. If source code or packages from FlowGram.AI are copied or bundled
+in a future change, retain the MIT copyright and permission notice with that
+copied or bundled material.

@@ -19,6 +19,9 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('ReactFlowProvider');
     expect(source).toContain('data-testid="workflow-command-center"');
     expect(source).toContain('data-testid="workflow-react-flow-canvas"');
+    expect(source).toContain('data-testid="workflow-flowgram-adapter"');
+    expect(source).toContain('data-testid="workflow-migration-compatibility"');
+    expect(source).toContain('data-testid="workflow-runtime-state-bridge"');
     expect(source).toContain('data-testid="workflow-run-setup-drawer"');
     expect(source).toContain('data-testid="workflow-library-gallery"');
     expect(source).toContain('data-testid="workflow-template-preview"');
@@ -68,6 +71,8 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-minimap"');
     expect(source).toContain('data-testid="workflow-edge-editor"');
     expect(source).toContain('data-testid="workflow-node-search"');
+    expect(source).toContain('data-testid="workflow-form-meta-inspector"');
+    expect(source).toContain('data-testid="workflow-form-meta-field"');
     expect(source).toContain('duplicateNode');
     expect(source).toContain('autoLayoutNodes');
     expect(source).toContain('data-testid="workflow-multi-select"');
@@ -79,6 +84,8 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-edge-route-style"');
     expect(source).toContain('data-testid="workflow-edge-branch-labels"');
     expect(source).toContain('data-testid="workflow-edge-insert-node"');
+    expect(source).toContain('data-testid="workflow-line-add-node"');
+    expect(source).toContain('reactFlowEdgeTypes');
     expect(source).toContain('insertNodeOnEdge');
     expect(source).toContain('edgeInsertType');
     expect(source).toContain('data-testid="workflow-minimap-filters"');

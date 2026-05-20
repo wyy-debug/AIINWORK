@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   MiniMap,
@@ -11,9 +13,11 @@ import {
   type Connection,
   type Edge,
   type EdgeChange,
+  type EdgeProps,
   type Node,
   type NodeChange,
   type NodeProps,
+  getSmoothStepPath,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -65,6 +69,16 @@ import type {
   WorkflowRun,
   WorkflowRunEvent,
 } from '../../../types/workflow';
+import {
+  analyzeWorkflowGraphCompatibility,
+  flowGramDocumentToWorkflowDefinition,
+  workflowDefinitionToFlowGramDocument,
+} from '../model/workflowGraphAdapter';
+import {
+  createWorkflowNodeRegistry,
+  defaultWorkflowPaletteGroups,
+} from '../model/workflowNodeRegistry';
+import { buildWorkGraphRuntimeState } from '../model/workflowRuntimeStateBridge';
 
 type WorkflowStudioProps = {
   selectedProject: Project;
@@ -93,52 +107,17 @@ interface WorkflowFlowNodeData extends Record<string, unknown> {
 }
 
 type WorkflowFlowNode = Node<WorkflowFlowNodeData, 'workflowNode'>;
-type WorkflowFlowEdge = Edge<{ mode?: WorkflowEdge['mode'] }>;
+interface WorkflowFlowEdgeData extends Record<string, unknown> {
+  mode?: WorkflowEdge['mode'];
+  routeStyle?: WorkflowEdge['routeStyle'];
+  insertType?: WorkflowNodeType;
+  onInsert?: (edgeId: string, type: WorkflowNodeType) => void;
+  runStatus?: string;
+}
+
+type WorkflowFlowEdge = Edge<WorkflowFlowEdgeData, 'workflowEdge'>;
 
 const views: StudioView[] = ['Home', 'Library', 'Editor', 'Runs'];
-
-const baseNodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot; description: string }> = [
-  { type: 'agent', label: 'Agent', icon: Bot, description: 'Primary agent step' },
-  { type: 'subagent', label: 'Subagent', icon: GitBranch, description: 'Focused side agent' },
-  { type: 'mcp', label: 'MCP', icon: Zap, description: 'MCP server tool' },
-  { type: 'tool', label: 'Tool', icon: Braces, description: 'Built-in tool' },
-  { type: 'shell', label: 'Shell', icon: CircleDot, description: 'Command gate' },
-  { type: 'artifact', label: 'Artifact', icon: FileText, description: 'Collect output' },
-  { type: 'approval', label: 'Approval', icon: ClipboardCheck, description: 'Human gate' },
-  { type: 'condition', label: 'Condition', icon: ChevronRight, description: 'Branch rule' },
-  { type: 'join', label: 'Join', icon: Link2, description: 'Wait for inputs' },
-];
-
-const paletteGroups: WorkflowPaletteGroup[] = [
-  { id: 'agents', label: 'Agents', types: ['agent', 'subagent'] },
-  { id: 'integrations', label: 'Integrations', types: ['mcp', 'tool'] },
-  { id: 'execution', label: 'Execution', types: ['shell', 'approval'] },
-  { id: 'control', label: 'Control Flow', types: ['condition', 'join'] },
-  { id: 'outputs', label: 'Outputs', types: ['artifact'] },
-];
-
-const inspectorTabs: WorkflowInspectorTab[] = ['Config', 'Data', 'Permissions', 'Runtime'];
-const libraryFilters: WorkflowLibraryFilter[] = ['All', 'Built-in', 'Enterprise', 'Needs setup', 'Recently used'];
-const layoutModes: WorkflowLayoutMode[] = ['left-to-right', 'top-down', 'compact'];
-const edgeRouteStyles: WorkflowEdgeRouteStyle[] = ['smoothstep', 'straight', 'step'];
-const minimapFilters: WorkflowMinimapFilter[] = ['all', 'status', 'type', 'risk'];
-const favoriteStorageKey = 'workflowStudio.favoriteWorkflowIds';
-const recentStorageKey = 'workflowStudio.recentWorkflowIds';
-const nodePresetStorageKey = 'workflowStudio.nodeConfigPresets';
-const pinnedRunStorageKey = 'workflowStudio.pinnedRunIds';
-const archivedRunStorageKey = 'workflowStudio.archivedRunIds';
-const transformFunctions = ['default(value)', 'join(list, ", ")', 'pick(object, "field")', 'truncate(text, 400)'];
-
-const statusTaxonomy = [
-  { status: 'queued', label: 'Queued', description: 'Waiting for a worker lease.' },
-  { status: 'running', label: 'Running', description: 'Actively executing nodes.' },
-  { status: 'recovering', label: 'Recovering', description: 'Resuming stale or interrupted work.' },
-  { status: 'waiting_approval', label: 'Waiting', description: 'Paused for human approval.' },
-  { status: 'completed', label: 'Completed', description: 'Finished successfully.' },
-  { status: 'failed', label: 'Failed', description: 'Stopped by an error or policy.' },
-  { status: 'stale', label: 'Stale', description: 'Worker heartbeat is missing.' },
-  { status: 'cancelled', label: 'Cancelled', description: 'Stopped by user action.' },
-];
 
 const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
   agent: Bot,
@@ -151,6 +130,40 @@ const nodeIconByType: Record<WorkflowNodeType, typeof Bot> = {
   condition: ChevronRight,
   join: Link2,
 };
+
+const workflowNodeRegistry = createWorkflowNodeRegistry();
+const baseNodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof Bot; description: string }> = workflowNodeRegistry.definitions.map((definition) => ({
+  type: definition.type,
+  label: definition.label,
+  icon: nodeIconByType[definition.type] || Bot,
+  description: definition.description,
+}));
+
+const paletteGroups: WorkflowPaletteGroup[] = defaultWorkflowPaletteGroups;
+
+const inspectorTabs: WorkflowInspectorTab[] = ['Config', 'Data', 'Permissions', 'Runtime'];
+const libraryFilters: WorkflowLibraryFilter[] = ['All', 'Built-in', 'Enterprise', 'Needs setup', 'Recently used'];
+const layoutModes: WorkflowLayoutMode[] = ['left-to-right', 'top-down', 'compact'];
+const edgeRouteStyles: WorkflowEdgeRouteStyle[] = ['smoothstep', 'straight', 'step'];
+const minimapFilters: WorkflowMinimapFilter[] = ['all', 'status', 'type', 'risk'];
+const favoriteStorageKey = 'workflowStudio.favoriteWorkflowIds';
+const recentStorageKey = 'workflowStudio.recentWorkflowIds';
+const nodePresetStorageKey = 'workflowStudio.nodeConfigPresets';
+const pinnedRunStorageKey = 'workflowStudio.pinnedRunIds';
+const archivedRunStorageKey = 'workflowStudio.archivedRunIds';
+const transformFunctions = ['default(value)', 'join(list, ", ")', 'pick(object, "field")', 'truncate(text, 400)'];
+const workflowNodeTopLevelConfigFields = new Set(['agentId', 'toolName', 'command', 'prompt', 'condition', 'permission', 'retryLimit', 'timeoutMs']);
+
+const statusTaxonomy = [
+  { status: 'queued', label: 'Queued', description: 'Waiting for a worker lease.' },
+  { status: 'running', label: 'Running', description: 'Actively executing nodes.' },
+  { status: 'recovering', label: 'Recovering', description: 'Resuming stale or interrupted work.' },
+  { status: 'waiting_approval', label: 'Waiting', description: 'Paused for human approval.' },
+  { status: 'completed', label: 'Completed', description: 'Finished successfully.' },
+  { status: 'failed', label: 'Failed', description: 'Stopped by an error or policy.' },
+  { status: 'stale', label: 'Stale', description: 'Worker heartbeat is missing.' },
+  { status: 'cancelled', label: 'Cancelled', description: 'Stopped by user action.' },
+];
 
 const statusTone: Record<string, string> = {
   queued: 'border-slate-200 bg-slate-50 text-slate-700',
@@ -375,6 +388,64 @@ function WorkflowFlowNodeCard({ data, selected }: NodeProps<WorkflowFlowNode>) {
 
 const reactFlowNodeTypes = { workflowNode: WorkflowFlowNodeCard };
 
+function WorkflowFlowEdgeWithAddButton({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  data,
+  selected,
+}: EdgeProps<WorkflowFlowEdge>) {
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  const isActive = data?.runStatus === 'active';
+  return (
+    <>
+      <BaseEdge
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{
+          ...style,
+          strokeWidth: selected || isActive ? 2.5 : 1.5,
+          stroke: isActive ? '#059669' : selected ? '#2563eb' : '#94a3b8',
+          strokeDasharray: data?.routeStyle === 'step' ? '6 4' : undefined,
+        }}
+      />
+      <EdgeLabelRenderer>
+        <button
+          type="button"
+          data-testid="workflow-line-add-node-label"
+          aria-label="Insert node on edge"
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onInsert?.(id, data.insertType || 'tool');
+          }}
+          className={cn(
+            'nodrag nopan pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-foreground shadow-sm transition',
+            selected || isActive ? 'border-primary opacity-100' : 'border-border opacity-80 hover:opacity-100',
+          )}
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+const reactFlowEdgeTypes = { workflowEdge: WorkflowFlowEdgeWithAddButton };
+
 export default function WorkflowStudio({ selectedProject, sessionId = null }: WorkflowStudioProps) {
   const [activeView, setActiveView] = useState<StudioView>('Home');
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
@@ -443,19 +514,23 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === selectedNodeId) || null, [draft.nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => draft.edges.find((edge) => edge.id === selectedEdgeId) || null, [draft.edges, selectedEdgeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
+  const activeNodeRegistry = useMemo(() => createWorkflowNodeRegistry(nodeTypeDefinitions), [nodeTypeDefinitions]);
   const paletteNodeTypes = useMemo(() => {
-    if (nodeTypeDefinitions.length === 0) return baseNodeTypes;
-    return nodeTypeDefinitions.map((definition) => ({
+    return activeNodeRegistry.definitions.map((definition) => ({
       type: definition.type,
       label: definition.label,
       icon: nodeIconByType[definition.type] || Bot,
       description: definition.description,
     }));
-  }, [nodeTypeDefinitions]);
+  }, [activeNodeRegistry]);
   const selectedNodeDefinition = useMemo(
-    () => nodeTypeDefinitions.find((definition) => definition.type === selectedNode?.type) || null,
-    [nodeTypeDefinitions, selectedNode?.type],
+    () => selectedNode ? activeNodeRegistry.byType.get(selectedNode.type) || null : null,
+    [activeNodeRegistry, selectedNode],
   );
+  const workGraphDocument = useMemo(() => workflowDefinitionToFlowGramDocument(draft), [draft]);
+  const workGraphRoundtrip = useMemo(() => flowGramDocumentToWorkflowDefinition(workGraphDocument, draft), [draft, workGraphDocument]);
+  const workGraphCompatibility = useMemo(() => analyzeWorkflowGraphCompatibility(draft, nodeTypeDefinitions), [draft, nodeTypeDefinitions]);
+  const selectedWorkGraphRuntimeState = useMemo(() => buildWorkGraphRuntimeState(draft, selectedRun), [draft, selectedRun]);
   const schemaVersion = selectedNodeDefinition?.ui?.schemaVersion || selectedNode?.config?.schemaVersion || '1.0';
   const requiredFieldErrors = useMemo(() => {
     if (!selectedNode) return [];
@@ -1074,6 +1149,26 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       nodes: current.nodes.map((node) => (node.id === nodeId ? { ...node, ...patch } : node)),
     }));
   }, [commitDraft]);
+
+  const getNodeFormMetaValue = useCallback((node: WorkflowNode, fieldName: string) => {
+    if (workflowNodeTopLevelConfigFields.has(fieldName)) {
+      return node[fieldName as keyof WorkflowNode] ?? '';
+    }
+    return node.config?.[fieldName] ?? '';
+  }, []);
+
+  const updateNodeFormMetaValue = useCallback((node: WorkflowNode, fieldName: string, value: unknown) => {
+    if (workflowNodeTopLevelConfigFields.has(fieldName)) {
+      updateNode(node.id, { [fieldName]: value } as Partial<WorkflowNode>);
+      return;
+    }
+    updateNode(node.id, {
+      config: {
+        ...(node.config || {}),
+        [fieldName]: value,
+      },
+    });
+  }, [updateNode]);
 
   const updateEdge = useCallback((edgeId: string, patch: Partial<WorkflowEdge>) => {
     commitDraft((current) => ({
@@ -1715,20 +1810,40 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }));
   }, [draft, lockedNodeIds, selectedNodeIds]);
 
-  const toFlowEdges = useCallback((run: WorkflowRun | null): WorkflowFlowEdge[] => draft.edges.map((edge) => {
-    const targetRun = run?.nodeRuns?.[edge.to];
+  const toFlowEdges = useCallback((run: WorkflowRun | null): WorkflowFlowEdge[] => {
+    const runtimeState = buildWorkGraphRuntimeState(draft, run);
+    return draft.edges.map((edge) => {
+      const edgeRuntimeState = runtimeState?.edges[edge.id];
+      return {
+        id: edge.id,
+        source: edge.from,
+        target: edge.to,
+        type: 'workflowEdge',
+        label: edge.condition ? `${edge.mode || 'success'}: ${edge.condition}` : edge.mode || 'success',
+        data: {
+          mode: edge.mode,
+          routeStyle: edge.routeStyle || 'smoothstep',
+          insertType: edgeInsertType,
+          onInsert: insertNodeOnEdge,
+          runStatus: edgeRuntimeState?.status,
+        },
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        className: selectedEdgeId === edge.id ? 'workflow-edge-selected' : undefined,
+      };
+    });
+  }, [draft, edgeInsertType, insertNodeOnEdge, selectedEdgeId]);
+
+  const edgeInsertOverlays = useMemo(() => draft.edges.map((edge) => {
+    const sourceNode = draft.nodes.find((node) => node.id === edge.from);
+    const targetNode = draft.nodes.find((node) => node.id === edge.to);
+    if (!sourceNode || !targetNode) return null;
     return {
-      id: edge.id,
-      source: edge.from,
-      target: edge.to,
-      type: edge.routeStyle || 'smoothstep',
-      label: edge.condition ? `${edge.mode || 'success'}: ${edge.condition}` : edge.mode || 'success',
-      data: { mode: edge.mode },
-      animated: targetRun?.status === 'running' || targetRun?.status === 'waiting_approval',
-      markerEnd: { type: MarkerType.ArrowClosed },
-      className: selectedEdgeId === edge.id ? 'workflow-edge-selected' : undefined,
+      edge,
+      x: Math.round((sourceNode.position.x + 220 + targetNode.position.x) / 2),
+      y: Math.round((sourceNode.position.y + 56 + targetNode.position.y + 56) / 2),
     };
-  }), [draft.edges, selectedEdgeId]);
+  }).filter((item): item is { edge: WorkflowEdge; x: number; y: number } => Boolean(item)), [draft.edges, draft.nodes]);
 
   const handleFlowNodesChange = useCallback((changes: NodeChange<WorkflowFlowNode>[]) => {
     setDraft((current) => ({
@@ -1843,11 +1958,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         </div>
         <div className="h-[560px] min-w-[980px] overflow-hidden rounded-md border border-border bg-background" data-testid="workflow-dag-canvas">
           <ReactFlowProvider>
-            <div className="h-full w-full" data-testid="workflow-react-flow-canvas">
+            <div className="relative h-full w-full" data-testid="workflow-react-flow-canvas">
               <ReactFlow
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={reactFlowNodeTypes}
+                edgeTypes={reactFlowEdgeTypes}
                 onNodesChange={handleFlowNodesChange}
                 onEdgesChange={handleFlowEdgesChange}
                 onConnect={handleFlowConnect}
@@ -1870,6 +1986,27 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <Controls />
                 <MiniMap data-testid="workflow-minimap" pannable zoomable nodeStrokeWidth={2} nodeColor={minimapNodeColor} />
               </ReactFlow>
+              <div className="pointer-events-none absolute inset-0 z-10" data-testid="workflow-line-add-node-overlay">
+                {edgeInsertOverlays.map((item) => (
+                  <button
+                    key={item.edge.id}
+                    type="button"
+                    data-testid="workflow-line-add-node"
+                    aria-label={`Insert node on ${item.edge.from} to ${item.edge.to}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      insertNodeOnEdge(item.edge.id, edgeInsertType);
+                    }}
+                    className={cn(
+                      'pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-foreground shadow-sm transition hover:border-primary hover:text-primary',
+                      selectedEdgeId === item.edge.id ? 'border-primary text-primary' : 'border-border',
+                    )}
+                    style={{ left: item.x, top: item.y, transform: 'translate(-50%, -50%)' }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                ))}
+              </div>
             </div>
           </ReactFlowProvider>
         </div>
@@ -1969,6 +2106,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <span className="rounded-md border border-border bg-background px-2 py-1">Profile: {draft.profileId}</span>
               <span className="rounded-md border border-border bg-background px-2 py-1">Permission: {draft.permissionPreset}</span>
               <span className="rounded-md border border-border bg-background px-2 py-1">Latest run: {selectedRun?.status || 'none'}</span>
+              <span className="rounded-md border border-border bg-background px-2 py-1" data-testid="workflow-flowgram-adapter">
+                WorkGraph: {workGraphDocument.schemaVersion} / {workGraphRoundtrip.nodes.length} nodes / {workGraphDocument.edges.length} edges
+              </span>
+              <span className={cn('rounded-md border px-2 py-1', workGraphCompatibility.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700')} data-testid="workflow-migration-compatibility">
+                Compatibility: {workGraphCompatibility.ok ? 'ready' : 'needs review'} ({workGraphCompatibility.warnings.length})
+              </span>
+              <span className="rounded-md border border-border bg-background px-2 py-1" data-testid="workflow-runtime-state-bridge">
+                Runtime: {selectedWorkGraphRuntimeState ? `${selectedWorkGraphRuntimeState.summary.running} running / ${selectedWorkGraphRuntimeState.summary.waiting} waiting / ${selectedWorkGraphRuntimeState.summary.failed} failed` : 'no run state'}
+              </span>
             </div>
           </div>
           <div className="flex max-w-xl flex-col items-start gap-3 sm:items-end">
@@ -2497,19 +2643,59 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                   Title
                   <input value={selectedNode.title} onChange={(event) => updateNode(selectedNode.id, { title: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
                 </label>
-                <label className="block text-xs font-medium text-muted-foreground">
-                  Agent / tool
-                  <input value={selectedNode.agentId || selectedNode.toolName || ''} onChange={(event) => updateNode(selectedNode.id, selectedNode.type === 'tool' || selectedNode.type === 'mcp' ? { toolName: event.target.value } : { agentId: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
-                </label>
-                <label className="block text-xs font-medium text-muted-foreground">
-                  Prompt / command / condition
-                  <textarea value={selectedNode.prompt || selectedNode.command || selectedNode.condition || ''} onChange={(event) => {
-                    const value = event.target.value;
-                    if (selectedNode.type === 'shell') updateNode(selectedNode.id, { command: value });
-                    else if (selectedNode.type === 'condition') updateNode(selectedNode.id, { condition: value });
-                    else updateNode(selectedNode.id, { prompt: value });
-                  }} className="mt-1 min-h-24 w-full rounded-md border border-border bg-background p-3 text-sm text-foreground" />
-                </label>
+                <div className="rounded-md border border-border bg-card p-3" data-testid="workflow-form-meta-inspector">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">FormMeta config</span>
+                    <span className="rounded border border-border bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {String(selectedNodeDefinition?.ui?.materialGroup || selectedNode.type)}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {(selectedNodeDefinition?.configSchema?.fields || []).map((field) => {
+                      const fieldValue = getNodeFormMetaValue(selectedNode, field.name);
+                      const commonClassName = 'mt-1 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground';
+                      return (
+                        <label key={field.name} className="block text-xs font-medium text-muted-foreground">
+                          {field.label || field.name}{field.required ? ' *' : ''}
+                          {field.type === 'template' || field.type === 'expression' || field.type === 'json' ? (
+                            <textarea
+                              value={typeof fieldValue === 'string' ? fieldValue : stringifyValue(fieldValue)}
+                              onChange={(event) => updateNodeFormMetaValue(selectedNode, field.name, event.target.value)}
+                              className={cn(commonClassName, 'min-h-20 py-2')}
+                              data-testid="workflow-form-meta-field"
+                              data-field-name={field.name}
+                            />
+                          ) : field.type === 'select' ? (
+                            <select
+                              value={typeof fieldValue === 'string' ? fieldValue : ''}
+                              onChange={(event) => updateNodeFormMetaValue(selectedNode, field.name, event.target.value)}
+                              className={cn(commonClassName, 'h-9')}
+                              data-testid="workflow-form-meta-field"
+                              data-field-name={field.name}
+                            >
+                              <option value="">Choose...</option>
+                              {(field.options || []).map((option) => <option key={option} value={option}>{option}</option>)}
+                            </select>
+                          ) : (
+                            <input
+                              type={field.type === 'number' ? 'number' : 'text'}
+                              value={typeof fieldValue === 'string' || typeof fieldValue === 'number' ? fieldValue : ''}
+                              onChange={(event) => updateNodeFormMetaValue(selectedNode, field.name, field.type === 'number' ? Number(event.target.value) : event.target.value)}
+                              className={cn(commonClassName, 'h-9')}
+                              data-testid="workflow-form-meta-field"
+                              data-field-name={field.name}
+                            />
+                          )}
+                        </label>
+                      );
+                    })}
+                    {(selectedNodeDefinition?.configSchema?.fields || []).length === 0 && (
+                      <div className="rounded border border-dashed border-border p-3 text-xs text-muted-foreground">
+                        This node type has no FormMeta fields.
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <label className="block text-xs font-medium text-muted-foreground">
                   Node permission
                   <select value={selectedNode.permission || ''} onChange={(event) => updateNode(selectedNode.id, { permission: event.target.value as WorkflowNode['permission'] })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground">

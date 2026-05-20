@@ -130,6 +130,23 @@ test('REQ-049 captures Workflow Studio editor, runner, approval, and history @sc
   await screenshot(page, 'REQ-049-workflow-history-completed.png');
 });
 
+test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-adapter')).toContainText('mtl-flowgram-v1');
+  await expect(page.getByTestId('workflow-migration-compatibility')).toContainText('Compatibility');
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
+  await expect(page.getByTestId('workflow-line-add-node').first()).toBeVisible();
+  await screenshot(page, 'REQ-183-workgraph-command-center.png');
+
+  await page.getByTestId('workflow-line-add-node').first().click();
+  await expect(page.getByTestId('workflow-form-meta-inspector')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-adapter')).toContainText('4 nodes');
+  await screenshot(page, 'REQ-183-line-add-formmeta-inspector.png');
+});
+
 test('REQ-083 captures Workflow Studio empty state guide @screenshot', async ({ page }) => {
   await installMockApi(page, { emptyWorkflows: true });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
