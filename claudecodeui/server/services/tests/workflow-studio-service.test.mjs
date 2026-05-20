@@ -18,14 +18,21 @@ const agentResolver = async (agentId) => ({
 
 function createMemorySubagentStore() {
   let index = 0;
+  const runs = new Map();
   return {
     async createRun(input = {}) {
       index += 1;
-      return {
+      const run = {
         id: `subagent-run-${index}`,
-        status: 'running',
+        status: 'completed',
         agentId: input.agent?.id || 'subagent',
+        result: 'completed by memory subagent',
       };
+      runs.set(run.id, run);
+      return run;
+    },
+    async getRun(runId) {
+      return runs.get(runId) || null;
     },
   };
 }
@@ -148,10 +155,17 @@ describe('workflow studio service', () => {
   });
 
   test('asks for risky nodes and supports approval continuation', async () => {
+    const executed = [];
     const store = createWorkflowStudioStore({
       persist: false,
       agentResolver,
       subagentRunStore: createMemorySubagentStore(),
+      executors: {
+        shell: async ({ nodeInput }) => {
+          executed.push(nodeInput.command);
+          return { stdout: 'shell executed after approval' };
+        },
+      },
     });
     await store.upsertWorkflow({
       id: 'shell-flow',
@@ -171,6 +185,41 @@ describe('workflow studio service', () => {
 
     const completed = await store.controlNode(waiting.id, 'shell', { action: 'approve' });
     expect(completed.status).toBe('completed');
+    expect(executed).toEqual(['npm test']);
+    expect(completed.nodeRuns.shell.output.stdout).toBe('shell executed after approval');
+    expect(completed.nodeRuns.artifact.status).toBe('completed');
+  });
+
+  test('approval decisions resolve node ids that contain underscores', async () => {
+    const executed = [];
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        shell: async ({ nodeInput }) => {
+          executed.push(nodeInput.command);
+          return { stdout: 'underscore node approved' };
+        },
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'approval-underscore-flow',
+      name: 'Approval Underscore Flow',
+      profileId: 'build',
+      permissionPreset: 'suggest',
+      nodes: [{ id: 'shell_node', type: 'shell', command: 'npm test' }],
+      edges: [],
+    });
+
+    const waiting = await store.createRun('approval-underscore-flow');
+    const approvals = store.listApprovalRequests();
+    expect(approvals[0].nodeId).toBe('shell_node');
+
+    const decided = await store.decideApproval(approvals[0].id, { decision: 'approve', reason: 'safe' });
+
+    expect(decided.status).toBe('completed');
+    expect(executed).toEqual(['npm test']);
+    expect(decided.nodeRuns.shell_node.output.stdout).toBe('underscore node approved');
   });
 
   test('denies risky nodes under enterprise-safe permission preset', async () => {
@@ -419,6 +468,35 @@ describe('workflow studio service', () => {
     expect(run.nodeRuns.explore.output.status).toBe('completed');
     expect(run.nodeRuns.explore.output.result).toBe('terminal result');
     expect(run.nodeRuns.explore.output.sessionLink).toContain('subagent-run=');
+  });
+
+  test('subagent bridge keeps non-terminal runs from completing downstream work', async () => {
+    const subagentStore = {
+      async createRun() {
+        return { id: 'subagent-run-still-running', status: 'running' };
+      },
+      async getRun() {
+        return { id: 'subagent-run-still-running', status: 'running' };
+      },
+    };
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, subagentRunStore: subagentStore });
+    await store.upsertWorkflow({
+      id: 'subagent-timeout-flow',
+      name: 'Subagent Timeout Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [
+        { id: 'explore', type: 'subagent', agentId: 'subagent-explore', timeoutMs: 20 },
+        { id: 'artifact', type: 'artifact' },
+      ],
+      edges: [{ from: 'explore', to: 'artifact' }],
+    });
+
+    const run = await store.createRun('subagent-timeout-flow');
+
+    expect(run.status).toBe('running');
+    expect(run.nodeRuns.explore.status).toBe('running');
+    expect(run.nodeRuns.artifact.status).toBe('pending');
   });
 
   test('exposes real agent bridge state, result contract, subagent cancellation, tool registry, mcp schemas, and browser screenshot artifacts', async () => {
@@ -768,7 +846,13 @@ describe('workflow studio service', () => {
   });
 
   test('lists approval inbox requests and records audited decisions', async () => {
-    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        shell: async () => ({ stdout: 'approved shell' }),
+      },
+    });
     await store.upsertWorkflow({
       id: 'approval-inbox-flow',
       name: 'Approval Inbox Flow',

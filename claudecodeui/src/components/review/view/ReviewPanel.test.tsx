@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getRenderedDiffRows, MAX_RENDERED_DIFF_ROWS } from './ReviewPanel';
+import { getDiffHunks, getRenderedDiffRows, MAX_DIFF_HUNKS, MAX_RENDERED_DIFF_ROWS } from './ReviewPanel';
 
 describe('ReviewPanel diff rendering performance', () => {
   it('caps rendered diff rows while reporting hidden rows', () => {
@@ -30,5 +30,24 @@ describe('ReviewPanel diff rendering performance', () => {
     const result = getRenderedDiffRows(diff, MAX_RENDERED_DIFF_ROWS);
 
     expect(result.rows.map((row) => row.lineNumber)).toEqual([null, 10, 11, 11]);
+  });
+
+  it('caps diff hunk previews for very large diffs', () => {
+    const diff = [
+      'diff --git a/src/app.ts b/src/app.ts',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      ...Array.from({ length: MAX_DIFF_HUNKS + 25 }, (_, index) => [
+        `@@ -${index + 1},1 +${index + 1},1 @@`,
+        `-old ${index}`,
+        `+new ${index}`,
+      ]).flat(),
+    ].join('\n');
+
+    const result = getDiffHunks(diff, MAX_DIFF_HUNKS);
+
+    expect(result).toHaveLength(MAX_DIFF_HUNKS);
+    expect(result[0].title).toContain('@@ -1,1 +1,1 @@');
+    expect(result.at(-1)?.title).toContain(`@@ -${MAX_DIFF_HUNKS},1 +${MAX_DIFF_HUNKS},1 @@`);
   });
 });

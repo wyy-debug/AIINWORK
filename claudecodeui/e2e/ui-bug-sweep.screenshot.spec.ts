@@ -54,6 +54,18 @@ const waitingRun = {
   timelineEvents: [],
 };
 
+const completedRun = {
+  ...waitingRun,
+  id: 'workflow-run-completed',
+  workflowName: 'Completed Delivery',
+  status: 'completed',
+  nodeRuns: {
+    explore: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent', status: 'completed', attempt: 1, logs: ['Completed subagent node.'] },
+    approval: { nodeId: 'approval', type: 'approval', title: 'Human Approval', status: 'completed', attempt: 1, logs: ['Approved.'] },
+    artifact: { nodeId: 'artifact', type: 'artifact', title: 'Delivery Artifact', status: 'completed', attempt: 1, logs: ['Artifact created.'] },
+  },
+};
+
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
@@ -107,7 +119,7 @@ async function installApi(page: Page, activeTab: 'chat' | 'workflows' = 'chat') 
     if (path === '/api/workflows') return json(route, { success: true, workflows: [workflow] });
     if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: waitingRun }, 201);
-    if (path === '/api/workflow-runs') return json(route, { success: true, runs: [waitingRun] });
+    if (path === '/api/workflow-runs') return json(route, { success: true, runs: [waitingRun, completedRun] });
     if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes: [] });
     if (path === '/api/workflow-approvals') return json(route, {
       success: true,
@@ -237,6 +249,19 @@ test('BUG-UI-004 Workflow Runs console keeps approval and diagnosis actions usab
   await page.getByPlaceholder('node, status, error').fill('approval');
   await expectNoHorizontalOverflow(page);
   await capture(page, 'BUG-UI-004-workflow-runs-console.png');
+});
+
+test('BUG-REVIEW-006 Workflow Runs list selects the clicked run @screenshot', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await installApi(page, 'workflows');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  const completedRunCard = page.getByRole('button', { name: /Completed Delivery/ });
+  await completedRunCard.click();
+  await expect(completedRunCard).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('workflow-run-console')).toContainText('completed');
+  await expectNoHorizontalOverflow(page);
+  await capture(page, 'BUG-REVIEW-006-workflow-run-selection.png');
 });
 
 test('BUG-UI-005/006 desktop Chat runtime drawer remains readable and composer clickable @screenshot', async ({ page }) => {

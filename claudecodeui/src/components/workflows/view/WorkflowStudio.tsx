@@ -391,6 +391,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [approvalAudit, setApprovalAudit] = useState<Record<string, any> | null>(null);
   const [releaseReadiness, setReleaseReadiness] = useState<Record<string, unknown> | null>(null);
   const [runLogQuery, setRunLogQuery] = useState('');
+  const [selectedRunId, setSelectedRunId] = useState('');
   const [pinnedRunIds, setPinnedRunIds] = useState<string[]>(() => readStoredIds(pinnedRunStorageKey));
   const [archivedRunIds, setArchivedRunIds] = useState<string[]>(() => readStoredIds(archivedRunStorageKey));
   const [cancelConfirmation, setCancelConfirmation] = useState<WorkflowRun | null>(null);
@@ -403,7 +404,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
 
-  const selectedRun = runs[0] || null;
+  const selectedRun = useMemo(
+    () => runs.find((run) => run.id === selectedRunId) || runs[0] || null,
+    [runs, selectedRunId],
+  );
   const selectedNode = useMemo(() => draft.nodes.find((node) => node.id === selectedNodeId) || null, [draft.nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => draft.edges.find((edge) => edge.id === selectedEdgeId) || null, [draft.edges, selectedEdgeId]);
   const agentOptions = useMemo(() => agents.filter((agent) => agent.status !== 'paused'), [agents]);
@@ -2693,7 +2697,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 const failedCount = Object.values(run.nodeRuns || {}).filter((nodeRun) => nodeRun.status === 'failed').length;
                 const approvalCount = Object.values(run.nodeRuns || {}).filter((nodeRun) => nodeRun.status === 'waiting_approval').length;
                 return (
-                  <button key={`run-list-${run.id}`} type="button" className="block w-full rounded-md border border-border bg-card p-3 text-left text-xs hover:bg-muted">
+                  <button
+                    key={`run-list-${run.id}`}
+                    type="button"
+                    onClick={() => setSelectedRunId(run.id)}
+                    aria-pressed={selectedRun?.id === run.id}
+                    className={cn(
+                      'block w-full rounded-md border bg-card p-3 text-left text-xs hover:bg-muted',
+                      selectedRun?.id === run.id ? 'border-primary ring-1 ring-primary/30' : 'border-border',
+                    )}
+                  >
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate font-semibold text-foreground">{run.workflowName}</span>
                       <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', statusTone[run.status] || statusTone.pending)}>{run.status}</span>

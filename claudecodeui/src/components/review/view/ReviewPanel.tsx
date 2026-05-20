@@ -109,6 +109,7 @@ const FILE_KIND_META: Record<ReviewFileKind, { label: string; shortLabel: string
 };
 
 export const MAX_RENDERED_DIFF_ROWS = 1500;
+export const MAX_DIFF_HUNKS = 80;
 
 const asStringArray = (value: unknown): string[] => {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -158,7 +159,7 @@ const getChangedFiles = (status: GitStatus | null): ReviewFile[] => {
   return Array.from(seen.values()).sort((left, right) => left.path.localeCompare(right.path));
 };
 
-const getDiffHunks = (diff: string) => {
+export const getDiffHunks = (diff: string, maxHunks = MAX_DIFF_HUNKS) => {
   const lines = diff.split('\n');
   const firstHunkIndex = lines.findIndex((line) => line.startsWith('@@'));
   if (firstHunkIndex < 0) {
@@ -171,17 +172,20 @@ const getDiffHunks = (diff: string) => {
   for (let index = firstHunkIndex; index < lines.length; index += 1) {
     const line = lines[index];
     if (line.startsWith('@@') && current.length > 0) {
-      hunks.push({
-        index: hunks.length,
-        title: current[0],
-        patch: [...header, ...current].join('\n') + '\n',
-      });
+      if (hunks.length < maxHunks) {
+        hunks.push({
+          index: hunks.length,
+          title: current[0],
+          patch: [...header, ...current].join('\n') + '\n',
+        });
+      }
+      if (hunks.length >= maxHunks) break;
       current = [];
     }
     current.push(line);
   }
 
-  if (current.length > 0) {
+  if (current.length > 0 && hunks.length < maxHunks) {
     hunks.push({
       index: hunks.length,
       title: current[0],

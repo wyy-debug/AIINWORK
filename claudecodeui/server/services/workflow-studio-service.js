@@ -1054,6 +1054,10 @@ async function waitForSubagentTerminal(store, initialRun, timeoutMs = 120000) {
   return last;
 }
 
+function reachedTerminalSubagentStatus(run) {
+  return SUBAGENT_TERMINAL_STATUSES.has(run?.status);
+}
+
 function validateRunInputs(workflow, inputs) {
   const errors = [];
   const runInputs = asObject(inputs);
@@ -1709,7 +1713,7 @@ export function createWorkflowStudioStore({
       run.timelineEvents.push(createRunEvent('workflow_node_failed', { ...summarizeNode(node), error: nodeRun.error }, now));
       return;
     }
-    if (permission === 'ask' && RISKY_NODE_TYPES.has(node.type)) {
+    if (permission === 'ask' && RISKY_NODE_TYPES.has(node.type) && nodeRun.permissionDecision !== 'approved') {
       nodeRun.status = 'waiting_approval';
       nodeRun.waitingReason = `${node.type} node requires approval before execution.`;
       nodeRun.permissionDecision = 'ask';
@@ -1763,7 +1767,11 @@ export function createWorkflowStudioStore({
           sessionId: run.sessionId,
           source: 'workflow',
         });
-        const terminalRun = await waitForSubagentTerminal(subagentRunStore, subagentRun, Math.min(node.timeoutMs || 120000, 1000));
+        const terminalRun = await waitForSubagentTerminal(
+          subagentRunStore,
+          subagentRun,
+          Math.min(Math.max(1, Number(node.timeoutMs) || 1000), 1000),
+        );
         nodeRun.output = {
           subagentRunId: terminalRun.id,
           status: terminalRun.status,
@@ -1779,6 +1787,17 @@ export function createWorkflowStudioStore({
         nodeRun.artifacts.push({ kind: 'subagent-run', refId: terminalRun.id, title: node.title });
         if (terminalRun.status === 'failed' || terminalRun.status === 'stopped' || terminalRun.status === 'cancelled') {
           throw new Error(terminalRun.error || `Subagent run failed: ${terminalRun.id}`);
+        }
+        if (!reachedTerminalSubagentStatus(terminalRun)) {
+          nodeRun.status = 'running';
+          nodeRun.updatedAt = now();
+          nodeRun.logs.push(`Subagent run ${terminalRun.id} is still ${terminalRun.status || 'running'} after timeout.`);
+          run.timelineEvents.push(createRunEvent('workflow_subagent_still_running', {
+            ...summarizeNode(node),
+            subagentRunId: terminalRun.id,
+            status: terminalRun.status || 'running',
+          }, now));
+          return;
         }
       } else if (node.type === 'condition') {
         nodeRun.output = { matched: true, condition: nodeRun.input.condition || 'always' };
@@ -2498,11 +2517,23 @@ export function createWorkflowStudioStore({
       .map(clone);
   }
 
+  function parseApprovalRequestId(approvalId) {
+    const raw = String(approvalId || '').replace(/^workflow_approval_/, '');
+    const matchingRun = [...runs]
+      .sort((left, right) => right.id.length - left.id.length)
+      .find((run) => raw === run.id || raw.startsWith(`${run.id}_`));
+    if (matchingRun) {
+      const nodeId = raw === matchingRun.id ? '' : raw.slice(matchingRun.id.length + 1);
+      return { runId: matchingRun.id, nodeId };
+    }
+    const parts = raw.split('_');
+    const nodeId = parts.pop();
+    return { runId: parts.join('_'), nodeId };
+  }
+
   async function decideApproval(approvalId, input = {}) {
     await load();
-    const parts = String(approvalId || '').replace(/^workflow_approval_/, '').split('_');
-    const nodeId = parts.pop();
-    const runId = parts.join('_');
+    const { runId, nodeId } = parseApprovalRequestId(approvalId);
     const run = runs.find((item) => item.id === runId);
     if (!run || !nodeId || !run.nodeRuns?.[nodeId]) return null;
     const decision = normalizeText(input.decision, 'approve', 40).toLowerCase();
@@ -2605,6 +2636,7 @@ export function createWorkflowStudioStore({
       nodeRun.status = 'pending';
       nodeRun.error = '';
       nodeRun.waitingReason = '';
+      nodeRun.permissionDecision = '';
       nodeRun.startedAt = null;
       nodeRun.completedAt = null;
       nodeRun.logs.push('Retry requested.');
@@ -2617,10 +2649,17 @@ export function createWorkflowStudioStore({
     }
 
     if (action === 'continue' || action === 'approve') {
-      nodeRun.status = 'completed';
-      nodeRun.completedAt = now();
-      nodeRun.durationMs = nodeRun.startedAt ? nodeRun.completedAt - nodeRun.startedAt : 0;
-      nodeRun.output = { approved: true, decision: action };
+      if (nodeRun.type === 'approval') {
+        nodeRun.status = 'completed';
+        nodeRun.completedAt = now();
+        nodeRun.durationMs = nodeRun.startedAt ? nodeRun.completedAt - nodeRun.startedAt : 0;
+        nodeRun.output = { approved: true, decision: action };
+      } else {
+        nodeRun.status = 'pending';
+        nodeRun.completedAt = null;
+        nodeRun.durationMs = 0;
+      }
+      nodeRun.permissionDecision = 'approved';
       nodeRun.waitingReason = '';
       nodeRun.logs.push(`Approval decision: ${action}.`);
       run.timelineEvents.push(createRunEvent('workflow_node_approved', { nodeId }, now));

@@ -113,6 +113,9 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('validateOutputContract');
     expect(source).toContain('dataLineageRows');
     expect(source).toContain('data-testid="workflow-run-live-polling-strategy"');
+    expect(source).toContain('selectedRunId');
+    expect(source).toContain('setSelectedRunId(run.id)');
+    expect(source).toContain('aria-pressed={selectedRun?.id === run.id}');
     expect(source).toContain('data-testid="workflow-run-streaming-logs"');
     expect(source).toContain('data-testid="workflow-run-log-search"');
     expect(source).toContain('data-testid="workflow-run-compare-attempts"');
