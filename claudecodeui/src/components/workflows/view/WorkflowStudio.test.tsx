@@ -63,10 +63,10 @@ describe('WorkflowStudio source contract', () => {
     expect(operationsSource).toContain('FlowGramOperationToolbar');
     expect(operationsSource).toContain('FlowGramSelectionOperationPanel');
     expect(operationsSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
-    expect(operationsSource).toContain('data-testid="workflow-flowgram-selection-panel"');
+    expect(operationsSource).toContain('data-testid="workflow-selection-helper"');
     expect(operationsSource).toContain('data-testid="workflow-flowgram-primary-actions"');
     expect(operationsSource).toContain('data-testid="workflow-flowgram-more-actions"');
-    expect(operationsSource).toContain('data-testid="workflow-flowgram-human-feedback"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
     expect(operationsSource).toContain('isMoreOpen');
     expect(operationsSource).toContain('No node selected');
     expect(operationsSource).toContain('Node selected');
@@ -178,10 +178,10 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-primary-actions"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-more-actions"');
-    expect(flowGramSource).toContain('data-testid="workflow-flowgram-human-feedback"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-shortcut-hints"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-feedback"');
-    expect(flowGramSource).toContain('data-testid="workflow-flowgram-selection-panel"');
+    expect(flowGramSource).toContain('data-testid="workflow-selection-helper"');
 
     expect(mainContentSource).not.toContain("import WorkflowStudio from '../../workflows/view/WorkflowStudio'");
     expect(mainContentSource).toContain("lazy(() => import('../../workflows/view/WorkflowStudio'))");
@@ -509,5 +509,23 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-diagnostics-layer"');
     expect(flowGramSource).not.toContain('FlowGram edits / MTL runtime executes');
     expect(flowGramSource).not.toContain('{humanFeedback} 路 {operationFeedback}');
+  });
+
+  it('continues desktop-only Workflow Studio polish without mobile screenshot gates', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(studioSource).toContain('data-testid="workflow-desktop-focus-layout"');
+    expect(studioSource).toContain('data-testid="workflow-editor-setup-strip"');
+    expect(studioSource).toContain('data-testid="workflow-runs-approval-focus"');
+    expect(flowGramSource).toContain('data-testid="workflow-canvas-operation-polish"');
+    expect(flowGramSource).toContain('data-testid="workflow-selection-helper"');
+    expect(screenshotSpec).toContain('BUG-UI-019-editor-focus-layout.png');
+    expect(screenshotSpec).toContain('BUG-UI-020-canvas-operation-polish.png');
+    expect(screenshotSpec).toContain('BUG-UI-021-runs-approval-focus.png');
+    expect(screenshotSpec).not.toContain('BUG-UI-019-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-020-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-021-mobile');
   });
 });

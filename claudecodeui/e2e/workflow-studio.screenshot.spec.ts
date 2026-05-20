@@ -141,7 +141,7 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-primary-actions')).toBeVisible();
-  await expect(page.getByTestId('workflow-flowgram-human-feedback')).toContainText(/No node selected|Node selected/);
+  await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toContainText(/No node selected|Node selected/);
   await screenshot(page, 'BUG-UI-012-workflow-simple-default.png');
   await page.getByTestId('workflow-flowgram-more-toggle').click();
   await expect(page.getByTestId('workflow-flowgram-more-actions')).toBeVisible();
@@ -155,8 +155,8 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await screenshot(page, 'REQ-213-flowgram-operation-toolbar.png');
   await screenshot(page, 'BUG-UI-011-flowgram-visual-parity.png');
   await page.getByTestId(/workflow-flowgram-node-/).first().click();
-  await expect(page.getByTestId('workflow-flowgram-human-feedback')).toContainText('Node selected');
-  await expect(page.getByTestId('workflow-flowgram-selection-panel')).toContainText('Node selected');
+  await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toContainText('Node selected');
+  await expect(page.getByTestId('workflow-selection-helper')).toContainText('Node selected');
   await screenshot(page, 'REQ-214-flowgram-selection-panel.png');
   await screenshot(page, 'BUG-UI-012-workflow-simple-selected.png');
   await expect(page.getByTestId('workflow-flowgram-line-insert').first()).toBeVisible();
@@ -219,18 +219,24 @@ test('BUG-UI-013 to BUG-UI-018 capture simplified Workflow Studio HCI @screensho
   await screenshot(page, 'BUG-UI-018-run-story-approval.png');
 });
 
-test.describe('Workflow Studio simplified mobile HCI', () => {
-  test.use({ viewport: { width: 390, height: 844 } });
+test('BUG-UI-019 to BUG-UI-021 capture desktop-only Workflow Studio polish @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
 
-  test('BUG-UI-013 captures mobile simple run path @screenshot', async ({ page }) => {
-    await installMockApi(page);
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('workflow-studio')).toBeVisible();
-    await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
-    await expect(page.getByTestId('workflow-simple-mode')).toBeVisible();
-    await expect(page.getByTestId('workflow-editor-mobile').getByTestId('workflow-guided-builder')).toBeVisible();
-    await page.getByTestId('workflow-mobile-run').click();
-    await expect(page.getByTestId('workflow-run-setup-drawer')).toBeVisible();
-    await screenshot(page, 'BUG-UI-013-mobile-simple-run.png');
-  });
+  await expect(page.getByTestId('workflow-desktop-focus-layout')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-setup-strip')).toBeVisible();
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-019-editor-focus-layout.png');
+
+  await expect(page.getByTestId('workflow-canvas-operation-polish')).toBeVisible();
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-selection-helper')).toBeVisible();
+  await screenshot(page, 'BUG-UI-020-canvas-operation-polish.png');
+
+  await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page.getByTestId('workflow-runs-approval-focus')).toBeVisible();
+  await screenshot(page, 'BUG-UI-021-runs-approval-focus.png');
 });

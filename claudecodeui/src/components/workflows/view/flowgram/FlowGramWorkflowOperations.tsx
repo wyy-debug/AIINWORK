@@ -115,15 +115,15 @@ export function FlowGramOperationToolbar({
   onToggleMore,
 }: FlowGramOperationToolbarProps) {
   return (
-    <div className="pointer-events-auto flex flex-col gap-1.5" data-testid="workflow-flowgram-operation-toolbar">
+    <div className="pointer-events-auto flex flex-col gap-1.5" data-testid="workflow-canvas-operation-polish">
       <div
-        className="flex h-11 items-center gap-1 rounded-[12px] border border-[rgba(68,83,130,0.22)] bg-white px-1.5 shadow-[0_2px_6px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.02)]"
+        className="flex h-10 items-center gap-1 rounded-md border border-slate-200 bg-white/90 px-1.5 shadow-[0_1px_4px_rgba(15,23,42,0.05)] backdrop-blur"
         data-testid="workflow-flowgram-primary-actions"
       >
         <button
           type="button"
           data-testid="workflow-flowgram-add-node-operation"
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
           onClick={(event) => {
             event.stopPropagation();
             onOpenNodePanel();
@@ -135,19 +135,19 @@ export function FlowGramOperationToolbar({
         <OperationButton testId="workflow-flowgram-fit-view" title="Fit view" onClick={onFitView}>
           <LocateFixed className="h-4 w-4" />
         </OperationButton>
-        <div className="hidden h-7 min-w-[46px] items-center justify-center rounded-lg border border-[rgba(68,83,130,0.18)] px-2 text-[11px] text-slate-600 md:flex" data-testid="workflow-flowgram-zoom-state">
+        <div className="hidden h-7 min-w-[46px] items-center justify-center rounded-md border border-slate-200 px-2 text-[11px] text-slate-600 md:flex" data-testid="workflow-flowgram-zoom-state">
           {zoomPercent}%
         </div>
         <OperationButton testId="workflow-flowgram-more-toggle" title="More canvas actions" onClick={onToggleMore}>
           <MoreHorizontal className="h-4 w-4" />
         </OperationButton>
       </div>
-      <div className="inline-flex h-7 max-w-[260px] items-center rounded-[9px] border border-[rgba(68,83,130,0.16)] bg-white/90 px-2 text-[11px] text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.04)]" data-testid="workflow-flowgram-human-feedback">
-        <span className="truncate">{humanFeedback} · {operationFeedback}</span>
+      <div className="inline-flex h-7 max-w-[260px] items-center rounded-md border border-slate-200 bg-white/80 px-2 text-[11px] text-slate-500 shadow-[0_1px_3px_rgba(15,23,42,0.04)]" data-testid="workflow-flowgram-operation-toolbar">
+        <span className="truncate">{humanFeedback} / {operationFeedback}</span>
       </div>
       {isMoreOpen && (
         <div
-          className="flex w-fit items-center gap-0.5 rounded-[12px] border border-[rgba(68,83,130,0.22)] bg-white p-1 shadow-[0_6px_18px_rgba(15,23,42,0.08)]"
+          className="flex w-fit items-center gap-0.5 rounded-md border border-slate-200 bg-white p-1 shadow-[0_6px_18px_rgba(15,23,42,0.08)]"
           data-testid="workflow-flowgram-more-actions"
         >
           <OperationButton testId="workflow-flowgram-zoom-in" title="Zoom in" onClick={onZoomIn}>
@@ -204,9 +204,9 @@ export function FlowGramSelectionOperationPanel({
   return (
     <div
       className={cn(
-        'pointer-events-auto flex h-10 max-w-[420px] items-center gap-1 rounded-[10px] border border-[rgba(68,83,130,0.25)] bg-white px-2 text-xs shadow-[0_2px_6px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.02)]',
+        'pointer-events-auto flex h-10 max-w-[420px] items-center gap-1 rounded-md border border-slate-200 bg-white/95 px-2 text-xs shadow-[0_1px_5px_rgba(15,23,42,0.07)] backdrop-blur',
       )}
-      data-testid="workflow-flowgram-selection-panel"
+      data-testid="workflow-selection-helper"
     >
       {selectedEdge ? <GitBranch className="h-4 w-4 shrink-0 text-primary" /> : <MousePointer2 className="h-4 w-4 shrink-0 text-primary" />}
       <div className="min-w-0 max-w-[180px] truncate text-[11px] font-medium text-slate-700" data-testid="workflow-flowgram-selection-label">
@@ -307,7 +307,7 @@ export function FlowGramNativeOperationLayer({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30" data-testid="workflow-flowgram-operation-layer">
-      <div className="absolute left-3 top-12">
+      <div className="absolute left-3 top-3">
         <FlowGramOperationToolbar
           zoomPercent={Math.round((tools.zoom || 1) * 100)}
           lineType={String(tools.lineType || 'default')}
@@ -324,7 +324,7 @@ export function FlowGramNativeOperationLayer({
           onToggleMore={() => setIsMoreOpen((current) => !current)}
         />
       </div>
-      <div className="absolute bottom-[78px] right-4">
+      <div className="absolute bottom-4 right-4">
         <FlowGramSelectionOperationPanel
           selectedNode={selectedNode}
           selectedEdge={selectedEdge}

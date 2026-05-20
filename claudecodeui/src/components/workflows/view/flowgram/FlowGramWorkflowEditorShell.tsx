@@ -82,7 +82,7 @@ const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, Wor
 
   return (
     <div
-      className="relative h-[560px] min-w-0 overflow-hidden rounded-md border border-border bg-background"
+      className="relative h-[640px] min-w-0 overflow-hidden rounded-md border border-border bg-background"
       data-testid="workflow-dag-canvas"
     >
       <div className="h-full w-full" data-testid="workflow-flowgram-free-layout-editor">
