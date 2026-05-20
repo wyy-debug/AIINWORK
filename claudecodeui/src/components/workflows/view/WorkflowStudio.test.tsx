@@ -483,4 +483,31 @@ describe('WorkflowStudio source contract', () => {
     expect(source).not.toContain('message bus');
     expect(source).not.toContain('topology');
   });
+
+  it('defaults Workflow Studio to a simplified human-guided interaction model', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
+
+    expect(studioSource).toContain('WorkflowUiMode');
+    expect(studioSource).toContain('workflowUiModeStorageKey');
+    expect(studioSource).toContain('data-testid="workflow-simple-mode"');
+    expect(studioSource).toContain('data-testid="workflow-advanced-toggle"');
+    expect(studioSource).toContain('data-testid="workflow-human-next-action"');
+    expect(studioSource).toContain('data-testid="workflow-guided-builder"');
+    expect(studioSource).toContain('data-testid="workflow-diagnostics-drawer"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-essential-fields"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-advanced-sections"');
+    expect(studioSource).toContain('data-testid="workflow-run-story"');
+    expect(studioSource).toContain('data-testid="workflow-run-advanced-tabs"');
+    expect(studioSource).toContain('Choose');
+    expect(studioSource).toContain('Configure');
+    expect(studioSource).toContain('Review');
+    expect(studioSource).toContain('Build and run an agent workflow for this project');
+    expect(studioSource).not.toContain('Compose Agent, Subagent, MCP, Tool, Shell, Artifact, Approval, Condition, and Join nodes as a visual DAG.');
+
+    expect(flowGramSource).toContain('showDiagnostics');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-diagnostics-layer"');
+    expect(flowGramSource).not.toContain('FlowGram edits / MTL runtime executes');
+    expect(flowGramSource).not.toContain('{humanFeedback} 路 {operationFeedback}');
+  });
 });

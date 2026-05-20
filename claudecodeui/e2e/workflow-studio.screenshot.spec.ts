@@ -185,3 +185,52 @@ test('REQ-083 captures Workflow Studio empty state guide @screenshot', async ({ 
   await expect(page.getByTestId('workflow-empty-state-guide')).toBeVisible();
   await screenshot(page, 'REQ-083-workflow-empty-state-guide.png');
 });
+
+test('BUG-UI-013 to BUG-UI-018 capture simplified Workflow Studio HCI @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+
+  await expect(page.getByTestId('workflow-simple-mode')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor').getByTestId('workflow-guided-builder')).toBeVisible();
+  await expect(page.getByTestId('workflow-human-next-action')).toBeVisible();
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('WorkGraph');
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('Migration doctor');
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('Benchmarks');
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-013-simple-editor-default.png');
+  await screenshot(page, 'BUG-UI-014-command-center-declutter.png');
+  await screenshot(page, 'BUG-UI-015-guided-builder.png');
+
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-inspector-essential-fields')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-advanced-sections')).toBeVisible();
+  await screenshot(page, 'BUG-UI-016-inspector-essential-fields.png');
+
+  await expect(page.getByTestId('workflow-flowgram-diagnostics-layer')).toBeHidden();
+  await screenshot(page, 'BUG-UI-017-canvas-visual-polish.png');
+
+  await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page.getByTestId('workflow-runs')).toBeVisible();
+  await expect(page.getByTestId('workflow-run-story')).toContainText(/approval|waiting|continue/i);
+  await expect(page.getByTestId('workflow-run-advanced-tabs')).toBeVisible();
+  await screenshot(page, 'BUG-UI-018-run-story-approval.png');
+});
+
+test.describe('Workflow Studio simplified mobile HCI', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('BUG-UI-013 captures mobile simple run path @screenshot', async ({ page }) => {
+    await installMockApi(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('workflow-studio')).toBeVisible();
+    await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+    await expect(page.getByTestId('workflow-simple-mode')).toBeVisible();
+    await expect(page.getByTestId('workflow-editor-mobile').getByTestId('workflow-guided-builder')).toBeVisible();
+    await page.getByTestId('workflow-mobile-run').click();
+    await expect(page.getByTestId('workflow-run-setup-drawer')).toBeVisible();
+    await screenshot(page, 'BUG-UI-013-mobile-simple-run.png');
+  });
+});

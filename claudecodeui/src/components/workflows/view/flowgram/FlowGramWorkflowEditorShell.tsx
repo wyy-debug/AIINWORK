@@ -25,6 +25,7 @@ type WorkflowFlowGramEditorProps = {
   onCopySelection?: () => void;
   onDuplicateSelection?: () => void;
   onDeleteSelection?: () => void;
+  showDiagnostics?: boolean;
 };
 
 const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, WorkflowFlowGramEditorProps>(function FlowGramWorkflowEditorShell(props, ref) {
@@ -99,22 +100,26 @@ const FlowGramWorkflowEditorShell = forwardRef<WorkflowFlowGramEditorHandle, Wor
           />
         </FreeLayoutEditor>
       </div>
-      <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-emerald-200 bg-emerald-50/90 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700 shadow-sm" data-testid="workflow-flowgram-runtime-boundary">
-        FlowGram edits / MTL runtime executes
-      </div>
-      <div className="pointer-events-none absolute bottom-3 right-3 z-20 rounded-md border border-border bg-background/85 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm" data-testid="workflow-minimap">
-        FlowGram minimap
-      </div>
-      <div className="pointer-events-none absolute left-3 bottom-3 z-20 rounded-md border border-border bg-background/85 px-2 py-1 text-[10px] text-muted-foreground shadow-sm" data-testid="workflow-flowgram-history-state">
-        Undo {historyState.canUndo ? 'ready' : 'empty'} / Redo {historyState.canRedo ? 'ready' : 'empty'}
-      </div>
-      <div className="pointer-events-none absolute right-3 top-3 z-20 max-w-xs rounded-md border border-border bg-background/90 p-2 text-[10px] text-muted-foreground shadow-sm" data-testid="workflow-flowgram-variable-catalog">
-        <div className="font-semibold uppercase tracking-wide text-foreground">Variables</div>
-        {variablePanelState.variables.slice(0, 4).map((variable) => (
-          <div key={variable.path} className="truncate">{variable.token} / {variable.valueType}</div>
-        ))}
-        {variablePanelState.variables.length === 0 && <div>No upstream variables</div>}
-      </div>
+      {props.showDiagnostics && (
+        <div data-testid="workflow-flowgram-diagnostics-layer">
+          <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-md border border-emerald-200 bg-emerald-50/90 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700 shadow-sm" data-testid="workflow-flowgram-runtime-boundary">
+            Diagnostics: editor boundary / runtime executes
+          </div>
+          <div className="pointer-events-none absolute bottom-3 right-3 z-20 rounded-md border border-border bg-background/85 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground shadow-sm" data-testid="workflow-minimap">
+            FlowGram minimap
+          </div>
+          <div className="pointer-events-none absolute left-3 bottom-3 z-20 rounded-md border border-border bg-background/85 px-2 py-1 text-[10px] text-muted-foreground shadow-sm" data-testid="workflow-flowgram-history-state">
+            Undo {historyState.canUndo ? 'ready' : 'empty'} / Redo {historyState.canRedo ? 'ready' : 'empty'}
+          </div>
+          <div className="pointer-events-none absolute right-3 top-3 z-20 max-w-xs rounded-md border border-border bg-background/90 p-2 text-[10px] text-muted-foreground shadow-sm" data-testid="workflow-flowgram-variable-catalog">
+            <div className="font-semibold uppercase tracking-wide text-foreground">Variables</div>
+            {variablePanelState.variables.slice(0, 4).map((variable) => (
+              <div key={variable.path} className="truncate">{variable.token} / {variable.valueType}</div>
+            ))}
+            {variablePanelState.variables.length === 0 && <div>No upstream variables</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 });
