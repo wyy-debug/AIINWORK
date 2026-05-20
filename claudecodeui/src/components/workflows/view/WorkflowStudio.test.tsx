@@ -14,7 +14,8 @@ describe('WorkflowStudio source contract', () => {
     ].join('\n');
 
     expect(source).toContain('data-testid="workflow-studio"');
-    expect(source).toContain("from './WorkflowFlowGramEditor'");
+    expect(source).toContain("lazy(() => import('./WorkflowFlowGramEditor'))");
+    expect(source).toContain('data-testid="workflow-flowgram-loading"');
     expect(source).toContain("from '@flowgram.ai/free-layout-editor'");
     expect(source).toContain('FreeLayoutEditor');
     expect(source).toContain('createFreeLinesPlugin');

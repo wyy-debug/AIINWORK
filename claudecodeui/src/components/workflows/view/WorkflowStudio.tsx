@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Background,
   BaseEdge,
@@ -82,7 +82,8 @@ import {
 } from '../model/workflowNodeRegistry';
 import { buildWorkGraphRuntimeState } from '../model/workflowRuntimeStateBridge';
 import { buildWorkflowMigrationDoctorReport } from '../model/workflowMigrationDoctor';
-import WorkflowFlowGramEditor from './WorkflowFlowGramEditor';
+
+const WorkflowFlowGramEditor = lazy(() => import('./WorkflowFlowGramEditor'));
 
 type WorkflowStudioProps = {
   selectedProject: Project;
@@ -2018,23 +2019,30 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </div>
           ))}
         </div>
-        <WorkflowFlowGramEditor
-          workflow={draft}
-          selectedRun={selectedRun}
-          selectedNodeId={selectedNodeId}
-          selectedEdgeId={selectedEdgeId}
-          onWorkflowChange={(next) => commitDraft(() => next)}
-          onSelectNode={(nodeId) => {
-            setSelectedNodeId(nodeId);
-            setSelectedNodeIds((current) => current.includes(nodeId) && current.length > 1 ? current : [nodeId]);
-            setSelectedEdgeId('');
-          }}
-          onSelectEdge={(edgeId) => {
-            setSelectedEdgeId(edgeId);
-            setSelectedNodeId('');
-          }}
-          onInsertNodeOnEdge={insertNodeOnEdge}
-        />
+        <Suspense fallback={(
+          <div className="flex h-[560px] min-w-[980px] items-center justify-center rounded-md border border-border bg-background text-sm text-muted-foreground" data-testid="workflow-flowgram-loading">
+            Loading FlowGram editor...
+          </div>
+        )}
+        >
+          <WorkflowFlowGramEditor
+            workflow={draft}
+            selectedRun={selectedRun}
+            selectedNodeId={selectedNodeId}
+            selectedEdgeId={selectedEdgeId}
+            onWorkflowChange={(next) => commitDraft(() => next)}
+            onSelectNode={(nodeId) => {
+              setSelectedNodeId(nodeId);
+              setSelectedNodeIds((current) => current.includes(nodeId) && current.length > 1 ? current : [nodeId]);
+              setSelectedEdgeId('');
+            }}
+            onSelectEdge={(edgeId) => {
+              setSelectedEdgeId(edgeId);
+              setSelectedNodeId('');
+            }}
+            onInsertNodeOnEdge={insertNodeOnEdge}
+          />
+        </Suspense>
       </div>
     );
   };
