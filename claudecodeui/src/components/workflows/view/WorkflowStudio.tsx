@@ -2289,7 +2289,39 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       )}
 
       {activeView === 'Editor' && (
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[260px_minmax(0,1fr)_300px] lg:overflow-hidden" data-testid="workflow-editor">
+        <>
+        <div className="min-h-0 flex-1 overflow-auto p-4 md:hidden" data-testid="workflow-editor-mobile">
+          <section className="rounded-md border border-border bg-card p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-foreground">{draft.name}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {draft.nodes.length} nodes / {draft.edges.length} edges
+                </p>
+              </div>
+              <span className="rounded border border-border px-2 py-1 text-xs text-muted-foreground">{draft.permissionPreset}</span>
+            </div>
+            <div className="mt-4 grid gap-2 text-sm text-muted-foreground">
+              {draft.nodes.slice(0, 6).map((node) => (
+                <div key={node.id} className="flex items-center justify-between gap-3 rounded border border-border bg-background px-3 py-2">
+                  <span className="min-w-0 truncate font-medium text-foreground">{node.title}</span>
+                  <span className="shrink-0 text-xs">{node.type}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setIsRunSetupOpen(true)} disabled={isBusy || draft.nodes.length === 0} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
+                <Play className="h-4 w-4" />
+                Run workflow
+              </button>
+              <button type="button" onClick={() => setActiveView('Runs')} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-muted">
+                <History className="h-4 w-4" />
+                View runs
+              </button>
+            </div>
+          </section>
+        </div>
+        <div className="hidden min-h-0 flex-1 grid-cols-1 overflow-auto md:grid lg:grid-cols-[260px_minmax(0,1fr)_300px] lg:overflow-hidden" data-testid="workflow-editor">
           <aside className="min-h-0 overflow-auto border-r border-border p-4">
             <h3 className="text-sm font-semibold text-foreground">Node palette</h3>
             <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground">
@@ -2640,6 +2672,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             )}
           </aside>
         </div>
+        </>
       )}
 
       {activeView === 'Runs' && (

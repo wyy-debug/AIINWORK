@@ -161,6 +161,7 @@ export default function SidebarProjectItem({
                 <div className="min-w-0 flex-1">
                   {isEditing ? (
                     <input
+                      data-testid="sidebar-project-name-input"
                       type="text"
                       value={editingName}
                       onChange={(event) => onEditingNameChange(event.target.value)}
@@ -325,6 +326,7 @@ export default function SidebarProjectItem({
                 <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
               )}
               <input
+                data-testid="sidebar-project-name-input"
                 type="text"
                 value={editingName}
                 onChange={(event) => onEditingNameChange(event.target.value)}
@@ -394,7 +396,7 @@ export default function SidebarProjectItem({
                 <button
                   type="button"
                   data-testid="sidebar-project-edit-button"
-                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -403,12 +405,12 @@ export default function SidebarProjectItem({
                   title={t('tooltips.renameProject')}
                   aria-label={t('tooltips.renameProject')}
                 >
-                  <Edit3 className="h-3.5 w-3.5" />
+                  <Edit3 className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
                   data-testid="sidebar-project-new-session-button"
-                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -418,7 +420,7 @@ export default function SidebarProjectItem({
                   title={t('sessions.newSession')}
                   aria-label={t('sessions.newSession')}
                 >
-                  <SquarePen className="h-3.5 w-3.5" />
+                  <SquarePen className="h-4 w-4" />
                 </button>
               </>
             )}

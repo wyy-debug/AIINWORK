@@ -25,11 +25,9 @@ export default function SidebarFooter({
 }: SidebarFooterProps) {
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
-      {/* Update banner */}
       {updateAvailable && (
         <>
           <div className="nav-divider" />
-          {/* Desktop update */}
           <div className="hidden px-2 py-1.5 md:block">
             <button
               className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-blue-50/80 dark:hover:bg-blue-900/15"
@@ -50,7 +48,6 @@ export default function SidebarFooter({
             </button>
           </div>
 
-          {/* Mobile update */}
           <div className="px-3 py-2 md:hidden">
             <button
               className="flex h-11 w-full items-center gap-3 rounded-xl border border-blue-200/60 bg-blue-50/80 px-3.5 transition-all active:scale-[0.98] dark:border-blue-700/40 dark:bg-blue-900/15"
@@ -73,12 +70,11 @@ export default function SidebarFooter({
         </>
       )}
 
-      {/* Settings */}
       <div className="nav-divider" />
 
-      {/* Desktop primary actions */}
       <div className="hidden space-y-1 px-2 py-1.5 md:block">
         <button
+          data-testid="sidebar-settings-button"
           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           onClick={onShowSettings}
         >
@@ -87,18 +83,17 @@ export default function SidebarFooter({
         </button>
       </div>
 
-      {/* Desktop version brand line (OSS mode only) */}
       {!IS_PLATFORM && (
         <div className="hidden px-3 py-2 text-center md:block">
           <span className="text-[10px] text-muted-foreground/40">
-            Argus v{currentVersion} – {t('branding.openSource')}
+            Argus v{currentVersion} - {t('branding.openSource')}
           </span>
         </div>
       )}
 
-      {/* Mobile primary actions */}
       <div className="space-y-2 px-3 py-3 md:hidden">
         <button
+          data-testid="sidebar-settings-button"
           className="flex h-12 w-full items-center gap-3.5 rounded-xl bg-muted/40 px-4 transition-all hover:bg-muted/60 active:scale-[0.98]"
           onClick={onShowSettings}
         >

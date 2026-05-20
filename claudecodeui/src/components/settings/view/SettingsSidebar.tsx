@@ -38,6 +38,7 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
             return (
               <button
                 key={item.id}
+                data-testid={`settings-tab-${item.id}`}
                 onClick={() => onChange(item.id)}
                 className={cn(
                   'flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors duration-150',
@@ -62,6 +63,7 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
             return (
               <Pill
                 key={item.id}
+                data-testid={`settings-tab-${item.id}`}
                 isActive={activeTab === item.id}
                 onClick={() => onChange(item.id)}
                 className="flex-shrink-0"
