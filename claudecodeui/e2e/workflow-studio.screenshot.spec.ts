@@ -138,7 +138,7 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await expect(page.getByTestId('workflow-migration-compatibility')).toContainText('Compatibility');
   await expect(page.getByTestId('workflow-migration-doctor-local')).toContainText('Migration doctor');
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
-  await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
   await expect(page.getByTestId('workflow-line-add-node').first()).toBeVisible();
   await screenshot(page, 'REQ-183-workgraph-command-center.png');
 

@@ -5,6 +5,7 @@ import type {
   WorkflowNodeType,
   WorkflowNodeTypeDefinition,
 } from '../../../types/workflow';
+import type { WorkflowJSON } from '@flowgram.ai/free-layout-editor';
 import { createWorkflowNodeRegistry } from './workflowNodeRegistry';
 
 export type WorkflowFlowReference = {
@@ -368,6 +369,84 @@ export function flowGramDocumentToWorkflowDefinition(
     },
     createdAt: document.createdAt || existing?.createdAt,
     updatedAt: document.updatedAt || existing?.updatedAt,
+  };
+}
+
+export function workflowDefinitionToFlowGramWorkflowJSON(workflow: WorkflowDefinition): WorkflowJSON {
+  return {
+    nodes: workflow.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      meta: {
+        position: asPosition(node.position),
+        defaultExpanded: true,
+        size: { width: 250, height: 112 },
+        defaultPorts: [
+          { type: 'input' },
+          { type: 'output' },
+        ],
+      },
+      data: {
+        title: node.title || node.type,
+        description: node.description || '',
+        workflowNode: node,
+        runtime: {
+          permission: node.permission,
+          retryLimit: node.retryLimit,
+          timeoutMs: node.timeoutMs,
+        },
+        config: cloneRecord(node.config),
+        flowValues: buildFlowValues(node),
+      },
+    })),
+    edges: workflow.edges.map((edge) => ({
+      sourceNodeID: edge.from,
+      targetNodeID: edge.to,
+      data: {
+        id: edge.id,
+        mode: edge.mode || 'success',
+        condition: edge.condition,
+        routeStyle: edge.routeStyle,
+      },
+    })),
+  };
+}
+
+export function flowGramWorkflowJSONToWorkflowDefinition(
+  workflow: WorkflowDefinition,
+  json: WorkflowJSON,
+): WorkflowDefinition {
+  const baseNodes = new Map(workflow.nodes.map((node) => [node.id, node]));
+  const nextNodes = (json.nodes || []).map((node) => {
+    const base = baseNodes.get(node.id);
+    const workflowNode = node.data?.workflowNode && typeof node.data.workflowNode === 'object'
+      ? node.data.workflowNode as WorkflowNode
+      : undefined;
+    const source = base || workflowNode;
+    if (!source) return undefined;
+    return {
+      ...source,
+      title: asText(node.data?.title, source.title),
+      description: asText(node.data?.description, source.description),
+      position: asPosition(node.meta?.position || source.position),
+      config: {
+        ...cloneRecord(source.config),
+        ...cloneRecord(node.data?.config),
+      },
+    } satisfies WorkflowNode;
+  }).filter(Boolean) as WorkflowNode[];
+
+  return {
+    ...workflow,
+    nodes: nextNodes.length > 0 ? nextNodes : workflow.nodes,
+    edges: (json.edges || []).map((edge, index) => ({
+      id: asText(edge.data?.id, `${edge.sourceNodeID}-${edge.targetNodeID}-${index}`),
+      from: edge.sourceNodeID,
+      to: edge.targetNodeID,
+      mode: edge.data?.mode || 'success',
+      condition: asText(edge.data?.condition),
+      routeStyle: edge.data?.routeStyle,
+    })),
   };
 }
 

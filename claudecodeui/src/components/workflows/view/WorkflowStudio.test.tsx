@@ -8,17 +8,21 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 
 describe('WorkflowStudio source contract', () => {
   it('exposes visual DAG editor, runner, approval, and history hooks', () => {
-    const source = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const source = [
+      readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8'),
+      readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8'),
+    ].join('\n');
 
     expect(source).toContain('data-testid="workflow-studio"');
-    expect(source).toContain("from '@xyflow/react'");
-    expect(source).toContain('ReactFlow');
-    expect(source).toContain('MiniMap');
-    expect(source).toContain('Controls');
-    expect(source).toContain('Handle');
-    expect(source).toContain('ReactFlowProvider');
+    expect(source).toContain("from './WorkflowFlowGramEditor'");
+    expect(source).toContain("from '@flowgram.ai/free-layout-editor'");
+    expect(source).toContain('FreeLayoutEditor');
+    expect(source).toContain('createFreeLinesPlugin');
+    expect(source).toContain('createFreeSnapPlugin');
+    expect(source).toContain('createMinimapPlugin');
     expect(source).toContain('data-testid="workflow-command-center"');
-    expect(source).toContain('data-testid="workflow-react-flow-canvas"');
+    expect(source).toContain('WorkflowFlowGramEditor');
+    expect(source).toContain('data-testid="workflow-flowgram-free-layout-editor"');
     expect(source).toContain('data-testid="workflow-flowgram-adapter"');
     expect(source).toContain('data-testid="workflow-migration-compatibility"');
     expect(source).toContain('data-testid="workflow-migration-doctor-local"');
@@ -87,9 +91,7 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-edge-branch-labels"');
     expect(source).toContain('data-testid="workflow-edge-insert-node"');
     expect(source).toContain('data-testid="workflow-line-add-node"');
-    expect(source).toContain('reactFlowEdgeTypes');
     expect(source).toContain('insertNodeOnEdge');
-    expect(source).toContain('edgeInsertType');
     expect(source).toContain('data-testid="workflow-minimap-filters"');
     expect(source).toContain('data-testid="workflow-graph-validation-badges"');
     expect(source).toContain('selectedNodeIds');

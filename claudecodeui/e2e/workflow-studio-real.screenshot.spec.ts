@@ -98,7 +98,7 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
 
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-dag-canvas')).toBeVisible();
-  await expect(page.getByTestId('workflow-react-flow-canvas')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
   await expect(page.getByTestId('workflow-multi-select')).toBeVisible();
   await expect(page.getByTestId('workflow-copy-paste')).toBeVisible();
   await expect(page.getByTestId('workflow-duplicate-subgraph')).toBeVisible();
@@ -108,10 +108,10 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await expect(page.getByTestId('workflow-minimap-filters')).toBeVisible();
   await screenshot(page, 'REQ-057-real-workflow-editor.png');
   await screenshot(page, 'REQ-064-real-editor-create-save-reopen.png');
-  await screenshot(page, 'REQ-081-editor-react-flow-canvas.png');
+  await screenshot(page, 'REQ-081-editor-flowgram-canvas.png');
   await screenshot(page, 'REQ-092-workflow-multi-select-nodes.png');
 
-  await page.getByTestId('workflow-node').first().click();
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
   await expect(page.getByTestId('workflow-inspector-tabs')).toBeVisible();
   await expect(page.getByTestId('workflow-node-schema-versioning')).toBeVisible();
   await screenshot(page, 'REQ-102-workflow-node-schema-versioning.png');
@@ -143,7 +143,7 @@ test('REQ-057 captures real Workflow Studio backend smoke screenshots @screensho
   await page.getByTestId('workflow-layout-mode').locator('select').selectOption('top-down');
   await page.getByRole('button', { name: 'Apply' }).first().click();
   await screenshot(page, 'REQ-096-workflow-auto-layout-modes.png');
-  await page.getByTestId('workflow-node').first().click();
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
   await page.getByTestId('workflow-layout-lock').click();
   await screenshot(page, 'REQ-097-workflow-layout-lock.png');
   await page.getByTestId('workflow-minimap-filters').locator('select').selectOption('risk');

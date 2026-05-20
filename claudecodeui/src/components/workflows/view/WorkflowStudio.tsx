@@ -82,6 +82,7 @@ import {
 } from '../model/workflowNodeRegistry';
 import { buildWorkGraphRuntimeState } from '../model/workflowRuntimeStateBridge';
 import { buildWorkflowMigrationDoctorReport } from '../model/workflowMigrationDoctor';
+import WorkflowFlowGramEditor from './WorkflowFlowGramEditor';
 
 type WorkflowStudioProps = {
   selectedProject: Project;
@@ -2017,60 +2018,23 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
             </div>
           ))}
         </div>
-        <div className="h-[560px] min-w-[980px] overflow-hidden rounded-md border border-border bg-background" data-testid="workflow-dag-canvas">
-          <ReactFlowProvider>
-            <div className="relative h-full w-full" data-testid="workflow-react-flow-canvas">
-              <ReactFlow
-                nodes={flowNodes}
-                edges={flowEdges}
-                nodeTypes={reactFlowNodeTypes}
-                edgeTypes={reactFlowEdgeTypes}
-                onNodesChange={handleFlowNodesChange}
-                onEdgesChange={handleFlowEdgesChange}
-                onConnect={handleFlowConnect}
-                onNodeClick={(_: ReactMouseEvent, node: WorkflowFlowNode) => {
-                  setSelectedNodeId(node.id);
-                  setSelectedNodeIds((current) => current.includes(node.id) && current.length > 1 ? current : [node.id]);
-                  setSelectedEdgeId('');
-                }}
-                onEdgeClick={(_: ReactMouseEvent, edge: WorkflowFlowEdge) => {
-                  setSelectedEdgeId(edge.id);
-                  setSelectedNodeId('');
-                }}
-                fitView
-                minZoom={0.35}
-                maxZoom={1.6}
-                multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
-                selectionOnDrag
-              >
-                <Background gap={24} color="#e2e8f0" />
-                <Controls />
-                <MiniMap data-testid="workflow-minimap" pannable zoomable nodeStrokeWidth={2} nodeColor={minimapNodeColor} />
-              </ReactFlow>
-              <div className="pointer-events-none absolute inset-0 z-10" data-testid="workflow-line-add-node-overlay">
-                {edgeInsertOverlays.map((item) => (
-                  <button
-                    key={item.edge.id}
-                    type="button"
-                    data-testid="workflow-line-add-node"
-                    aria-label={`Insert node on ${item.edge.from} to ${item.edge.to}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      insertNodeOnEdge(item.edge.id, edgeInsertType);
-                    }}
-                    className={cn(
-                      'pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded-full border bg-background text-foreground shadow-sm transition hover:border-primary hover:text-primary',
-                      selectedEdgeId === item.edge.id ? 'border-primary text-primary' : 'border-border',
-                    )}
-                    style={{ left: item.x, top: item.y, transform: 'translate(-50%, -50%)' }}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          </ReactFlowProvider>
-        </div>
+        <WorkflowFlowGramEditor
+          workflow={draft}
+          selectedRun={selectedRun}
+          selectedNodeId={selectedNodeId}
+          selectedEdgeId={selectedEdgeId}
+          onWorkflowChange={(next) => commitDraft(() => next)}
+          onSelectNode={(nodeId) => {
+            setSelectedNodeId(nodeId);
+            setSelectedNodeIds((current) => current.includes(nodeId) && current.length > 1 ? current : [nodeId]);
+            setSelectedEdgeId('');
+          }}
+          onSelectEdge={(edgeId) => {
+            setSelectedEdgeId(edgeId);
+            setSelectedNodeId('');
+          }}
+          onInsertNodeOnEdge={insertNodeOnEdge}
+        />
       </div>
     );
   };

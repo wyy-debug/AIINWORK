@@ -6,10 +6,12 @@ import {
   buildWorkflowFlowReferenceCatalog,
   collectWorkflowFlowValueRefs,
   flowGramDocumentToWorkflowDefinition,
+  flowGramWorkflowJSONToWorkflowDefinition,
   formatWorkflowFlowValue,
   parseWorkflowFlowValue,
   validateWorkflowFlowReferences,
   workflowDefinitionToFlowGramDocument,
+  workflowDefinitionToFlowGramWorkflowJSON,
 } from './workflowGraphAdapter';
 
 const sampleWorkflow: WorkflowDefinition = {
@@ -128,5 +130,38 @@ describe('workflowGraphAdapter', () => {
       valid: false,
       missing: [{ nodeId: 'review', field: 'prompt', path: 'nodes.missing.output.summary' }],
     });
+  });
+
+  it('maps WorkflowDefinition to the published FlowGram free-layout JSON shape', () => {
+    const flowJSON = workflowDefinitionToFlowGramWorkflowJSON(sampleWorkflow);
+
+    expect(flowJSON.nodes[0]).toMatchObject({
+      id: 'explore',
+      type: 'subagent',
+      meta: {
+        position: { x: 120, y: 160 },
+      },
+      data: {
+        title: 'Explore',
+      },
+    });
+    expect(flowJSON.edges[0]).toMatchObject({
+      sourceNodeID: 'explore',
+      targetNodeID: 'review',
+      data: {
+        id: 'edge-explore-review',
+        mode: 'success',
+      },
+    });
+
+    const moved = flowGramWorkflowJSONToWorkflowDefinition(sampleWorkflow, {
+      ...flowJSON,
+      nodes: flowJSON.nodes.map((node) => (
+        node.id === 'review'
+          ? { ...node, meta: { ...node.meta, position: { x: 300, y: 88 } } }
+          : node
+      )),
+    });
+    expect(moved.nodes.find((node) => node.id === 'review')?.position).toEqual({ x: 300, y: 88 });
   });
 });
