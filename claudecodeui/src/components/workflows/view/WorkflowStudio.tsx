@@ -631,7 +631,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   }, [governanceState]);
   const largeGraphPerformance = useMemo(() => readinessState?.performance
     ? `${readinessState.performance.nodeCount}/100 nodes, ${readinessState.performance.edgeCount} edges, ${readinessState.performance.status}`
-    : `${draft.nodes.length}/100 nodes visible; React Flow keeps canvas interaction stable.`, [draft.nodes.length, readinessState]);
+    : `${draft.nodes.length}/100 nodes visible; FlowGram keeps canvas interaction stable.`, [draft.nodes.length, readinessState]);
   const virtualizedRunLogs = useMemo(() => readinessState?.virtualizedLogs
     ? `${readinessState.virtualizedLogs.rows?.length || 0}/${readinessState.virtualizedLogs.total || 0} virtualized log rows loaded`
     : `${streamingLogRows.length} log rows ready for virtualized rendering.`, [readinessState, streamingLogRows.length]);

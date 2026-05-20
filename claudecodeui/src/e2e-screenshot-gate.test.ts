@@ -41,7 +41,7 @@ describe('E2E screenshot evidence gate', () => {
       'REQ-057-real-workflow-editor.png',
       'REQ-057-real-workflow-approval.png',
       'REQ-057-real-workflow-completed-history.png',
-      'REQ-081-editor-react-flow-canvas.png',
+      'REQ-081-editor-flowgram-canvas.png',
       'REQ-081-library-template-gallery.png',
       'REQ-081-inspector-node-config.png',
       'REQ-081-run-console-approval.png',
