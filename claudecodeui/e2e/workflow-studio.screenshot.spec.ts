@@ -140,6 +140,11 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-primary-actions')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-human-feedback')).toContainText(/No node selected|Node selected/);
+  await screenshot(page, 'BUG-UI-012-workflow-simple-default.png');
+  await page.getByTestId('workflow-flowgram-more-toggle').click();
+  await expect(page.getByTestId('workflow-flowgram-more-actions')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-shortcut-hints')).toBeVisible();
   await page.getByTestId('workflow-flowgram-zoom-in').click();
   await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Zoomed in');
@@ -150,8 +155,10 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await screenshot(page, 'REQ-213-flowgram-operation-toolbar.png');
   await screenshot(page, 'BUG-UI-011-flowgram-visual-parity.png');
   await page.getByTestId(/workflow-flowgram-node-/).first().click();
-  await expect(page.getByTestId('workflow-flowgram-selection-panel')).toContainText('Explore Subagent');
+  await expect(page.getByTestId('workflow-flowgram-human-feedback')).toContainText('Node selected');
+  await expect(page.getByTestId('workflow-flowgram-selection-panel')).toContainText('Node selected');
   await screenshot(page, 'REQ-214-flowgram-selection-panel.png');
+  await screenshot(page, 'BUG-UI-012-workflow-simple-selected.png');
   await expect(page.getByTestId('workflow-flowgram-line-insert').first()).toBeVisible();
   await screenshot(page, 'REQ-183-workgraph-command-center.png');
 

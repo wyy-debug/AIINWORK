@@ -64,6 +64,14 @@ describe('WorkflowStudio source contract', () => {
     expect(operationsSource).toContain('FlowGramSelectionOperationPanel');
     expect(operationsSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
     expect(operationsSource).toContain('data-testid="workflow-flowgram-selection-panel"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-primary-actions"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-more-actions"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-human-feedback"');
+    expect(operationsSource).toContain('isMoreOpen');
+    expect(operationsSource).toContain('No node selected');
+    expect(operationsSource).toContain('Node selected');
+    expect(operationsSource).not.toContain('Ctrl/Cmd D duplicate');
+    expect(operationsSource).not.toContain('Ctrl/Cmd 0 fit');
 
     expect(registrySource).toContain('flowGramWorkflowNodeTypes');
     expect(registrySource).toContain('onAdd');
@@ -168,6 +176,9 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).toContain('zoomOut');
     expect(flowGramSource).toContain('autoLayout');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-primary-actions"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-more-actions"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-human-feedback"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-shortcut-hints"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-feedback"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-selection-panel"');

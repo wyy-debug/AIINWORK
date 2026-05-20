@@ -12,6 +12,7 @@ import {
   Keyboard,
   LayoutGrid,
   LocateFixed,
+  MoreHorizontal,
   MousePointer2,
   Plus,
   Route,
@@ -43,12 +44,15 @@ type FlowGramOperationToolbarProps = {
   lineType: string;
   interactionMode: string;
   operationFeedback: string;
+  humanFeedback: string;
+  isMoreOpen: boolean;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitView: () => void;
   onAutoLayout: () => void;
   onSwitchLineType: () => void;
   onOpenNodePanel: () => void;
+  onToggleMore: () => void;
 };
 
 type FlowGramSelectionOperationPanelProps = {
@@ -100,49 +104,81 @@ export function FlowGramOperationToolbar({
   lineType,
   interactionMode,
   operationFeedback,
+  humanFeedback,
+  isMoreOpen,
   onZoomIn,
   onZoomOut,
   onFitView,
   onAutoLayout,
   onSwitchLineType,
   onOpenNodePanel,
+  onToggleMore,
 }: FlowGramOperationToolbarProps) {
   return (
-    <div
-      className="pointer-events-auto flex h-10 items-center gap-0.5 rounded-[10px] border border-[rgba(68,83,130,0.25)] bg-white px-1 shadow-[0_2px_6px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.02)]"
-      data-testid="workflow-flowgram-operation-toolbar"
-    >
-      <OperationButton testId="workflow-flowgram-zoom-in" title="Zoom in" onClick={onZoomIn}>
-        <ZoomIn className="h-4 w-4" />
-      </OperationButton>
-      <OperationButton testId="workflow-flowgram-zoom-out" title="Zoom out" onClick={onZoomOut}>
-        <ZoomOut className="h-4 w-4" />
-      </OperationButton>
-      <OperationButton testId="workflow-flowgram-fit-view" title="Fit view" onClick={onFitView}>
-        <LocateFixed className="h-4 w-4" />
-      </OperationButton>
-      <OperationButton testId="workflow-flowgram-auto-layout" title="Auto layout" onClick={onAutoLayout}>
-        <LayoutGrid className="h-4 w-4" />
-      </OperationButton>
-      <OperationButton testId="workflow-flowgram-line-type" title={`Switch line type: ${operationLabel(lineType)}`} onClick={onSwitchLineType}>
-        <Route className="h-4 w-4" />
-      </OperationButton>
-      <OperationButton testId="workflow-flowgram-add-node-operation" title="Add node" onClick={onOpenNodePanel}>
-        <Plus className="h-4 w-4" />
-      </OperationButton>
-      <div className="mx-1 hidden h-4 w-px bg-[rgba(68,83,130,0.18)] md:block" />
-      <div className="hidden h-7 min-w-[48px] items-center justify-center rounded-lg border border-[rgba(68,83,130,0.22)] px-2 text-[11px] text-slate-600 md:flex" data-testid="workflow-flowgram-zoom-state">
-        {zoomPercent}%
+    <div className="pointer-events-auto flex flex-col gap-1.5" data-testid="workflow-flowgram-operation-toolbar">
+      <div
+        className="flex h-11 items-center gap-1 rounded-[12px] border border-[rgba(68,83,130,0.22)] bg-white px-1.5 shadow-[0_2px_6px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.02)]"
+        data-testid="workflow-flowgram-primary-actions"
+      >
+        <button
+          type="button"
+          data-testid="workflow-flowgram-add-node-operation"
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenNodePanel();
+          }}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add
+        </button>
+        <OperationButton testId="workflow-flowgram-fit-view" title="Fit view" onClick={onFitView}>
+          <LocateFixed className="h-4 w-4" />
+        </OperationButton>
+        <div className="hidden h-7 min-w-[46px] items-center justify-center rounded-lg border border-[rgba(68,83,130,0.18)] px-2 text-[11px] text-slate-600 md:flex" data-testid="workflow-flowgram-zoom-state">
+          {zoomPercent}%
+        </div>
+        <OperationButton testId="workflow-flowgram-more-toggle" title="More canvas actions" onClick={onToggleMore}>
+          <MoreHorizontal className="h-4 w-4" />
+        </OperationButton>
       </div>
-      <div className="hidden max-w-[72px] truncate rounded-lg px-2 text-[11px] text-slate-500 lg:block" data-testid="workflow-flowgram-line-type-state">
-        {operationLabel(lineType)}
+      <div className="inline-flex h-7 max-w-[260px] items-center rounded-[9px] border border-[rgba(68,83,130,0.16)] bg-white/90 px-2 text-[11px] text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.04)]" data-testid="workflow-flowgram-human-feedback">
+        <span className="truncate">{humanFeedback} · {operationFeedback}</span>
       </div>
-      <div className="hidden items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-slate-500 xl:flex" data-testid="workflow-flowgram-interaction-mode">
-        <MousePointer2 className="h-3 w-3" />
-        <span>{operationLabel(interactionMode)}</span>
-      </div>
-      <div className="mx-1 hidden h-4 w-px bg-[rgba(68,83,130,0.18)] lg:block" />
-      <div className="hidden max-w-[108px] truncate rounded-lg px-1.5 text-[11px] text-slate-500 lg:block" data-testid="workflow-flowgram-operation-feedback">
+      {isMoreOpen && (
+        <div
+          className="flex w-fit items-center gap-0.5 rounded-[12px] border border-[rgba(68,83,130,0.22)] bg-white p-1 shadow-[0_6px_18px_rgba(15,23,42,0.08)]"
+          data-testid="workflow-flowgram-more-actions"
+        >
+          <OperationButton testId="workflow-flowgram-zoom-in" title="Zoom in" onClick={onZoomIn}>
+            <ZoomIn className="h-4 w-4" />
+          </OperationButton>
+          <OperationButton testId="workflow-flowgram-zoom-out" title="Zoom out" onClick={onZoomOut}>
+            <ZoomOut className="h-4 w-4" />
+          </OperationButton>
+          <OperationButton testId="workflow-flowgram-auto-layout" title="Auto layout" onClick={onAutoLayout}>
+            <LayoutGrid className="h-4 w-4" />
+          </OperationButton>
+          <OperationButton testId="workflow-flowgram-line-type" title={`Switch line type: ${operationLabel(lineType)}`} onClick={onSwitchLineType}>
+            <Route className="h-4 w-4" />
+          </OperationButton>
+          <div className="mx-1 h-4 w-px bg-[rgba(68,83,130,0.18)]" />
+          <div className="max-w-[72px] truncate rounded-lg px-2 text-[11px] text-slate-500" data-testid="workflow-flowgram-line-type-state">
+            {operationLabel(lineType)}
+          </div>
+          <div className="hidden items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-slate-500 lg:flex" data-testid="workflow-flowgram-interaction-mode">
+            <MousePointer2 className="h-3 w-3" />
+            <span>{operationLabel(interactionMode)}</span>
+          </div>
+          <div className="hidden h-7 items-center gap-2 rounded-[8px] px-1 text-[10px] text-slate-500 xl:flex" data-testid="workflow-flowgram-shortcut-hints">
+            <Keyboard className="h-3.5 w-3.5" />
+            <span>Del</span>
+            <span>Cmd+D</span>
+            <span>Cmd+0</span>
+          </div>
+        </div>
+      )}
+      <div className="sr-only" data-testid="workflow-flowgram-operation-feedback">
         {operationFeedback}
       </div>
     </div>
@@ -158,10 +194,10 @@ export function FlowGramSelectionOperationPanel({
   onFitSelection,
 }: FlowGramSelectionOperationPanelProps) {
   const selectedLabel = selectedNode
-    ? `${selectedNode.title || selectedNode.id} / ${selectedNode.type}`
+    ? `Node selected: ${selectedNode.title || selectedNode.id}`
     : selectedEdge
-      ? `${selectedEdge.from} -> ${selectedEdge.to}`
-      : 'No canvas selection';
+      ? `Connection selected: ${selectedEdge.from} -> ${selectedEdge.to}`
+      : 'No node selected';
   const hasSelection = Boolean(selectedNode || selectedEdge);
   if (!hasSelection) return null;
 
@@ -209,6 +245,7 @@ export function FlowGramNativeOperationLayer({
   const ctx = useClientContext();
   const tools = usePlaygroundTools({ minZoom: 0.25, maxZoom: 2 });
   const [operationFeedback, setOperationFeedback] = useState('Canvas ready');
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
 
   const selectedNode = useMemo(
     () => workflow.nodes.find((node) => node.id === selectedNodeId) || null,
@@ -262,6 +299,12 @@ export function FlowGramNativeOperationLayer({
     }
   }, [completeOperation, ctx, onAddNodeFallback]);
 
+  const humanFeedback = selectedNode
+    ? `Node selected: ${selectedNode.title || selectedNode.id}`
+    : selectedEdge
+      ? 'Connection selected'
+      : 'No node selected';
+
   return (
     <div className="pointer-events-none absolute inset-0 z-30" data-testid="workflow-flowgram-operation-layer">
       <div className="absolute left-3 top-12">
@@ -270,19 +313,16 @@ export function FlowGramNativeOperationLayer({
           lineType={String(tools.lineType || 'default')}
           interactionMode={String(tools.interactiveType || 'mouse')}
           operationFeedback={operationFeedback}
+          humanFeedback={humanFeedback}
+          isMoreOpen={isMoreOpen}
           onZoomIn={zoomIn}
           onZoomOut={zoomOut}
           onFitView={fitView}
           onAutoLayout={autoLayout}
           onSwitchLineType={switchLineType}
           onOpenNodePanel={openNodePanel}
+          onToggleMore={() => setIsMoreOpen((current) => !current)}
         />
-      </div>
-      <div className="absolute left-3 top-[94px] hidden h-7 items-center gap-2 rounded-[8px] border border-[rgba(68,83,130,0.18)] bg-white/90 px-2 text-[10px] text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.05)] md:flex" data-testid="workflow-flowgram-shortcut-hints">
-        <Keyboard className="h-3.5 w-3.5" />
-        <span>Del delete</span>
-        <span>⌘D duplicate</span>
-        <span>⌘0 fit</span>
       </div>
       <div className="absolute bottom-[78px] right-4">
         <FlowGramSelectionOperationPanel
