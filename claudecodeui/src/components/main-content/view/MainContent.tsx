@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
@@ -8,7 +8,6 @@ import ActionsPanel from '../../actions/view/ActionsPanel';
 import BrowserPanel from '../../browser/view/BrowserPanel';
 import ArtifactsPanel from '../../artifacts/view/ArtifactsPanel';
 import SubagentsWorkspace from '../../subagents/view/SubagentsWorkspace';
-import WorkflowStudio from '../../workflows/view/WorkflowStudio';
 import GlobalCommandMenu from '../../command-menu/view/GlobalCommandMenu';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
@@ -21,6 +20,8 @@ import type { Project } from '../../../types/app';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+
+const WorkflowStudio = lazy(() => import('../../workflows/view/WorkflowStudio'));
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -241,10 +242,16 @@ function MainContent({
 
           {visibleActiveTab === 'workflows' && (
             <div className="h-full overflow-hidden">
-              <WorkflowStudio
-                selectedProject={selectedProject}
-                sessionId={selectedSession?.id || null}
-              />
+              <Suspense fallback={(
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground" data-testid="workflow-route-lazy-boundary">
+                  Loading Workflow Studio...
+                </div>
+              )}>
+                <WorkflowStudio
+                  selectedProject={selectedProject}
+                  sessionId={selectedSession?.id || null}
+                />
+              </Suspense>
             </div>
           )}
         </div>

@@ -30,6 +30,54 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).not.toContain('createRuntimePlugin');
   });
 
+  it('uses FlowGram-native form, variable, line insertion, history, runtime state, and route loading', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const mainContentSource = readFileSync(resolve(currentDir, '../../main-content/view/MainContent.tsx'), 'utf8');
+
+    expect(flowGramSource).toContain('export type WorkflowFlowGramEditorHandle');
+    expect(flowGramSource).toContain('export type WorkflowFlowGramFormValues');
+    expect(flowGramSource).toContain('export type WorkflowFlowGramVariableCatalog');
+    expect(flowGramSource).toContain('export type WorkflowRuntimeVisualState');
+    expect(flowGramSource).toContain('export type WorkflowLineInsertRequest');
+
+    expect(flowGramSource).toContain('buildWorkflowFlowGramFormValues');
+    expect(flowGramSource).toContain('buildWorkflowFlowGramVariableCatalog');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-form-inspector"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-variable-catalog"');
+    expect(flowGramSource).not.toContain('data-testid="workflow-flowgram-form-meta"');
+    expect(flowGramSource).not.toContain('render: () => <div className="hidden"');
+
+    expect(flowGramSource).toContain('renderInsideLine');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-line-insert"');
+    expect(flowGramSource).not.toContain('workflow-line-add-node-overlay');
+    expect(flowGramSource).not.toContain('edgeMidpoint');
+
+    expect(flowGramSource).toContain('useImperativeHandle');
+    expect(flowGramSource).toContain('ctx.history.undo');
+    expect(flowGramSource).toContain('ctx.history.redo');
+    expect(flowGramSource).toContain('ctx.history.canUndo');
+    expect(flowGramSource).toContain('ctx.history.canRedo');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-history-state"');
+    expect(studioSource).toContain('flowGramEditorRef');
+    expect(studioSource).toContain('flowGramEditorRef.current?.undo');
+    expect(studioSource).toContain('flowGramEditorRef.current?.redo');
+    expect(studioSource).toContain('>Undo<');
+    expect(studioSource).toContain('>Redo<');
+    expect(studioSource).not.toContain('Definition undo');
+    expect(studioSource).not.toContain('Definition redo');
+
+    expect(flowGramSource).toContain('runtimeVisualState');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-runtime-node-state"');
+    expect(flowGramSource).toContain('setLineClassName');
+    expect(flowGramSource).toContain('isErrorLine');
+    expect(flowGramSource).toContain('isDisabledLine');
+
+    expect(mainContentSource).not.toContain("import WorkflowStudio from '../../workflows/view/WorkflowStudio'");
+    expect(mainContentSource).toContain("lazy(() => import('../../workflows/view/WorkflowStudio'))");
+    expect(mainContentSource).toContain('data-testid="workflow-route-lazy-boundary"');
+  });
+
   it('exposes visual DAG editor, runner, approval, and history hooks', () => {
     const source = [
       readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8'),
@@ -114,7 +162,7 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-edge-route-style"');
     expect(source).toContain('data-testid="workflow-edge-branch-labels"');
     expect(source).toContain('data-testid="workflow-edge-insert-node"');
-    expect(source).toContain('data-testid="workflow-line-add-node"');
+    expect(source).toContain('data-testid="workflow-flowgram-line-insert"');
     expect(source).toContain('insertNodeOnEdge');
     expect(source).toContain('data-testid="workflow-minimap-filters"');
     expect(source).toContain('data-testid="workflow-graph-validation-badges"');

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -61,6 +61,7 @@ import {
 } from '../model/workflowNodeRegistry';
 import { buildWorkGraphRuntimeState } from '../model/workflowRuntimeStateBridge';
 import { buildWorkflowMigrationDoctorReport } from '../model/workflowMigrationDoctor';
+import type { WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor';
 
 const WorkflowFlowGramEditor = lazy(() => import('./WorkflowFlowGramEditor'));
 
@@ -290,6 +291,7 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 }
 
 export default function WorkflowStudio({ selectedProject, sessionId = null }: WorkflowStudioProps) {
+  const flowGramEditorRef = useRef<WorkflowFlowGramEditorHandle | null>(null);
   const [activeView, setActiveView] = useState<StudioView>('Home');
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
@@ -375,6 +377,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const workGraphCompatibility = useMemo(() => analyzeWorkflowGraphCompatibility(draft, nodeTypeDefinitions), [draft, nodeTypeDefinitions]);
   const localMigrationDoctor = useMemo(() => buildWorkflowMigrationDoctorReport(workflows.length > 0 ? workflows : [draft], nodeTypeDefinitions), [draft, nodeTypeDefinitions, workflows]);
   const selectedWorkGraphRuntimeState = useMemo(() => buildWorkGraphRuntimeState(draft, selectedRun), [draft, selectedRun]);
+  const shouldLoadExtendedWorkflowState = activeView === 'Library' || activeView === 'Runs';
   const schemaVersion = selectedNodeDefinition?.ui?.schemaVersion || selectedNode?.config?.schemaVersion || '1.0';
   const requiredFieldErrors = useMemo(() => {
     if (!selectedNode) return [];
@@ -672,21 +675,19 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const loadData = useCallback(async () => {
     setError('');
-    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse, approvalsResponse, readinessResponse] = await Promise.all([
+    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse, approvalsResponse] = await Promise.all([
       api.workflows(),
       api.workflowRuns({ limit: 25 }),
       api.agents(false, 'all'),
       api.workflowNodeTypes(),
       api.workflowApprovals(),
-      api.workflowBenchmarkReadiness(),
     ]);
-    const [workflowsData, runsData, agentsData, nodeTypesData, approvalsData, readinessData] = await Promise.all([
+    const [workflowsData, runsData, agentsData, nodeTypesData, approvalsData] = await Promise.all([
       workflowsResponse.json(),
       runsResponse.json(),
       agentsResponse.json(),
       nodeTypesResponse.json(),
       approvalsResponse.json(),
-      readinessResponse.json(),
     ]);
     if (!workflowsResponse.ok) throw new Error(workflowsData?.error || 'Failed to load workflows');
     if (!runsResponse.ok) throw new Error(runsData?.error || 'Failed to load workflow runs');
@@ -698,7 +699,6 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setAgents(agentsData.agents || []);
     setNodeTypeDefinitions(nodeTypesData.nodeTypes || []);
     setApprovalRequests(approvalsResponse.ok ? approvalsData.approvals || [] : []);
-    setReleaseReadiness(readinessResponse.ok ? readinessData.readiness || null : null);
     if (!selectedWorkflowId && loadedWorkflows[0]) {
       setSelectedWorkflowId(loadedWorkflows[0].id);
       setDraft(loadedWorkflows[0]);
@@ -720,7 +720,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   }, [loadNodeTypes, nodeTypeDefinitions.length]);
 
   useEffect(() => {
-    if (!draft.id) return;
+    if (!draft.id || !shouldLoadExtendedWorkflowState) return;
     let cancelled = false;
     const loadSecurity = async () => {
       const [securityResponse, auditResponse, bridgeResponse, toolsResponse, mcpResponse, templateResponse, upgradeResponse, exportPreviewResponse, historyResponse, governanceResponse, analyticsResponse, auditSearchResponse, policyResponse, performanceResponse, offlineResponse, retentionResponse, sizeGuardResponse, smokeMatrixResponse, doctorResponse, productionResponse] = await Promise.all([
@@ -768,6 +768,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         productionResponse.json(),
       ]);
       if (cancelled) return;
+      const readinessResponse = await api.workflowBenchmarkReadiness();
+      const readinessData = await readinessResponse.json();
+      if (cancelled) return;
+      if (readinessResponse.ok) setReleaseReadiness(readinessData.readiness || null);
       if (securityResponse.ok) {
         setWorkflowSecurity(securityData.security || null);
         setSecretVaultRefs(Array.isArray(securityData.security?.secretRefs) ? securityData.security.secretRefs : []);
@@ -835,7 +839,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     return () => {
       cancelled = true;
     };
-  }, [draft.id, selectedRun?.id]);
+  }, [draft.id, selectedRun?.id, shouldLoadExtendedWorkflowState]);
 
   useEffect(() => {
     writeStoredIds(favoriteStorageKey, favoriteWorkflowIds);
@@ -945,7 +949,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     commitDraft((current) => ({ ...current, ...patch }));
   }, [commitDraft]);
 
-  const undoWorkflowEdit = useCallback(() => {
+  const undoWorkflowEdit = useCallback(async () => {
+    if (await flowGramEditorRef.current?.undo()) return;
     setHistoryPast((history) => {
       const previous = history.at(-1);
       if (!previous) return history;
@@ -958,7 +963,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     });
   }, [draft]);
 
-  const redoWorkflowEdit = useCallback(() => {
+  const redoWorkflowEdit = useCallback(async () => {
+    if (await flowGramEditorRef.current?.redo()) return;
     setHistoryFuture((future) => {
       const next = future[0];
       if (!next) return future;
@@ -969,7 +975,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       setSelectedEdgeId('');
       return future.slice(1);
     });
-  }, []);
+  }, [draft]);
 
   const updateNode = useCallback((nodeId: string, patch: Partial<WorkflowNode>) => {
     commitDraft((current) => ({
@@ -1677,6 +1683,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const renderCanvas = (run: WorkflowRun | null = null) => {
     const selectedCount = selectedNodeIds.length;
+    const canUndoWorkflow = historyPast.length > 0 || Boolean(flowGramEditorRef.current?.canUndo());
+    const canRedoWorkflow = historyFuture.length > 0 || Boolean(flowGramEditorRef.current?.canRedo());
     return (
       <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2" data-testid="workflow-canvas-controls">
@@ -1694,8 +1702,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               Subgraph
             </button>
             <div className="inline-flex items-center gap-1 rounded-md border border-border bg-background p-1" data-testid="workflow-undo-redo">
-              <button type="button" onClick={undoWorkflowEdit} disabled={historyPast.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Definition undo</button>
-              <button type="button" onClick={redoWorkflowEdit} disabled={historyFuture.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Definition redo</button>
+              <button type="button" onClick={() => void undoWorkflowEdit()} disabled={!canUndoWorkflow} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Undo</button>
+              <button type="button" onClick={() => void redoWorkflowEdit()} disabled={!canRedoWorkflow} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Redo</button>
             </div>
             <label className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs" data-testid="workflow-layout-mode">
               Layout
@@ -1743,8 +1751,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         )}
         >
           <WorkflowFlowGramEditor
+            ref={flowGramEditorRef}
             workflow={draft}
             selectedRun={selectedRun}
+            runtimeVisualState={selectedWorkGraphRuntimeState}
             selectedNodeId={selectedNodeId}
             selectedEdgeId={selectedEdgeId}
             onWorkflowChange={(next) => commitDraft(() => next)}
@@ -1818,8 +1828,8 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <div className="mt-3 grid gap-2 text-sm" data-testid="workflow-keyboard-shortcuts">
                 {[
                   ['Ctrl/Cmd K', 'Open command palette'],
-                  ['Ctrl/Cmd Z', 'Definition undo'],
-                  ['Ctrl/Cmd Y', 'Definition redo'],
+                  ['Ctrl/Cmd Z', 'Undo'],
+                  ['Ctrl/Cmd Y', 'Redo'],
                   ['Ctrl/Cmd C', 'Copy selected nodes'],
                   ['Ctrl/Cmd V', 'Paste copied nodes'],
                   ['Ctrl/Cmd D', 'Duplicate selected subgraph'],

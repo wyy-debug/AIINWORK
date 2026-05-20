@@ -139,7 +139,7 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await expect(page.getByTestId('workflow-migration-doctor-local')).toContainText('Migration doctor');
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
-  await expect(page.getByTestId('workflow-line-add-node').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-line-insert').first()).toBeVisible();
   await screenshot(page, 'REQ-183-workgraph-command-center.png');
 
   await page.getByTitle('Keyboard shortcuts').click();
@@ -147,7 +147,7 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await screenshot(page, 'REQ-183-plugin-shortcuts-minimap.png');
   await page.keyboard.press('Escape');
 
-  await page.getByTestId('workflow-line-add-node').first().click();
+  await page.getByTestId('workflow-flowgram-line-insert').first().click();
   await expect(page.getByTestId('workflow-form-meta-inspector')).toBeVisible();
   await expect(page.getByTestId('workflow-flow-reference-validation')).toContainText('Typed references');
   await expect(page.getByTestId('workflow-flowing-lines')).toBeVisible();

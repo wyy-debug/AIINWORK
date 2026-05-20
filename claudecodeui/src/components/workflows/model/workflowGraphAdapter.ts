@@ -424,7 +424,7 @@ export function flowGramWorkflowJSONToWorkflowDefinition(
       : undefined;
     const source = base || workflowNode;
     if (!source) return undefined;
-    return {
+    return applyFlowValues({
       ...source,
       title: asText(node.data?.title, source.title),
       description: asText(node.data?.description, source.description),
@@ -433,7 +433,7 @@ export function flowGramWorkflowJSONToWorkflowDefinition(
         ...cloneRecord(source.config),
         ...cloneRecord(node.data?.config),
       },
-    } satisfies WorkflowNode;
+    } satisfies WorkflowNode, cloneRecord(node.data?.flowValues) as Record<string, WorkflowFlowValue>);
   }).filter(Boolean) as WorkflowNode[];
 
   return {
