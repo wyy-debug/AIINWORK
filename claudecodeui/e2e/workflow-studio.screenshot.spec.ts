@@ -265,3 +265,27 @@ test('BUG-UI-022 to BUG-UI-024 capture modern desktop Workflow Studio polish @sc
   await expect(page.getByTestId('workflow-node-modern-block').first()).toBeVisible();
   await screenshot(page, 'BUG-UI-024-canvas-surface-node-polish.png');
 });
+
+test('BUG-UI-025 to BUG-UI-027 capture low-noise desktop Workflow Studio defaults @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+
+  await expect(page.getByTestId('workflow-quiet-default-header')).toBeVisible();
+  await expect(page.getByTestId('workflow-quiet-meta')).toBeVisible();
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('Profile build');
+  await screenshot(page, 'BUG-UI-025-quiet-default-header.png');
+
+  await expect(page.getByTestId('workflow-canvas-first-rail')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-metadata-details')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-setup-strip')).not.toContainText('Permission');
+  await screenshot(page, 'BUG-UI-026-canvas-first-simple-mode.png');
+
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-inspector-low-noise-defaults')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-advanced-sections')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-more-actions')).toBeVisible();
+  await screenshot(page, 'BUG-UI-027-low-noise-inspector.png');
+});

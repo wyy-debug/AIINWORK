@@ -552,4 +552,22 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).not.toContain('BUG-UI-023-mobile');
     expect(screenshotSpec).not.toContain('BUG-UI-024-mobile');
   });
+
+  it('keeps the default Workflow Studio view low-noise and canvas first', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(studioSource).toContain('data-testid="workflow-quiet-default-header"');
+    expect(studioSource).toContain('data-testid="workflow-quiet-meta"');
+    expect(studioSource).toContain('data-testid="workflow-canvas-first-rail"');
+    expect(studioSource).toContain('data-testid="workflow-editor-metadata-details"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-low-noise-defaults"');
+    expect(studioSource).toContain('data-density="compact"');
+    expect(screenshotSpec).toContain('BUG-UI-025-quiet-default-header.png');
+    expect(screenshotSpec).toContain('BUG-UI-026-canvas-first-simple-mode.png');
+    expect(screenshotSpec).toContain('BUG-UI-027-low-noise-inspector.png');
+    expect(screenshotSpec).not.toContain('BUG-UI-025-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-026-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-027-mobile');
+  });
 });
