@@ -146,6 +146,19 @@ const customPythonNodeType = {
   outputSchema: { fields: [{ name: 'result', type: 'object', label: 'Result' }, { name: 'status', type: 'string', label: 'Status' }] },
 };
 
+const incompatibleCustomPythonManifest = {
+  ...customPythonManifest,
+  version: '2.0.0',
+  configSchema: {
+    type: 'object',
+    properties: {
+      mode: { type: 'number', title: 'Format mode' },
+    },
+    required: [],
+  },
+  outputSchema: { type: 'object', properties: { result: { type: 'object', title: 'Result' } } },
+};
+
 const installedPythonNodePackage = {
   id: customPythonManifest.id,
   enabled: true,
@@ -184,7 +197,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean } = {}) {
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean } = {}) {
   let runState = options.previewConsistency === 'matched'
     ? previewMatchedRun
     : options.previewConsistency === 'changed'
@@ -253,7 +266,7 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
       return json(route, { success: true, removed: true, packageId: customPythonManifest.id });
     }
     if (path === '/api/workflow-node-packages/generate-draft') {
-      return json(route, { success: true, draft: { status: 'draft', prompt: 'Create formatter node', manifest: customPythonManifest } }, 201);
+      return json(route, { success: true, draft: { status: 'draft', prompt: 'Create formatter node', manifest: options.incompatibleUpgrade ? incompatibleCustomPythonManifest : customPythonManifest } }, 201);
     }
     if (path === '/api/workflow-node-packages/validate-draft') {
       return json(route, {
@@ -279,6 +292,20 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
       });
     }
     if (path === '/api/workflow-node-packages/install') {
+      if (options.incompatibleUpgrade) {
+        return json(route, {
+          success: false,
+          error: 'Workflow node package upgrade is incompatible',
+          compatibility: {
+            compatible: false,
+            reasons: [
+              { code: 'config_field_type_changed', field: 'mode', from: 'select', to: 'number', message: 'config field changed type: mode' },
+              { code: 'output_field_removed', field: 'status', message: 'output field was removed: status' },
+            ],
+            warnings: [],
+          },
+        }, 409);
+      }
       nodeTypes = [...builtinNodeTypes, customPythonNodeType];
       installedPackages = [{ id: customPythonManifest.id, enabled: true, status: 'ready', manifest: customPythonManifest, definition: customPythonNodeType }];
       runState = customRun;
@@ -357,6 +384,30 @@ test('REQ-211C captures custom node Package Manager impact and lifecycle state @
   await page.getByTestId('workflow-node-package-disable').click();
   await expect(page.getByTestId('workflow-node-package-state')).toContainText('disabled / disabled');
   await screenshot(page, 'REQ-211C-package-manager-disabled.png');
+});
+
+test('REQ-211D captures package lifecycle and incompatible upgrade evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { withInstalledNodePackage: true, incompatibleUpgrade: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-generate-custom-node').first().click();
+  await expect(page.getByTestId('workflow-node-package-manager')).toBeVisible();
+  await expect(page.getByTestId('workflow-node-package-state')).toContainText('enabled / ready');
+  await page.getByRole('button', { name: 'Impact' }).click();
+  await expect(page.getByTestId('workflow-node-package-impact-report')).toContainText('Workflows 1');
+  await screenshot(page, 'REQ-211D-impact-report.png');
+  await page.getByTestId('workflow-node-package-disable').click();
+  await expect(page.getByTestId('workflow-node-package-state')).toContainText('disabled / disabled');
+  await screenshot(page, 'REQ-211D-disabled-state.png');
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-result')).toContainText('Passed');
+  await page.getByRole('button', { name: 'Install node' }).click();
+  await expect(page.getByTestId('workflow-node-package-upgrade-warning')).toContainText('Incompatible package upgrade');
+  await expect(page.getByTestId('workflow-node-package-upgrade-warning')).toContainText('status');
+  await screenshot(page, 'REQ-211D-incompatible-upgrade.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {

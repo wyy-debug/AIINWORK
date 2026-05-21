@@ -387,6 +387,65 @@ function isNodePackagePaletteAvailable(nodePackage = {}) {
     && (status === 'ready' || status === 'update_available');
 }
 
+function mapSchemaFields(fields = []) {
+  return new Map((Array.isArray(fields) ? fields : [])
+    .map((field) => asObject(field))
+    .filter((field) => normalizeText(field.name, '', 120))
+    .map((field) => [normalizeText(field.name, '', 120), {
+      name: normalizeText(field.name, '', 120),
+      type: normalizeText(field.type, 'json', 40),
+      required: Boolean(field.required),
+    }]));
+}
+
+function compareNodePackageFields(previousFields, nextFields, group) {
+  const reasons = [];
+  const previous = mapSchemaFields(previousFields);
+  const next = mapSchemaFields(nextFields);
+  for (const [name, previousField] of previous.entries()) {
+    const nextField = next.get(name);
+    if (!nextField) {
+      reasons.push({ code: `${group}_field_removed`, field: name, message: `${group} field was removed: ${name}` });
+      continue;
+    }
+    if (previousField.type !== nextField.type) {
+      reasons.push({ code: `${group}_field_type_changed`, field: name, from: previousField.type, to: nextField.type, message: `${group} field changed type: ${name}` });
+    }
+  }
+  return reasons;
+}
+
+function schemaPropertiesToFields(schema = {}) {
+  return Object.entries(asObject(schema.properties)).map(([name, value]) => ({
+    name,
+    type: normalizeText(asObject(value).type, 'json', 40),
+    required: Array.isArray(schema.required) && schema.required.includes(name),
+  }));
+}
+
+function buildNodePackageCompatibility(previousPackage = {}, nextPackage = {}) {
+  const reasons = [];
+  const warnings = [];
+  const previousType = normalizeText(previousPackage.definition?.type || previousPackage.manifest?.type, '', 120);
+  const nextType = normalizeText(nextPackage.definition?.type || nextPackage.manifest?.type, '', 120);
+  if (previousType && nextType && previousType !== nextType) {
+    reasons.push({ code: 'package_type_changed', field: 'type', from: previousType, to: nextType, message: `Package node type changed: ${previousType} -> ${nextType}` });
+  }
+  reasons.push(...compareNodePackageFields(previousPackage.definition?.configSchema?.fields || [], nextPackage.definition?.configSchema?.fields || [], 'config'));
+  reasons.push(...compareNodePackageFields(schemaPropertiesToFields(previousPackage.manifest?.inputSchema), schemaPropertiesToFields(nextPackage.manifest?.inputSchema), 'input'));
+  reasons.push(...compareNodePackageFields(previousPackage.definition?.outputSchema?.fields || [], nextPackage.definition?.outputSchema?.fields || [], 'output'));
+  const previousDependencies = stableJson(previousPackage.manifest?.dependencies || previousPackage.dependencies || {});
+  const nextDependencies = stableJson(nextPackage.manifest?.dependencies || nextPackage.dependencies || {});
+  if (previousDependencies !== nextDependencies) {
+    warnings.push({ code: 'dependencies_changed', message: 'Package dependencies changed; verify install environment before running workflows.' });
+  }
+  return {
+    compatible: reasons.length === 0,
+    reasons,
+    warnings,
+  };
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -2342,10 +2401,28 @@ export function createWorkflowStudioStore({
     await load();
     const normalized = normalizeNodePackage(input);
     const index = nodePackages.findIndex((item) => item.id === normalized.id);
-    if (index >= 0) nodePackages[index] = normalized;
-    else nodePackages.push(normalized);
+    if (index >= 0) {
+      const current = nodePackages[index];
+      const compatibility = buildNodePackageCompatibility(current, normalized);
+      if (!compatibility.compatible) {
+        const error = new Error('Workflow node package upgrade is incompatible');
+        error.statusCode = 409;
+        error.compatibility = compatibility;
+        throw error;
+      }
+      nodePackages[index] = {
+        ...normalized,
+        installedAt: current.installedAt || normalized.installedAt,
+        compatibility,
+      };
+    } else {
+      nodePackages.push({
+        ...normalized,
+        compatibility: { compatible: true, reasons: [], warnings: [] },
+      });
+    }
     await saveWorkflows();
-    return clone(normalized);
+    return clone(nodePackages.find((item) => item.id === normalized.id) || normalized);
   }
 
   async function setNodePackageLifecycle(packageId, lifecycleState) {

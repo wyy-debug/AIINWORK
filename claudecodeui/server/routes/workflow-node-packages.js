@@ -9,6 +9,8 @@ function sendNodePackageError(res, error, fallbackStatus = 500, fallbackMessage 
   res.status(error?.statusCode || fallbackStatus).json({
     success: false,
     error: error?.message || fallbackMessage,
+    compatibility: error?.compatibility || null,
+    validation: error?.validation || null,
   });
 }
 

@@ -150,6 +150,12 @@ type WorkflowNodePackageImpactReport = {
   };
 };
 
+type WorkflowNodePackageCompatibility = {
+  compatible?: boolean;
+  reasons?: Array<{ code?: string; field?: string; from?: string; to?: string; message?: string }>;
+  warnings?: Array<{ code?: string; message?: string }>;
+};
+
 type WorkflowDryRunPreview = {
   workflowId?: string;
   nodeCount?: number;
@@ -478,6 +484,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [customNodeValidation, setCustomNodeValidation] = useState<{ valid?: boolean; errors?: Array<{ code?: string; message?: string }>; warnings?: Array<{ code?: string; message?: string }> } | null>(null);
   const [customNodeTestResult, setCustomNodeTestResult] = useState<WorkflowPythonNodeTestResult | null>(null);
   const [customNodeInstallMessage, setCustomNodeInstallMessage] = useState('');
+  const [customNodeUpgradeCompatibility, setCustomNodeUpgradeCompatibility] = useState<WorkflowNodePackageCompatibility | null>(null);
   const [workflowNodePackages, setWorkflowNodePackages] = useState<WorkflowNodePackageRecord[]>([]);
   const [nodePackageImpactReports, setNodePackageImpactReports] = useState<Record<string, WorkflowNodePackageImpactReport>>({});
   const [nodePackageActionMessage, setNodePackageActionMessage] = useState('');
@@ -1757,6 +1764,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setIsBusy(true);
     setError('');
     setCustomNodeInstallMessage('');
+    setCustomNodeUpgradeCompatibility(null);
     setCustomNodeTestResult(null);
     try {
       const response = await api.generateWorkflowNodePackageDraft({
@@ -1823,10 +1831,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     setIsBusy(true);
     setError('');
     setCustomNodeInstallMessage('');
+    setCustomNodeUpgradeCompatibility(null);
     try {
       const response = await api.installWorkflowNodePackage(customNodeDraft.manifest);
       const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || 'Failed to install custom node');
+      if (!response.ok) {
+        setCustomNodeUpgradeCompatibility(data?.compatibility || null);
+        throw new Error(data?.error || 'Failed to install custom node');
+      }
       setCustomNodeInstallMessage(`${data.package?.definition?.label || customNodeDraft.manifest.label || 'Custom node'} installed`);
       await loadNodeTypes();
       await loadWorkflowNodePackages();
@@ -2409,6 +2421,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                       {customNodeValidation && (
                         <div className={cn('mt-3 rounded border px-2 py-1 text-xs', customNodeValidation.valid ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700')}>
                           {customNodeValidation.valid ? 'Manifest contract is valid.' : (customNodeValidation.errors || []).map((item) => item.message || item.code).join(', ')}
+                        </div>
+                      )}
+                      {customNodeUpgradeCompatibility && customNodeUpgradeCompatibility.compatible === false && (
+                        <div className="mt-3 rounded border border-red-200 bg-red-50 px-2 py-2 text-xs text-red-700" data-testid="workflow-node-package-upgrade-warning">
+                          <span className="block font-semibold">Incompatible package upgrade</span>
+                          <div className="mt-1 space-y-1">
+                            {(customNodeUpgradeCompatibility.reasons || []).slice(0, 4).map((reason, index) => (
+                              <div key={`${reason.code || 'reason'}-${reason.field || index}`}>
+                                {reason.message || `${reason.code || 'schema_changed'}${reason.field ? `: ${reason.field}` : ''}`}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                       {customNodeInstallMessage && (

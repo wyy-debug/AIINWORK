@@ -601,6 +601,7 @@ describe('WorkflowStudio source contract', () => {
     expect(studioSource).toContain('data-testid="workflow-node-package-disable"');
     expect(studioSource).toContain('data-testid="workflow-node-package-enable"');
     expect(studioSource).toContain('data-testid="workflow-node-package-uninstall"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-upgrade-warning"');
     expect(studioSource).toContain('Custom');
     expect(studioSource).not.toContain('dangerouslySetInnerHTML');
     expect(screenshotSpec).toContain('REQ-207-ai-node-draft.png');
@@ -610,5 +611,8 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).toContain('REQ-207-custom-node-run-output.png');
     expect(screenshotSpec).toContain('REQ-211C-package-manager-impact.png');
     expect(screenshotSpec).toContain('REQ-211C-package-manager-disabled.png');
+    expect(screenshotSpec).toContain('REQ-211D-impact-report.png');
+    expect(screenshotSpec).toContain('REQ-211D-disabled-state.png');
+    expect(screenshotSpec).toContain('REQ-211D-incompatible-upgrade.png');
   });
 });

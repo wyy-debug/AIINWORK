@@ -1230,6 +1230,48 @@ describe('workflow studio service', () => {
     expect(missing).toMatchObject({ packageId: 'missing-node', exists: false, affected: { workflows: [], templates: [], recentRuns: [] } });
   });
 
+  test('blocks incompatible workflow node package upgrades with schema reasons', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+    });
+
+    const compatible = await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.1.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }, { name: 'prefix', label: 'Prefix', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }, { name: 'count', type: 'number' }] },
+    });
+    expect(compatible.manifest.version).toBe('1.1.0');
+    expect(compatible.compatibility).toMatchObject({ compatible: true });
+
+    await expect(store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '2.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'number' }] },
+      outputSchema: { fields: [] },
+    })).rejects.toMatchObject({
+      statusCode: 409,
+      compatibility: expect.objectContaining({
+        compatible: false,
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ code: 'config_field_type_changed', field: 'mode' }),
+          expect.objectContaining({ code: 'output_field_removed', field: 'summary' }),
+        ]),
+      }),
+    });
+    expect(store.listNodePackages()[0].manifest.version).toBe('1.1.0');
+  });
+
   test('smokes workflow templates and exposes benchmark release readiness results', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.ready();
