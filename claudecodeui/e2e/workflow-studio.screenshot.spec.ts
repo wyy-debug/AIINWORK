@@ -50,6 +50,35 @@ const waitingRun = {
   timelineEvents: [],
 };
 
+const previewMatchedRun = {
+  ...waitingRun,
+  id: 'workflow-run-preview-matched',
+  previewMatched: true,
+  previewChanged: false,
+  previewDiff: {
+    matched: true,
+    changed: false,
+    reasons: [],
+    changedNodes: [],
+  },
+};
+
+const previewChangedRun = {
+  ...waitingRun,
+  id: 'workflow-run-preview-changed',
+  previewMatched: false,
+  previewChanged: true,
+  previewDiff: {
+    matched: false,
+    changed: true,
+    reasons: ['input_changed', 'node_input_changed'],
+    changedNodes: [
+      { nodeId: 'explore', fields: ['resolvedInput'], reasons: ['node_input_changed'] },
+      { nodeId: 'approval', fields: ['permissionDecision'], reasons: ['permission_changed'] },
+    ],
+  },
+};
+
 const completedRun = {
   ...waitingRun,
   status: 'completed',
@@ -143,8 +172,12 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } = {}) {
-  let runState = waitingRun;
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed' } = {}) {
+  let runState = options.previewConsistency === 'matched'
+    ? previewMatchedRun
+    : options.previewConsistency === 'changed'
+      ? previewChangedRun
+      : waitingRun;
   let nodeTypes = [...builtinNodeTypes];
   let installedPackages: unknown[] = [];
 
@@ -242,6 +275,29 @@ test('REQ-049 captures Workflow Studio editor, runner, approval, and history @sc
   await page.getByTestId('workflow-approve-node').click();
   await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
   await screenshot(page, 'REQ-049-workflow-history-completed.png');
+});
+
+test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {
+  await installMockApi(page, { previewConsistency: 'matched' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toBeVisible();
+  await expect(page.getByTestId('workflow-preview-consistency-chip')).toContainText('Matched');
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toContainText('reviewed dry-run snapshot matches');
+  await screenshot(page, 'REQ-210C-preview-matched-run-console.png');
+});
+
+test('REQ-210C captures preview changed Run Console state @screenshot', async ({ page }) => {
+  await installMockApi(page, { previewConsistency: 'changed' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toBeVisible();
+  await expect(page.getByTestId('workflow-preview-consistency-chip')).toContainText('Review diff');
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toContainText('input_changed');
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toContainText('explore');
+  await screenshot(page, 'REQ-210C-preview-changed-run-console.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {
