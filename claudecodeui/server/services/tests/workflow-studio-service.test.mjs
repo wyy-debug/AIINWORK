@@ -437,7 +437,8 @@ describe('workflow studio service', () => {
     const run = await store.createRun('missing-mcp-flow');
 
     expect(run.status).toBe('failed');
-    expect(run.nodeRuns.mcp.error).toMatch(/MCP tool is not configured/i);
+    expect(run.nodeRuns.mcp.error).toMatch(/tool_not_found/i);
+    expect(run.nodeRuns.mcp.output.error).toEqual(expect.objectContaining({ code: 'tool_not_found' }));
   });
 
   test('subagent bridge waits for terminal status and fails terminal errors', async () => {
@@ -566,7 +567,14 @@ describe('workflow studio service', () => {
     const tools = store.getToolRegistry();
     expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(['git-native-review', 'browser-screenshot']));
     expect(store.getMcpToolCatalog('agent-bridge-flow')).toEqual([
-      expect.objectContaining({ toolName: 'redmine.get_issue', enabled: true, argumentSchema: expect.any(Object) }),
+      expect.objectContaining({
+        toolName: 'redmine.get_issue',
+        enabled: false,
+        available: false,
+        allowlisted: true,
+        diagnostic: expect.objectContaining({ code: 'tool_not_found' }),
+        argumentSchema: expect.any(Object),
+      }),
     ]);
     expect(store.buildMcpArgumentSchema('redmine.get_issue').fields).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'arguments', type: 'json' }),
@@ -1540,6 +1548,168 @@ describe('workflow studio service', () => {
     ]));
     const ids = artifactList.artifacts.map((artifact) => artifact.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test('lists workflow MCP tools with normalized argument schema and allowlist state', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      mcpToolRegistry: [
+        {
+          serverId: 'fixtures',
+          name: 'echo',
+          label: 'Fixture Echo',
+          enabled: true,
+          inputSchema: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', title: 'Text' },
+              count: { type: 'number', title: 'Count' },
+            },
+            required: ['text'],
+          },
+        },
+      ],
+    });
+    await store.upsertWorkflow({
+      id: 'mcp-catalog-flow',
+      name: 'MCP Catalog Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      metadata: { security: { mcpAllowlist: ['fixtures.echo'] } },
+      nodes: [{ id: 'mcp', type: 'mcp', title: 'Echo MCP', toolName: 'fixtures.echo' }],
+      edges: [],
+    });
+
+    const catalog = store.getMcpToolCatalog('mcp-catalog-flow');
+    expect(catalog).toEqual([
+      expect.objectContaining({
+        toolName: 'fixtures.echo',
+        server: 'fixtures',
+        name: 'echo',
+        label: 'Fixture Echo',
+        enabled: true,
+        available: true,
+        allowlisted: true,
+        argumentSchema: expect.objectContaining({
+          fields: expect.arrayContaining([
+            expect.objectContaining({ name: 'text', type: 'string', required: true, label: 'Text' }),
+            expect.objectContaining({ name: 'count', type: 'number', required: false, label: 'Count' }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
+  test('runs MCP workflow nodes through a typed runtime bridge', async () => {
+    const calls = [];
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      mcpToolRegistry: [
+        {
+          serverId: 'fixtures',
+          name: 'echo',
+          enabled: true,
+          inputSchema: {
+            type: 'object',
+            properties: { text: { type: 'string', title: 'Text' } },
+            required: ['text'],
+          },
+        },
+      ],
+      mcpToolExecutor: async (request) => {
+        calls.push(request);
+        return {
+          summary: `Echoed ${request.arguments.text}`,
+          result: { echoed: request.arguments.text },
+          artifacts: [{ type: 'json', title: 'MCP Echo Output', content: JSON.stringify(request.arguments) }],
+        };
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'mcp-runtime-flow',
+      name: 'MCP Runtime Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      metadata: { security: { mcpAllowlist: ['fixtures.echo'] } },
+      nodes: [{ id: 'mcp', type: 'mcp', title: 'Echo MCP', toolName: 'fixtures.echo', config: { text: 'hello mcp' } }],
+      edges: [],
+    });
+
+    const run = await store.createRun('mcp-runtime-flow');
+    expect(run.status).toBe('completed');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(expect.objectContaining({
+      serverId: 'fixtures',
+      toolName: 'fixtures.echo',
+      name: 'echo',
+      arguments: { text: 'hello mcp' },
+      permissionSnapshot: expect.objectContaining({ permissionPreset: 'full-auto' }),
+    }));
+    expect(run.nodeRuns.mcp.output).toEqual(expect.objectContaining({
+      status: 'completed',
+      summary: 'Echoed hello mcp',
+      result: { echoed: 'hello mcp' },
+      toolName: 'fixtures.echo',
+    }));
+    expect(run.nodeRuns.mcp.artifacts).toEqual([
+      expect.objectContaining({ type: 'json', title: 'MCP Echo Output', nodeId: 'mcp' }),
+    ]);
+  });
+
+  test('normalizes MCP runtime schema and permission errors', async () => {
+    const calls = [];
+    const createStore = () => createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      mcpToolRegistry: [
+        {
+          serverId: 'fixtures',
+          name: 'echo',
+          enabled: true,
+          inputSchema: {
+            type: 'object',
+            properties: { text: { type: 'string', title: 'Text' } },
+            required: ['text'],
+          },
+        },
+      ],
+      mcpToolExecutor: async (request) => {
+        calls.push(request);
+        return { summary: 'should not run', result: {} };
+      },
+    });
+
+    const schemaStore = createStore();
+    await schemaStore.upsertWorkflow({
+      id: 'mcp-schema-error-flow',
+      name: 'MCP Schema Error Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      metadata: { security: { mcpAllowlist: ['fixtures.echo'] } },
+      nodes: [{ id: 'mcp', type: 'mcp', title: 'Echo MCP', toolName: 'fixtures.echo', config: {} }],
+      edges: [],
+    });
+    const schemaRun = await schemaStore.createRun('mcp-schema-error-flow');
+    expect(schemaRun.status).toBe('failed');
+    expect(schemaRun.nodeRuns.mcp.output.error).toEqual(expect.objectContaining({ code: 'schema_invalid' }));
+    expect(schemaRun.nodeRuns.mcp.error).toMatch(/schema_invalid/);
+
+    const denyStore = createStore();
+    await denyStore.upsertWorkflow({
+      id: 'mcp-deny-flow',
+      name: 'MCP Deny Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      metadata: { security: { mcpAllowlist: ['fixtures.other'] } },
+      nodes: [{ id: 'mcp', type: 'mcp', title: 'Echo MCP', toolName: 'fixtures.echo', config: { text: 'blocked' } }],
+      edges: [],
+    });
+    const deniedRun = await denyStore.createRun('mcp-deny-flow');
+    expect(deniedRun.status).toBe('failed');
+    expect(deniedRun.nodeRuns.mcp.permissionDecision).toBe('deny');
+    expect(calls).toHaveLength(0);
   });
 
   test('registers workflow node packages and validates missing dependencies', async () => {

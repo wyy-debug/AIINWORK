@@ -591,6 +591,31 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     writeWorkflowUiMode(workflowUiMode);
   }, [workflowUiMode]);
 
+  useEffect(() => {
+    if (activeView !== 'Editor' || !draft.id) return;
+    let cancelled = false;
+    const loadEditorMcpCatalog = async () => {
+      const [mcpResponse, securityResponse] = await Promise.all([
+        api.workflowMcpToolCatalog(draft.id),
+        api.workflowSecurity(draft.id),
+      ]);
+      const [mcpData, securityData] = await Promise.all([
+        mcpResponse.json(),
+        securityResponse.json(),
+      ]);
+      if (cancelled) return;
+      if (mcpResponse.ok) setWorkflowMcpCatalog(Array.isArray(mcpData.tools) ? mcpData.tools : []);
+      if (securityResponse.ok) {
+        setWorkflowSecurity(securityData.security || null);
+        setMcpAllowlistRows(Array.isArray(securityData.security?.mcpAllowlist) ? securityData.security.mcpAllowlist : []);
+      }
+    };
+    void loadEditorMcpCatalog().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, draft.id]);
+
   const effectiveSelectedNodeId = useMemo(() => {
     if (draft.nodes.some((node) => node.id === selectedNodeId)) return selectedNodeId;
     return selectedNodeIds.find((id) => draft.nodes.some((node) => node.id === id)) || '';
@@ -1026,6 +1051,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const subagentPoolLimit = useMemo(() => agentBridgeState?.subagentPoolLimit || Math.max(1, Math.min(4, draft.maxConcurrency || 1)), [agentBridgeState, draft.maxConcurrency]);
   const subagentCancellationBridge = selectedRun ? `${selectedRun.workflowName}: cancel cascades to child subagent runs` : 'No active run selected.';
   const mcpToolCatalogSync = useMemo(() => workflowMcpCatalog.some((tool) => tool.enabled) ? workflowMcpCatalog.filter((tool) => tool.enabled).map((tool) => tool.toolName).join(', ') : nodeTypeDefinitions.filter((definition) => definition.type === 'mcp').length > 0 ? 'MCP catalog loaded; configure workflow allowlist to enable tools.' : 'MCP catalog waits for enabled server/tool definitions.', [nodeTypeDefinitions, workflowMcpCatalog]);
+  const selectedMcpTool = useMemo(() => selectedNode?.type === 'mcp'
+    ? workflowMcpCatalog.find((tool) => tool.toolName === selectedNode.toolName) || null
+    : null, [selectedNode, workflowMcpCatalog]);
+  const selectedMcpArgumentFields = useMemo(() => {
+    const fields = selectedMcpTool?.argumentSchema?.fields;
+    return Array.isArray(fields) ? fields : [];
+  }, [selectedMcpTool]);
   const mcpArgumentBuilder = useMemo(() => selectedNode?.type === 'mcp' ? workflowMcpCatalog.find((tool) => tool.toolName === selectedNode.toolName)?.argumentSchema?.fields?.map((field: any) => field.name).join(', ') || Object.keys(selectedNode.config || {}).join(', ') || 'schema-driven fields pending' : 'Pick an MCP node to render arguments from tool schema.', [selectedNode, workflowMcpCatalog]);
   const mcpErrorNormalization = 'server not found / tool not found / schema invalid / timeout';
   const toolNodeRegistry = useMemo(() => workflowToolRegistry.map((tool) => tool.id || tool.label).join(', ') || nodeTypeDefinitions.filter((definition) => definition.type === 'tool').map((definition) => definition.label).join(', ') || 'Built-in tools registered through node definitions.', [nodeTypeDefinitions, workflowToolRegistry]);
@@ -3623,11 +3655,61 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     </select>
                   </label>
                 )}
-                {(selectedNode.type === 'tool' || selectedNode.type === 'mcp') && (
+                {selectedNode.type === 'tool' && (
                   <label className="block text-xs font-medium text-muted-foreground">
                     Tool
                     <input value={selectedNode.toolName || ''} onChange={(event) => updateNode(selectedNode.id, { toolName: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
                   </label>
+                )}
+                {selectedNode.type === 'mcp' && (
+                  <div className="space-y-2">
+                    <label className="block text-xs font-medium text-muted-foreground">
+                      MCP tool
+                      <select
+                        value={selectedNode.toolName || ''}
+                        onChange={(event) => updateNode(selectedNode.id, { toolName: event.target.value })}
+                        className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                        data-testid="workflow-mcp-tool-selector"
+                      >
+                        <option value="">Choose MCP tool...</option>
+                        {workflowMcpCatalog.filter((tool) => tool.toolName).map((tool) => (
+                          <option key={String(tool.toolName)} value={String(tool.toolName)} disabled={tool.available === false || tool.enabled === false}>
+                            {String(tool.label || tool.toolName)}{tool.allowlisted === false ? ' (not allowlisted)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="rounded-md border border-border bg-muted/20 p-2 text-xs text-muted-foreground" data-testid="workflow-mcp-dependency-status">
+                      {selectedMcpTool
+                        ? `${selectedMcpTool.available === false || selectedMcpTool.enabled === false ? 'Unavailable' : 'Available'} · ${selectedMcpTool.allowlisted === false ? 'not allowlisted' : 'allowlisted or open'}`
+                        : 'Select an enabled MCP server.tool before running.'}
+                    </div>
+                    <div className="space-y-2 rounded-md border border-border bg-white p-2" data-testid="workflow-mcp-argument-form">
+                      {selectedMcpArgumentFields.length > 0 ? selectedMcpArgumentFields.map((field: any) => (
+                        <label key={String(field.name)} className="block text-xs font-medium text-muted-foreground">
+                          {String(field.label || field.name)}{field.required ? ' *' : ''}
+                          {field.type === 'json' ? (
+                            <textarea
+                              value={stringifyValue(selectedNode.config?.[field.name])}
+                              onChange={(event) => updateNodeFormMetaValue(selectedNode, String(field.name), event.target.value)}
+                              className="mt-1 min-h-16 w-full rounded-md border border-border bg-background p-2 text-sm text-foreground"
+                              data-testid="workflow-mcp-argument-field"
+                            />
+                          ) : (
+                            <input
+                              type={field.type === 'number' ? 'number' : 'text'}
+                              value={String(selectedNode.config?.[field.name] ?? '')}
+                              onChange={(event) => updateNodeFormMetaValue(selectedNode, String(field.name), field.type === 'number' ? Number(event.target.value) : event.target.value)}
+                              className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                              data-testid="workflow-mcp-argument-field"
+                            />
+                          )}
+                        </label>
+                      )) : (
+                        <div className="text-xs text-muted-foreground">Tool schema will render typed arguments here.</div>
+                      )}
+                    </div>
+                  </div>
                 )}
                 {selectedNode.type === 'shell' && (
                   <label className="block text-xs font-medium text-muted-foreground">

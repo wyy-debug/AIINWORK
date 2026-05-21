@@ -1500,22 +1500,129 @@ function applyAgentResultContract(node, nodeRun, output = {}, extra = {}) {
   };
 }
 
+function splitMcpToolName(input = {}) {
+  const source = typeof input === 'string' ? { toolName: input } : asObject(input);
+  const explicitToolName = normalizeText(source.toolName || source.id, '', 240);
+  const serverId = normalizeText(source.serverId || source.server || (explicitToolName.includes('.') ? explicitToolName.split('.')[0] : ''), '', 120);
+  const name = normalizeText(source.name || source.tool || source.method || (explicitToolName.includes('.') ? explicitToolName.split('.').slice(1).join('.') : explicitToolName), '', 160);
+  return {
+    serverId,
+    name,
+    toolName: explicitToolName || [serverId, name].filter(Boolean).join('.'),
+  };
+}
+
+function normalizeMcpSchemaFields(schema = {}) {
+  const source = asObject(schema);
+  const fields = Array.isArray(source.fields)
+    ? source.fields
+    : Object.entries(asObject(source.properties)).map(([name, definition]) => ({
+      name,
+      ...asObject(definition),
+    }));
+  const required = new Set(normalizeStringArray(source.required, 160));
+  return fields.map((field) => {
+    const item = asObject(field);
+    const name = normalizeText(item.name || item.key, '', 160);
+    const rawType = normalizeText(item.type, 'string', 40);
+    return {
+      name,
+      type: ['object', 'array'].includes(rawType) ? 'json' : rawType,
+      required: item.required === true || required.has(name),
+      label: normalizeText(item.label || item.title || name, name, 160),
+      defaultValue: item.defaultValue ?? item.default,
+      options: Array.isArray(item.options) ? item.options : Array.isArray(item.enum) ? item.enum : undefined,
+    };
+  }).filter((field) => field.name);
+}
+
+function normalizeMcpArgumentSchema(toolName = '', schema = {}) {
+  const normalizedToolName = normalizeText(toolName, '', 240);
+  const fields = normalizeMcpSchemaFields(schema);
+  return {
+    toolName: normalizedToolName,
+    fields: fields.length > 0 ? fields : [
+      { name: 'arguments', type: 'json', required: false, label: 'Tool arguments' },
+      { name: 'timeoutMs', type: 'number', required: false, label: 'Timeout' },
+    ],
+  };
+}
+
+function normalizeMcpToolDefinition(input = {}, index = 0) {
+  const source = asObject(input);
+  const names = splitMcpToolName(source);
+  const toolName = normalizeText(names.toolName, `mcp.tool.${index + 1}`, 240);
+  const schema = source.argumentSchema || source.inputSchema || source.schema || source.parameters || {};
+  return {
+    toolName,
+    server: normalizeText(names.serverId, toolName.split('.')[0] || '', 120),
+    serverId: normalizeText(names.serverId, toolName.split('.')[0] || '', 120),
+    name: normalizeText(names.name, toolName.includes('.') ? toolName.split('.').slice(1).join('.') : toolName, 160),
+    label: normalizeText(source.label || source.title || names.name || toolName, toolName, 160),
+    description: normalizeText(source.description, '', 500),
+    enabled: source.enabled !== false,
+    available: source.available !== false && source.enabled !== false,
+    source: normalizeText(source.source, 'registry', 80),
+    argumentSchema: normalizeMcpArgumentSchema(toolName, schema),
+    rawSchema: clone(schema),
+  };
+}
+
+function normalizeMcpToolRegistry(registry = []) {
+  return (Array.isArray(registry) ? registry : [])
+    .map((entry, index) => normalizeMcpToolDefinition(entry, index))
+    .filter((entry) => entry.toolName);
+}
+
+function createMcpBridgeError(code, message, details = {}) {
+  const error = new Error(`${code}: ${message}`);
+  error.code = code;
+  error.details = details;
+  return error;
+}
+
+function validateMcpArguments(argumentSchema = {}, args = {}) {
+  const errors = [];
+  for (const field of argumentSchema.fields || []) {
+    const value = args[field.name];
+    if (field.required && (value === undefined || value === null || value === '')) {
+      errors.push({ field: field.name, code: 'required', message: `Missing required MCP argument: ${field.name}` });
+      continue;
+    }
+    if (value === undefined || value === null || value === '') continue;
+    if (field.type === 'number' && typeof value !== 'number') {
+      errors.push({ field: field.name, code: 'type', message: `MCP argument ${field.name} must be a number.` });
+    }
+    if (field.type === 'boolean' && typeof value !== 'boolean') {
+      errors.push({ field: field.name, code: 'type', message: `MCP argument ${field.name} must be a boolean.` });
+    }
+    if (field.type === 'string' && typeof value !== 'string') {
+      errors.push({ field: field.name, code: 'type', message: `MCP argument ${field.name} must be a string.` });
+    }
+  }
+  return errors;
+}
+
 function normalizeMcpExecutionError(toolName, error) {
+  const explicitCode = normalizeText(error?.code || error?.details?.code, '', 120);
   const message = normalizeText(error?.message || error, '', 2000);
   const lower = message.toLowerCase();
-  const code = lower.includes('not configured') || lower.includes('server not found')
+  const code = explicitCode || (lower.includes('not configured') || lower.includes('server not found')
     ? 'server_not_found'
     : lower.includes('tool not found')
       ? 'tool_not_found'
-      : lower.includes('schema')
+      : lower.includes('schema') || lower.includes('argument')
         ? 'schema_invalid'
+        : lower.includes('permission') || lower.includes('denied')
+          ? 'permission_denied'
         : lower.includes('timeout')
           ? 'timeout'
-          : 'execution_failed';
+          : 'execution_failed');
   return {
     code,
     toolName: normalizeText(toolName, '', 240),
     message: message || `MCP tool failed: ${toolName || 'unknown'}`,
+    details: asObject(error?.details),
   };
 }
 
@@ -2408,7 +2515,11 @@ async function runPythonNodeManifest(manifestInput, payload = {}, {
   }
 }
 
-function createDefaultExecutors({ artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR } = {}) {
+function createDefaultExecutors({
+  artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR,
+  resolveMcpTool = null,
+  invokeMcpTool = null,
+} = {}) {
   return {
     async agent({ node, nodeInput, run }) {
       return {
@@ -2464,10 +2575,47 @@ function createDefaultExecutors({ artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR 
         command,
       };
     },
-    async mcp({ node, nodeInput }) {
+    async mcp({ workflow, run, node, nodeRun, nodeInput }) {
       const toolName = nodeInput.toolName || node.toolName;
-      const normalized = normalizeMcpExecutionError(toolName, `MCP tool is not configured for workflow execution: ${toolName || node.id}`);
-      throw new Error(`${normalized.code}: ${normalized.message}`);
+      const tool = typeof resolveMcpTool === 'function' ? resolveMcpTool(toolName) : null;
+      if (!tool) {
+        throw createMcpBridgeError('tool_not_found', `MCP tool not found: ${toolName || node.id}`);
+      }
+      if (!tool.enabled || !tool.available) {
+        throw createMcpBridgeError('server_not_found', `MCP server is not available for tool: ${toolName || node.id}`);
+      }
+      const rawConfig = asObject(nodeInput.config);
+      const args = asObject(rawConfig.arguments && typeof rawConfig.arguments === 'object' ? rawConfig.arguments : rawConfig);
+      const validationErrors = validateMcpArguments(tool.argumentSchema, args);
+      if (validationErrors.length > 0) {
+        throw createMcpBridgeError('schema_invalid', validationErrors[0].message, { errors: validationErrors });
+      }
+      if (typeof invokeMcpTool !== 'function') {
+        throw createMcpBridgeError('server_not_found', `MCP runtime bridge is not configured for workflow execution: ${toolName || node.id}`);
+      }
+      const response = asObject(await invokeMcpTool({
+        serverId: tool.serverId || tool.server,
+        server: tool.server || tool.serverId,
+        name: tool.name,
+        toolName: tool.toolName,
+        arguments: args,
+        timeoutMs: Number(rawConfig.timeoutMs) || node.timeoutMs || 120000,
+        permissionSnapshot: {
+          workflowId: workflow.id,
+          runId: run.id,
+          nodeId: node.id,
+          permissionPreset: workflow.permissionPreset,
+          decision: nodeRun.permissionDecision || 'allow',
+        },
+      }));
+      return {
+        ...response,
+        status: normalizeText(response.status, 'completed', 80),
+        summary: normalizeText(response.summary || response.content || response.result, `${tool.toolName} completed.`, 12000),
+        result: response.result ?? response,
+        toolName: tool.toolName,
+        serverId: tool.serverId || tool.server,
+      };
     },
     async artifact({ workflow, run, node, nodeInput }) {
       const content = nodeInput.prompt || [
@@ -2566,6 +2714,8 @@ export function createWorkflowStudioStore({
   pythonArgs = [],
   pythonTimeoutMs = PYTHON_NODE_DEFAULT_TIMEOUT_MS,
   pythonPayloadLimitBytes = PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES,
+  mcpToolRegistry = [],
+  mcpToolExecutor = null,
 } = {}) {
   let loaded = false;
   let workflows = [];
@@ -2580,8 +2730,17 @@ export function createWorkflowStudioStore({
     checkpointRetentionDays: 14,
     evidenceRetentionDays: 30,
   };
+  const mcpTools = normalizeMcpToolRegistry(mcpToolRegistry);
+  const resolveMcpTool = (toolName = '') => {
+    const normalizedToolName = normalizeText(toolName, '', 240);
+    return mcpTools.find((tool) => tool.toolName === normalizedToolName) || null;
+  };
   const nodeExecutors = {
-    ...createDefaultExecutors({ artifactsDir }),
+    ...createDefaultExecutors({
+      artifactsDir,
+      resolveMcpTool,
+      invokeMcpTool: typeof mcpToolExecutor === 'function' ? mcpToolExecutor : null,
+    }),
     ...asObject(executors),
   };
 
@@ -3202,8 +3361,9 @@ export function createWorkflowStudioStore({
     nodeRun.logs.push(`Started ${node.type} node: ${node.title}`);
     run.timelineEvents.push(createRunEvent('workflow_node_started', summarizeNode(node), now));
 
-    const permission = resolveNodePermission(workflow, node);
+    let permission = resolveNodePermission(workflow, node);
     const permissionExplanation = buildPermissionExplanation(workflow, node, { decisionOverride: permission, nodeRun });
+    permission = permissionExplanation.permissionDecision || permission;
     nodeRun.permissionExplanation = permissionExplanation;
     if (permission === 'deny') {
       nodeRun.status = 'failed';
@@ -3409,7 +3569,18 @@ export function createWorkflowStudioStore({
       run.timelineEvents.push(createRunEvent('workflow_node_completed', summarizeNode(node), now));
     } catch (error) {
       nodeRun.status = 'failed';
-      nodeRun.error = error?.message || String(error);
+      if (node.type === 'mcp') {
+        const mcpError = normalizeMcpExecutionError(nodeRun.input?.toolName || node.toolName, error);
+        nodeRun.output = {
+          ...(nodeRun.output || {}),
+          status: 'failed',
+          error: mcpError,
+          toolName: mcpError.toolName,
+        };
+        nodeRun.error = `${mcpError.code}: ${mcpError.message}`;
+      } else {
+        nodeRun.error = error?.message || String(error);
+      }
       nodeRun.completedAt = now();
       nodeRun.durationMs = nodeRun.completedAt - nodeRun.startedAt;
       nodeRun.updatedAt = now();
@@ -4864,19 +5035,40 @@ export function createWorkflowStudioStore({
   function getMcpToolCatalog(workflowId = '') {
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
     const allowlist = workflow ? getWorkflowSecurity(workflow).mcpAllowlist : [];
-    const configured = allowlist.map((toolName) => ({
-      toolName,
-      server: toolName.split('.')[0] || '',
-      name: toolName.split('.').slice(1).join('.') || toolName,
-      enabled: true,
-      source: 'workflow-allowlist',
-      argumentSchema: buildMcpArgumentSchema(toolName),
-    }));
+    const allowed = new Set(allowlist);
+    const catalog = new Map();
+    for (const tool of mcpTools) {
+      catalog.set(tool.toolName, {
+        ...clone(tool),
+        allowlisted: allowlist.length === 0 || allowed.has(tool.toolName),
+      });
+    }
+    for (const toolName of allowlist) {
+      if (catalog.has(toolName)) continue;
+      const names = splitMcpToolName(toolName);
+      catalog.set(toolName, {
+        toolName,
+        server: names.serverId,
+        serverId: names.serverId,
+        name: names.name,
+        label: toolName,
+        enabled: false,
+        available: false,
+        allowlisted: true,
+        source: 'workflow-allowlist-missing',
+        diagnostic: { code: 'tool_not_found', message: `MCP tool ${toolName} is allowlisted but not available.` },
+        argumentSchema: buildMcpArgumentSchema(toolName),
+      });
+    }
+    const configured = [...catalog.values()];
     return configured.length > 0 ? configured : [{
       toolName: '',
       server: '',
+      serverId: '',
       name: '',
       enabled: false,
+      available: false,
+      allowlisted: false,
       source: 'none',
       argumentSchema: buildMcpArgumentSchema(''),
     }];
@@ -4884,13 +5076,8 @@ export function createWorkflowStudioStore({
 
   function buildMcpArgumentSchema(toolName = '') {
     const normalized = normalizeText(toolName, '', 240);
-    return {
-      toolName: normalized,
-      fields: [
-        { name: 'arguments', type: 'json', required: false, label: 'Tool arguments' },
-        { name: 'timeoutMs', type: 'number', required: false, label: 'Timeout' },
-      ],
-    };
+    const tool = resolveMcpTool(normalized);
+    return tool?.argumentSchema || normalizeMcpArgumentSchema(normalized, {});
   }
 
   async function exportWorkflow(workflowId, format = 'json') {

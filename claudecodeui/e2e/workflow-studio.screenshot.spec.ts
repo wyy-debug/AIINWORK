@@ -166,6 +166,79 @@ const completedRun = {
   ],
 };
 
+const mcpWorkflow = {
+  ...workflow,
+  id: 'mcp-tool-runtime',
+  name: 'MCP Tool Runtime',
+  description: 'Call a typed MCP tool and show normalized output.',
+  permissionPreset: 'full-auto',
+  metadata: { security: { mcpAllowlist: ['fixtures.echo'] } },
+  nodes: [
+    { id: 'mcp', type: 'mcp', title: 'Fixture MCP Echo', toolName: 'fixtures.echo', config: { text: 'hello mcp' }, permission: '', position: { x: 120, y: 160 } },
+  ],
+  edges: [],
+};
+
+const mcpToolCatalog = [{
+  toolName: 'fixtures.echo',
+  server: 'fixtures',
+  serverId: 'fixtures',
+  name: 'echo',
+  label: 'Fixture Echo',
+  enabled: true,
+  available: true,
+  allowlisted: true,
+  source: 'fixture',
+  argumentSchema: {
+    toolName: 'fixtures.echo',
+    fields: [{ name: 'text', type: 'string', required: true, label: 'Text' }],
+  },
+}];
+
+const mcpSuccessRun = {
+  id: 'workflow-run-mcp-success',
+  workflowId: mcpWorkflow.id,
+  workflowName: mcpWorkflow.name,
+  status: 'completed',
+  createdAt: Date.now(),
+  nodeRuns: {
+    mcp: {
+      nodeId: 'mcp',
+      type: 'mcp',
+      title: 'Fixture MCP Echo',
+      status: 'completed',
+      attempt: 1,
+      logs: ['Started mcp node: Fixture MCP Echo', 'Completed mcp node.'],
+      input: { toolName: 'fixtures.echo', config: { text: 'hello mcp' } },
+      output: { status: 'completed', summary: 'Echoed hello mcp', result: { echoed: 'hello mcp' }, toolName: 'fixtures.echo' },
+    },
+  },
+  artifacts: [{
+    id: 'workflow_artifact_summary_workflow-run-mcp-success',
+    runId: 'workflow-run-mcp-success',
+    nodeId: '',
+    type: 'workflow-run-summary',
+    title: 'MCP Tool Runtime run summary',
+    summary: 'MCP workflow completed.',
+  }],
+  timelineEvents: [],
+};
+
+const mcpDeniedRun = {
+  ...mcpSuccessRun,
+  id: 'workflow-run-mcp-denied',
+  status: 'failed',
+  nodeRuns: {
+    mcp: {
+      ...mcpSuccessRun.nodeRuns.mcp,
+      status: 'failed',
+      permissionDecision: 'deny',
+      error: 'permission_denied: MCP tool fixtures.echo is not in workflow allowlist',
+      output: { status: 'failed', error: { code: 'permission_denied', message: 'MCP tool fixtures.echo is not in workflow allowlist' } },
+    },
+  },
+};
+
 const approvalRequest = {
   id: `workflow_approval_${waitingRun.id}_approval`,
   runId: waitingRun.id,
@@ -382,8 +455,13 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean; historicalSnapshot?: boolean } = {}) {
-  let runState = options.previewConsistency === 'matched'
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean; historicalSnapshot?: boolean; mcpRuntime?: 'success' | 'denied' } = {}) {
+  const activeWorkflow = options.mcpRuntime ? mcpWorkflow : workflow;
+  let runState = options.mcpRuntime === 'success'
+    ? mcpSuccessRun
+    : options.mcpRuntime === 'denied'
+      ? mcpDeniedRun
+      : options.previewConsistency === 'matched'
     ? previewMatchedRun
     : options.previewConsistency === 'changed'
       ? previewChangedRun
@@ -403,11 +481,13 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
 
     if (path === '/api/projects') return json(route, [project]);
     if (path.startsWith('/api/conversations')) return json(route, { project: { ...project, name: 'Conversations', sessions: [] } });
-    if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [workflow] });
+    if (path === '/api/workflows/mcp-tool-catalog') return json(route, { success: true, tools: options.mcpRuntime ? mcpToolCatalog : [] });
+    if (path === '/api/workflows/mcp-argument-schema') return json(route, { success: true, schema: options.mcpRuntime ? mcpToolCatalog[0].argumentSchema : { fields: [] } });
+    if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [activeWorkflow] });
     if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes });
-    if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
-    if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
-    if (path === `/api/workflows/${workflow.id}/validate-run`) {
+    if (path === `/api/workflows/${activeWorkflow.id}`) return json(route, { success: true, workflow: activeWorkflow });
+    if (path === '/api/workflows/validate') return json(route, { success: true, workflow: activeWorkflow, validation: { valid: true, errors: [], warnings: [] } });
+    if (path === `/api/workflows/${activeWorkflow.id}/validate-run`) {
       const previewNodes = Object.values(waitingRun.nodeRuns).map((nodeRun: any) => {
         const missingVariableError = options.missingVariablePreview && nodeRun.nodeId === 'approval'
           ? {
@@ -447,15 +527,15 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
           errors: options.missingVariablePreview ? previewNodes.flatMap((node) => node.errors) : [],
           warnings: [],
           preview: {
-            workflowId: workflow.id,
-            nodeCount: workflow.nodes.length,
-            blockedCount: previewNodes.filter((node) => node.blocked).length,
-            nodes: previewNodes,
+          workflowId: activeWorkflow.id,
+          nodeCount: activeWorkflow.nodes.length,
+          blockedCount: previewNodes.filter((node) => node.blocked).length,
+          nodes: previewNodes,
           },
         },
       }, options.missingVariablePreview ? 400 : 200);
     }
-    if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
+    if (path === `/api/workflows/${activeWorkflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
     if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
     if (path === `/api/workflow-runs/${runState.id}/artifacts`) return json(route, { success: true, artifacts: { runId: runState.id, artifacts: runState.artifacts || [] } });
     if (path === `/api/workflow-runs/${runState.id}/events`) return json(route, { success: true, events: runState.timelineEvents || [] });
@@ -464,8 +544,46 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
       return json(route, { success: true, run: runState });
     }
     if (path === '/api/workflow-approvals') return json(route, { success: true, approvals: [approvalRequest] });
-    if (path === `/api/workflows/${workflow.id}/security`) return json(route, { success: true, security: workflowSecurity });
-    if (path === `/api/workflows/${workflow.id}/permission-dry-run`) return json(route, { success: true, dryRun: workflowSecurity.permissionDryRun });
+    if (path === `/api/workflows/${activeWorkflow.id}/security`) return json(route, {
+      success: true,
+      security: options.mcpRuntime === 'denied'
+        ? {
+          ...workflowSecurity,
+          mcpAllowlist: ['fixtures.other'],
+          permissionDryRun: {
+            workflowId: activeWorkflow.id,
+            permissionPreset: activeWorkflow.permissionPreset,
+            rows: [{ nodeId: 'mcp', title: 'Fixture MCP Echo', type: 'mcp', decision: 'deny', reason: 'MCP tool fixtures.echo is not in workflow allowlist', requestedCapabilities: ['mcp.call:fixtures.echo'], effectiveCapabilities: [], riskReasons: ['MCP tool fixtures.echo is not in workflow allowlist'] }],
+          },
+        }
+        : options.mcpRuntime
+          ? {
+            ...workflowSecurity,
+            mcpAllowlist: ['fixtures.echo'],
+            permissionDryRun: {
+              workflowId: activeWorkflow.id,
+              permissionPreset: activeWorkflow.permissionPreset,
+              rows: [{ nodeId: 'mcp', title: 'Fixture MCP Echo', type: 'mcp', decision: 'allow', reason: 'MCP tool allowlisted', requestedCapabilities: ['mcp.call:fixtures.echo'], effectiveCapabilities: ['mcp.call:fixtures.echo'], riskReasons: ['mcp is controlled by full-auto'] }],
+            },
+          }
+          : workflowSecurity,
+    });
+    if (path === `/api/workflows/${activeWorkflow.id}/permission-dry-run`) return json(route, {
+      success: true,
+      dryRun: options.mcpRuntime === 'denied'
+        ? {
+          workflowId: activeWorkflow.id,
+          permissionPreset: activeWorkflow.permissionPreset,
+          rows: [{ nodeId: 'mcp', title: 'Fixture MCP Echo', type: 'mcp', decision: 'deny', reason: 'MCP tool fixtures.echo is not in workflow allowlist', requestedCapabilities: ['mcp.call:fixtures.echo'], effectiveCapabilities: [], riskReasons: ['MCP tool fixtures.echo is not in workflow allowlist'] }],
+        }
+        : options.mcpRuntime
+          ? {
+            workflowId: activeWorkflow.id,
+            permissionPreset: activeWorkflow.permissionPreset,
+            rows: [{ nodeId: 'mcp', title: 'Fixture MCP Echo', type: 'mcp', decision: 'allow', reason: 'MCP tool allowlisted', requestedCapabilities: ['mcp.call:fixtures.echo'], effectiveCapabilities: ['mcp.call:fixtures.echo'], riskReasons: ['mcp is controlled by full-auto'] }],
+          }
+          : workflowSecurity.permissionDryRun,
+    });
     if (path === '/api/agents') return json(route, {
       success: true,
       agents: [
@@ -744,6 +862,37 @@ test('REQ-216 captures workflow artifact gallery contract @screenshot', async ({
   await expect(page.getByTestId('workflow-artifact-copy-path').first()).toBeVisible();
   await expect(page.getByTestId('workflow-artifact-attach-evidence').first()).toBeVisible();
   await screenshot(page, 'REQ-216B-artifact-gallery-contract.png');
+});
+
+test('REQ-217 captures MCP node config and runtime evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { mcpRuntime: 'success' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await expect(page.getByTestId('workflow-mcp-tool-selector')).toBeVisible();
+  await expect(page.getByTestId('workflow-mcp-argument-form')).toContainText('Text');
+  await expect(page.getByTestId('workflow-mcp-dependency-status')).toContainText('Available');
+  await screenshot(page, 'REQ-217C-mcp-node-config.png');
+
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-runs')).toContainText('Fixture MCP Echo');
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-mcp-tool-catalog-sync')).toContainText('fixtures.echo');
+  await expect(page.getByTestId('workflow-mcp-argument-builder')).toContainText('text');
+  await screenshot(page, 'REQ-217D-mcp-runtime-success.png');
+});
+
+test('REQ-217 captures MCP permission deny evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { mcpRuntime: 'denied' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-runs').getByText('failed').first()).toBeVisible();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-permission-dry-run')).toContainText('not in workflow allowlist');
+  await expect(page.getByTestId('workflow-failure-classifier')).toContainText('permission');
+  await screenshot(page, 'REQ-217D-mcp-permission-deny.png');
 });
 
 test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {
