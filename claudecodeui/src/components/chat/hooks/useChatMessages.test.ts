@@ -175,6 +175,24 @@ describe('normalizedToChatMessages subagent handling', () => {
     expect(normalizedToChatMessages(messages)).toEqual([]);
   });
 
+  it('filters injected Skill instruction text from user-visible chat messages', () => {
+    const messages = [
+      message({
+        id: 'skill-instructions-1',
+        role: 'user',
+        content: [
+          'Base directory for this skill: C:\\Users\\yckui\\.mtl-code\\skills\\trace-export-tool-skill',
+          '',
+          '# Trace Export Tool Skill',
+          '',
+          'Use this Skill for `.utrace` analysis workflows.',
+        ].join('\n'),
+      }),
+    ];
+
+    expect(normalizedToChatMessages(messages)).toEqual([]);
+  });
+
   it('treats Codex-style spawn_agent as a subagent container', () => {
     const messages = [
       message({

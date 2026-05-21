@@ -50,7 +50,18 @@ const INTERNAL_CONTENT_PREFIXES = [
 function isInternalContent(content: string): boolean {
   const trimmed = content.trimStart();
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+    || isInjectedSkillInstructionContent(trimmed)
     || isTaskNotificationContent(trimmed);
+}
+
+function isInjectedSkillInstructionContent(content: string): boolean {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith('Base directory for this skill:')) {
+    return false;
+  }
+
+  return /\n\s*#\s+.+Skill\b/i.test(trimmed)
+    || /\n\s*##\s+(When To Use|Required Runtime|Preferred Workflow|Output Rules)\b/i.test(trimmed);
 }
 
 function getUserTextContent(raw: AnyRecord): string {
