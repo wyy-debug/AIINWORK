@@ -314,6 +314,11 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-variable-debugger-row"');
     expect(source).toContain('data-testid="workflow-variable-copy-expression"');
     expect(source).toContain('data-testid="workflow-run-lineage-detail"');
+    expect(source).toContain('data-testid="workflow-missing-variable-diagnostics"');
+    expect(source).toContain('data-testid="workflow-missing-variable-jump"');
+    expect(source).toContain('data-testid="workflow-missing-variable-node-badge"');
+    expect(source).toContain('missingVariableDiagnostics');
+    expect(source).toContain('selectMissingVariableDiagnostic');
     expect(source).toContain('resolvedInputLineage');
     expect(source).toContain('inputLineage');
     expect(source).toContain('lineageFieldRows');

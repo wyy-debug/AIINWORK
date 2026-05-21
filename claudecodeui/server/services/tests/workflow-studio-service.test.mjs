@@ -810,6 +810,75 @@ describe('workflow studio service', () => {
     });
   });
 
+  test('normalizes missing variable diagnostics with node field and source expression', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'missing-variable-diagnostics-flow',
+      name: 'Missing Variable Diagnostics Flow',
+      profileId: 'build',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', agentId: 'build', prompt: 'Review {{nodes.explore.output.missingSummary}}' },
+        { id: 'ghost', type: 'agent', agentId: 'build', prompt: 'Ghost {{nodes.ghostWriter.output.summary}}' },
+        { id: 'input-missing', type: 'agent', agentId: 'build', prompt: 'Input {{inputs.missing}}' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'ghost' },
+        { from: 'ghost', to: 'input-missing' },
+      ],
+    });
+
+    const result = await store.validateRun('missing-variable-diagnostics-flow', { inputs: { change_request: 'preview me' } });
+    const reviewError = result.errors.find((error) => error.nodeId === 'review');
+    const ghostError = result.errors.find((error) => error.nodeId === 'ghost');
+    const inputError = result.errors.find((error) => error.nodeId === 'input-missing');
+    const previewReview = result.preview.nodes.find((node) => node.nodeId === 'review');
+
+    expect(reviewError).toMatchObject({
+      code: 'missing_output_field',
+      category: 'missing_variable',
+      nodeId: 'review',
+      field: 'prompt',
+      variable: 'nodes.explore.output.missingSummary',
+      diagnostic: {
+        nodeId: 'review',
+        field: 'prompt',
+        sourceExpression: 'nodes.explore.output.missingSummary',
+        sourceNodeId: 'explore',
+        outputField: 'missingSummary',
+      },
+    });
+    expect(ghostError).toMatchObject({
+      code: 'missing_node_variable',
+      category: 'missing_variable',
+      diagnostic: expect.objectContaining({
+        nodeId: 'ghost',
+        field: 'prompt',
+        sourceExpression: 'nodes.ghostWriter.output.summary',
+        sourceNodeId: 'ghostWriter',
+      }),
+    });
+    expect(inputError).toMatchObject({
+      code: 'missing_input_variable',
+      category: 'missing_variable',
+      diagnostic: expect.objectContaining({
+        nodeId: 'input-missing',
+        field: 'prompt',
+        sourceExpression: 'inputs.missing',
+        inputId: 'missing',
+      }),
+    });
+    expect(previewReview.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'missing_output_field',
+        category: 'missing_variable',
+        diagnostic: expect.objectContaining({ nodeId: 'review', field: 'prompt' }),
+      }),
+    ]));
+  });
+
   test('creates runs with resolver-backed preview and execution snapshots', async () => {
     const store = createWorkflowStudioStore({
       persist: false,

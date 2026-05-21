@@ -173,7 +173,15 @@ type WorkflowDryRunPreview = {
     permissionDecision?: string;
     upstream?: Array<{ nodeId?: string; mode?: string }>;
     blocked?: boolean;
-    errors?: Array<{ code?: string; message?: string }>;
+    errors?: Array<{
+      code?: string;
+      category?: string;
+      message?: string;
+      nodeId?: string;
+      field?: string;
+      variable?: string;
+      diagnostic?: Record<string, unknown>;
+    }>;
   }>;
 };
 
@@ -205,6 +213,15 @@ type WorkflowLineageRow = {
   valuePreview: string;
   errorMessage: string;
   segmentCount: number;
+};
+
+type WorkflowMissingVariableDiagnostic = {
+  nodeId: string;
+  nodeTitle: string;
+  field: string;
+  variable: string;
+  code: string;
+  message: string;
 };
 
 type WorkflowPaletteGroup = {
@@ -373,6 +390,15 @@ function buildLineageFieldRows(lineage?: Record<string, unknown> | null): Workfl
       segmentCount: segments.length,
     };
   });
+}
+
+function isMissingVariableError(error: { code?: string; category?: string }) {
+  const code = String(error.code || '');
+  return error.category === 'missing_variable'
+    || code === 'missing_input_variable'
+    || code === 'missing_node_variable'
+    || code === 'missing_output_field'
+    || code === 'missing_variable';
 }
 
 function getTemplateManifest(workflow: WorkflowDefinition) {
@@ -634,6 +660,25 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const lineage = selectedPreviewNode?.resolvedInputLineage || runLineage;
     return buildLineageFieldRows(lineage || null);
   }, [selectedNode, selectedPreviewNode, selectedRun]);
+  const missingVariableDiagnostics = useMemo<WorkflowMissingVariableDiagnostic[]>(() => {
+    return (dryRunPreview?.nodes || []).flatMap((previewNode) => {
+      const nodeId = String(previewNode.nodeId || '');
+      const nodeTitle = draft.nodes.find((node) => node.id === nodeId)?.title || previewNode.title || nodeId;
+      return (previewNode.errors || [])
+        .filter(isMissingVariableError)
+        .map((error) => {
+          const diagnostic = isRecord(error.diagnostic) ? error.diagnostic : {};
+          return {
+            nodeId: String(diagnostic.nodeId || error.nodeId || nodeId),
+            nodeTitle,
+            field: String(diagnostic.field || error.field || 'field'),
+            variable: String(diagnostic.sourceExpression || diagnostic.variable || error.variable || ''),
+            code: String(error.code || 'missing_variable'),
+            message: error.message || `Missing variable ${String(diagnostic.sourceExpression || diagnostic.variable || error.variable || '')}`,
+          };
+        });
+    });
+  }, [draft.nodes, dryRunPreview]);
   const getNodeRunLineageRows = useCallback((nodeRun: WorkflowNodeRun) => {
     if (nodeRun.inputLineage && Object.keys(nodeRun.inputLineage).length > 0) {
       return buildLineageFieldRows(nodeRun.inputLineage);
@@ -647,6 +692,16 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     };
     return buildLineageFieldRows(findSnapshotLineage(selectedRun?.executionInputSnapshot) || findSnapshotLineage(selectedRun?.previewSnapshot));
   }, [selectedRun]);
+  const selectMissingVariableDiagnostic = useCallback((diagnostic: WorkflowMissingVariableDiagnostic) => {
+    if (!diagnostic.nodeId) return;
+    setActiveView('Editor');
+    setWorkflowUiMode('advanced');
+    setInspectorTab('Data');
+    setSelectedNodeId(diagnostic.nodeId);
+    setSelectedNodeIds([diagnostic.nodeId]);
+    setSelectedEdgeId('');
+    setIsDiagnosticsOpen(true);
+  }, []);
   const mappingPreview = useMemo(() => draft.nodes.map((node) => ({
     node,
     input: {
@@ -2151,6 +2206,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const selectedCount = selectedNodeIds.length;
     const canUndoWorkflow = Boolean(flowGramEditorRef.current?.canUndo()) || Boolean(externalDraftUndo.past);
     const canRedoWorkflow = Boolean(flowGramEditorRef.current?.canRedo()) || Boolean(externalDraftUndo.future);
+    const selectedNodeMissingVariableBadges = selectedNode
+      ? missingVariableDiagnostics
+        .filter((diagnostic) => diagnostic.nodeId === selectedNode.id)
+        .map((diagnostic) => `${diagnostic.field}: ${diagnostic.variable || diagnostic.code}`)
+      : [];
     return (
       <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
         {!isSimpleMode && (
@@ -2211,6 +2271,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         )}
         {!isSimpleMode && (
         <div className="mb-3 flex flex-wrap gap-1 text-[10px] text-muted-foreground" data-testid="workflow-graph-validation-badges">
+          {selectedNodeMissingVariableBadges.map((badge) => (
+            <span key={badge} data-testid="workflow-missing-variable-node-badge" className="rounded border border-red-200 bg-red-50 px-2 py-1 text-red-700">{badge}</span>
+          ))}
           {(selectedNode ? getNodeValidationBadges(draft, selectedNode, lockedNodeIds) : ['FlowGram validation ready']).map((badge) => (
             <span key={badge} className="rounded border border-border bg-background px-2 py-1">{badge}</span>
           ))}
@@ -3321,6 +3384,29 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800" data-testid="workflow-dry-run-debugger">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-700">Dry run debugger</h3>
                 {dryRunMessages.map((message) => <div key={message} className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{message}</div>)}
+              </div>
+            )}
+            {missingVariableDiagnostics.length > 0 && (
+              <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800" data-testid="workflow-missing-variable-diagnostics">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-red-700">Missing variable diagnostics</h3>
+                  <span className="rounded border border-red-200 bg-white px-2 py-0.5 text-[10px] text-red-700">{missingVariableDiagnostics.length} blockers</span>
+                </div>
+                <div className="grid gap-2">
+                  {missingVariableDiagnostics.map((diagnostic) => (
+                    <button
+                      key={`${diagnostic.nodeId}-${diagnostic.field}-${diagnostic.variable}`}
+                      type="button"
+                      data-testid="workflow-missing-variable-jump"
+                      onClick={() => selectMissingVariableDiagnostic(diagnostic)}
+                      className="rounded border border-red-200 bg-white px-2 py-2 text-left text-xs text-red-800 hover:bg-red-50"
+                    >
+                      <span className="block font-semibold">{diagnostic.nodeTitle} / {diagnostic.field}</span>
+                      <span className="mt-1 block font-mono text-[11px]">{diagnostic.variable || diagnostic.code}</span>
+                      <span className="mt-1 block text-red-700">{diagnostic.message}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             {dryRunPreview?.nodes && dryRunPreview.nodes.length > 0 && (

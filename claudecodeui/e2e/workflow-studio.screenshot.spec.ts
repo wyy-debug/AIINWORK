@@ -227,7 +227,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime' } = {}) {
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean } = {}) {
   let runState = options.previewConsistency === 'matched'
     ? previewMatchedRun
     : options.previewConsistency === 'changed'
@@ -251,30 +251,52 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
     if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
     if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
     if (path === `/api/workflows/${workflow.id}/validate-run`) {
+      const previewNodes = Object.values(waitingRun.nodeRuns).map((nodeRun: any) => {
+        const missingVariableError = options.missingVariablePreview && nodeRun.nodeId === 'approval'
+          ? {
+            code: 'missing_output_field',
+            category: 'missing_variable',
+            nodeId: 'approval',
+            field: 'prompt',
+            variable: 'nodes.explore.output.missingSummary',
+            sourceNodeId: 'explore',
+            outputField: 'missingSummary',
+            message: 'Node approval references unavailable output nodes.explore.output.missingSummary.',
+            diagnostic: {
+              nodeId: 'approval',
+              field: 'prompt',
+              sourceExpression: 'nodes.explore.output.missingSummary',
+              sourceNodeId: 'explore',
+              outputField: 'missingSummary',
+            },
+          }
+          : null;
+        return {
+          nodeId: nodeRun.nodeId,
+          type: nodeRun.type,
+          title: nodeRun.title,
+          resolvedInput: nodeRun.input || {},
+          resolvedInputLineage: nodeRun.inputLineage || {},
+          permissionDecision: nodeRun.permissionDecision || 'allow',
+          upstream: workflow.edges.filter((edge) => edge.to === nodeRun.nodeId).map((edge) => ({ nodeId: edge.from, mode: edge.mode })),
+          blocked: Boolean(missingVariableError),
+          errors: missingVariableError ? [missingVariableError] : [],
+        };
+      });
       return json(route, {
         success: true,
         validation: {
-          valid: true,
-          errors: [],
+          valid: !options.missingVariablePreview,
+          errors: options.missingVariablePreview ? previewNodes.flatMap((node) => node.errors) : [],
           warnings: [],
           preview: {
             workflowId: workflow.id,
             nodeCount: workflow.nodes.length,
-            blockedCount: 0,
-            nodes: Object.values(waitingRun.nodeRuns).map((nodeRun: any) => ({
-              nodeId: nodeRun.nodeId,
-              type: nodeRun.type,
-              title: nodeRun.title,
-              resolvedInput: nodeRun.input || {},
-              resolvedInputLineage: nodeRun.inputLineage || {},
-              permissionDecision: nodeRun.permissionDecision || 'allow',
-              upstream: workflow.edges.filter((edge) => edge.to === nodeRun.nodeId).map((edge) => ({ nodeId: edge.from, mode: edge.mode })),
-              blocked: false,
-              errors: [],
-            })),
+            blockedCount: previewNodes.filter((node) => node.blocked).length,
+            nodes: previewNodes,
           },
         },
-      });
+      }, options.missingVariablePreview ? 400 : 200);
     }
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
     if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
@@ -656,6 +678,26 @@ test('REQ-213B captures variable debugger and run lineage detail @screenshot', a
   await page.getByTestId('workflow-run-lineage-detail').first().click();
   await expect(page.getByTestId('workflow-run-lineage-detail').first()).toContainText('inputs.change_request');
   await screenshot(page, 'REQ-213B-run-lineage-detail.png');
+});
+
+test('REQ-213C captures missing variable diagnostics and click-to-select @screenshot', async ({ page }) => {
+  await installMockApi(page, { missingVariablePreview: true });
+  await page.addInitScript(() => {
+    localStorage.setItem('workflowStudio.uiMode', 'advanced');
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-dry-run-debugger').first().click();
+  await expect(page.getByTestId('workflow-missing-variable-diagnostics')).toBeVisible();
+  await expect(page.getByTestId('workflow-missing-variable-diagnostics')).toContainText('nodes.explore.output.missingSummary');
+  await screenshot(page, 'REQ-213C-missing-variable-diagnostics.png');
+
+  await page.getByTestId('workflow-missing-variable-jump').first().click();
+  await expect(page.getByTestId('workflow-selection-helper')).toContainText('Human Approval');
+  await expect(page.getByTestId('workflow-missing-variable-node-badge')).toContainText('missingSummary');
+  await page.getByTestId('workflow-missing-variable-node-badge').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-213C-missing-variable-click-select.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {

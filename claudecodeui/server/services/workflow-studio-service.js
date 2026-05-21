@@ -1671,6 +1671,18 @@ function validateNodeConfigs(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIO
   return errors;
 }
 
+function createVariableDiagnostic({ nodeId, field, variable, inputId = '', sourceNodeId = '', outputField = '' }) {
+  return {
+    nodeId,
+    field,
+    sourceExpression: variable,
+    variable,
+    inputId,
+    sourceNodeId,
+    outputField,
+  };
+}
+
 function validateWorkflowVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const errors = [];
   const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
@@ -1688,9 +1700,16 @@ function validateWorkflowVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEF
         if (!inputIds.has(inputMatch[1])) {
           errors.push({
             code: 'missing_input_variable',
+            category: 'missing_variable',
             nodeId: node.id,
             field: variable.field,
             variable: variable.expression,
+            diagnostic: createVariableDiagnostic({
+              nodeId: node.id,
+              field: variable.field,
+              variable: variable.expression,
+              inputId: inputMatch[1],
+            }),
             message: `Node ${node.id} references missing workflow input ${variable.expression}.`,
           });
         }
@@ -1703,9 +1722,17 @@ function validateWorkflowVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEF
         if (!sourceNode) {
           errors.push({
             code: 'missing_node_variable',
+            category: 'missing_variable',
             nodeId: node.id,
             field: variable.field,
             variable: variable.expression,
+            diagnostic: createVariableDiagnostic({
+              nodeId: node.id,
+              field: variable.field,
+              variable: variable.expression,
+              sourceNodeId,
+              outputField,
+            }),
             message: `Node ${node.id} references missing node ${sourceNodeId}.`,
           });
           continue;
@@ -1713,11 +1740,19 @@ function validateWorkflowVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEF
         if (!getNodeOutputFieldNames(sourceNode.type, nodeTypeDefinitions).has(outputField)) {
           errors.push({
             code: 'missing_output_field',
+            category: 'missing_variable',
             nodeId: node.id,
             sourceNodeId,
             field: variable.field,
             outputField,
             variable: variable.expression,
+            diagnostic: createVariableDiagnostic({
+              nodeId: node.id,
+              field: variable.field,
+              variable: variable.expression,
+              sourceNodeId,
+              outputField,
+            }),
             message: `Node ${node.id} references unavailable output ${variable.expression}.`,
           });
         }
