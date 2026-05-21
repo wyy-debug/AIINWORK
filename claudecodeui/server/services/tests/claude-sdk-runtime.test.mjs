@@ -14,6 +14,7 @@ import {
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
+  resolveMtlCodeCanonicalSessionRegistration,
 } from '../../claude-sdk.js';
 
 test('Argus host allow rules do not narrow native Claude Code tools in normal modes', () => {
@@ -328,6 +329,32 @@ test('Argus runtime changes restart as a fresh native session instead of resumin
   assert.equal(restartOptions.clientSessionId, 'old-native-session');
   assert.equal(args.includes('--resume'), false);
   assert.equal(args.includes('--append-system-prompt'), true);
+});
+
+test('Argus resumed turns keep the requested session as the canonical UI session', () => {
+  const registration = resolveMtlCodeCanonicalSessionRegistration({
+    messageSessionId: 'native-reported-different-session',
+    capturedSessionId: 'existing-ui-session',
+    requestedSessionId: 'existing-ui-session',
+    clientSessionId: '',
+  });
+
+  assert.equal(registration.shouldAdoptMessageSessionId, false);
+  assert.equal(registration.canonicalSessionId, 'existing-ui-session');
+  assert.equal(registration.providerSessionAlias, 'native-reported-different-session');
+});
+
+test('Argus fresh turns still adopt the native session id', () => {
+  const registration = resolveMtlCodeCanonicalSessionRegistration({
+    messageSessionId: 'real-native-session',
+    capturedSessionId: '',
+    requestedSessionId: '',
+    clientSessionId: 'new-session-temp',
+  });
+
+  assert.equal(registration.shouldAdoptMessageSessionId, true);
+  assert.equal(registration.canonicalSessionId, 'real-native-session');
+  assert.equal(registration.providerSessionAlias, '');
 });
 
 test('Argus persistent idle sessions are not reported as currently processing', () => {

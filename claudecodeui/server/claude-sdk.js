@@ -678,6 +678,45 @@ function createMtlCodeFreshSessionOptionsForRuntimeChange(options = {}) {
   return freshOptions;
 }
 
+function normalizeMtlCodeSessionId(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveMtlCodeCanonicalSessionRegistration({
+  messageSessionId = '',
+  capturedSessionId = '',
+  requestedSessionId = '',
+  clientSessionId = '',
+} = {}) {
+  const messageId = normalizeMtlCodeSessionId(messageSessionId);
+  const capturedId = normalizeMtlCodeSessionId(capturedSessionId);
+  const requestedId = normalizeMtlCodeSessionId(requestedSessionId);
+  const clientId = normalizeMtlCodeSessionId(clientSessionId);
+  const canonicalRequestedId = requestedId || capturedId;
+
+  if (!messageId) {
+    return {
+      canonicalSessionId: canonicalRequestedId || clientId,
+      providerSessionAlias: '',
+      shouldAdoptMessageSessionId: false,
+    };
+  }
+
+  if (canonicalRequestedId && messageId !== canonicalRequestedId) {
+    return {
+      canonicalSessionId: canonicalRequestedId,
+      providerSessionAlias: messageId,
+      shouldAdoptMessageSessionId: false,
+    };
+  }
+
+  return {
+    canonicalSessionId: messageId,
+    providerSessionAlias: '',
+    shouldAdoptMessageSessionId: !capturedId || capturedId !== messageId,
+  };
+}
+
 function buildMtlCodeRuntimeSignature({ cwd = '', cliArgs = [], env = {} } = {}) {
   const stableCliArgs = [];
   for (let index = 0; index < cliArgs.length; index += 1) {
@@ -1783,11 +1822,31 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     registeredSessionIds.clear();
   };
   const ensureSessionRegistered = (messageSessionId) => {
-    if (!messageSessionId || capturedSessionId === messageSessionId) {
+    const registration = resolveMtlCodeCanonicalSessionRegistration({
+      messageSessionId,
+      capturedSessionId,
+      requestedSessionId: currentOptions?.sessionId || sessionId || '',
+      clientSessionId,
+    });
+
+    if (!registration.shouldAdoptMessageSessionId) {
+      if (
+        registration.providerSessionAlias
+        && registration.canonicalSessionId
+        && registration.providerSessionAlias !== registration.canonicalSessionId
+      ) {
+        logMtlCodeSessionLifecycle('session_alias_ignored', {
+          turnId: currentTurnId,
+          sessionId: registration.canonicalSessionId,
+          clientSessionId,
+          providerSessionAlias: registration.providerSessionAlias,
+        });
+        registerSession(registration.canonicalSessionId);
+      }
       return;
     }
 
-    capturedSessionId = messageSessionId;
+    capturedSessionId = registration.canonicalSessionId;
     registerSession(capturedSessionId);
     logMtlCodeSessionLifecycle('session_captured', {
       turnId: currentTurnId,
@@ -2763,6 +2822,7 @@ export {
   buildMtlCodeCloseFailureMessage,
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
+  resolveMtlCodeCanonicalSessionRegistration,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
   createMtlCodeFreshSessionOptionsForRuntimeChange,
