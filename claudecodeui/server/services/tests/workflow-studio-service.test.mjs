@@ -762,6 +762,54 @@ describe('workflow studio service', () => {
     ]));
   });
 
+  test('emits field-level lineage for resolved and missing workflow variables', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'lineage-flow',
+      name: 'Lineage Flow',
+      profileId: 'build',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', agentId: 'build', prompt: 'Review {{nodes.explore.output.summary}}' },
+        { id: 'broken', type: 'agent', agentId: 'build', prompt: 'Broken {{inputs.missing}}' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'broken' },
+      ],
+    });
+
+    const result = await store.validateRun('lineage-flow', { inputs: { change_request: 'preview me' } });
+    const explore = result.preview.nodes.find((node) => node.nodeId === 'explore');
+    const review = result.preview.nodes.find((node) => node.nodeId === 'review');
+    const broken = result.preview.nodes.find((node) => node.nodeId === 'broken');
+
+    expect(explore.resolvedInputLineage.prompt).toMatchObject({
+      field: 'prompt',
+      status: 'resolved',
+      sourceExpression: 'inputs.change_request',
+      sourcePath: 'inputs.change_request',
+      valuePreview: 'Explore preview me',
+    });
+    expect(explore.resolvedInputLineage.prompt.segments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'literal', valuePreview: 'Explore ' }),
+      expect.objectContaining({ type: 'variable', status: 'resolved', sourceExpression: 'inputs.change_request', sourcePath: 'inputs.change_request', valuePreview: 'preview me' }),
+    ]));
+    expect(review.resolvedInputLineage.prompt).toMatchObject({
+      status: 'resolved',
+      sourceExpression: 'nodes.explore.output.summary',
+      sourcePath: 'nodes.explore.output.summary',
+    });
+    expect(broken.resolvedInputLineage.prompt).toMatchObject({
+      field: 'prompt',
+      status: 'missing',
+      sourceExpression: 'inputs.missing',
+      sourcePath: 'inputs.missing',
+      error: expect.objectContaining({ code: 'missing_variable' }),
+    });
+  });
+
   test('creates runs with resolver-backed preview and execution snapshots', async () => {
     const store = createWorkflowStudioStore({
       persist: false,

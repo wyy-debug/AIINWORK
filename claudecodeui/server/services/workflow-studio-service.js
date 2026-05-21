@@ -1413,6 +1413,77 @@ function renderTemplate(text, context) {
   });
 }
 
+function previewLineageValue(value) {
+  const text = stringifyTemplateValue(value);
+  return String(text || '').slice(0, 240);
+}
+
+function renderTemplateWithLineage(text, context, field) {
+  const source = typeof text === 'string' ? text : '';
+  const segments = [];
+  let rendered = '';
+  let cursor = 0;
+  let firstVariable = null;
+  let firstError = null;
+  for (const match of source.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)) {
+    const index = match.index || 0;
+    if (index > cursor) {
+      const literal = source.slice(cursor, index);
+      rendered += literal;
+      segments.push({ type: 'literal', valuePreview: literal.slice(0, 240) });
+    }
+    const expression = match[1];
+    const result = getPathValue(context, expression);
+    const segment = {
+      type: 'variable',
+      sourceExpression: expression,
+      sourcePath: expression,
+    };
+    if (!firstVariable) firstVariable = segment;
+    if (result.found) {
+      const value = stringifyTemplateValue(result.value);
+      rendered += value;
+      segments.push({
+        ...segment,
+        status: 'resolved',
+        valuePreview: previewLineageValue(result.value),
+      });
+    } else {
+      rendered += match[0];
+      const error = {
+        code: 'missing_variable',
+        variable: expression,
+        message: `Workflow variable not found: ${expression}`,
+      };
+      if (!firstError) firstError = error;
+      segments.push({
+        ...segment,
+        status: 'missing',
+        valuePreview: '<missing>',
+        error,
+      });
+    }
+    cursor = index + match[0].length;
+  }
+  if (cursor < source.length) {
+    const literal = source.slice(cursor);
+    rendered += literal;
+    segments.push({ type: 'literal', valuePreview: literal.slice(0, 240) });
+  }
+  const variableSegments = segments.filter((segment) => segment.type === 'variable');
+  const status = firstError ? 'missing' : variableSegments.length > 0 ? 'resolved' : 'literal';
+  const trace = {
+    field,
+    status,
+    sourceExpression: firstVariable?.sourceExpression || '',
+    sourcePath: firstVariable?.sourcePath || '',
+    valuePreview: rendered.slice(0, 240),
+    segments,
+  };
+  if (firstError) trace.error = firstError;
+  return { value: rendered, trace };
+}
+
 function buildTemplateContext(run) {
   return {
     inputs: run.inputs || {},
@@ -1432,6 +1503,37 @@ function buildNodeInputFromContext(node, context) {
     condition: renderTemplate(node.condition || '', context),
     toolName: renderTemplate(node.toolName || '', context),
     config: clone(node.config || {}),
+  };
+}
+
+function buildNodeInputWithLineageFromContext(node, context) {
+  const prompt = renderTemplateWithLineage(node.prompt || '', context, 'prompt');
+  const command = renderTemplateWithLineage(node.command || '', context, 'command');
+  const condition = renderTemplateWithLineage(node.condition || '', context, 'condition');
+  const toolName = renderTemplateWithLineage(node.toolName || '', context, 'toolName');
+  const config = clone(node.config || {});
+  return {
+    resolvedInput: {
+      prompt: prompt.value,
+      command: command.value,
+      condition: condition.value,
+      toolName: toolName.value,
+      config,
+    },
+    lineage: {
+      prompt: prompt.trace,
+      command: command.trace,
+      condition: condition.trace,
+      toolName: toolName.trace,
+      config: {
+        field: 'config',
+        status: 'literal',
+        sourceExpression: '',
+        sourcePath: '',
+        valuePreview: stableJson(config).slice(0, 240),
+        segments: [{ type: 'literal', valuePreview: stableJson(config).slice(0, 240) }],
+      },
+    },
   };
 }
 
@@ -3420,8 +3522,11 @@ export function createWorkflowStudioStore({
         .filter((entry) => entry?.nodeId === node.id)
         .map((entry) => clone(entry));
       let resolvedInput = {};
+      let resolvedInputLineage = {};
       try {
-        resolvedInput = buildNodeInputFromContext(node, context);
+        const resolved = buildNodeInputWithLineageFromContext(node, context);
+        resolvedInput = resolved.resolvedInput;
+        resolvedInputLineage = resolved.lineage;
       } catch (error) {
         errors.push({
           code: error?.code === 'missing_variable' ? 'missing_variable' : 'preview_resolution_failed',
@@ -3442,6 +3547,7 @@ export function createWorkflowStudioStore({
         type: node.type,
         title: node.title,
         resolvedInput,
+        resolvedInputLineage,
         permissionDecision,
         upstream,
         blocked: errors.length > 0 || permissionDecision === 'deny',
