@@ -643,6 +643,31 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       actionLabel: 'Watch progress',
     };
   }, [selectedRun]);
+  const previewConsistency = useMemo<WorkflowHumanHint>(() => {
+    if (!selectedRun) {
+      return {
+        title: 'Preview not checked',
+        body: 'Start a run after dry check to compare the reviewed preview with execution inputs.',
+        actionLabel: 'No run',
+      };
+    }
+    if (selectedRun.previewChanged || selectedRun.previewDiff?.changed) {
+      const reasons = selectedRun.previewDiff?.reasons?.join(', ') || 'execution inputs changed after preview';
+      return {
+        title: 'Preview changed before execution',
+        body: reasons,
+        actionLabel: 'Review diff',
+      };
+    }
+    return {
+      title: 'Preview matched execution',
+      body: 'The reviewed dry-run snapshot matches the inputs used to create this run.',
+      actionLabel: 'Matched',
+    };
+  }, [selectedRun]);
+  const previewChangedNodes = useMemo(() => (
+    selectedRun?.previewDiff?.changedNodes || []
+  ), [selectedRun]);
   const activeApprovalNode = useMemo(() => (
     selectedRun
       ? Object.values(selectedRun.nodeRuns || {}).find((nodeRun) => nodeRun.status === 'waiting_approval') || null
@@ -1467,6 +1492,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         projectPath: selectedProject.path || selectedProject.fullPath,
         sessionId: sessionId || '',
         inputs: runInputs,
+        previewSnapshot: dryRunPreview || undefined,
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || 'Failed to run workflow');
@@ -1477,7 +1503,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     } finally {
       setIsBusy(false);
     }
-  }, [draft.id, loadData, runInputs, selectedProject.fullPath, selectedProject.path, sessionId]);
+  }, [draft.id, dryRunPreview, loadData, runInputs, selectedProject.fullPath, selectedProject.path, sessionId]);
 
   useEffect(() => {
     const onWorkflowEditorShortcut = (event: KeyboardEvent) => {
@@ -3506,6 +3532,48 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 </div>
               )}
             </section>
+            {selectedRun && (
+              <section
+                className={cn(
+                  'mb-4 rounded-md border p-3 text-xs',
+                  selectedRun.previewChanged || selectedRun.previewDiff?.changed
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-800',
+                )}
+                data-testid="workflow-preview-diff-panel"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold text-foreground">Preview consistency</h3>
+                    <p className="mt-1">{previewConsistency.body}</p>
+                  </div>
+                  <span
+                    className={cn(
+                      'shrink-0 rounded-full border bg-background px-2 py-0.5 text-[11px]',
+                      selectedRun.previewChanged || selectedRun.previewDiff?.changed
+                        ? 'border-amber-300 text-amber-800'
+                        : 'border-emerald-300 text-emerald-800',
+                    )}
+                    data-testid="workflow-preview-consistency-chip"
+                  >
+                    {previewConsistency.actionLabel}
+                  </span>
+                </div>
+                {previewChangedNodes.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {previewChangedNodes.slice(0, 4).map((node) => (
+                      <div key={node.nodeId} className="rounded border border-amber-200 bg-background px-2 py-1">
+                        <span className="font-medium text-foreground">{node.nodeId}</span>
+                        <span className="ml-2">{(node.fields || []).join(', ') || 'node'} changed</span>
+                        {(node.reasons || []).length > 0 && (
+                          <span className="ml-2 text-muted-foreground">({node.reasons?.join(', ')})</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
             {selectedRun && activeApprovalNode && (
               <section className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-4 shadow-sm" data-testid="workflow-runs-approval-focus">
                 <div className="flex items-start justify-between gap-4">

@@ -240,6 +240,10 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('resolvedInput');
     expect(source).toContain('permissionDecision');
     expect(source).toContain('data-testid="workflow-run-console"');
+    expect(source).toContain('data-testid="workflow-preview-consistency-chip"');
+    expect(source).toContain('data-testid="workflow-preview-diff-panel"');
+    expect(source).toContain('previewSnapshot: dryRunPreview || undefined');
+    expect(source).toContain('previewChangedNodes');
     expect(source).toContain('data-testid="workflow-run-events"');
     expect(source).toContain('data-testid="workflow-node-logs"');
     expect(source).toContain('data-testid="workflow-retry-from-node"');

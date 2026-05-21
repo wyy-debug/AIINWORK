@@ -121,6 +121,17 @@ export interface WorkflowNodeRun {
   permissionDecision?: string;
 }
 
+export interface WorkflowPreviewDiff {
+  matched?: boolean;
+  changed?: boolean;
+  reasons?: string[];
+  changedNodes?: Array<{
+    nodeId: string;
+    fields?: string[];
+    reasons?: string[];
+  }>;
+}
+
 export interface WorkflowRun {
   id: string;
   workflowId: string;
@@ -130,6 +141,12 @@ export interface WorkflowRun {
   sessionId?: string;
   inputs?: Record<string, unknown>;
   profileSnapshot?: Record<string, unknown>;
+  previewSnapshot?: Record<string, unknown>;
+  executionInputSnapshot?: Record<string, unknown>;
+  previewDiff?: WorkflowPreviewDiff;
+  previewMatched?: boolean;
+  previewChanged?: boolean;
+  resolverVersion?: string;
   queue?: {
     state?: WorkflowQueueState;
     workerId?: string;

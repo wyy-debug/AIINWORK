@@ -810,6 +810,56 @@ describe('workflow studio service', () => {
     const executionAgent = run.executionInputSnapshot.nodes.find((node) => node.nodeId === 'agent');
     expect(executionAgent.resolvedInput).toEqual(previewAgent.resolvedInput);
     expect(run.executionInputSnapshot.nodes).toEqual(run.previewSnapshot.nodes);
+    expect(run.previewMatched).toBe(true);
+    expect(run.previewChanged).toBe(false);
+    expect(run.previewDiff).toMatchObject({
+      matched: true,
+      changed: false,
+      changedNodes: [],
+      reasons: [],
+    });
+  });
+
+  test('reports preview diff when execution inputs drift from the reviewed preview snapshot', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      autoExecute: false,
+      agentResolver,
+    });
+    await store.upsertWorkflow({
+      id: 'snapshot-drift-flow',
+      name: 'Snapshot Drift Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'agent', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+
+    const validation = await store.validateRun('snapshot-drift-flow', { inputs: { change_request: 'reviewed plan' } });
+    const run = await store.createRun('snapshot-drift-flow', {
+      inputs: { change_request: 'changed before run' },
+      previewSnapshot: validation.preview,
+    });
+
+    expect(run.previewMatched).toBe(false);
+    expect(run.previewChanged).toBe(true);
+    expect(run.previewDiff).toMatchObject({
+      matched: false,
+      changed: true,
+      reasons: expect.arrayContaining(['input_changed', 'node_input_changed']),
+      changedNodes: [
+        expect.objectContaining({
+          nodeId: 'agent',
+          fields: expect.arrayContaining(['resolvedInput']),
+          reasons: expect.arrayContaining(['node_input_changed']),
+        }),
+      ],
+    });
+    expect(run.previewSnapshot.inputSnapshot.change_request).toBe('reviewed plan');
+    expect(run.executionInputSnapshot.inputSnapshot.change_request).toBe('changed before run');
   });
 
   test('clones workflow templates with manifest metadata into editable workflows', async () => {

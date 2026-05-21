@@ -366,6 +366,124 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isSameJson(left, right) {
+  return stableJson(left ?? null) === stableJson(right ?? null);
+}
+
+function normalizePreviewDiff(input = {}) {
+  const source = asObject(input);
+  const changed = source.changed === true;
+  return {
+    matched: source.matched === undefined ? !changed : source.matched === true,
+    changed,
+    reasons: Array.isArray(source.reasons) ? source.reasons.map((item) => normalizeText(item, '', 80)).filter(Boolean) : [],
+    changedNodes: Array.isArray(source.changedNodes)
+      ? source.changedNodes.map((entry) => {
+        const node = asObject(entry);
+        return {
+          nodeId: normalizeText(node.nodeId, '', 120),
+          fields: Array.isArray(node.fields) ? node.fields.map((item) => normalizeText(item, '', 120)).filter(Boolean) : [],
+          reasons: Array.isArray(node.reasons) ? node.reasons.map((item) => normalizeText(item, '', 80)).filter(Boolean) : [],
+        };
+      }).filter((entry) => entry.nodeId)
+      : [],
+  };
+}
+
+function addPreviewReason(diff, reason) {
+  if (!diff.reasons.includes(reason)) {
+    diff.reasons.push(reason);
+  }
+}
+
+function addChangedPreviewNode(diff, nodeId, field, reason) {
+  const normalizedNodeId = normalizeText(nodeId, '', 120);
+  if (!normalizedNodeId) return;
+  let entry = diff.changedNodes.find((item) => item.nodeId === normalizedNodeId);
+  if (!entry) {
+    entry = { nodeId: normalizedNodeId, fields: [], reasons: [] };
+    diff.changedNodes.push(entry);
+  }
+  if (field && !entry.fields.includes(field)) {
+    entry.fields.push(field);
+  }
+  if (reason && !entry.reasons.includes(reason)) {
+    entry.reasons.push(reason);
+  }
+  if (reason) {
+    addPreviewReason(diff, reason);
+  }
+}
+
+function diffPreviewSnapshots(previewSnapshotInput = {}, executionSnapshotInput = {}) {
+  const previewSnapshot = asObject(previewSnapshotInput);
+  const executionSnapshot = asObject(executionSnapshotInput);
+  const diff = { matched: true, changed: false, reasons: [], changedNodes: [] };
+
+  if (!isSameJson(previewSnapshot.inputSnapshot || {}, executionSnapshot.inputSnapshot || {})) {
+    addPreviewReason(diff, 'input_changed');
+  }
+  if (normalizeText(previewSnapshot.resolverVersion) !== normalizeText(executionSnapshot.resolverVersion)) {
+    addPreviewReason(diff, 'resolver_version_changed');
+  }
+
+  const previewDeps = asObject(previewSnapshot.dependencyRefs);
+  const executionDeps = asObject(executionSnapshot.dependencyRefs);
+  if (normalizeText(previewDeps.workflowDigest) !== normalizeText(executionDeps.workflowDigest)) {
+    addPreviewReason(diff, 'definition_changed');
+  }
+  if (normalizeText(previewDeps.profileId) !== normalizeText(executionDeps.profileId)) {
+    addPreviewReason(diff, 'profile_changed');
+  }
+  if (normalizeText(previewDeps.permissionPreset) !== normalizeText(executionDeps.permissionPreset)) {
+    addPreviewReason(diff, 'permission_preset_changed');
+  }
+  if (!isSameJson(previewDeps.nodePackages || [], executionDeps.nodePackages || [])) {
+    addPreviewReason(diff, 'package_changed');
+  }
+
+  const previewNodes = new Map((Array.isArray(previewSnapshot.nodes) ? previewSnapshot.nodes : []).map((node) => [normalizeText(node?.nodeId, '', 120), asObject(node)]));
+  const executionNodes = new Map((Array.isArray(executionSnapshot.nodes) ? executionSnapshot.nodes : []).map((node) => [normalizeText(node?.nodeId, '', 120), asObject(node)]));
+  for (const [nodeId, previewNode] of previewNodes.entries()) {
+    const executionNode = executionNodes.get(nodeId);
+    if (!executionNode) {
+      addChangedPreviewNode(diff, nodeId, 'node', 'node_removed');
+      continue;
+    }
+    if (!isSameJson(previewNode.resolvedInput || {}, executionNode.resolvedInput || {})) {
+      addChangedPreviewNode(diff, nodeId, 'resolvedInput', 'node_input_changed');
+    }
+    if (normalizeText(previewNode.permissionDecision) !== normalizeText(executionNode.permissionDecision)) {
+      addChangedPreviewNode(diff, nodeId, 'permissionDecision', 'permission_changed');
+    }
+    if (Boolean(previewNode.blocked) !== Boolean(executionNode.blocked)) {
+      addChangedPreviewNode(diff, nodeId, 'blocked', 'blocked_state_changed');
+    }
+    if (!isSameJson(previewNode.errors || [], executionNode.errors || [])) {
+      addChangedPreviewNode(diff, nodeId, 'errors', 'node_errors_changed');
+    }
+  }
+  for (const nodeId of executionNodes.keys()) {
+    if (!previewNodes.has(nodeId)) {
+      addChangedPreviewNode(diff, nodeId, 'node', 'node_added');
+    }
+  }
+
+  diff.changed = diff.reasons.length > 0 || diff.changedNodes.length > 0;
+  diff.matched = !diff.changed;
+  return diff;
+}
+
 function normalizeJsonSchema(value, fallbackType = 'object') {
   const source = asObject(value);
   return {
@@ -1929,6 +2047,11 @@ function normalizeRun(input, now) {
   const workflow = asObject(source.workflow);
   const timestamp = source.createdAt || now();
   const nodeRuns = asObject(source.nodeRuns);
+  const previewSnapshot = asObject(source.previewSnapshot);
+  const executionInputSnapshot = asObject(source.executionInputSnapshot);
+  const previewDiff = Object.keys(asObject(source.previewDiff)).length > 0
+    ? normalizePreviewDiff(source.previewDiff)
+    : diffPreviewSnapshots(previewSnapshot, executionInputSnapshot);
   return {
     id: normalizeText(source.id, `workflow_run_${crypto.randomUUID()}`, 120),
     workflowId: normalizeText(source.workflowId || workflow.id, '', 120),
@@ -1940,9 +2063,12 @@ function normalizeRun(input, now) {
     sessionId: normalizeText(source.sessionId, '', 240),
     inputs: asObject(source.inputs),
     profileSnapshot: asObject(source.profileSnapshot),
-    previewSnapshot: asObject(source.previewSnapshot),
-    executionInputSnapshot: asObject(source.executionInputSnapshot),
-    resolverVersion: normalizeText(source.resolverVersion || source.executionInputSnapshot?.resolverVersion || source.previewSnapshot?.resolverVersion, '', 80),
+    previewSnapshot,
+    executionInputSnapshot,
+    previewDiff,
+    previewMatched: source.previewMatched === undefined ? previewDiff.matched : source.previewMatched === true,
+    previewChanged: source.previewChanged === undefined ? previewDiff.changed : source.previewChanged === true,
+    resolverVersion: normalizeText(source.resolverVersion || executionInputSnapshot.resolverVersion || previewSnapshot.resolverVersion, '', 80),
     nodeRuns,
     queue: createQueueState(source.queue, now),
     logs: Array.isArray(source.logs) ? source.logs : [],
@@ -2650,6 +2776,10 @@ export function createWorkflowStudioStore({
       throw error;
     }
     const runPlan = resolveWorkflowRunPlan(runnableWorkflow, { runInputs });
+    const reviewedPreviewSnapshot = Object.keys(asObject(input.previewSnapshot)).length > 0
+      ? clone(asObject(input.previewSnapshot))
+      : runPlan.previewSnapshot;
+    const previewDiff = diffPreviewSnapshots(reviewedPreviewSnapshot, runPlan.executionInputSnapshot);
 
     const agent = await agentResolver(runnableWorkflow.profileId);
     const timestamp = now();
@@ -2668,8 +2798,11 @@ export function createWorkflowStudioStore({
         governanceStatus: normalizeWorkflowGovernance(workflow).status,
         publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
       },
-      previewSnapshot: runPlan.previewSnapshot,
+      previewSnapshot: reviewedPreviewSnapshot,
       executionInputSnapshot: runPlan.executionInputSnapshot,
+      previewDiff,
+      previewMatched: previewDiff.matched,
+      previewChanged: previewDiff.changed,
       resolverVersion: runPlan.resolverVersion,
       queue: {
         state: autoExecute ? 'running' : 'queued',
@@ -2677,8 +2810,14 @@ export function createWorkflowStudioStore({
         updatedAt: timestamp,
       },
       nodeRuns: Object.fromEntries(runnableWorkflow.nodes.map((node) => [node.id, createNodeRun(node, now)])),
-      logs: [`Created workflow run for ${workflow.name}.`],
-      timelineEvents: [createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name, governanceStatus: normalizeWorkflowGovernance(workflow).status }, now)],
+      logs: [
+        `Created workflow run for ${workflow.name}.`,
+        ...(previewDiff.changed ? [`Preview drift detected: ${previewDiff.reasons.join(', ') || 'changed node inputs'}.`] : []),
+      ],
+      timelineEvents: [
+        createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name, governanceStatus: normalizeWorkflowGovernance(workflow).status }, now),
+        ...(previewDiff.changed ? [createRunEvent('workflow_preview_changed', { reasons: previewDiff.reasons, changedNodes: previewDiff.changedNodes }, now)] : []),
+      ],
       createdAt: timestamp,
       startedAt: timestamp,
       updatedAt: timestamp,
