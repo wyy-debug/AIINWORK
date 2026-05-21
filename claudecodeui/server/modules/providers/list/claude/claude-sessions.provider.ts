@@ -54,6 +54,15 @@ function isInternalContent(content: string): boolean {
     || isTaskNotificationContent(trimmed);
 }
 
+function stripHiddenUserContext(content: string): string {
+  return content
+    .replace(/\r\n/g, '\n')
+    .replace(/\n?\s*\[Images provided at the following paths:\][\s\S]*?(?=\n\s*\n|$)/i, '')
+    .replace(/\n?\s*\[Images given:[\s\S]*?images are located at the following paths:\][\s\S]*?(?=\n\s*\n|$)/i, '')
+    .replace(/\n?\s*## Screenshot analysis[\s\S]*$/i, '')
+    .trim();
+}
+
 function isInjectedSkillInstructionContent(content: string): boolean {
   const trimmed = content.trimStart();
   if (!trimmed.startsWith('Base directory for this skill:')) {
@@ -355,7 +364,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
-            const text = part.text || '';
+            const text = stripHiddenUserContext(part.text || '');
             const taskNotification = taskNotificationFromContent(text);
             if (taskNotification) {
               messages.push(createNormalizedMessage({
@@ -389,7 +398,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n');
-          if (textParts && !isInternalContent(textParts)) {
+          const visibleTextParts = stripHiddenUserContext(textParts);
+          if (visibleTextParts && !isInternalContent(visibleTextParts)) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
               sessionId,
@@ -397,12 +407,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'text',
               role: 'user',
-              content: textParts,
+              content: visibleTextParts,
             }));
           }
         }
       } else if (typeof raw.message.content === 'string') {
-        const text = raw.message.content;
+        const text = stripHiddenUserContext(raw.message.content);
         const taskNotification = taskNotificationFromContent(text);
         if (taskNotification) {
           messages.push(createNormalizedMessage({
