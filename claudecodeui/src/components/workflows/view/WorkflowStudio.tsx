@@ -117,6 +117,39 @@ type WorkflowPythonNodeTestResult = {
   parsedOutput?: Record<string, unknown>;
 };
 
+type WorkflowNodePackageRecord = {
+  id?: string;
+  enabled?: boolean;
+  status?: string;
+  lifecycleState?: string;
+  state?: string;
+  updatedAt?: string;
+  manifest?: Record<string, any>;
+  definition?: {
+    type?: string;
+    label?: string;
+    description?: string;
+  };
+  dependencies?: Record<string, unknown>;
+  missingDependencies?: Array<Record<string, unknown>>;
+};
+
+type WorkflowNodePackageImpactReport = {
+  packageId?: string;
+  exists?: boolean;
+  destructiveActionRisk?: string;
+  totals?: {
+    workflows?: number;
+    templates?: number;
+    recentRuns?: number;
+  };
+  affected?: {
+    workflows?: Array<Record<string, any>>;
+    templates?: Array<Record<string, any>>;
+    recentRuns?: Array<Record<string, any>>;
+  };
+};
+
 type WorkflowDryRunPreview = {
   workflowId?: string;
   nodeCount?: number;
@@ -445,6 +478,9 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [customNodeValidation, setCustomNodeValidation] = useState<{ valid?: boolean; errors?: Array<{ code?: string; message?: string }>; warnings?: Array<{ code?: string; message?: string }> } | null>(null);
   const [customNodeTestResult, setCustomNodeTestResult] = useState<WorkflowPythonNodeTestResult | null>(null);
   const [customNodeInstallMessage, setCustomNodeInstallMessage] = useState('');
+  const [workflowNodePackages, setWorkflowNodePackages] = useState<WorkflowNodePackageRecord[]>([]);
+  const [nodePackageImpactReports, setNodePackageImpactReports] = useState<Record<string, WorkflowNodePackageImpactReport>>({});
+  const [nodePackageActionMessage, setNodePackageActionMessage] = useState('');
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -895,6 +931,20 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       ...dependencyWarnings.map((item) => item.message || item.code || 'Dependency warning'),
     ];
   }, [customNodeDraft, customNodeValidation]);
+  const installedWorkflowNodePackages = useMemo(() => workflowNodePackages.filter((item) => item?.id), [workflowNodePackages]);
+  const workflowNodePackageSummary = useMemo(() => {
+    const enabled = installedWorkflowNodePackages.filter((item) => item.enabled !== false && (item.lifecycleState || item.state) !== 'disabled').length;
+    const disabled = installedWorkflowNodePackages.length - enabled;
+    return `${enabled} enabled / ${disabled} disabled`;
+  }, [installedWorkflowNodePackages]);
+
+  const loadWorkflowNodePackages = useCallback(async () => {
+    const response = await api.workflowNodePackages();
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Failed to load workflow node packages');
+    setWorkflowNodePackages(data.packages || []);
+    return data.packages || [];
+  }, []);
 
   const loadNodeTypes = useCallback(async () => {
     const response = await api.workflowNodeTypes();
@@ -905,29 +955,33 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const loadData = useCallback(async () => {
     setError('');
-    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse, approvalsResponse] = await Promise.all([
+    const [workflowsResponse, runsResponse, agentsResponse, nodeTypesResponse, approvalsResponse, nodePackagesResponse] = await Promise.all([
       api.workflows(),
       api.workflowRuns({ limit: 25 }),
       api.agents(false, 'all'),
       api.workflowNodeTypes(),
       api.workflowApprovals(),
+      api.workflowNodePackages(),
     ]);
-    const [workflowsData, runsData, agentsData, nodeTypesData, approvalsData] = await Promise.all([
+    const [workflowsData, runsData, agentsData, nodeTypesData, approvalsData, nodePackagesData] = await Promise.all([
       workflowsResponse.json(),
       runsResponse.json(),
       agentsResponse.json(),
       nodeTypesResponse.json(),
       approvalsResponse.json(),
+      nodePackagesResponse.json(),
     ]);
     if (!workflowsResponse.ok) throw new Error(workflowsData?.error || 'Failed to load workflows');
     if (!runsResponse.ok) throw new Error(runsData?.error || 'Failed to load workflow runs');
     if (!agentsResponse.ok) throw new Error(agentsData?.error || 'Failed to load agents');
     if (!nodeTypesResponse.ok) throw new Error(nodeTypesData?.error || 'Failed to load workflow node types');
+    if (!nodePackagesResponse.ok) throw new Error(nodePackagesData?.error || 'Failed to load workflow node packages');
     const loadedWorkflows = workflowsData.workflows || [];
     setWorkflows(loadedWorkflows);
     setRuns(runsData.runs || []);
     setAgents(agentsData.agents || []);
     setNodeTypeDefinitions(nodeTypesData.nodeTypes || []);
+    setWorkflowNodePackages(nodePackagesData.packages || []);
     setApprovalRequests(approvalsResponse.ok ? approvalsData.approvals || [] : []);
     if (!selectedWorkflowId && loadedWorkflows[0]) {
       setSelectedWorkflowId(loadedWorkflows[0].id);
@@ -1775,12 +1829,60 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       if (!response.ok) throw new Error(data?.error || 'Failed to install custom node');
       setCustomNodeInstallMessage(`${data.package?.definition?.label || customNodeDraft.manifest.label || 'Custom node'} installed`);
       await loadNodeTypes();
+      await loadWorkflowNodePackages();
     } catch (installError) {
       setError(installError instanceof Error ? installError.message : 'Failed to install custom node');
     } finally {
       setIsBusy(false);
     }
-  }, [customNodeDraft, loadNodeTypes]);
+  }, [customNodeDraft, loadNodeTypes, loadWorkflowNodePackages]);
+
+  const loadNodePackageImpact = useCallback(async (packageId: string) => {
+    if (!packageId) return null;
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.workflowNodePackageImpact(packageId);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to load node package impact');
+      setNodePackageImpactReports((current) => ({ ...current, [packageId]: data.report || {} }));
+      return data.report || null;
+    } catch (impactError) {
+      setError(impactError instanceof Error ? impactError.message : 'Failed to load node package impact');
+      return null;
+    } finally {
+      setIsBusy(false);
+    }
+  }, []);
+
+  const runNodePackageLifecycleAction = useCallback(async (packageId: string, action: 'enable' | 'disable' | 'uninstall') => {
+    if (!packageId) return;
+    setIsBusy(true);
+    setError('');
+    setNodePackageActionMessage('');
+    try {
+      if (action !== 'enable') {
+        const impactResponse = await api.workflowNodePackageImpact(packageId);
+        const impactData = await impactResponse.json();
+        if (impactResponse.ok) {
+          setNodePackageImpactReports((current) => ({ ...current, [packageId]: impactData.report || {} }));
+        }
+      }
+      const response = action === 'enable'
+        ? await api.enableWorkflowNodePackage(packageId)
+        : action === 'disable'
+          ? await api.disableWorkflowNodePackage(packageId)
+          : await api.uninstallWorkflowNodePackage(packageId);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || `Failed to ${action} node package`);
+      setNodePackageActionMessage(action === 'uninstall' ? `${packageId} uninstalled` : `${data.package?.definition?.label || packageId} ${action}d`);
+      await Promise.all([loadNodeTypes(), loadWorkflowNodePackages()]);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : `Failed to ${action} node package`);
+    } finally {
+      setIsBusy(false);
+    }
+  }, [loadNodeTypes, loadWorkflowNodePackages]);
 
   const runBenchmarks = useCallback(async () => {
     setIsBusy(true);
@@ -2129,6 +2231,92 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     Generate draft
                   </button>
                   <span className="text-xs text-slate-500">Python only. Standard library only. No generated React UI code.</span>
+                </div>
+              </section>
+
+              <section className="mt-4 rounded-md border border-slate-200 bg-white p-3" data-testid="workflow-node-package-manager">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-950">Installed node packages</h4>
+                    <p className="mt-1 text-xs text-slate-500">Manage custom nodes before they appear in the Custom palette.</p>
+                  </div>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600">{workflowNodePackageSummary}</span>
+                </div>
+                {nodePackageActionMessage && (
+                  <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700">{nodePackageActionMessage}</div>
+                )}
+                <div className="mt-3 space-y-2">
+                  {installedWorkflowNodePackages.map((nodePackage) => {
+                    const packageId = String(nodePackage.id || nodePackage.manifest?.id || '');
+                    const lifecycleState = String(nodePackage.lifecycleState || nodePackage.state || (nodePackage.enabled === false ? 'disabled' : 'enabled'));
+                    const impactReport = nodePackageImpactReports[packageId];
+                    const usedByCount = (impactReport?.totals?.workflows || 0) + (impactReport?.totals?.templates || 0) + (impactReport?.totals?.recentRuns || 0);
+                    const dependencyCount = Object.values(nodePackage.dependencies || nodePackage.manifest?.dependencies || {}).flatMap((value) => Array.isArray(value) ? value : value ? [value] : []).length;
+                    return (
+                      <div key={packageId} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h5 className="truncate text-sm font-semibold text-slate-950">{nodePackage.definition?.label || nodePackage.manifest?.label || packageId}</h5>
+                            <p className="mt-1 truncate text-xs text-slate-500">{nodePackage.definition?.description || nodePackage.manifest?.description || nodePackage.definition?.type || 'Custom workflow node package'}</p>
+                          </div>
+                          <span
+                            className={cn(
+                              'shrink-0 rounded-full border px-2 py-0.5 text-[11px]',
+                              lifecycleState === 'disabled'
+                                ? 'border-slate-200 bg-white text-slate-600'
+                                : nodePackage.status === 'broken' || lifecycleState === 'broken'
+                                  ? 'border-red-200 bg-red-50 text-red-700'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700',
+                            )}
+                            data-testid="workflow-node-package-state"
+                          >
+                            {lifecycleState} / {nodePackage.status || 'ready'}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-4">
+                          <div className="rounded border border-slate-200 bg-white px-2 py-1">Type: {nodePackage.definition?.type || nodePackage.manifest?.type || 'custom'}</div>
+                          <div className="rounded border border-slate-200 bg-white px-2 py-1">Version: {String(nodePackage.manifest?.version || '1.0.0')}</div>
+                          <div className="rounded border border-slate-200 bg-white px-2 py-1">Deps: {dependencyCount}</div>
+                          <div className="rounded border border-slate-200 bg-white px-2 py-1">Used by: {impactReport ? usedByCount : 'check'}</div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => void loadNodePackageImpact(packageId)} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-2 text-xs hover:bg-slate-100 disabled:opacity-50">
+                            Impact
+                          </button>
+                          {lifecycleState === 'disabled' ? (
+                            <button type="button" data-testid="workflow-node-package-enable" onClick={() => void runNodePackageLifecycleAction(packageId, 'enable')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 text-xs text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+                              Enable
+                            </button>
+                          ) : (
+                            <button type="button" data-testid="workflow-node-package-disable" onClick={() => void runNodePackageLifecycleAction(packageId, 'disable')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-2 text-xs hover:bg-slate-100 disabled:opacity-50">
+                              Disable
+                            </button>
+                          )}
+                          <button type="button" data-testid="workflow-node-package-uninstall" onClick={() => void runNodePackageLifecycleAction(packageId, 'uninstall')} disabled={isBusy} className="inline-flex h-8 items-center rounded-md border border-red-200 bg-red-50 px-2 text-xs text-red-700 hover:bg-red-100 disabled:opacity-50">
+                            Uninstall
+                          </button>
+                        </div>
+                        {impactReport && (
+                          <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800" data-testid="workflow-node-package-impact-report">
+                            <div className="font-semibold">Impact report: {impactReport.destructiveActionRisk || 'none'}</div>
+                            <div className="mt-1">Workflows {impactReport.totals?.workflows || 0} · Templates {impactReport.totals?.templates || 0} · Recent runs {impactReport.totals?.recentRuns || 0}</div>
+                            {[
+                              ...(impactReport.affected?.workflows || []),
+                              ...(impactReport.affected?.templates || []),
+                              ...(impactReport.affected?.recentRuns || []),
+                            ].slice(0, 3).map((entry) => (
+                              <div key={`${entry.objectType}-${entry.id}`} className="mt-1 rounded border border-amber-200 bg-white px-2 py-1">
+                                {String(entry.objectType)} · {String(entry.title || entry.id)} · nodes {(entry.nodeIds || []).join(', ') || 'declared dependency'}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {installedWorkflowNodePackages.length === 0 && (
+                    <div className="rounded border border-dashed border-slate-200 p-4 text-center text-xs text-slate-500">No custom node packages installed yet.</div>
+                  )}
                 </div>
               </section>
 

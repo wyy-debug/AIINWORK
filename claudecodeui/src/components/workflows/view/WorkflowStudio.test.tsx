@@ -587,10 +587,20 @@ describe('WorkflowStudio source contract', () => {
     expect(apiSource).toContain('generateWorkflowNodePackageDraft');
     expect(apiSource).toContain('validateWorkflowNodePackageDraft');
     expect(apiSource).toContain('testWorkflowNodePackageDraft');
+    expect(apiSource).toContain('workflowNodePackageImpact');
+    expect(apiSource).toContain('disableWorkflowNodePackage');
+    expect(apiSource).toContain('enableWorkflowNodePackage');
+    expect(apiSource).toContain('uninstallWorkflowNodePackage');
     expect(studioSource).toContain('data-testid="workflow-generate-custom-node"');
     expect(studioSource).toContain('data-testid="workflow-ai-node-draft-review"');
     expect(studioSource).toContain('data-testid="workflow-custom-schema-node-form"');
     expect(studioSource).toContain('data-testid="workflow-python-node-test-result"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-manager"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-state"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-impact-report"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-disable"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-enable"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-uninstall"');
     expect(studioSource).toContain('Custom');
     expect(studioSource).not.toContain('dangerouslySetInnerHTML');
     expect(screenshotSpec).toContain('REQ-207-ai-node-draft.png');
@@ -598,5 +608,7 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).toContain('REQ-207-python-node-test-stdout-stderr.png');
     expect(screenshotSpec).toContain('REQ-207-custom-node-installed.png');
     expect(screenshotSpec).toContain('REQ-207-custom-node-run-output.png');
+    expect(screenshotSpec).toContain('REQ-211C-package-manager-impact.png');
+    expect(screenshotSpec).toContain('REQ-211C-package-manager-disabled.png');
   });
 });
