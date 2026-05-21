@@ -310,6 +310,14 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-transform-functions"');
     expect(source).toContain('data-testid="workflow-output-contract-test"');
     expect(source).toContain('data-testid="workflow-data-lineage-view"');
+    expect(source).toContain('data-testid="workflow-variable-debugger"');
+    expect(source).toContain('data-testid="workflow-variable-debugger-row"');
+    expect(source).toContain('data-testid="workflow-variable-copy-expression"');
+    expect(source).toContain('data-testid="workflow-run-lineage-detail"');
+    expect(source).toContain('resolvedInputLineage');
+    expect(source).toContain('inputLineage');
+    expect(source).toContain('lineageFieldRows');
+    expect(source).toContain('getNodeRunLineageRows');
     expect(source).toContain('schemaVersion');
     expect(source).toContain('saveNodeConfigPreset');
     expect(source).toContain('applyNodeConfigPreset');

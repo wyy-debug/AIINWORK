@@ -42,7 +42,37 @@ const waitingRun = {
   status: 'waiting_approval',
   createdAt: Date.now(),
   nodeRuns: {
-    explore: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent', status: 'completed', attempt: 1, logs: ['Completed subagent node.'] },
+    explore: {
+      nodeId: 'explore',
+      type: 'subagent',
+      title: 'Explore Subagent',
+      status: 'completed',
+      attempt: 1,
+      logs: ['Completed subagent node.'],
+      input: { prompt: 'Explore impact for Trace Export frame export.', command: '', condition: '', toolName: '', config: {} },
+      output: { summary: 'Trace export impact found.' },
+      inputLineage: {
+        prompt: {
+          field: 'prompt',
+          status: 'resolved',
+          sourceExpression: 'inputs.change_request',
+          sourcePath: 'inputs.change_request',
+          valuePreview: 'Explore impact for Trace Export frame export.',
+          segments: [
+            { type: 'literal', valuePreview: 'Explore impact for ' },
+            { type: 'variable', status: 'resolved', sourceExpression: 'inputs.change_request', sourcePath: 'inputs.change_request', valuePreview: 'Trace Export frame export' },
+          ],
+        },
+        config: {
+          field: 'config',
+          status: 'literal',
+          sourceExpression: '',
+          sourcePath: '',
+          valuePreview: '{}',
+          segments: [{ type: 'literal', valuePreview: '{}' }],
+        },
+      },
+    },
     approval: { nodeId: 'approval', type: 'approval', title: 'Human Approval', status: 'waiting_approval', attempt: 1, waitingReason: 'Waiting for approval.', logs: ['Waiting for approval.'] },
     artifact: { nodeId: 'artifact', type: 'artifact', title: 'Delivery Artifact', status: 'pending', attempt: 0, logs: [] },
   },
@@ -220,6 +250,32 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
     if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes });
     if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
     if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
+    if (path === `/api/workflows/${workflow.id}/validate-run`) {
+      return json(route, {
+        success: true,
+        validation: {
+          valid: true,
+          errors: [],
+          warnings: [],
+          preview: {
+            workflowId: workflow.id,
+            nodeCount: workflow.nodes.length,
+            blockedCount: 0,
+            nodes: Object.values(waitingRun.nodeRuns).map((nodeRun: any) => ({
+              nodeId: nodeRun.nodeId,
+              type: nodeRun.type,
+              title: nodeRun.title,
+              resolvedInput: nodeRun.input || {},
+              resolvedInputLineage: nodeRun.inputLineage || {},
+              permissionDecision: nodeRun.permissionDecision || 'allow',
+              upstream: workflow.edges.filter((edge) => edge.to === nodeRun.nodeId).map((edge) => ({ nodeId: edge.from, mode: edge.mode })),
+              blocked: false,
+              errors: [],
+            })),
+          },
+        },
+      });
+    }
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
     if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
     if (path === `/api/workflow-runs/${waitingRun.id}/nodes/approval/control`) {
@@ -577,6 +633,29 @@ test('REQ-212D captures runtime error custom node test matrix evidence @screensh
   await expect(page.getByTestId('workflow-python-node-test-matrix')).toContainText('runtime stderr captured');
   await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
   await screenshot(page, 'REQ-212D-test-matrix-runtime-error.png');
+});
+
+test('REQ-213B captures variable debugger and run lineage detail @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('workflowStudio.uiMode', 'advanced');
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await page.getByTestId('workflow-inspector-tabs').getByRole('button', { name: 'Data' }).click();
+  await expect(page.getByTestId('workflow-variable-debugger')).toBeVisible();
+  await expect(page.getByTestId('workflow-variable-debugger-row').first()).toContainText('inputs.change_request');
+  await expect(page.getByTestId('workflow-variable-copy-expression').first()).toBeEnabled();
+  await page.getByTestId('workflow-variable-debugger').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-213B-variable-debugger.png');
+
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-run-lineage-detail').first()).toBeVisible();
+  await page.getByTestId('workflow-run-lineage-detail').first().click();
+  await expect(page.getByTestId('workflow-run-lineage-detail').first()).toContainText('inputs.change_request');
+  await screenshot(page, 'REQ-213B-run-lineage-detail.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {

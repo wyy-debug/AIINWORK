@@ -113,6 +113,7 @@ export interface WorkflowNodeRun {
   durationMs?: number;
   logs?: string[];
   input?: Record<string, unknown>;
+  inputLineage?: Record<string, unknown>;
   output?: Record<string, unknown>;
   artifacts?: Array<Record<string, unknown>>;
   checkpoints?: Record<string, Record<string, unknown>>;

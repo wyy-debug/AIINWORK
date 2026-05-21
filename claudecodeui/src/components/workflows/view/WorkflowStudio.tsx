@@ -169,11 +169,42 @@ type WorkflowDryRunPreview = {
     type?: string;
     title?: string;
     resolvedInput?: Record<string, unknown>;
+    resolvedInputLineage?: Record<string, unknown>;
     permissionDecision?: string;
     upstream?: Array<{ nodeId?: string; mode?: string }>;
     blocked?: boolean;
     errors?: Array<{ code?: string; message?: string }>;
   }>;
+};
+
+type WorkflowLineageSegment = {
+  type?: string;
+  kind?: string;
+  text?: string;
+  sourceExpression?: string;
+  sourcePath?: string;
+  valuePreview?: unknown;
+  error?: { code?: string; message?: string; variable?: string };
+};
+
+type WorkflowLineageTrace = {
+  field?: string;
+  status?: string;
+  sourceExpression?: string;
+  sourcePath?: string;
+  valuePreview?: unknown;
+  segments?: WorkflowLineageSegment[];
+  error?: { code?: string; message?: string; variable?: string };
+};
+
+type WorkflowLineageRow = {
+  field: string;
+  status: string;
+  sourceExpression: string;
+  sourcePath: string;
+  valuePreview: string;
+  errorMessage: string;
+  segmentCount: number;
 };
 
 type WorkflowPaletteGroup = {
@@ -314,6 +345,34 @@ function stringifyValue(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function compactPreview(value: unknown) {
+  const text = stringifyValue(value);
+  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+}
+
+function buildLineageFieldRows(lineage?: Record<string, unknown> | null): WorkflowLineageRow[] {
+  if (!lineage) return [];
+  return Object.entries(lineage).map(([field, rawTrace]) => {
+    const trace = isRecord(rawTrace) ? rawTrace as WorkflowLineageTrace : { valuePreview: rawTrace };
+    const segments = Array.isArray(trace.segments) ? trace.segments : [];
+    const firstReferenceSegment = segments.find((segment) => segment?.sourcePath || segment?.valuePreview !== undefined);
+    const error = trace.error || segments.find((segment) => segment?.error)?.error;
+    return {
+      field: trace.field || field,
+      status: trace.status || (error ? 'missing' : trace.sourceExpression ? 'resolved' : 'literal'),
+      sourceExpression: trace.sourceExpression || firstReferenceSegment?.sourceExpression || firstReferenceSegment?.text || '',
+      sourcePath: trace.sourcePath || firstReferenceSegment?.sourcePath || '',
+      valuePreview: compactPreview(trace.valuePreview ?? firstReferenceSegment?.valuePreview),
+      errorMessage: error?.message || error?.code || '',
+      segmentCount: segments.length,
+    };
+  });
 }
 
 function getTemplateManifest(workflow: WorkflowDefinition) {
@@ -566,6 +625,28 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       example: variable.example,
     }));
   }, [draft, nodeTypeDefinitions, runInputs, selectedNode]);
+  const selectedPreviewNode = useMemo(() => {
+    if (!selectedNode) return null;
+    return dryRunPreview?.nodes?.find((node) => node.nodeId === selectedNode.id) || null;
+  }, [dryRunPreview, selectedNode]);
+  const lineageFieldRows = useMemo(() => {
+    const runLineage = selectedNode ? selectedRun?.nodeRuns?.[selectedNode.id]?.inputLineage : null;
+    const lineage = selectedPreviewNode?.resolvedInputLineage || runLineage;
+    return buildLineageFieldRows(lineage || null);
+  }, [selectedNode, selectedPreviewNode, selectedRun]);
+  const getNodeRunLineageRows = useCallback((nodeRun: WorkflowNodeRun) => {
+    if (nodeRun.inputLineage && Object.keys(nodeRun.inputLineage).length > 0) {
+      return buildLineageFieldRows(nodeRun.inputLineage);
+    }
+    const findSnapshotLineage = (snapshot: unknown) => {
+      const nodes = isRecord(snapshot) && Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+      const snapshotNode = nodes.find((item) => isRecord(item) && item.nodeId === nodeRun.nodeId);
+      return isRecord(snapshotNode) && isRecord(snapshotNode.resolvedInputLineage)
+        ? snapshotNode.resolvedInputLineage
+        : null;
+    };
+    return buildLineageFieldRows(findSnapshotLineage(selectedRun?.executionInputSnapshot) || findSnapshotLineage(selectedRun?.previewSnapshot));
+  }, [selectedRun]);
   const mappingPreview = useMemo(() => draft.nodes.map((node) => ({
     node,
     input: {
@@ -3627,13 +3708,51 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     ))}
                   </div>
                   <div className="mt-3 rounded-md border border-border bg-card p-2" data-testid="workflow-data-lineage-view">
-                    <span className="block text-xs font-semibold text-foreground">Data lineage</span>
-                    <div className="mt-2 max-h-28 space-y-1 overflow-auto">
-                      {dataLineageRows.length > 0 ? dataLineageRows.map((row) => (
-                        <div key={row} className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground">{row}</div>
-                      )) : (
-                        <div className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground">No upstream lineage yet.</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="block text-xs font-semibold text-foreground">Data lineage</span>
+                      <span className="rounded border border-border bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {lineageFieldRows.length} fields
+                      </span>
+                    </div>
+                    <div className="mt-2 max-h-44 space-y-2 overflow-auto" data-testid="workflow-variable-debugger">
+                      {lineageFieldRows.length > 0 ? lineageFieldRows.map((row) => {
+                        const copyValue = row.sourceExpression ? `{{${row.sourceExpression}}}` : row.sourcePath;
+                        return (
+                          <div key={`${row.field}-${row.sourceExpression}-${row.status}`} className="rounded border border-border bg-background px-2 py-2 text-[11px]" data-testid="workflow-variable-debugger-row">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <span className="block font-semibold text-foreground">{row.field}</span>
+                                <span className={cn('mt-1 inline-flex rounded border px-1.5 py-0.5 text-[10px]', row.status === 'missing' ? 'border-red-200 bg-red-50 text-red-700' : row.status === 'resolved' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600')}>
+                                  {row.status}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                data-testid="workflow-variable-copy-expression"
+                                disabled={!copyValue}
+                                className="rounded border border-border px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted disabled:opacity-40"
+                                onClick={() => copyValue && void navigator.clipboard?.writeText(copyValue)}
+                              >
+                                Copy
+                              </button>
+                            </div>
+                            <div className="mt-2 space-y-1 text-muted-foreground">
+                              <div className="font-mono text-[10px] text-foreground">{row.sourceExpression ? `{{${row.sourceExpression}}}` : 'literal value'}</div>
+                              {row.sourcePath && <div>Source: {row.sourcePath}</div>}
+                              <div>Preview: {row.valuePreview}</div>
+                              <div>Segments: {row.segmentCount}</div>
+                              {row.errorMessage && <div className="text-red-700">Error: {row.errorMessage}</div>}
+                            </div>
+                          </div>
+                        );
+                      }) : (
+                        <div className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground">Run dry check to resolve field-level lineage for this node.</div>
                       )}
+                    </div>
+                    <div className="mt-2 max-h-20 space-y-1 overflow-auto">
+                      {dataLineageRows.length > 0 ? dataLineageRows.map((row) => (
+                        <div key={row} className="rounded border border-border px-2 py-1 text-[10px] text-muted-foreground">{row}</div>
+                      )) : null}
                     </div>
                   </div>
                   {invalidVariables.length > 0 && (
@@ -4188,6 +4307,32 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                             <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Input / output</summary>
                             <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-[11px] text-foreground">{stringifyValue({ input: nodeRun.input, output: nodeRun.output })}</pre>
                           </details>
+                          {(() => {
+                            const runLineageRows = getNodeRunLineageRows(nodeRun);
+                            return (
+                              <details className="rounded border border-border bg-muted/20 p-2" data-testid="workflow-run-lineage-detail">
+                                <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Variable lineage</summary>
+                                <div className="mt-2 max-h-36 space-y-2 overflow-auto">
+                                  {runLineageRows.length > 0 ? runLineageRows.map((row) => (
+                                    <div key={`${nodeRun.nodeId}-${row.field}-${row.sourceExpression}-${row.status}`} className="rounded border border-border bg-background px-2 py-2 text-[11px]">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-semibold text-foreground">{row.field}</span>
+                                        <span className={cn('rounded border px-1.5 py-0.5 text-[10px]', row.status === 'missing' ? 'border-red-200 bg-red-50 text-red-700' : row.status === 'resolved' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600')}>
+                                          {row.status}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 font-mono text-[10px] text-foreground">{row.sourceExpression ? `{{${row.sourceExpression}}}` : 'literal value'}</div>
+                                      {row.sourcePath && <div className="mt-1 text-muted-foreground">Source: {row.sourcePath}</div>}
+                                      <div className="mt-1 text-muted-foreground">Preview: {row.valuePreview}</div>
+                                      {row.errorMessage && <div className="mt-1 text-red-700">Error: {row.errorMessage}</div>}
+                                    </div>
+                                  )) : (
+                                    <div className="rounded border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">No lineage snapshot for this node yet.</div>
+                                  )}
+                                </div>
+                              </details>
+                            );
+                          })()}
                           {nodeRun.checkpoints && Object.keys(nodeRun.checkpoints || {}).length > 0 && (
                             <details className="rounded border border-border bg-muted/20 p-2">
                               <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Checkpoints</summary>
