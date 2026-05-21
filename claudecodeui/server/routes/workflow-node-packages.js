@@ -61,6 +61,18 @@ router.post('/install', async (req, res) => {
   }
 });
 
+router.get('/:packageId/impact', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const report = await defaultWorkflowStudioStore.getNodePackageImpactReport(req.params.packageId, {
+      recentRunLimit: req.query.limit || 25,
+    });
+    res.json({ success: true, report });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to build workflow node package impact report');
+  }
+});
+
 router.post('/:packageId/enable', async (req, res) => {
   try {
     await defaultWorkflowStudioStore.ready();

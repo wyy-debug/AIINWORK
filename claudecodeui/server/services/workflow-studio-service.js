@@ -2394,6 +2394,96 @@ export function createWorkflowStudioStore({
     return { removed: true, packageId: id };
   }
 
+  async function getNodePackageImpactReport(packageId, { recentRunLimit = 25 } = {}) {
+    await load();
+    const id = normalizeText(packageId, '', 120);
+    const nodePackage = nodePackages.find((item) => item.id === id) || null;
+    const packageTypes = new Set([
+      normalizeText(nodePackage?.definition?.type, '', 120),
+      normalizeText(nodePackage?.manifest?.type, '', 120),
+      normalizeText(id, '', 120),
+    ].filter(Boolean));
+    const matchNodeIds = (workflow) => (workflow.nodes || [])
+      .filter((node) => packageTypes.has(normalizeText(node.type, '', 120)))
+      .map((node) => node.id);
+    const isTemplateWorkflow = (workflow) => Boolean(workflow.metadata?.templateManifest || workflow.metadata?.recipeId || String(workflow.id).startsWith('recipe-'));
+    const workflowEntries = [];
+    const templateEntries = [];
+    for (const workflow of workflows) {
+      const nodeIds = matchNodeIds(workflow);
+      const declaredPackageDeps = normalizeStringArray(workflow.metadata?.dependencies?.nodePackages || workflow.metadata?.templateManifest?.dependencies?.nodePackages);
+      const usesPackage = nodeIds.length > 0 || declaredPackageDeps.includes(id);
+      if (!usesPackage) continue;
+      const entry = {
+        objectType: isTemplateWorkflow(workflow) ? 'template' : 'workflow',
+        id: workflow.id,
+        title: workflow.name,
+        workflowId: workflow.id,
+        nodeIds,
+        severity: 'blocking',
+      };
+      if (isTemplateWorkflow(workflow)) templateEntries.push(entry);
+      else workflowEntries.push(entry);
+    }
+
+    const recentRuns = runs
+      .slice()
+      .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))
+      .slice(0, Math.max(1, Math.min(Number(recentRunLimit) || 25, 100)))
+      .map((run) => {
+        const snapshotPackages = [
+          ...(run.executionInputSnapshot?.dependencyRefs?.nodePackages || []),
+          ...(run.previewSnapshot?.dependencyRefs?.nodePackages || []),
+        ].map(asObject);
+        const packageRefs = snapshotPackages.filter((entry) => normalizeText(entry.id, '', 120) === id);
+        const nodeIds = new Set();
+        for (const nodeRun of Object.values(run.nodeRuns || {})) {
+          if (packageTypes.has(normalizeText(nodeRun.type, '', 120))) {
+            nodeIds.add(nodeRun.nodeId);
+          }
+        }
+        for (const snapshotNode of [
+          ...(Array.isArray(run.executionInputSnapshot?.nodes) ? run.executionInputSnapshot.nodes : []),
+          ...(Array.isArray(run.previewSnapshot?.nodes) ? run.previewSnapshot.nodes : []),
+        ]) {
+          if (packageTypes.has(normalizeText(snapshotNode?.type, '', 120))) {
+            nodeIds.add(snapshotNode.nodeId);
+          }
+        }
+        if (packageRefs.length === 0 && nodeIds.size === 0) return null;
+        return {
+          objectType: 'run',
+          id: run.id,
+          title: run.workflowName,
+          workflowId: run.workflowId,
+          nodeIds: [...nodeIds],
+          severity: 'warning',
+          status: run.status,
+          createdAt: run.createdAt || null,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      packageId: id,
+      exists: Boolean(nodePackage),
+      packageType: normalizeText(nodePackage?.definition?.type || nodePackage?.manifest?.type, '', 120),
+      status: normalizeText(nodePackage?.status, nodePackage ? 'ready' : 'missing', 80),
+      lifecycleState: normalizeText(nodePackage?.lifecycleState || nodePackage?.state, nodePackage ? 'enabled' : 'missing', 80),
+      affected: {
+        workflows: workflowEntries,
+        templates: templateEntries,
+        recentRuns,
+      },
+      totals: {
+        workflows: workflowEntries.length,
+        templates: templateEntries.length,
+        recentRuns: recentRuns.length,
+      },
+      destructiveActionRisk: workflowEntries.length + templateEntries.length > 0 ? 'blocking' : recentRuns.length > 0 ? 'warning' : 'none',
+    };
+  }
+
   function getStoreNodeTypeDefinition(type) {
     return getNodeTypeDefinition(type) || nodePackages.find((item) => isNodePackagePaletteAvailable(item) && item.definition.type === type)?.definition || null;
   }
@@ -4596,6 +4686,7 @@ export function createWorkflowStudioStore({
     enableNodePackage,
     disableNodePackage,
     uninstallNodePackage,
+    getNodePackageImpactReport,
     listNodePackages,
     getWorkflowNodeTypeDefinitions: getStoreNodeTypeDefinitions,
     smokeTemplate,

@@ -462,6 +462,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ package: workflowNodePackage }),
     }),
+  workflowNodePackageImpact: (packageId, { limit = 25 } = {}) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    const query = params.toString();
+    return apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/impact${query ? `?${query}` : ''}`);
+  },
   enableWorkflowNodePackage: (packageId) =>
     apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/enable`, {
       method: 'POST',

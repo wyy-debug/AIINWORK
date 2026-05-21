@@ -1183,6 +1183,53 @@ describe('workflow studio service', () => {
     expect(store.getWorkflow('uses-formatter')).toBeTruthy();
   });
 
+  test('reports workflow node package impact across workflows templates and recent run snapshots', async () => {
+    const store = createWorkflowStudioStore({ persist: false, autoExecute: false, agentResolver });
+    await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+    });
+    await store.upsertWorkflow({
+      id: 'uses-formatter',
+      name: 'Uses Formatter',
+      nodes: [{ id: 'format', type: 'formatter', title: 'Format' }],
+      edges: [],
+    });
+    await store.upsertWorkflow({
+      id: 'formatter-template',
+      name: 'Formatter Template',
+      metadata: {
+        templateManifest: { id: 'formatter-template', version: '1.0.0', dependencies: { nodePackages: ['formatter-node'] } },
+      },
+      nodes: [{ id: 'template-format', type: 'formatter', title: 'Template Format' }],
+      edges: [],
+    });
+    const run = await store.createRun('uses-formatter');
+
+    const report = await store.getNodePackageImpactReport('formatter-node');
+    expect(report).toMatchObject({
+      packageId: 'formatter-node',
+      exists: true,
+      totals: { workflows: 1, templates: 1, recentRuns: 1 },
+    });
+    expect(report.affected.workflows).toEqual([
+      expect.objectContaining({ objectType: 'workflow', id: 'uses-formatter', nodeIds: ['format'], severity: 'blocking' }),
+    ]);
+    expect(report.affected.templates).toEqual([
+      expect.objectContaining({ objectType: 'template', id: 'formatter-template', nodeIds: ['template-format'], severity: 'blocking' }),
+    ]);
+    expect(report.affected.recentRuns).toEqual([
+      expect.objectContaining({ objectType: 'run', id: run.id, workflowId: 'uses-formatter', nodeIds: ['format'], severity: 'warning' }),
+    ]);
+
+    const missing = await store.getNodePackageImpactReport('missing-node');
+    expect(missing).toMatchObject({ packageId: 'missing-node', exists: false, affected: { workflows: [], templates: [], recentRuns: [] } });
+  });
+
   test('smokes workflow templates and exposes benchmark release readiness results', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.ready();
