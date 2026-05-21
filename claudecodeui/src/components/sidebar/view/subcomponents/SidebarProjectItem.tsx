@@ -422,6 +422,20 @@ export default function SidebarProjectItem({
                 >
                   <SquarePen className="h-4 w-4" />
                 </button>
+                <button
+                  type="button"
+                  data-testid="sidebar-project-remove-button"
+                  className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring dark:hover:bg-red-950/30 dark:hover:text-red-400"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteProject(project);
+                  }}
+                  title={t('deleteConfirmation.removeFromSidebar')}
+                  aria-label={t('deleteConfirmation.removeFromSidebar')}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </>
             )}
           </div>

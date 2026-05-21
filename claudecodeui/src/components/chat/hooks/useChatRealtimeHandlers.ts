@@ -3,6 +3,11 @@ import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, t
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import { notifyAgentCompletion } from '../../../utils/nativeNotifications';
+import {
+  isTemporaryChatSessionId as isTemporarySessionId,
+  shouldPromoteCreatedSessionToActiveView,
+} from '../utils/chatSessionRouting';
+import { emitChatRoutingDebug } from '../utils/chatRoutingDebug';
 import type {
   AgentRuntimeDiagnostics,
   PendingPermissionRequest,
@@ -13,9 +18,6 @@ type PendingViewSession = {
   sessionId: string | null;
   startedAt: number;
 };
-
-const isTemporarySessionId = (sessionId: string | null | undefined) =>
-  Boolean(sessionId && sessionId.startsWith('new-session-'));
 
 type LatestChatMessage = {
   type?: string;
@@ -59,6 +61,7 @@ type LatestChatMessage = {
 
 interface UseChatRealtimeHandlersArgs {
   latestMessage: LatestChatMessage | null;
+  sendMessage: (message: unknown) => void;
   provider: LLMProvider;
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
@@ -90,6 +93,7 @@ interface UseChatRealtimeHandlersArgs {
 
 export function useChatRealtimeHandlers({
   latestMessage,
+  sendMessage,
   provider,
   selectedProject,
   selectedSession,
@@ -356,8 +360,32 @@ export function useChatRealtimeHandlers({
         const temporarySessionId = isTemporarySessionId(currentSessionId)
           ? currentSessionId
           : pendingViewSessionRef.current?.sessionId;
+        const shouldPromoteCreatedSession = shouldPromoteCreatedSessionToActiveView({
+          selectedSessionId: selectedSession?.id || null,
+          currentSessionId,
+          pendingViewSessionId: pendingViewSessionRef.current?.sessionId || null,
+          newSessionId,
+        });
+        emitChatRoutingDebug(sendMessage, 'client.realtime.session_created', {
+          provider,
+          messageProvider,
+          newSessionId,
+          sid,
+          selectedProjectName: selectedProject?.name || null,
+          selectedProjectPath: selectedProject?.fullPath || selectedProject?.path || '',
+          selectedSessionId: selectedSession?.id || null,
+          currentSessionId,
+          pendingViewSessionId: pendingViewSessionRef.current?.sessionId || null,
+          temporarySessionId,
+          shouldPromoteCreatedSession,
+        });
 
-        if (temporarySessionId && isTemporarySessionId(temporarySessionId) && temporarySessionId !== newSessionId) {
+        if (
+          shouldPromoteCreatedSession
+          && temporarySessionId
+          && isTemporarySessionId(temporarySessionId)
+          && temporarySessionId !== newSessionId
+        ) {
           sessionStore.replaceSessionId(temporarySessionId, newSessionId);
           temporarySessionAliasesRef.current.set(temporarySessionId, newSessionId);
           setPromptInjectionDebug?.((previous) => {
@@ -372,7 +400,7 @@ export function useChatRealtimeHandlers({
           });
         }
 
-        if (!currentSessionId || currentSessionId.startsWith('new-session-')) {
+        if (shouldPromoteCreatedSession) {
           sessionStorage.setItem('pendingSessionId', newSessionId);
           if (
             pendingViewSessionRef.current
@@ -385,8 +413,8 @@ export function useChatRealtimeHandlers({
           setPendingPermissionRequests((prev) =>
             prev.map((r) => (r.sessionId ? r : { ...r, sessionId: newSessionId })),
           );
+          onNavigateToSession?.(newSessionId);
         }
-        onNavigateToSession?.(newSessionId);
         scheduleProjectsRefresh(350);
         break;
       }
@@ -426,6 +454,20 @@ export function useChatRealtimeHandlers({
 
         // Clear pending session
         const pendingSessionId = sessionStorage.getItem('pendingSessionId');
+        emitChatRoutingDebug(sendMessage, 'client.realtime.complete', {
+          provider,
+          messageProvider,
+          sid,
+          selectedProjectName: selectedProject?.name || null,
+          selectedProjectPath: selectedProject?.fullPath || selectedProject?.path || '',
+          selectedSessionId: selectedSession?.id || null,
+          currentSessionId,
+          pendingViewSessionId: pendingViewSessionRef.current?.sessionId || null,
+          pendingSessionId,
+          actualSessionId: msg.actualSessionId || null,
+          exitCode: typeof msg.exitCode === 'number' ? msg.exitCode : null,
+          aborted: Boolean(msg.aborted),
+        });
         if (pendingSessionId && msg.exitCode === 0) {
           const actualId = msg.actualSessionId
             || (isTemporarySessionId(currentSessionId) ? sid : currentSessionId)
@@ -507,6 +549,7 @@ export function useChatRealtimeHandlers({
     }
   }, [
     latestMessage,
+    sendMessage,
     provider,
     selectedProject,
     selectedSession,

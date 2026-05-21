@@ -32,6 +32,26 @@ test('Claude session provider hides persisted Argus internal fallback prefixes',
   assert.deepEqual(messages, []);
 });
 
+test('Claude session provider hides injected Skill instruction user records', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'skill-instructions-1',
+    message: {
+      role: 'user',
+      content: [
+        'Base directory for this skill: C:\\Users\\yckui\\.mtl-code\\skills\\trace-export-tool-skill',
+        '',
+        '# Trace Export Tool Skill',
+        '',
+        'Use this Skill for `.utrace` analysis workflows.',
+      ].join('\n'),
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
 test('Claude session provider marks compact summaries as lazy-loadable without embedding summary content', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({

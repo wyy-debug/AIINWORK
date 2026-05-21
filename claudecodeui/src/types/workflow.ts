@@ -113,12 +113,43 @@ export interface WorkflowNodeRun {
   durationMs?: number;
   logs?: string[];
   input?: Record<string, unknown>;
+  inputLineage?: Record<string, unknown>;
   output?: Record<string, unknown>;
   artifacts?: Array<Record<string, unknown>>;
   checkpoints?: Record<string, Record<string, unknown>>;
   error?: string;
   waitingReason?: string;
   permissionDecision?: string;
+}
+
+export interface WorkflowPreviewDiff {
+  matched?: boolean;
+  changed?: boolean;
+  reasons?: string[];
+  changedNodes?: Array<{
+    nodeId: string;
+    fields?: string[];
+    reasons?: string[];
+  }>;
+}
+
+export interface WorkflowRunSnapshot {
+  snapshotVersion?: number;
+  capturedAt?: string;
+  workflowId?: string;
+  workflowName?: string;
+  runnableWorkflowId?: string;
+  runnableWorkflowName?: string;
+  workflowDigest?: string;
+  resolverVersion?: string;
+  definitionSnapshot?: WorkflowDefinition;
+  profileSnapshot?: Record<string, unknown>;
+  permissionSnapshot?: Record<string, unknown>;
+  nodePackageSnapshots?: Array<Record<string, unknown>>;
+  runInputsSnapshot?: Record<string, unknown>;
+  previewSnapshot?: Record<string, unknown>;
+  executionInputSnapshot?: Record<string, unknown>;
+  dependencyRefs?: Record<string, unknown>;
 }
 
 export interface WorkflowRun {
@@ -130,6 +161,13 @@ export interface WorkflowRun {
   sessionId?: string;
   inputs?: Record<string, unknown>;
   profileSnapshot?: Record<string, unknown>;
+  runSnapshot?: WorkflowRunSnapshot;
+  previewSnapshot?: Record<string, unknown>;
+  executionInputSnapshot?: Record<string, unknown>;
+  previewDiff?: WorkflowPreviewDiff;
+  previewMatched?: boolean;
+  previewChanged?: boolean;
+  resolverVersion?: string;
   queue?: {
     state?: WorkflowQueueState;
     workerId?: string;

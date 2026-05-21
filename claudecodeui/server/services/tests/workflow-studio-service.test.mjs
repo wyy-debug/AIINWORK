@@ -707,6 +707,356 @@ describe('workflow studio service', () => {
     ]));
   });
 
+  test('returns per-node dry preview with resolved inputs, blockers, and permission decisions', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'preview-flow',
+      name: 'Preview Flow',
+      profileId: 'build',
+      permissionPreset: 'enterprise-safe',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', agentId: 'build', prompt: 'Review {{nodes.explore.output.summary}}' },
+        { id: 'broken', type: 'agent', agentId: 'build', prompt: 'Broken {{inputs.missing}}' },
+        { id: 'shell', type: 'shell', command: 'npm test' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'broken' },
+        { from: 'broken', to: 'shell' },
+      ],
+    });
+
+    const result = await store.validateRun('preview-flow', { inputs: { change_request: 'preview me' } });
+
+    expect(result.preview).toMatchObject({
+      workflowId: 'preview-flow',
+      nodeCount: 4,
+      blockedCount: 2,
+    });
+    expect(result.preview.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'explore',
+        type: 'agent',
+        resolvedInput: expect.objectContaining({ prompt: 'Explore preview me' }),
+        permissionDecision: 'allow',
+        blocked: false,
+      }),
+      expect.objectContaining({
+        nodeId: 'review',
+        upstream: expect.arrayContaining([expect.objectContaining({ nodeId: 'explore', mode: 'success' })]),
+        resolvedInput: expect.objectContaining({ prompt: expect.stringContaining('nodes.explore.output.summary') }),
+      }),
+      expect.objectContaining({
+        nodeId: 'broken',
+        blocked: true,
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'missing_input_variable', variable: 'inputs.missing' })]),
+      }),
+      expect.objectContaining({
+        nodeId: 'shell',
+        permissionDecision: 'deny',
+        blocked: true,
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'permission_denied' })]),
+      }),
+    ]));
+  });
+
+  test('emits field-level lineage for resolved and missing workflow variables', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'lineage-flow',
+      name: 'Lineage Flow',
+      profileId: 'build',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', agentId: 'build', prompt: 'Review {{nodes.explore.output.summary}}' },
+        { id: 'broken', type: 'agent', agentId: 'build', prompt: 'Broken {{inputs.missing}}' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'broken' },
+      ],
+    });
+
+    const result = await store.validateRun('lineage-flow', { inputs: { change_request: 'preview me' } });
+    const explore = result.preview.nodes.find((node) => node.nodeId === 'explore');
+    const review = result.preview.nodes.find((node) => node.nodeId === 'review');
+    const broken = result.preview.nodes.find((node) => node.nodeId === 'broken');
+
+    expect(explore.resolvedInputLineage.prompt).toMatchObject({
+      field: 'prompt',
+      status: 'resolved',
+      sourceExpression: 'inputs.change_request',
+      sourcePath: 'inputs.change_request',
+      valuePreview: 'Explore preview me',
+    });
+    expect(explore.resolvedInputLineage.prompt.segments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'literal', valuePreview: 'Explore ' }),
+      expect.objectContaining({ type: 'variable', status: 'resolved', sourceExpression: 'inputs.change_request', sourcePath: 'inputs.change_request', valuePreview: 'preview me' }),
+    ]));
+    expect(review.resolvedInputLineage.prompt).toMatchObject({
+      status: 'resolved',
+      sourceExpression: 'nodes.explore.output.summary',
+      sourcePath: 'nodes.explore.output.summary',
+    });
+    expect(broken.resolvedInputLineage.prompt).toMatchObject({
+      field: 'prompt',
+      status: 'missing',
+      sourceExpression: 'inputs.missing',
+      sourcePath: 'inputs.missing',
+      error: expect.objectContaining({ code: 'missing_variable' }),
+    });
+  });
+
+  test('normalizes missing variable diagnostics with node field and source expression', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'missing-variable-diagnostics-flow',
+      name: 'Missing Variable Diagnostics Flow',
+      profileId: 'build',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', agentId: 'build', prompt: 'Review {{nodes.explore.output.missingSummary}}' },
+        { id: 'ghost', type: 'agent', agentId: 'build', prompt: 'Ghost {{nodes.ghostWriter.output.summary}}' },
+        { id: 'input-missing', type: 'agent', agentId: 'build', prompt: 'Input {{inputs.missing}}' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'ghost' },
+        { from: 'ghost', to: 'input-missing' },
+      ],
+    });
+
+    const result = await store.validateRun('missing-variable-diagnostics-flow', { inputs: { change_request: 'preview me' } });
+    const reviewError = result.errors.find((error) => error.nodeId === 'review');
+    const ghostError = result.errors.find((error) => error.nodeId === 'ghost');
+    const inputError = result.errors.find((error) => error.nodeId === 'input-missing');
+    const previewReview = result.preview.nodes.find((node) => node.nodeId === 'review');
+
+    expect(reviewError).toMatchObject({
+      code: 'missing_output_field',
+      category: 'missing_variable',
+      nodeId: 'review',
+      field: 'prompt',
+      variable: 'nodes.explore.output.missingSummary',
+      diagnostic: {
+        nodeId: 'review',
+        field: 'prompt',
+        sourceExpression: 'nodes.explore.output.missingSummary',
+        sourceNodeId: 'explore',
+        outputField: 'missingSummary',
+      },
+    });
+    expect(ghostError).toMatchObject({
+      code: 'missing_node_variable',
+      category: 'missing_variable',
+      diagnostic: expect.objectContaining({
+        nodeId: 'ghost',
+        field: 'prompt',
+        sourceExpression: 'nodes.ghostWriter.output.summary',
+        sourceNodeId: 'ghostWriter',
+      }),
+    });
+    expect(inputError).toMatchObject({
+      code: 'missing_input_variable',
+      category: 'missing_variable',
+      diagnostic: expect.objectContaining({
+        nodeId: 'input-missing',
+        field: 'prompt',
+        sourceExpression: 'inputs.missing',
+        inputId: 'missing',
+      }),
+    });
+    expect(previewReview.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'missing_output_field',
+        category: 'missing_variable',
+        diagnostic: expect.objectContaining({ nodeId: 'review', field: 'prompt' }),
+      }),
+    ]));
+  });
+
+  test('creates runs with resolver-backed preview and execution snapshots', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      autoExecute: false,
+      agentResolver,
+    });
+    await store.upsertWorkflow({
+      id: 'snapshot-flow',
+      name: 'Snapshot Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'agent', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+
+    const validation = await store.validateRun('snapshot-flow', { inputs: { change_request: 'snapshot me' } });
+    const run = await store.createRun('snapshot-flow', {
+      inputs: { change_request: 'snapshot me' },
+      projectPath: 'E:\\AIINWORK',
+      sessionId: 'session-snapshot',
+    });
+
+    expect(run.status).toBe('queued');
+    expect(run.previewSnapshot).toMatchObject({
+      workflowId: 'snapshot-flow',
+      resolverVersion: expect.any(String),
+      inputSnapshot: { change_request: 'snapshot me' },
+      dependencyRefs: expect.objectContaining({
+        workflowDigest: expect.any(String),
+        profileId: 'build',
+        permissionPreset: 'full-auto',
+        nodePackages: [],
+      }),
+    });
+    expect(run.executionInputSnapshot).toMatchObject({
+      workflowId: 'snapshot-flow',
+      resolverVersion: run.previewSnapshot.resolverVersion,
+      inputSnapshot: { change_request: 'snapshot me' },
+      dependencyRefs: run.previewSnapshot.dependencyRefs,
+    });
+
+    const previewAgent = validation.preview.nodes.find((node) => node.nodeId === 'agent');
+    const executionAgent = run.executionInputSnapshot.nodes.find((node) => node.nodeId === 'agent');
+    expect(executionAgent.resolvedInput).toEqual(previewAgent.resolvedInput);
+    expect(run.executionInputSnapshot.nodes).toEqual(run.previewSnapshot.nodes);
+    expect(run.previewMatched).toBe(true);
+    expect(run.previewChanged).toBe(false);
+    expect(run.previewDiff).toMatchObject({
+      matched: true,
+      changed: false,
+      changedNodes: [],
+      reasons: [],
+    });
+  });
+
+  test('persists auditable workflow run snapshots across definition and package changes', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      autoExecute: false,
+      agentResolver,
+    });
+    await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.2.3',
+      configSchema: { fields: [{ name: 'style', type: 'text', defaultValue: 'compact' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'text' }] },
+    });
+    await store.upsertWorkflow({
+      id: 'auditable-run-flow',
+      name: 'Auditable Run Flow',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'format', type: 'formatter', title: 'Format input', config: { style: 'compact' }, prompt: 'Format {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+
+    const run = await store.createRun('auditable-run-flow', {
+      inputs: { change_request: 'keep this snapshot' },
+      projectPath: 'E:\\AIINWORK',
+      sessionId: 'session-audit',
+    });
+
+    await store.upsertWorkflow({
+      id: 'auditable-run-flow',
+      name: 'Auditable Run Flow Changed',
+      profileId: 'review',
+      permissionPreset: 'enterprise-safe',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'format', type: 'agent', agentId: 'review', title: 'Changed node', prompt: 'Changed {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+    await store.uninstallNodePackage('formatter-node');
+
+    const historical = store.getRun(run.id);
+    expect(historical.runSnapshot).toMatchObject({
+      workflowId: 'auditable-run-flow',
+      workflowName: 'Auditable Run Flow',
+      resolverVersion: expect.any(String),
+      runInputsSnapshot: { change_request: 'keep this snapshot' },
+      definitionSnapshot: expect.objectContaining({
+        name: 'Auditable Run Flow',
+        profileId: 'build',
+        permissionPreset: 'auto-edit',
+        nodes: [expect.objectContaining({ id: 'format', type: 'formatter', prompt: 'Format {{inputs.change_request}}' })],
+      }),
+      profileSnapshot: expect.objectContaining({
+        profileId: 'build',
+        agentName: 'build',
+      }),
+      permissionSnapshot: expect.objectContaining({
+        permissionPreset: 'auto-edit',
+        source: 'workflow',
+      }),
+      nodePackageSnapshots: [
+        expect.objectContaining({
+          id: 'formatter-node',
+          type: 'formatter',
+          version: '1.2.3',
+          manifest: expect.objectContaining({ id: 'formatter-node' }),
+        }),
+      ],
+    });
+    expect(historical.runSnapshot.definitionSnapshot.nodes[0].type).toBe('formatter');
+    expect(historical.runSnapshot.nodePackageSnapshots[0].manifest).toBeTruthy();
+  });
+
+  test('reports preview diff when execution inputs drift from the reviewed preview snapshot', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      autoExecute: false,
+      agentResolver,
+    });
+    await store.upsertWorkflow({
+      id: 'snapshot-drift-flow',
+      name: 'Snapshot Drift Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'agent', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+
+    const validation = await store.validateRun('snapshot-drift-flow', { inputs: { change_request: 'reviewed plan' } });
+    const run = await store.createRun('snapshot-drift-flow', {
+      inputs: { change_request: 'changed before run' },
+      previewSnapshot: validation.preview,
+    });
+
+    expect(run.previewMatched).toBe(false);
+    expect(run.previewChanged).toBe(true);
+    expect(run.previewDiff).toMatchObject({
+      matched: false,
+      changed: true,
+      reasons: expect.arrayContaining(['input_changed', 'node_input_changed']),
+      changedNodes: [
+        expect.objectContaining({
+          nodeId: 'agent',
+          fields: expect.arrayContaining(['resolvedInput']),
+          reasons: expect.arrayContaining(['node_input_changed']),
+        }),
+      ],
+    });
+    expect(run.previewSnapshot.inputSnapshot.change_request).toBe('reviewed plan');
+    expect(run.executionInputSnapshot.inputSnapshot.change_request).toBe('changed before run');
+  });
+
   test('clones workflow templates with manifest metadata into editable workflows', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.ready();
@@ -845,6 +1195,90 @@ describe('workflow studio service', () => {
     expect(replay.events.map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_started', 'workflow_node_completed']));
   });
 
+  test('replays historical runs from snapshots and event logs after definition changes', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        agent: async ({ node }) => {
+          if (node.id === 'review') throw new Error('review failed from event log');
+          return { summary: `${node.id} done` };
+        },
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'event-replay-flow',
+      name: 'Event Replay Flow',
+      profileId: 'build',
+      nodes: [
+        { id: 'explore', type: 'agent', prompt: 'Explore' },
+        { id: 'review', type: 'agent', prompt: 'Review {{nodes.explore.output.summary}}' },
+      ],
+      edges: [{ from: 'explore', to: 'review' }],
+    });
+
+    const failed = await store.createRun('event-replay-flow');
+    await store.upsertWorkflow({
+      id: 'event-replay-flow',
+      name: 'Changed Current Flow',
+      profileId: 'debug',
+      nodes: [{ id: 'changed', type: 'agent', prompt: 'Changed current definition' }],
+      edges: [],
+    });
+
+    const replay = store.replayRun(failed.id);
+    expect(replay.status).toBe('failed');
+    expect(replay.snapshot.workflowName).toBe('Event Replay Flow');
+    expect(replay.definitionSnapshot.nodes.map((node) => node.id)).toEqual(['explore', 'review']);
+    expect(Object.keys(replay.nodes)).toEqual(['explore', 'review']);
+    expect(replay.nodes.explore.status).toBe('completed');
+    expect(replay.nodes.review.status).toBe('failed');
+    expect(replay.nodes.review.error).toBe('review failed from event log');
+    expect(replay.diagnostics).toEqual([]);
+  });
+
+  test('reports replay diagnostics for missing created events and out-of-order node transitions', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-replay-'));
+    const workflowsPath = path.join(rootDir, 'workflows.json');
+    const runsPath = path.join(rootDir, 'runs.json');
+    const store = createWorkflowStudioStore({
+      workflowsPath,
+      runsPath,
+      persist: true,
+      agentResolver,
+      executors: {
+        agent: async () => ({ summary: 'done' }),
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'diagnostic-replay-flow',
+      name: 'Diagnostic Replay Flow',
+      profileId: 'build',
+      nodes: [{ id: 'agent', type: 'agent', prompt: 'Run' }],
+      edges: [],
+    });
+    const run = await store.createRun('diagnostic-replay-flow');
+    const raw = JSON.parse(await fs.readFile(runsPath, 'utf8'));
+    raw.runs[0].timelineEvents = [
+      raw.runs[0].timelineEvents.find((event) => event.type === 'workflow_node_completed'),
+      ...raw.runs[0].timelineEvents.filter((event) => !['workflow_run_created', 'workflow_node_completed'].includes(event.type)),
+    ].filter(Boolean);
+    await fs.writeFile(runsPath, JSON.stringify(raw, null, 2));
+
+    const reloaded = await createWorkflowStudioStore({
+      workflowsPath,
+      runsPath,
+      persist: true,
+      autoExecute: false,
+      agentResolver,
+    }).ready();
+    const replay = reloaded.replayRun(run.id);
+    expect(replay.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_run_created' }),
+      expect.objectContaining({ code: 'out_of_order_node_completed', nodeId: 'agent' }),
+    ]));
+  });
+
   test('lists approval inbox requests and records audited decisions', async () => {
     const store = createWorkflowStudioStore({
       persist: false,
@@ -981,9 +1415,140 @@ describe('workflow studio service', () => {
 
     expect(registered.status).toBe('missing_dependencies');
     expect(store.listNodePackages()).toEqual([
-      expect.objectContaining({ id: 'crashsight-node', enabled: false, status: 'missing_dependencies' }),
+      expect.objectContaining({ id: 'crashsight-node', enabled: false, status: 'missing_dependencies', lifecycleState: 'broken' }),
     ]);
-    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('crashsight-analysis');
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).not.toContain('crashsight-analysis');
+  });
+
+  test('manages workflow node package lifecycle without deleting dependent workflows', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const installed = await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+    });
+
+    expect(installed).toMatchObject({ id: 'formatter-node', enabled: true, status: 'ready', lifecycleState: 'enabled' });
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('formatter');
+
+    await store.upsertWorkflow({
+      id: 'uses-formatter',
+      name: 'Uses Formatter',
+      nodes: [{ id: 'format', type: 'formatter', title: 'Format' }],
+      edges: [],
+    });
+
+    const disabled = await store.disableNodePackage('formatter-node');
+    const disabledAgain = await store.disableNodePackage('formatter-node');
+    expect(disabled).toMatchObject({ id: 'formatter-node', enabled: false, status: 'disabled', lifecycleState: 'disabled' });
+    expect(disabledAgain).toMatchObject({ id: 'formatter-node', enabled: false, status: 'disabled', lifecycleState: 'disabled' });
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).not.toContain('formatter');
+    expect(store.getWorkflow('uses-formatter')).toMatchObject({
+      id: 'uses-formatter',
+      nodes: [expect.objectContaining({ id: 'format', type: 'formatter' })],
+    });
+
+    const enabled = await store.enableNodePackage('formatter-node');
+    expect(enabled).toMatchObject({ id: 'formatter-node', enabled: true, status: 'ready', lifecycleState: 'enabled' });
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('formatter');
+
+    const removed = await store.uninstallNodePackage('formatter-node');
+    expect(removed).toMatchObject({ removed: true, packageId: 'formatter-node' });
+    expect(store.listNodePackages()).toHaveLength(0);
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).not.toContain('formatter');
+    expect(store.getWorkflow('uses-formatter')).toBeTruthy();
+  });
+
+  test('reports workflow node package impact across workflows templates and recent run snapshots', async () => {
+    const store = createWorkflowStudioStore({ persist: false, autoExecute: false, agentResolver });
+    await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+    });
+    await store.upsertWorkflow({
+      id: 'uses-formatter',
+      name: 'Uses Formatter',
+      nodes: [{ id: 'format', type: 'formatter', title: 'Format' }],
+      edges: [],
+    });
+    await store.upsertWorkflow({
+      id: 'formatter-template',
+      name: 'Formatter Template',
+      metadata: {
+        templateManifest: { id: 'formatter-template', version: '1.0.0', dependencies: { nodePackages: ['formatter-node'] } },
+      },
+      nodes: [{ id: 'template-format', type: 'formatter', title: 'Template Format' }],
+      edges: [],
+    });
+    const run = await store.createRun('uses-formatter');
+
+    const report = await store.getNodePackageImpactReport('formatter-node');
+    expect(report).toMatchObject({
+      packageId: 'formatter-node',
+      exists: true,
+      totals: { workflows: 1, templates: 1, recentRuns: 1 },
+    });
+    expect(report.affected.workflows).toEqual([
+      expect.objectContaining({ objectType: 'workflow', id: 'uses-formatter', nodeIds: ['format'], severity: 'blocking' }),
+    ]);
+    expect(report.affected.templates).toEqual([
+      expect.objectContaining({ objectType: 'template', id: 'formatter-template', nodeIds: ['template-format'], severity: 'blocking' }),
+    ]);
+    expect(report.affected.recentRuns).toEqual([
+      expect.objectContaining({ objectType: 'run', id: run.id, workflowId: 'uses-formatter', nodeIds: ['format'], severity: 'warning' }),
+    ]);
+
+    const missing = await store.getNodePackageImpactReport('missing-node');
+    expect(missing).toMatchObject({ packageId: 'missing-node', exists: false, affected: { workflows: [], templates: [], recentRuns: [] } });
+  });
+
+  test('blocks incompatible workflow node package upgrades with schema reasons', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+    });
+
+    const compatible = await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.1.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }, { name: 'prefix', label: 'Prefix', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }, { name: 'count', type: 'number' }] },
+    });
+    expect(compatible.manifest.version).toBe('1.1.0');
+    expect(compatible.compatibility).toMatchObject({ compatible: true });
+
+    await expect(store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '2.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'number' }] },
+      outputSchema: { fields: [] },
+    })).rejects.toMatchObject({
+      statusCode: 409,
+      compatibility: expect.objectContaining({
+        compatible: false,
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ code: 'config_field_type_changed', field: 'mode' }),
+          expect.objectContaining({ code: 'output_field_removed', field: 'summary' }),
+        ]),
+      }),
+    });
+    expect(store.listNodePackages()[0].manifest.version).toBe('1.1.0');
   });
 
   test('smokes workflow templates and exposes benchmark release readiness results', async () => {
@@ -1261,5 +1826,277 @@ describe('workflow studio service', () => {
       releaseSmokeMatrix: expect.any(Object),
     });
     expect(restored).toMatchObject({ workflowCount: expect.any(Number), runCount: expect.any(Number) });
+  });
+
+  test('validates AI generated Python node manifests before install', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node that uppercases text.',
+      sampleInput: { text: 'hello' },
+    });
+
+    const validation = store.validateNodePackageDraft(draft.manifest);
+    const dependencyValidation = store.validateNodePackageDraft({
+      ...draft.manifest,
+      dependencies: ['requests'],
+      codeFiles: {
+        'main.py': 'import requests\nprint("{}")\n',
+      },
+    });
+
+    expect(draft.status).toBe('draft');
+    expect(draft.manifest).toMatchObject({
+      manifestVersion: '1',
+      language: 'python',
+      dependencies: [],
+      entrypoint: 'main.py',
+    });
+    expect(validation.valid).toBe(true);
+    expect(dependencyValidation.valid).toBe(false);
+    expect(dependencyValidation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unsupported_dependency' }),
+      expect.objectContaining({ code: 'unsupported_import' }),
+    ]));
+  });
+
+  test('runs Python node drafts with JSON stdin/stdout and classifies execution failures', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const successDraft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const success = await store.testNodePackageDraft(successDraft.manifest, {
+      input: { text: 'hello' },
+      config: { mode: 'upper' },
+    });
+    const syntax = await store.testNodePackageDraft({
+      ...successDraft.manifest,
+      codeFiles: { 'main.py': 'def broken(:\n  pass\n' },
+      testCases: [{ id: 'syntax', input: {}, config: {}, expectedOutput: {} }],
+    });
+    const timeout = await store.testNodePackageDraft({
+      ...successDraft.manifest,
+      codeFiles: { 'main.py': 'while True:\n    pass\n' },
+      testCases: [{ id: 'timeout', input: {}, config: {}, expectedOutput: {} }],
+    }, { timeoutMs: 50 });
+    const invalidJson = await store.testNodePackageDraft({
+      ...successDraft.manifest,
+      codeFiles: { 'main.py': 'print("not json")\n' },
+      testCases: [{ id: 'invalid-json', input: {}, config: {}, expectedOutput: {} }],
+    });
+
+    expect(success.ok).toBe(true);
+    expect(success.parsedOutput).toMatchObject({ status: 'completed', result: expect.any(Object) });
+    expect(success.stdout).toContain('"status"');
+    expect(syntax.error.category).toBe('python_syntax_error');
+    expect(timeout.error.category).toBe('execution_timeout');
+    expect(invalidJson.error.category).toBe('invalid_json_output');
+  });
+
+  test('runs every Python node draft test case and preserves partial failures', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      codeFiles: {
+        'main.py': [
+          'import json',
+          'import sys',
+          'payload = json.load(sys.stdin)',
+          'text = str((payload.get("input") or {}).get("text") or "")',
+          'if text == "bad":',
+          '    print("case failed", file=sys.stderr)',
+          '    sys.exit(2)',
+          'print(json.dumps({"summary": text.upper(), "result": {"text": text.upper()}, "status": "completed"}))',
+        ].join('\n'),
+      },
+      testCases: [
+        { id: 'first-pass', input: { text: 'hello' }, config: {} },
+        { id: 'middle-fail', input: { text: 'bad' }, config: {} },
+        { id: 'last-pass', input: { text: 'again' }, config: {} },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.cases).toHaveLength(3);
+    expect(result.cases.map((entry) => entry.testCaseId)).toEqual(['first-pass', 'middle-fail', 'last-pass']);
+    expect(result.cases[0]).toMatchObject({ ok: true, parsedOutput: { result: { text: 'HELLO' } } });
+    expect(result.cases[1]).toMatchObject({ ok: false, error: { category: 'runtime_error' } });
+    expect(result.cases[1].stderr).toContain('case failed');
+    expect(result.cases[2]).toMatchObject({ ok: true, parsedOutput: { result: { text: 'AGAIN' } } });
+    expect(result.error).toMatchObject({ category: 'runtime_error' });
+  });
+
+  test('keeps Python node test case payload limits isolated per case', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      testCases: [
+        { id: 'too-large', input: { text: 'x'.repeat(2000) }, config: {} },
+        { id: 'still-runs', input: { text: 'ok' }, config: {} },
+      ],
+    }, { payloadLimitBytes: 1024 });
+
+    expect(result.ok).toBe(false);
+    expect(result.cases).toHaveLength(2);
+    expect(result.cases[0]).toMatchObject({ testCaseId: 'too-large', ok: false, error: { category: 'payload_too_large' } });
+    expect(result.cases[1]).toMatchObject({ testCaseId: 'still-runs', ok: true, parsedOutput: { result: { text: 'OK' } } });
+  });
+
+  test('checks Python node expectedOutput subsets and expectedStatus per test case', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      testCases: [
+        { id: 'subset-pass', input: { text: 'hello' }, config: { mode: 'upper' }, expectedOutput: { result: { text: 'HELLO' } }, expectedStatus: 'completed' },
+        { id: 'subset-fail', input: { text: 'hello' }, config: { mode: 'upper' }, expectedOutput: { result: { text: 'GOODBYE' }, missing: true }, expectedStatus: 'completed' },
+        { id: 'status-fail', input: { text: 'hello' }, config: { mode: 'upper' }, expectedOutput: { result: { text: 'HELLO' } }, expectedStatus: 'failed' },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.cases[0]).toMatchObject({ testCaseId: 'subset-pass', ok: true, assertionFailures: [] });
+    expect(result.cases[1]).toMatchObject({ testCaseId: 'subset-fail', ok: false, error: { category: 'assertion_failed' } });
+    expect(result.cases[1].assertionFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'result.text', expected: 'GOODBYE', actual: 'HELLO' }),
+      expect.objectContaining({ path: 'missing', expected: true }),
+    ]));
+    expect(result.cases[2]).toMatchObject({ testCaseId: 'status-fail', ok: false, error: { category: 'assertion_failed' } });
+    expect(result.cases[2].assertionFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'status', expected: 'failed', actual: 'completed' }),
+    ]));
+  });
+
+  test('installs and runs a Python custom node in a workflow', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node that uppercases text.',
+      sampleInput: { text: 'hello' },
+    });
+    const installed = await store.installNodePackage(draft.manifest);
+
+    await store.upsertWorkflow({
+      id: 'python-format-flow',
+      name: 'Python Format Flow',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      inputs: [{ id: 'text', label: 'Text', type: 'text' }],
+      nodes: [
+        {
+          id: 'format',
+          type: installed.definition.type,
+          title: 'Format Text',
+          config: { mode: 'upper' },
+          prompt: '{{inputs.text}}',
+        },
+        {
+          id: 'artifact',
+          type: 'artifact',
+          prompt: '{{nodes.format.output.result}}',
+        },
+      ],
+      edges: [{ from: 'format', to: 'artifact' }],
+    });
+
+    const run = await store.createRun('python-format-flow', { inputs: { text: 'hello' } });
+
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.format.output).toMatchObject({
+      status: 'completed',
+      result: expect.objectContaining({ text: 'HELLO' }),
+    });
+    expect(run.nodeRuns.artifact.output.summary).toContain('HELLO');
+  });
+
+  test('includes installed custom node schemas in dry-run variables and config validation', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node that uppercases text.',
+      sampleInput: { text: 'hello' },
+    });
+    const installed = await store.installNodePackage({
+      ...draft.manifest,
+      configSchema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', title: 'Mode', enum: ['upper', 'lower'] },
+        },
+        required: ['mode'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', title: 'Summary' },
+          result: { type: 'object', title: 'Result' },
+          status: { type: 'string', title: 'Status' },
+          formattedText: { type: 'string', title: 'Formatted text' },
+        },
+        required: ['summary', 'result', 'status', 'formattedText'],
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'custom-node-dry-run-flow',
+      name: 'Custom Node Dry Run Flow',
+      profileId: 'build',
+      inputs: [{ id: 'text', label: 'Text', type: 'text', required: true }],
+      nodes: [
+        { id: 'format', type: installed.definition.type, prompt: '{{inputs.text}}' },
+        { id: 'artifact', type: 'artifact', prompt: '{{nodes.format.output.formattedText}}' },
+      ],
+      edges: [{ from: 'format', to: 'artifact' }],
+    });
+
+    const result = await store.validateRun('custom-node-dry-run-flow', { inputs: { text: 'hello' } });
+
+    expect(result.availableVariables).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'nodes.format.output.formattedText', type: 'string' }),
+    ]));
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_required_config', nodeId: 'format', field: 'mode' }),
+    ]));
+    expect(result.errors).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_output_field', variable: 'nodes.format.output.formattedText' }),
+    ]));
+  });
+
+  test('rejects Python node stdout that violates the manifest output contract', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      codeFiles: {
+        'main.py': 'import json\nprint(json.dumps({"summary": "missing result", "status": "completed"}))\n',
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string' },
+          result: { type: 'object' },
+          status: { type: 'string' },
+        },
+        required: ['summary', 'result', 'status'],
+      },
+      testCases: [{ id: 'invalid-contract', input: {}, config: {}, expectedOutput: {} }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error.category).toBe('invalid_output_contract');
+    expect(result.error.category).not.toBe('assertion_failed');
+    expect(result.assertionFailures || []).toEqual([]);
+    expect(result.error.message).toMatch(/result/);
   });
 });

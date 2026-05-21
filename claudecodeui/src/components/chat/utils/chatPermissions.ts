@@ -27,12 +27,41 @@ export function formatToolInputForDisplay(input: unknown) {
   }
 }
 
+function toolResultContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (content === undefined || content === null) return '';
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function looksLikeClaudePermissionFailure(message: ChatMessage): boolean {
+  const content = toolResultContentText(message.toolResult?.content).toLowerCase();
+  if (!content) return false;
+
+  if (content.includes('<tool_use_error')) return false;
+
+  return [
+    'permission.required',
+    'tool disallowed by settings',
+    'user denied tool use',
+    'tool use denied',
+    'requires permission',
+    'require permission',
+    'permission request',
+    'not allowed by runtime permissions',
+  ].some((marker) => content.includes(marker));
+}
+
 export function getClaudePermissionSuggestion(
   message: ChatMessage | null | undefined,
   provider: string,
 ): ClaudePermissionSuggestion | null {
   if (provider !== 'claude') return null;
   if (!message?.toolResult?.isError) return null;
+  if (!looksLikeClaudePermissionFailure(message)) return null;
 
   const toolName = message?.toolName;
   const entry = buildClaudeToolPermissionEntry(toolName, message.toolInput);

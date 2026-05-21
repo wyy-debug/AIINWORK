@@ -442,10 +442,43 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   workflowNodePackages: () => apiFetch('/api/workflow-node-packages'),
+  generateWorkflowNodePackageDraft: (payload = {}) =>
+    apiFetch('/api/workflow-node-packages/generate-draft', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  validateWorkflowNodePackageDraft: (manifest = {}) =>
+    apiFetch('/api/workflow-node-packages/validate-draft', {
+      method: 'POST',
+      body: JSON.stringify({ manifest }),
+    }),
+  testWorkflowNodePackageDraft: (payload = {}) =>
+    apiFetch('/api/workflow-node-packages/test-draft', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   installWorkflowNodePackage: (workflowNodePackage = {}) =>
     apiFetch('/api/workflow-node-packages/install', {
       method: 'POST',
       body: JSON.stringify({ package: workflowNodePackage }),
+    }),
+  workflowNodePackageImpact: (packageId, { limit = 25 } = {}) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    const query = params.toString();
+    return apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/impact${query ? `?${query}` : ''}`);
+  },
+  enableWorkflowNodePackage: (packageId) =>
+    apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/enable`, {
+      method: 'POST',
+    }),
+  disableWorkflowNodePackage: (packageId) =>
+    apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/disable`, {
+      method: 'POST',
+    }),
+  uninstallWorkflowNodePackage: (packageId) =>
+    apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}`, {
+      method: 'DELETE',
     }),
   smokeWorkflowTemplate: (templateId, payload = {}) =>
     apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/smoke`, {

@@ -24,6 +24,16 @@ function isTaskNotificationContent(content: string): boolean {
     || /^&lt;task-notification\b/i.test(trimmed);
 }
 
+function isInjectedSkillInstructionContent(content: string): boolean {
+  const trimmed = decodeHtmlEntities(content).trimStart();
+  if (!trimmed.startsWith('Base directory for this skill:')) {
+    return false;
+  }
+
+  return /\n\s*#\s+.+Skill\b/i.test(trimmed)
+    || /\n\s*##\s+(When To Use|Required Runtime|Preferred Workflow|Output Rules)\b/i.test(trimmed);
+}
+
 function isInternalAgentFailureNarration(content: string): boolean {
   const normalized = content.replace(/\s+/g, ' ').trim().toLowerCase();
   return normalized.includes('i literally cannot stop myself')
@@ -405,7 +415,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (!content.trim()) continue;
 
         if (msg.role === 'user') {
-          if (isTaskNotificationContent(content)) {
+          if (isTaskNotificationContent(content) || isInjectedSkillInstructionContent(content)) {
             continue;
           }
           converted.push({

@@ -43,6 +43,7 @@ import {
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { evaluateRuntimePermission } from './services/runtime-permission-service.js';
+import { appendSessionRoutingDebugEvent } from './services/session-routing-debug-service.js';
 import {
   getArgusPlanModeAllowedTools,
   getArgusPlanModeDeniedTools,
@@ -399,7 +400,9 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
 
 function logMtlCodeSessionLifecycle(event, details = {}) {
   try {
-    console.log(`${ARGUS_SESSION_LOG_PREFIX} ${JSON.stringify(buildMtlCodeSessionLogPayload(event, details))}`);
+    const payload = buildMtlCodeSessionLogPayload(event, details);
+    console.log(`${ARGUS_SESSION_LOG_PREFIX} ${JSON.stringify(payload)}`);
+    appendSessionRoutingDebugEvent(`sdk.${event}`, payload);
   } catch (error) {
     console.warn('[ArgusSession] failed to serialize lifecycle log:', error?.message || error);
   }
@@ -673,9 +676,46 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 }
 
 function createMtlCodeFreshSessionOptionsForRuntimeChange(options = {}) {
-  const freshOptions = { ...options };
-  delete freshOptions.sessionId;
-  return freshOptions;
+  return { ...options };
+}
+
+function normalizeMtlCodeSessionId(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveMtlCodeCanonicalSessionRegistration({
+  messageSessionId = '',
+  capturedSessionId = '',
+  requestedSessionId = '',
+  clientSessionId = '',
+} = {}) {
+  const messageId = normalizeMtlCodeSessionId(messageSessionId);
+  const capturedId = normalizeMtlCodeSessionId(capturedSessionId);
+  const requestedId = normalizeMtlCodeSessionId(requestedSessionId);
+  const clientId = normalizeMtlCodeSessionId(clientSessionId);
+  const canonicalRequestedId = requestedId || capturedId;
+
+  if (!messageId) {
+    return {
+      canonicalSessionId: canonicalRequestedId || clientId,
+      providerSessionAlias: '',
+      shouldAdoptMessageSessionId: false,
+    };
+  }
+
+  if (canonicalRequestedId && messageId !== canonicalRequestedId) {
+    return {
+      canonicalSessionId: canonicalRequestedId,
+      providerSessionAlias: messageId,
+      shouldAdoptMessageSessionId: false,
+    };
+  }
+
+  return {
+    canonicalSessionId: messageId,
+    providerSessionAlias: '',
+    shouldAdoptMessageSessionId: !capturedId || capturedId !== messageId,
+  };
 }
 
 function buildMtlCodeRuntimeSignature({ cwd = '', cliArgs = [], env = {} } = {}) {
@@ -1271,15 +1311,17 @@ async function extractContextBudget(resultMessage, options = {}) {
 
 /**
  * Handles image processing for SDK queries
- * Saves base64 images to temporary files and returns modified prompt with file paths
+ * Saves base64 images to temporary files and optionally returns a prompt with file paths.
  * @param {string} command - Original user prompt
  * @param {Array} images - Array of image objects with base64 data
  * @param {string} cwd - Working directory for temp file creation
+ * @param {{appendPathNote?: boolean}} options - Image prompt handling options
  * @returns {Promise<Object>} {modifiedCommand, tempImagePaths, tempDir}
  */
-async function handleImages(command, images, cwd) {
+async function handleImages(command, images, cwd, options = {}) {
   const tempImagePaths = [];
   let tempDir = null;
+  const appendPathNote = options.appendPathNote !== false;
 
   if (!images || images.length === 0) {
     return { modifiedCommand: command, tempImagePaths, tempDir };
@@ -1310,9 +1352,8 @@ async function handleImages(command, images, cwd) {
       tempImagePaths.push(filepath);
     }
 
-    // Include the full image paths in the prompt
     let modifiedCommand = command;
-    if (tempImagePaths.length > 0 && command && command.trim()) {
+    if (appendPathNote && tempImagePaths.length > 0 && command && command.trim()) {
       const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
       modifiedCommand = command + imageNote;
     }
@@ -1323,6 +1364,199 @@ async function handleImages(command, images, cwd) {
     console.error('Error processing images for SDK:', error);
     return { modifiedCommand: command, tempImagePaths, tempDir };
   }
+}
+
+function isDataUrlImage(image) {
+  return Boolean(
+    image
+    && typeof image.data === 'string'
+    && /^data:image\/[a-z0-9.+-]+;base64,/i.test(image.data)
+  );
+}
+
+function buildOpenAIScreenshotAnalysisMessages({ command = '', images = [] } = {}) {
+  const validImages = Array.isArray(images) ? images.filter(isDataUrlImage).slice(0, 5) : [];
+  const userRequest = typeof command === 'string' && command.trim()
+    ? command.trim()
+    : 'Analyze the attached screenshot and describe the relevant UI, text, state, and possible issues.';
+  const content = [
+    {
+      type: 'text',
+      text: [
+        'You are a screenshot analysis bridge for a coding agent.',
+        'Analyze the attached image(s) and produce concise, actionable context for the next agent turn.',
+        'Focus on visible UI text, errors, disabled controls, layout issues, clicked/selected state, and anything the user is asking about.',
+        `User request: ${userRequest}`,
+      ].join('\n'),
+    },
+    ...validImages.map((image) => ({
+      type: 'image_url',
+      image_url: {
+        url: image.data,
+      },
+    })),
+  ];
+
+  return [{ role: 'user', content }];
+}
+
+function buildOpenAIChatCompletionsUrl(baseUrl) {
+  const normalized = typeof baseUrl === 'string' ? baseUrl.trim().replace(/\/+$/, '') : '';
+  if (!normalized) {
+    return '';
+  }
+  if (/\/v1\/chat\/completions$/i.test(normalized) || /\/chat\/completions$/i.test(normalized)) {
+    return normalized;
+  }
+  if (/\/v1$/i.test(normalized)) {
+    return `${normalized}/chat/completions`;
+  }
+  return `${normalized}/v1/chat/completions`;
+}
+
+function extractOpenAIChatCompletionText(payload) {
+  const messageContent = payload?.choices?.[0]?.message?.content;
+  if (typeof messageContent === 'string') {
+    return messageContent.trim();
+  }
+  if (Array.isArray(messageContent)) {
+    return messageContent
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        if (typeof part?.content === 'string') return part.content;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+function extractOpenAIStreamingChatCompletionText(rawText) {
+  if (typeof rawText !== 'string' || !rawText.trim()) {
+    return '';
+  }
+
+  const chunks = [];
+  for (const line of rawText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) {
+      continue;
+    }
+    const data = trimmed.slice('data:'.length).trim();
+    if (!data || data === '[DONE]') {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(data);
+      const choice = payload?.choices?.[0];
+      const deltaContent = choice?.delta?.content;
+      const messageContent = choice?.message?.content;
+      if (typeof deltaContent === 'string') {
+        chunks.push(deltaContent);
+      } else if (typeof messageContent === 'string') {
+        chunks.push(messageContent);
+      }
+    } catch {
+      // Ignore malformed SSE housekeeping lines from OpenAI-compatible gateways.
+    }
+  }
+
+  return chunks.join('').trim();
+}
+
+async function analyzeScreenshotImagesWithOpenAI({
+  command = '',
+  images = [],
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const validImages = Array.isArray(images) ? images.filter(isDataUrlImage) : [];
+  if (validImages.length === 0) {
+    return { ok: false, reason: 'no_images' };
+  }
+
+  if (env?.MTL_CODE_USE_OPENAI === '0') {
+    return { ok: false, reason: 'openai_runtime_unavailable' };
+  }
+
+  const apiKey = typeof env?.[OPENAI_MODEL_ENV_KEYS.apiKey] === 'string'
+    ? env[OPENAI_MODEL_ENV_KEYS.apiKey].trim()
+    : '';
+  const model = typeof env?.[OPENAI_MODEL_ENV_KEYS.model] === 'string'
+    ? env[OPENAI_MODEL_ENV_KEYS.model].trim()
+    : '';
+  const endpoint = buildOpenAIChatCompletionsUrl(env?.[OPENAI_MODEL_ENV_KEYS.baseUrl]);
+  if (!apiKey || !model || !endpoint || typeof fetchImpl !== 'function') {
+    return { ok: false, reason: 'openai_runtime_unavailable' };
+  }
+
+  const body = {
+    model,
+    messages: buildOpenAIScreenshotAnalysisMessages({ command, images: validImages }),
+    temperature: 0.1,
+    max_tokens: 1200,
+    stream: true,
+  };
+
+  try {
+    const response = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response?.ok) {
+      return {
+        ok: false,
+        reason: 'vision_request_failed',
+        status: response?.status || 0,
+      };
+    }
+
+    const contentType = typeof response.headers?.get === 'function'
+      ? String(response.headers.get('content-type') || '')
+      : '';
+    const shouldReadStream = /text\/event-stream/i.test(contentType) && typeof response.text === 'function';
+    const analysis = shouldReadStream
+      ? extractOpenAIStreamingChatCompletionText(await response.text())
+      : extractOpenAIChatCompletionText(await response.json());
+    if (!analysis) {
+      return { ok: false, reason: 'empty_vision_response' };
+    }
+
+    return {
+      ok: true,
+      analysis,
+      model,
+      endpoint,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'vision_request_error',
+      errorMessage: error?.message || String(error),
+    };
+  }
+}
+
+function appendScreenshotVisionAnalysis(command, analysis) {
+  const base = typeof command === 'string' ? command.trimEnd() : '';
+  const text = typeof analysis === 'string' ? analysis.trim() : '';
+  if (!text) {
+    return base;
+  }
+  const section = [
+    '## Screenshot analysis',
+    'The attached screenshot(s) were parsed by the configured vision-capable model before this agent turn.',
+    text,
+  ].join('\n');
+  return base ? `${base}\n\n${section}` : section;
 }
 
 /**
@@ -1783,11 +2017,31 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
     registeredSessionIds.clear();
   };
   const ensureSessionRegistered = (messageSessionId) => {
-    if (!messageSessionId || capturedSessionId === messageSessionId) {
+    const registration = resolveMtlCodeCanonicalSessionRegistration({
+      messageSessionId,
+      capturedSessionId,
+      requestedSessionId: currentOptions?.sessionId || sessionId || '',
+      clientSessionId,
+    });
+
+    if (!registration.shouldAdoptMessageSessionId) {
+      if (
+        registration.providerSessionAlias
+        && registration.canonicalSessionId
+        && registration.providerSessionAlias !== registration.canonicalSessionId
+      ) {
+        logMtlCodeSessionLifecycle('session_alias_ignored', {
+          turnId: currentTurnId,
+          sessionId: registration.canonicalSessionId,
+          clientSessionId,
+          providerSessionAlias: registration.providerSessionAlias,
+        });
+        registerSession(registration.canonicalSessionId);
+      }
       return;
     }
 
-    capturedSessionId = messageSessionId;
+    capturedSessionId = registration.canonicalSessionId;
     registerSession(capturedSessionId);
     logMtlCodeSessionLifecycle('session_captured', {
       turnId: currentTurnId,
@@ -1961,9 +2215,8 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   };
 
   try {
-    const imageResult = await handleImages(command, options.images, options.cwd);
-    const finalCommand = imageResult.modifiedCommand;
-    promptDebugEffectiveCommand = finalCommand;
+    const imageResult = await handleImages(command, options.images, options.cwd, { appendPathNote: false });
+    let finalCommand = imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
 
@@ -1979,6 +2232,29 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       throw new Error(permission.reason || 'Argus backend spawn is not allowed by runtime permissions');
     }
     const childEnv = await buildMtlCodeSpawnEnv(options);
+    const screenshotAnalysis = await analyzeScreenshotImagesWithOpenAI({
+      command,
+      images: options.images,
+      env: childEnv,
+    });
+    if (screenshotAnalysis.ok && screenshotAnalysis.analysis) {
+      finalCommand = appendScreenshotVisionAnalysis(finalCommand, screenshotAnalysis.analysis);
+      logMtlCodeSessionLifecycle('screenshot_analysis_complete', {
+        sessionId: sessionId || clientSessionId,
+        clientSessionId,
+        apiProvider: getMtlCodeApiProvider(childEnv),
+        requestModel: getMtlCodeRequestModel(childEnv),
+      });
+    } else if (options.images?.length > 0 && screenshotAnalysis.reason && screenshotAnalysis.reason !== 'no_images') {
+      logMtlCodeSessionLifecycle('screenshot_analysis_skipped', {
+        sessionId: sessionId || clientSessionId,
+        clientSessionId,
+        reason: screenshotAnalysis.reason,
+        apiProvider: getMtlCodeApiProvider(childEnv),
+        requestModel: getMtlCodeRequestModel(childEnv),
+      });
+    }
+    promptDebugEffectiveCommand = finalCommand;
     let spawnOptions = options;
     let cliArgs = buildMtlCodeArgs(spawnOptions, childEnv);
     runtimeSignature = buildMtlCodeRuntimeSignature({ cwd, cliArgs, env: childEnv });
@@ -2056,7 +2332,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         clientSessionId,
         reuseSessionKey,
         runtimeSignature,
-        resumeSuppressedForRuntimeChange: true,
+        resumeSuppressedForRuntimeChange: false,
       });
       closeMtlCodePersistentSession(existingSession.instance, 'runtime_changed');
       removeSession(reuseSessionKey);
@@ -2763,6 +3039,11 @@ export {
   buildMtlCodeCloseFailureMessage,
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
+  handleImages,
+  buildOpenAIScreenshotAnalysisMessages,
+  analyzeScreenshotImagesWithOpenAI,
+  appendScreenshotVisionAnalysis,
+  resolveMtlCodeCanonicalSessionRegistration,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
   createMtlCodeFreshSessionOptionsForRuntimeChange,

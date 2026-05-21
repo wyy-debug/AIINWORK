@@ -9,6 +9,8 @@ function sendNodePackageError(res, error, fallbackStatus = 500, fallbackMessage 
   res.status(error?.statusCode || fallbackStatus).json({
     success: false,
     error: error?.message || fallbackMessage,
+    compatibility: error?.compatibility || null,
+    validation: error?.validation || null,
   });
 }
 
@@ -21,12 +23,85 @@ router.get('/', async (_req, res) => {
   }
 });
 
+router.post('/generate-draft', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const draft = defaultWorkflowStudioStore.generatePythonNodeDraft(req.body || {});
+    res.status(201).json({ success: true, draft });
+  } catch (error) {
+    sendNodePackageError(res, error, 400, 'Failed to generate workflow node package draft');
+  }
+});
+
+router.post('/validate-draft', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const validation = defaultWorkflowStudioStore.validateNodePackageDraft(req.body?.manifest || req.body || {});
+    res.status(validation.valid ? 200 : 400).json({ success: validation.valid, validation });
+  } catch (error) {
+    sendNodePackageError(res, error, 400, 'Failed to validate workflow node package draft');
+  }
+});
+
+router.post('/test-draft', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const result = await defaultWorkflowStudioStore.testNodePackageDraft(req.body?.manifest || req.body || {}, req.body || {});
+    res.status(result.ok ? 200 : 400).json({ success: result.ok, result });
+  } catch (error) {
+    sendNodePackageError(res, error, 400, 'Failed to test workflow node package draft');
+  }
+});
+
 router.post('/install', async (req, res) => {
   try {
+    await defaultWorkflowStudioStore.ready();
     const nodePackage = await defaultWorkflowStudioStore.installNodePackage(req.body?.package || req.body || {});
     res.status(201).json({ success: true, package: nodePackage });
   } catch (error) {
     sendNodePackageError(res, error, 400, 'Failed to install workflow node package');
+  }
+});
+
+router.get('/:packageId/impact', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const report = await defaultWorkflowStudioStore.getNodePackageImpactReport(req.params.packageId, {
+      recentRunLimit: req.query.limit || 25,
+    });
+    res.json({ success: true, report });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to build workflow node package impact report');
+  }
+});
+
+router.post('/:packageId/enable', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const nodePackage = await defaultWorkflowStudioStore.enableNodePackage(req.params.packageId);
+    res.json({ success: true, package: nodePackage });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to enable workflow node package');
+  }
+});
+
+router.post('/:packageId/disable', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const nodePackage = await defaultWorkflowStudioStore.disableNodePackage(req.params.packageId);
+    res.json({ success: true, package: nodePackage });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to disable workflow node package');
+  }
+});
+
+router.delete('/:packageId', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const result = await defaultWorkflowStudioStore.uninstallNodePackage(req.params.packageId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to uninstall workflow node package');
   }
 });
 

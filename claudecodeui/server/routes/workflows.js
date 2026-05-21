@@ -1,6 +1,6 @@
 import express from 'express';
 
-import { defaultWorkflowStudioStore, getWorkflowNodeTypeDefinitions } from '../services/workflow-studio-service.js';
+import { defaultWorkflowStudioStore } from '../services/workflow-studio-service.js';
 
 const router = express.Router();
 
@@ -32,8 +32,13 @@ router.post('/validate', async (req, res) => {
   }
 });
 
-router.get('/node-types', (_req, res) => {
-  res.json({ success: true, nodeTypes: getWorkflowNodeTypeDefinitions() });
+router.get('/node-types', async (_req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    res.json({ success: true, nodeTypes: defaultWorkflowStudioStore.getWorkflowNodeTypeDefinitions() });
+  } catch (error) {
+    sendWorkflowError(res, error, 500, 'Failed to load workflow node types');
+  }
 });
 
 router.get('/tool-registry', async (_req, res) => {

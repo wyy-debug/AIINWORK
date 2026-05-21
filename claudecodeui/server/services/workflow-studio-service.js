@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { exec as execCallback } from 'node:child_process';
+import { exec as execCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { listBuiltInRecipes, renderRecipePrompt } from '../../shared/recipes.js';
@@ -58,6 +58,39 @@ const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 const WORKFLOW_GOVERNANCE_STATUSES = new Set(['draft', 'published', 'deprecated']);
 const WORKFLOW_COMPLIANCE_LABELS = new Set(['data-sensitive', 'external-network', 'code-write', 'secret-access', 'mcp-enabled']);
+const WORKFLOW_RUN_RESOLVER_VERSION = 'workflow-run-resolver/1';
+const NODE_PACKAGE_STATUSES = new Set(['ready', 'disabled', 'missing_dependencies', 'broken', 'update_available']);
+const NODE_PACKAGE_LIFECYCLE_STATES = new Set(['enabled', 'disabled', 'broken', 'update_available']);
+const PYTHON_NODE_MANIFEST_VERSION = '1';
+const PYTHON_NODE_DEFAULT_TIMEOUT_MS = 30000;
+const PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES = 5 * 1024 * 1024;
+const PYTHON_STDLIB_IMPORT_ALLOWLIST = new Set([
+  'argparse',
+  'base64',
+  'collections',
+  'csv',
+  'datetime',
+  'decimal',
+  'enum',
+  'functools',
+  'hashlib',
+  'html',
+  'io',
+  'itertools',
+  'json',
+  'math',
+  'os',
+  'pathlib',
+  're',
+  'statistics',
+  'string',
+  'sys',
+  'textwrap',
+  'time',
+  'typing',
+  'urllib',
+  'uuid',
+]);
 
 const BUILT_IN_NODE_TYPES = new Set(WORKFLOW_NODE_TYPES);
 const BUILT_IN_TOOL_REGISTRY = Object.freeze([
@@ -331,8 +364,360 @@ function normalizePermission(value, fallback = '') {
   return PERMISSION_ACTIONS.has(normalized) ? normalized : fallback;
 }
 
+function normalizeNodePackageStatus(value, fallback = 'ready') {
+  const status = normalizeText(value, fallback, 80).toLowerCase();
+  return NODE_PACKAGE_STATUSES.has(status) ? status : fallback;
+}
+
+function normalizeNodePackageLifecycle(value, enabled, status = 'ready') {
+  const requested = normalizeText(value, '', 80).toLowerCase();
+  if (NODE_PACKAGE_LIFECYCLE_STATES.has(requested)) return requested;
+  if (enabled === false || status === 'disabled') return 'disabled';
+  if (status === 'missing_dependencies' || status === 'broken') return 'broken';
+  if (status === 'update_available') return 'update_available';
+  return 'enabled';
+}
+
+function isNodePackagePaletteAvailable(nodePackage = {}) {
+  const status = normalizeNodePackageStatus(nodePackage.status, 'ready');
+  const lifecycleState = normalizeNodePackageLifecycle(nodePackage.lifecycleState || nodePackage.state, nodePackage.enabled, status);
+  return nodePackage.enabled !== false
+    && lifecycleState !== 'disabled'
+    && lifecycleState !== 'broken'
+    && (status === 'ready' || status === 'update_available');
+}
+
+function mapSchemaFields(fields = []) {
+  return new Map((Array.isArray(fields) ? fields : [])
+    .map((field) => asObject(field))
+    .filter((field) => normalizeText(field.name, '', 120))
+    .map((field) => [normalizeText(field.name, '', 120), {
+      name: normalizeText(field.name, '', 120),
+      type: normalizeText(field.type, 'json', 40),
+      required: Boolean(field.required),
+    }]));
+}
+
+function compareNodePackageFields(previousFields, nextFields, group) {
+  const reasons = [];
+  const previous = mapSchemaFields(previousFields);
+  const next = mapSchemaFields(nextFields);
+  for (const [name, previousField] of previous.entries()) {
+    const nextField = next.get(name);
+    if (!nextField) {
+      reasons.push({ code: `${group}_field_removed`, field: name, message: `${group} field was removed: ${name}` });
+      continue;
+    }
+    if (previousField.type !== nextField.type) {
+      reasons.push({ code: `${group}_field_type_changed`, field: name, from: previousField.type, to: nextField.type, message: `${group} field changed type: ${name}` });
+    }
+  }
+  return reasons;
+}
+
+function schemaPropertiesToFields(schema = {}) {
+  return Object.entries(asObject(schema.properties)).map(([name, value]) => ({
+    name,
+    type: normalizeText(asObject(value).type, 'json', 40),
+    required: Array.isArray(schema.required) && schema.required.includes(name),
+  }));
+}
+
+function buildNodePackageCompatibility(previousPackage = {}, nextPackage = {}) {
+  const reasons = [];
+  const warnings = [];
+  const previousType = normalizeText(previousPackage.definition?.type || previousPackage.manifest?.type, '', 120);
+  const nextType = normalizeText(nextPackage.definition?.type || nextPackage.manifest?.type, '', 120);
+  if (previousType && nextType && previousType !== nextType) {
+    reasons.push({ code: 'package_type_changed', field: 'type', from: previousType, to: nextType, message: `Package node type changed: ${previousType} -> ${nextType}` });
+  }
+  reasons.push(...compareNodePackageFields(previousPackage.definition?.configSchema?.fields || [], nextPackage.definition?.configSchema?.fields || [], 'config'));
+  reasons.push(...compareNodePackageFields(schemaPropertiesToFields(previousPackage.manifest?.inputSchema), schemaPropertiesToFields(nextPackage.manifest?.inputSchema), 'input'));
+  reasons.push(...compareNodePackageFields(previousPackage.definition?.outputSchema?.fields || [], nextPackage.definition?.outputSchema?.fields || [], 'output'));
+  const previousDependencies = stableJson(previousPackage.manifest?.dependencies || previousPackage.dependencies || {});
+  const nextDependencies = stableJson(nextPackage.manifest?.dependencies || nextPackage.dependencies || {});
+  if (previousDependencies !== nextDependencies) {
+    warnings.push({ code: 'dependencies_changed', message: 'Package dependencies changed; verify install environment before running workflows.' });
+  }
+  return {
+    compatible: reasons.length === 0,
+    reasons,
+    warnings,
+  };
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isSameJson(left, right) {
+  return stableJson(left ?? null) === stableJson(right ?? null);
+}
+
+function normalizePreviewDiff(input = {}) {
+  const source = asObject(input);
+  const changed = source.changed === true;
+  return {
+    matched: source.matched === undefined ? !changed : source.matched === true,
+    changed,
+    reasons: Array.isArray(source.reasons) ? source.reasons.map((item) => normalizeText(item, '', 80)).filter(Boolean) : [],
+    changedNodes: Array.isArray(source.changedNodes)
+      ? source.changedNodes.map((entry) => {
+        const node = asObject(entry);
+        return {
+          nodeId: normalizeText(node.nodeId, '', 120),
+          fields: Array.isArray(node.fields) ? node.fields.map((item) => normalizeText(item, '', 120)).filter(Boolean) : [],
+          reasons: Array.isArray(node.reasons) ? node.reasons.map((item) => normalizeText(item, '', 80)).filter(Boolean) : [],
+        };
+      }).filter((entry) => entry.nodeId)
+      : [],
+  };
+}
+
+function addPreviewReason(diff, reason) {
+  if (!diff.reasons.includes(reason)) {
+    diff.reasons.push(reason);
+  }
+}
+
+function addChangedPreviewNode(diff, nodeId, field, reason) {
+  const normalizedNodeId = normalizeText(nodeId, '', 120);
+  if (!normalizedNodeId) return;
+  let entry = diff.changedNodes.find((item) => item.nodeId === normalizedNodeId);
+  if (!entry) {
+    entry = { nodeId: normalizedNodeId, fields: [], reasons: [] };
+    diff.changedNodes.push(entry);
+  }
+  if (field && !entry.fields.includes(field)) {
+    entry.fields.push(field);
+  }
+  if (reason && !entry.reasons.includes(reason)) {
+    entry.reasons.push(reason);
+  }
+  if (reason) {
+    addPreviewReason(diff, reason);
+  }
+}
+
+function diffPreviewSnapshots(previewSnapshotInput = {}, executionSnapshotInput = {}) {
+  const previewSnapshot = asObject(previewSnapshotInput);
+  const executionSnapshot = asObject(executionSnapshotInput);
+  const diff = { matched: true, changed: false, reasons: [], changedNodes: [] };
+
+  if (!isSameJson(previewSnapshot.inputSnapshot || {}, executionSnapshot.inputSnapshot || {})) {
+    addPreviewReason(diff, 'input_changed');
+  }
+  if (normalizeText(previewSnapshot.resolverVersion) !== normalizeText(executionSnapshot.resolverVersion)) {
+    addPreviewReason(diff, 'resolver_version_changed');
+  }
+
+  const previewDeps = asObject(previewSnapshot.dependencyRefs);
+  const executionDeps = asObject(executionSnapshot.dependencyRefs);
+  if (normalizeText(previewDeps.workflowDigest) !== normalizeText(executionDeps.workflowDigest)) {
+    addPreviewReason(diff, 'definition_changed');
+  }
+  if (normalizeText(previewDeps.profileId) !== normalizeText(executionDeps.profileId)) {
+    addPreviewReason(diff, 'profile_changed');
+  }
+  if (normalizeText(previewDeps.permissionPreset) !== normalizeText(executionDeps.permissionPreset)) {
+    addPreviewReason(diff, 'permission_preset_changed');
+  }
+  if (!isSameJson(previewDeps.nodePackages || [], executionDeps.nodePackages || [])) {
+    addPreviewReason(diff, 'package_changed');
+  }
+
+  const previewNodes = new Map((Array.isArray(previewSnapshot.nodes) ? previewSnapshot.nodes : []).map((node) => [normalizeText(node?.nodeId, '', 120), asObject(node)]));
+  const executionNodes = new Map((Array.isArray(executionSnapshot.nodes) ? executionSnapshot.nodes : []).map((node) => [normalizeText(node?.nodeId, '', 120), asObject(node)]));
+  for (const [nodeId, previewNode] of previewNodes.entries()) {
+    const executionNode = executionNodes.get(nodeId);
+    if (!executionNode) {
+      addChangedPreviewNode(diff, nodeId, 'node', 'node_removed');
+      continue;
+    }
+    if (!isSameJson(previewNode.resolvedInput || {}, executionNode.resolvedInput || {})) {
+      addChangedPreviewNode(diff, nodeId, 'resolvedInput', 'node_input_changed');
+    }
+    if (normalizeText(previewNode.permissionDecision) !== normalizeText(executionNode.permissionDecision)) {
+      addChangedPreviewNode(diff, nodeId, 'permissionDecision', 'permission_changed');
+    }
+    if (Boolean(previewNode.blocked) !== Boolean(executionNode.blocked)) {
+      addChangedPreviewNode(diff, nodeId, 'blocked', 'blocked_state_changed');
+    }
+    if (!isSameJson(previewNode.errors || [], executionNode.errors || [])) {
+      addChangedPreviewNode(diff, nodeId, 'errors', 'node_errors_changed');
+    }
+  }
+  for (const nodeId of executionNodes.keys()) {
+    if (!previewNodes.has(nodeId)) {
+      addChangedPreviewNode(diff, nodeId, 'node', 'node_added');
+    }
+  }
+
+  diff.changed = diff.reasons.length > 0 || diff.changedNodes.length > 0;
+  diff.matched = !diff.changed;
+  return diff;
+}
+
+function normalizeJsonSchema(value, fallbackType = 'object') {
+  const source = asObject(value);
+  return {
+    type: normalizeText(source.type, fallbackType, 40) || fallbackType,
+    properties: asObject(source.properties),
+    required: Array.isArray(source.required) ? source.required.map((item) => normalizeText(item, '', 120)).filter(Boolean) : [],
+    additionalProperties: source.additionalProperties === true,
+  };
+}
+
+function schemaToConfigFields(schema = {}) {
+  const properties = asObject(schema.properties);
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return Object.entries(properties).map(([name, definition]) => {
+    const field = asObject(definition);
+    const type = normalizeText(field.type, 'string', 40);
+    return {
+      name,
+      label: normalizeText(field.title || field.label || name, name, 120),
+      type: type === 'string' ? 'text' : type,
+      required: required.has(name),
+      defaultValue: field.default,
+      options: Array.isArray(field.enum) ? field.enum.map((item) => String(item)) : undefined,
+    };
+  });
+}
+
+function normalizeCodeFiles(value = {}) {
+  const source = asObject(value);
+  return Object.fromEntries(Object.entries(source)
+    .map(([fileName, content]) => [normalizeText(fileName, '', 240), typeof content === 'string' ? content : ''])
+    .filter(([fileName]) => fileName && !fileName.includes('..') && !path.isAbsolute(fileName)));
+}
+
+function collectPythonImports(codeFiles = {}) {
+  const imports = new Set();
+  for (const source of Object.values(codeFiles)) {
+    const text = typeof source === 'string' ? source : '';
+    for (const match of text.matchAll(/^\s*import\s+([a-zA-Z_][a-zA-Z0-9_., \t]*)/gm)) {
+      for (const item of match[1].split(',')) {
+        const moduleName = item.trim().split(/\s+as\s+/i)[0].split('.')[0];
+        if (moduleName) imports.add(moduleName);
+      }
+    }
+    for (const match of text.matchAll(/^\s*from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+import\s+/gm)) {
+      const moduleName = match[1].split('.')[0];
+      if (moduleName) imports.add(moduleName);
+    }
+  }
+  return [...imports];
+}
+
+function normalizePythonNodeManifest(input = {}) {
+  const source = asObject(input.manifest || input);
+  const id = normalizeId(source.id || source.type || source.label, 'python-custom-node');
+  const codeFiles = normalizeCodeFiles(source.codeFiles);
+  const entrypoint = normalizeText(source.entrypoint, 'main.py', 240);
+  const configSchema = normalizeJsonSchema(source.configSchema, 'object');
+  const inputSchema = normalizeJsonSchema(source.inputSchema, 'object');
+  const outputSchema = normalizeJsonSchema(source.outputSchema, 'object');
+  const dependencies = Array.isArray(source.dependencies)
+    ? source.dependencies.map((dependency) => normalizeText(dependency, '', 120)).filter(Boolean)
+    : [];
+  const manifest = {
+    manifestVersion: normalizeText(source.manifestVersion, '', 20),
+    id,
+    type: normalizeId(source.type || id, id),
+    label: normalizeText(source.label || source.name || id, id, 120),
+    description: normalizeText(source.description, '', 1000),
+    language: normalizeText(source.language, 'python', 40).toLowerCase(),
+    configSchema,
+    inputSchema,
+    outputSchema,
+    permissions: asObject(source.permissions),
+    dependencies,
+    entrypoint,
+    codeFiles,
+    testCases: Array.isArray(source.testCases) ? source.testCases.map((entry, index) => {
+      const testCase = asObject(entry);
+      return {
+        id: normalizeId(testCase.id || `case-${index + 1}`, `case-${index + 1}`),
+        name: normalizeText(testCase.name || testCase.id, `Case ${index + 1}`, 120),
+        input: asObject(testCase.input),
+        config: asObject(testCase.config),
+        expectedOutput: asObject(testCase.expectedOutput),
+        expectedStatus: normalizeText(testCase.expectedStatus, '', 80),
+      };
+    }) : [],
+  };
+  manifest.definition = {
+    type: manifest.type,
+    label: manifest.label,
+    description: manifest.description,
+    ports: {
+      inputs: Object.keys(inputSchema.properties || {}).length ? Object.keys(inputSchema.properties) : ['input'],
+      outputs: Object.keys(outputSchema.properties || {}).length ? Object.keys(outputSchema.properties) : ['summary', 'result', 'status'],
+    },
+    configSchema: { fields: schemaToConfigFields(configSchema) },
+    permissions: {
+      risky: Boolean(manifest.permissions.risky),
+      action: normalizeText(manifest.permissions.action, 'custom.python', 120),
+    },
+    outputSchema: {
+      fields: Object.entries(outputSchema.properties || {}).map(([name, value]) => ({
+        name,
+        type: normalizeText(asObject(value).type, 'json', 40),
+        label: normalizeText(asObject(value).title || name, name, 120),
+      })),
+    },
+    ui: { materialGroup: 'custom', language: 'python', customPackage: true },
+    layout: asObject(source.layout),
+    packageId: id,
+    version: normalizeText(source.version, '1.0.0', 40),
+    dependencies: { python: dependencies },
+  };
+  return manifest;
+}
+
+export function validatePythonNodeManifest(input = {}) {
+  const manifest = normalizePythonNodeManifest(input);
+  const errors = [];
+  const warnings = [];
+  if (manifest.manifestVersion !== PYTHON_NODE_MANIFEST_VERSION) {
+    errors.push({ code: 'invalid_manifest_version', message: 'Python node manifestVersion must be "1".' });
+  }
+  if (manifest.language !== 'python') {
+    errors.push({ code: 'unsupported_language', message: 'Only Python workflow node packages are supported in this phase.' });
+  }
+  if (!manifest.codeFiles[manifest.entrypoint]) {
+    errors.push({ code: 'missing_entrypoint', message: `Python node entrypoint is missing: ${manifest.entrypoint}` });
+  }
+  if (manifest.dependencies.length > 0) {
+    for (const dependency of manifest.dependencies) {
+      errors.push({ code: 'unsupported_dependency', dependency, message: `Third-party Python dependency is not supported yet: ${dependency}` });
+    }
+  }
+  for (const moduleName of collectPythonImports(manifest.codeFiles)) {
+    if (!PYTHON_STDLIB_IMPORT_ALLOWLIST.has(moduleName)) {
+      errors.push({ code: 'unsupported_import', module: moduleName, message: `Python import is not in the phase-one stdlib allowlist: ${moduleName}` });
+    }
+  }
+  if (manifest.testCases.length === 0) {
+    warnings.push({ code: 'missing_test_cases', message: 'Python node package should include at least one install-time test case.' });
+  }
+  return {
+    valid: errors.length === 0,
+    manifest,
+    errors,
+    warnings,
+  };
 }
 
 function normalizeInputOutput(entry, index, kind) {
@@ -359,7 +744,7 @@ function normalizePosition(value, index) {
 
 export function normalizeWorkflowNode(entry, index = 0) {
   const node = asObject(entry);
-  const requestedType = normalizeText(node.type, 'agent', 40).toLowerCase();
+  const requestedType = normalizeText(node.type, 'agent', 120).toLowerCase();
   const type = requestedType || 'agent';
   const id = normalizeId(node.id || node.name || `${type}-${index + 1}`, `${type}-${index + 1}`);
   return {
@@ -388,8 +773,15 @@ function getNodeTypeDefinition(type) {
   return NODE_TYPE_DEFINITIONS.find((definition) => definition.type === type) || null;
 }
 
-function getNodeOutputFieldNames(type) {
-  const definition = getNodeTypeDefinition(type);
+function getNodeTypeDefinitionFromList(type, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+  const definitions = Array.isArray(nodeTypeDefinitions) && nodeTypeDefinitions.length > 0
+    ? nodeTypeDefinitions
+    : NODE_TYPE_DEFINITIONS;
+  return definitions.find((definition) => definition?.type === type) || null;
+}
+
+function getNodeOutputFieldNames(type, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+  const definition = getNodeTypeDefinitionFromList(type, nodeTypeDefinitions);
   return new Set((definition?.outputSchema?.fields || []).map((field) => field.name));
 }
 
@@ -654,11 +1046,15 @@ export function createStarterWorkflow() {
   });
 }
 
-export function validateWorkflowDefinition(input = {}) {
+export function validateWorkflowDefinition(input = {}, extraNodeDefinitions = []) {
   const workflow = normalizeWorkflowDefinition(input);
   const errors = [];
   const warnings = [];
   const nodeIds = new Set();
+  const validNodeTypes = new Set([
+    ...WORKFLOW_NODE_TYPES,
+    ...(Array.isArray(extraNodeDefinitions) ? extraNodeDefinitions.map((definition) => definition?.type).filter(Boolean) : []),
+  ]);
 
   if (!workflow.profileId) {
     errors.push({ code: 'missing_profile', message: 'Workflow must bind an Agent Profile.' });
@@ -673,7 +1069,7 @@ export function validateWorkflowDefinition(input = {}) {
       errors.push({ code: 'duplicate_node', nodeId: node.id, message: `Duplicate node id: ${node.id}` });
     }
     nodeIds.add(node.id);
-    if (!NODE_TYPES.has(node.type)) {
+    if (!validNodeTypes.has(node.type)) {
       errors.push({ code: 'invalid_node_type', nodeId: node.id, message: `Invalid node type: ${node.type}` });
     }
     if (node.permission === 'allow' && workflow.permissionPreset !== 'full-auto') {
@@ -1017,6 +1413,77 @@ function renderTemplate(text, context) {
   });
 }
 
+function previewLineageValue(value) {
+  const text = stringifyTemplateValue(value);
+  return String(text || '').slice(0, 240);
+}
+
+function renderTemplateWithLineage(text, context, field) {
+  const source = typeof text === 'string' ? text : '';
+  const segments = [];
+  let rendered = '';
+  let cursor = 0;
+  let firstVariable = null;
+  let firstError = null;
+  for (const match of source.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)) {
+    const index = match.index || 0;
+    if (index > cursor) {
+      const literal = source.slice(cursor, index);
+      rendered += literal;
+      segments.push({ type: 'literal', valuePreview: literal.slice(0, 240) });
+    }
+    const expression = match[1];
+    const result = getPathValue(context, expression);
+    const segment = {
+      type: 'variable',
+      sourceExpression: expression,
+      sourcePath: expression,
+    };
+    if (!firstVariable) firstVariable = segment;
+    if (result.found) {
+      const value = stringifyTemplateValue(result.value);
+      rendered += value;
+      segments.push({
+        ...segment,
+        status: 'resolved',
+        valuePreview: previewLineageValue(result.value),
+      });
+    } else {
+      rendered += match[0];
+      const error = {
+        code: 'missing_variable',
+        variable: expression,
+        message: `Workflow variable not found: ${expression}`,
+      };
+      if (!firstError) firstError = error;
+      segments.push({
+        ...segment,
+        status: 'missing',
+        valuePreview: '<missing>',
+        error,
+      });
+    }
+    cursor = index + match[0].length;
+  }
+  if (cursor < source.length) {
+    const literal = source.slice(cursor);
+    rendered += literal;
+    segments.push({ type: 'literal', valuePreview: literal.slice(0, 240) });
+  }
+  const variableSegments = segments.filter((segment) => segment.type === 'variable');
+  const status = firstError ? 'missing' : variableSegments.length > 0 ? 'resolved' : 'literal';
+  const trace = {
+    field,
+    status,
+    sourceExpression: firstVariable?.sourceExpression || '',
+    sourcePath: firstVariable?.sourcePath || '',
+    valuePreview: rendered.slice(0, 240),
+    segments,
+  };
+  if (firstError) trace.error = firstError;
+  return { value: rendered, trace };
+}
+
 function buildTemplateContext(run) {
   return {
     inputs: run.inputs || {},
@@ -1029,14 +1496,75 @@ function buildTemplateContext(run) {
   };
 }
 
-function buildNodeInput(node, run) {
-  const context = buildTemplateContext(run);
+function buildNodeInputFromContext(node, context) {
   return {
     prompt: renderTemplate(node.prompt || '', context),
     command: renderTemplate(node.command || '', context),
     condition: renderTemplate(node.condition || '', context),
     toolName: renderTemplate(node.toolName || '', context),
     config: clone(node.config || {}),
+  };
+}
+
+function buildNodeInputWithLineageFromContext(node, context) {
+  const prompt = renderTemplateWithLineage(node.prompt || '', context, 'prompt');
+  const command = renderTemplateWithLineage(node.command || '', context, 'command');
+  const condition = renderTemplateWithLineage(node.condition || '', context, 'condition');
+  const toolName = renderTemplateWithLineage(node.toolName || '', context, 'toolName');
+  const config = clone(node.config || {});
+  return {
+    resolvedInput: {
+      prompt: prompt.value,
+      command: command.value,
+      condition: condition.value,
+      toolName: toolName.value,
+      config,
+    },
+    lineage: {
+      prompt: prompt.trace,
+      command: command.trace,
+      condition: condition.trace,
+      toolName: toolName.trace,
+      config: {
+        field: 'config',
+        status: 'literal',
+        sourceExpression: '',
+        sourcePath: '',
+        valuePreview: stableJson(config).slice(0, 240),
+        segments: [{ type: 'literal', valuePreview: stableJson(config).slice(0, 240) }],
+      },
+    },
+  };
+}
+
+function buildNodeInput(node, run) {
+  return buildNodeInputFromContext(node, buildTemplateContext(run));
+}
+
+function previewValueForType(type, pathName) {
+  if (type === 'number' || type === 'integer') return 0;
+  if (type === 'boolean') return false;
+  if (type === 'object') return { preview: pathName };
+  if (type === 'array') return [{ preview: pathName }];
+  return `<${pathName}>`;
+}
+
+function buildDryRunTemplateContext(workflow, runInputs, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+  return {
+    inputs: runInputs || {},
+    nodes: Object.fromEntries((workflow.nodes || []).map((node) => {
+      const definition = getNodeTypeDefinitionFromList(node.type, nodeTypeDefinitions);
+      const output = Object.fromEntries((definition?.outputSchema?.fields || []).map((field) => {
+        const pathName = `nodes.${node.id}.output.${field.name}`;
+        return [field.name, previewValueForType(field.type, pathName)];
+      }));
+      return [node.id, {
+        input: {},
+        output,
+        status: 'preview',
+        error: '',
+      }];
+    })),
   };
 }
 
@@ -1084,7 +1612,7 @@ function extractTemplateVariables(value, field = 'prompt') {
     .map((match) => ({ field, expression: match[1] }));
 }
 
-function buildAvailableVariables(workflow) {
+function buildAvailableVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const variables = [];
   for (const input of workflow.inputs || []) {
     variables.push({
@@ -1095,7 +1623,7 @@ function buildAvailableVariables(workflow) {
     });
   }
   for (const node of workflow.nodes || []) {
-    const definition = getNodeTypeDefinition(node.type);
+    const definition = getNodeTypeDefinitionFromList(node.type, nodeTypeDefinitions);
     for (const field of definition?.outputSchema?.fields || []) {
       variables.push({
         path: `nodes.${node.id}.output.${field.name}`,
@@ -1131,10 +1659,10 @@ function getNodeConfigValue(node, fieldName) {
   return node.config?.[fieldName];
 }
 
-function validateNodeConfigs(workflow) {
+function validateNodeConfigs(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const errors = [];
   for (const node of workflow.nodes || []) {
-    const definition = getNodeTypeDefinition(node.type);
+    const definition = getNodeTypeDefinitionFromList(node.type, nodeTypeDefinitions);
     if (!definition) continue;
     for (const field of definition.configSchema?.fields || []) {
       validateConfigField(getNodeConfigValue(node, field.name), field, node, errors);
@@ -1143,7 +1671,19 @@ function validateNodeConfigs(workflow) {
   return errors;
 }
 
-function validateWorkflowVariables(workflow) {
+function createVariableDiagnostic({ nodeId, field, variable, inputId = '', sourceNodeId = '', outputField = '' }) {
+  return {
+    nodeId,
+    field,
+    sourceExpression: variable,
+    variable,
+    inputId,
+    sourceNodeId,
+    outputField,
+  };
+}
+
+function validateWorkflowVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const errors = [];
   const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
   const inputIds = new Set((workflow.inputs || []).map((input) => input.id));
@@ -1160,9 +1700,16 @@ function validateWorkflowVariables(workflow) {
         if (!inputIds.has(inputMatch[1])) {
           errors.push({
             code: 'missing_input_variable',
+            category: 'missing_variable',
             nodeId: node.id,
             field: variable.field,
             variable: variable.expression,
+            diagnostic: createVariableDiagnostic({
+              nodeId: node.id,
+              field: variable.field,
+              variable: variable.expression,
+              inputId: inputMatch[1],
+            }),
             message: `Node ${node.id} references missing workflow input ${variable.expression}.`,
           });
         }
@@ -1175,21 +1722,37 @@ function validateWorkflowVariables(workflow) {
         if (!sourceNode) {
           errors.push({
             code: 'missing_node_variable',
+            category: 'missing_variable',
             nodeId: node.id,
             field: variable.field,
             variable: variable.expression,
+            diagnostic: createVariableDiagnostic({
+              nodeId: node.id,
+              field: variable.field,
+              variable: variable.expression,
+              sourceNodeId,
+              outputField,
+            }),
             message: `Node ${node.id} references missing node ${sourceNodeId}.`,
           });
           continue;
         }
-        if (!getNodeOutputFieldNames(sourceNode.type).has(outputField)) {
+        if (!getNodeOutputFieldNames(sourceNode.type, nodeTypeDefinitions).has(outputField)) {
           errors.push({
             code: 'missing_output_field',
+            category: 'missing_variable',
             nodeId: node.id,
             sourceNodeId,
             field: variable.field,
             outputField,
             variable: variable.expression,
+            diagnostic: createVariableDiagnostic({
+              nodeId: node.id,
+              field: variable.field,
+              variable: variable.expression,
+              sourceNodeId,
+              outputField,
+            }),
             message: `Node ${node.id} references unavailable output ${variable.expression}.`,
           });
         }
@@ -1293,6 +1856,394 @@ async function collectGitReviewInput(projectPath = '') {
   };
 }
 
+function createPythonExecutionError(category, message, extra = {}) {
+  const error = new Error(message);
+  error.category = category;
+  error.code = category;
+  Object.assign(error, extra);
+  return error;
+}
+
+function classifyPythonExecutionError(stderr = '', fallback = 'runtime_error') {
+  if (/ModuleNotFoundError|No module named/i.test(stderr)) return 'missing_python_dependency';
+  if (/SyntaxError/i.test(stderr)) return 'python_syntax_error';
+  return fallback;
+}
+
+function jsonSchemaTypeMatches(value, type) {
+  if (!type || type === 'json') return true;
+  if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'object') return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  if (type === 'boolean') return typeof value === 'boolean';
+  if (type === 'string' || type === 'text' || type === 'markdown' || type === 'path') return typeof value === 'string';
+  return true;
+}
+
+function validateJsonSchemaObject(value, schema = {}, pathPrefix = 'output') {
+  const errors = [];
+  const source = asObject(value);
+  const properties = asObject(schema.properties);
+  const required = Array.isArray(schema.required) ? schema.required : [];
+
+  for (const fieldName of required) {
+    if (source[fieldName] === undefined || source[fieldName] === null) {
+      errors.push(`Missing required ${pathPrefix}.${fieldName}`);
+    }
+  }
+
+  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+    if (source[fieldName] === undefined || source[fieldName] === null) continue;
+    const type = normalizeText(asObject(fieldSchema).type, '', 40);
+    if (type && !jsonSchemaTypeMatches(source[fieldName], type)) {
+      errors.push(`Invalid type for ${pathPrefix}.${fieldName}: expected ${type}`);
+    }
+  }
+
+  return errors;
+}
+
+function validatePythonNodeOutputContract(output, manifest = {}) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return ['Python node stdout must be a JSON object.'];
+  }
+
+  const errors = [];
+  for (const fieldName of ['summary', 'result', 'status']) {
+    if (output[fieldName] === undefined || output[fieldName] === null) {
+      errors.push(`Missing required output.${fieldName}`);
+    }
+  }
+  if (output.summary !== undefined && typeof output.summary !== 'string') {
+    errors.push('Invalid type for output.summary: expected string');
+  }
+  if (output.status !== undefined && typeof output.status !== 'string') {
+    errors.push('Invalid type for output.status: expected string');
+  }
+  if (output.artifacts !== undefined && !Array.isArray(output.artifacts)) {
+    errors.push('Invalid type for output.artifacts: expected array');
+  }
+
+  errors.push(...validateJsonSchemaObject(output, manifest.outputSchema, 'output'));
+  return [...new Set(errors)];
+}
+
+function assertionValuePreview(value) {
+  if (value === undefined) return '<missing>';
+  const text = typeof value === 'string' ? value : stableJson(value);
+  return String(text ?? '').slice(0, 240);
+}
+
+function collectExpectedOutputAssertionFailures(expected, actual, pathPrefix = '') {
+  const failures = [];
+  if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      const childPath = pathPrefix ? `${pathPrefix}.${key}` : key;
+      failures.push(...collectExpectedOutputAssertionFailures(expectedValue, actual?.[key], childPath));
+    }
+    return failures;
+  }
+  if (!isSameJson(expected, actual)) {
+    failures.push({
+      code: 'expected_output_mismatch',
+      path: pathPrefix || 'output',
+      expected,
+      actual,
+      expectedPreview: assertionValuePreview(expected),
+      actualPreview: assertionValuePreview(actual),
+      message: `Expected ${pathPrefix || 'output'} to match ${assertionValuePreview(expected)} but got ${assertionValuePreview(actual)}.`,
+    });
+  }
+  return failures;
+}
+
+function evaluatePythonNodeTestAssertions(result = {}, testCase = {}) {
+  if (!result.ok) {
+    return { ...result, assertionFailures: [] };
+  }
+  const assertionFailures = [];
+  const expectedStatus = normalizeText(testCase.expectedStatus, '', 80);
+  if (expectedStatus && result.parsedOutput?.status !== expectedStatus) {
+    assertionFailures.push({
+      code: 'expected_status_mismatch',
+      path: 'status',
+      expected: expectedStatus,
+      actual: result.parsedOutput?.status,
+      expectedPreview: assertionValuePreview(expectedStatus),
+      actualPreview: assertionValuePreview(result.parsedOutput?.status),
+      message: `Expected status to be ${expectedStatus} but got ${assertionValuePreview(result.parsedOutput?.status)}.`,
+    });
+  }
+  if (testCase.expectedOutput !== undefined) {
+    assertionFailures.push(...collectExpectedOutputAssertionFailures(testCase.expectedOutput, result.parsedOutput));
+  }
+  if (assertionFailures.length === 0) {
+    return { ...result, assertionFailures };
+  }
+  return {
+    ...result,
+    ok: false,
+    assertionFailures,
+    error: {
+      category: 'assertion_failed',
+      message: assertionFailures.map((entry) => entry.message).join('; '),
+    },
+  };
+}
+
+function createPythonFormatterNodeDraft({ prompt = '', sampleInput = {} } = {}) {
+  const label = normalizeText(prompt, 'Python Formatter Node', 80)
+    .replace(/^create\s+(a|an)\s+/i, '')
+    .replace(/\s+node.*$/i, ' node');
+  const id = normalizeId(label, 'python-formatter-node');
+  const code = [
+    'import json',
+    'import sys',
+    '',
+    'def pick_text(input_data):',
+    '    for key in ("text", "content", "value", "prompt"):',
+    '        value = input_data.get(key)',
+    '        if value is not None:',
+    '            return str(value)',
+    '    return ""',
+    '',
+    'payload = json.load(sys.stdin)',
+    'input_data = payload.get("input") or {}',
+    'config = payload.get("config") or {}',
+    'text = pick_text(input_data)',
+    'mode = str(config.get("mode") or "upper").lower()',
+    'if mode == "lower":',
+    '    formatted = text.lower()',
+    'elif mode == "title":',
+    '    formatted = text.title()',
+    'elif mode == "trim":',
+    '    formatted = text.strip()',
+    'else:',
+    '    formatted = text.upper()',
+    'print(json.dumps({',
+    '    "summary": f"Formatted {len(text)} characters with mode={mode}.",',
+    '    "result": {"text": formatted, "mode": mode},',
+    '    "status": "completed"',
+    '}))',
+    '',
+  ].join('\n');
+  const input = Object.keys(asObject(sampleInput)).length ? asObject(sampleInput) : { text: 'hello workflow' };
+  return {
+    status: 'draft',
+    prompt: normalizeText(prompt, '', 1000),
+    manifest: normalizePythonNodeManifest({
+      manifestVersion: PYTHON_NODE_MANIFEST_VERSION,
+      id,
+      type: id,
+      label: label || 'Python Formatter Node',
+      description: normalizeText(prompt, 'Formats text using a safe Python standard-library script.', 500),
+      language: 'python',
+      dependencies: [],
+      entrypoint: 'main.py',
+      configSchema: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            title: 'Format mode',
+            enum: ['upper', 'lower', 'title', 'trim'],
+            default: 'upper',
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', title: 'Text' },
+          prompt: { type: 'string', title: 'Rendered prompt' },
+        },
+        required: [],
+        additionalProperties: true,
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', title: 'Summary' },
+          result: { type: 'object', title: 'Result' },
+          status: { type: 'string', title: 'Status' },
+        },
+        required: ['summary', 'result', 'status'],
+        additionalProperties: true,
+      },
+      permissions: { risky: false, action: 'custom.python' },
+      codeFiles: { 'main.py': code },
+      testCases: [{
+        id: 'formats-text',
+        name: 'Formats text',
+        input,
+        config: { mode: 'upper' },
+        expectedOutput: { result: { text: String(input.text || input.prompt || '').toUpperCase() } },
+      }],
+    }),
+  };
+}
+
+async function writePythonNodeFiles(rootDir, codeFiles = {}) {
+  await fs.mkdir(rootDir, { recursive: true, mode: 0o700 });
+  for (const [fileName, content] of Object.entries(codeFiles)) {
+    const target = path.join(rootDir, fileName);
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await fs.writeFile(target, String(content), { mode: 0o600 });
+  }
+}
+
+async function runPythonNodeManifest(manifestInput, payload = {}, {
+  pythonCommand = 'python',
+  pythonArgs = [],
+  timeoutMs = PYTHON_NODE_DEFAULT_TIMEOUT_MS,
+  payloadLimitBytes = PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES,
+} = {}) {
+  const validation = validatePythonNodeManifest(manifestInput);
+  const manifest = validation.manifest;
+  if (!validation.valid) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      parsedOutput: null,
+      exitCode: null,
+      durationMs: 0,
+      error: { category: 'invalid_manifest', message: validation.errors.map((error) => error.message).join('; ') },
+      validation,
+    };
+  }
+
+  const stdin = JSON.stringify(payload);
+  if (Buffer.byteLength(stdin, 'utf8') > payloadLimitBytes) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      parsedOutput: null,
+      exitCode: null,
+      durationMs: 0,
+      error: { category: 'payload_too_large', message: `Python node stdin payload exceeds ${payloadLimitBytes} bytes.` },
+      validation,
+    };
+  }
+
+  const startedAt = Date.now();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-python-node-'));
+  await writePythonNodeFiles(tmpDir, manifest.codeFiles);
+
+  try {
+    return await new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      let timedOut = false;
+      let outputTooLarge = false;
+      const child = spawn(pythonCommand, [...pythonArgs, manifest.entrypoint], {
+        cwd: tmpDir,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ ...result, durationMs: Date.now() - startedAt, validation });
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGKILL');
+      }, Math.max(1, Number(timeoutMs) || PYTHON_NODE_DEFAULT_TIMEOUT_MS));
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString('utf8');
+        if (Buffer.byteLength(stdout, 'utf8') > payloadLimitBytes) {
+          outputTooLarge = true;
+          child.kill('SIGKILL');
+        }
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', (error) => {
+        finish({
+          ok: false,
+          stdout,
+          stderr,
+          parsedOutput: null,
+          exitCode: null,
+          error: { category: error.code === 'ENOENT' ? 'missing_python_runtime' : 'runtime_error', message: error.message },
+        });
+      });
+      child.on('close', (exitCode) => {
+        if (timedOut) {
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category: 'execution_timeout', message: `Python node execution timed out after ${timeoutMs}ms.` },
+          });
+          return;
+        }
+        if (outputTooLarge) {
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category: 'payload_too_large', message: `Python node stdout exceeds ${payloadLimitBytes} bytes.` },
+          });
+          return;
+        }
+        if (exitCode !== 0) {
+          const category = classifyPythonExecutionError(stderr);
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category, message: stderr.trim() || `Python node exited with code ${exitCode}.` },
+          });
+          return;
+        }
+        try {
+          const parsedOutput = JSON.parse(stdout || '');
+          const outputContractErrors = validatePythonNodeOutputContract(parsedOutput, manifest);
+          if (outputContractErrors.length > 0) {
+            finish({
+              ok: false,
+              stdout,
+              stderr,
+              parsedOutput,
+              exitCode,
+              error: { category: 'invalid_output_contract', message: outputContractErrors.join('; ') },
+            });
+            return;
+          }
+          finish({ ok: true, stdout, stderr, parsedOutput, exitCode, error: null });
+        } catch {
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category: 'invalid_json_output', message: 'Python node stdout must be a JSON object.' },
+          });
+        }
+      });
+      child.stdin.end(stdin);
+    });
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function createDefaultExecutors({ artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR } = {}) {
   return {
     async agent({ node, nodeInput, run }) {
@@ -1381,6 +2332,11 @@ function normalizeRun(input, now) {
   const workflow = asObject(source.workflow);
   const timestamp = source.createdAt || now();
   const nodeRuns = asObject(source.nodeRuns);
+  const previewSnapshot = asObject(source.previewSnapshot);
+  const executionInputSnapshot = asObject(source.executionInputSnapshot);
+  const previewDiff = Object.keys(asObject(source.previewDiff)).length > 0
+    ? normalizePreviewDiff(source.previewDiff)
+    : diffPreviewSnapshots(previewSnapshot, executionInputSnapshot);
   return {
     id: normalizeText(source.id, `workflow_run_${crypto.randomUUID()}`, 120),
     workflowId: normalizeText(source.workflowId || workflow.id, '', 120),
@@ -1392,6 +2348,13 @@ function normalizeRun(input, now) {
     sessionId: normalizeText(source.sessionId, '', 240),
     inputs: asObject(source.inputs),
     profileSnapshot: asObject(source.profileSnapshot),
+    runSnapshot: asObject(source.runSnapshot),
+    previewSnapshot,
+    executionInputSnapshot,
+    previewDiff,
+    previewMatched: source.previewMatched === undefined ? previewDiff.matched : source.previewMatched === true,
+    previewChanged: source.previewChanged === undefined ? previewDiff.changed : source.previewChanged === true,
+    resolverVersion: normalizeText(source.resolverVersion || executionInputSnapshot.resolverVersion || previewSnapshot.resolverVersion, '', 80),
     nodeRuns,
     queue: createQueueState(source.queue, now),
     logs: Array.isArray(source.logs) ? source.logs : [],
@@ -1435,6 +2398,10 @@ export function createWorkflowStudioStore({
   checkpointService = defaultWorkflowCheckpointStore,
   artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR,
   screenshotDir = DEFAULT_WORKFLOW_SCREENSHOT_DIR,
+  pythonCommand = 'python',
+  pythonArgs = [],
+  pythonTimeoutMs = PYTHON_NODE_DEFAULT_TIMEOUT_MS,
+  pythonPayloadLimitBytes = PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES,
 } = {}) {
   let loaded = false;
   let workflows = [];
@@ -1463,8 +2430,12 @@ export function createWorkflowStudioStore({
         workflows = Array.isArray(rawWorkflows.workflows)
           ? rawWorkflows.workflows.map((workflow) => normalizeWorkflowDefinition(workflow, workflow, now))
           : [];
+        nodePackages = Array.isArray(rawWorkflows.nodePackages)
+          ? rawWorkflows.nodePackages.map(asObject)
+          : [];
       } catch {
         workflows = [];
+        nodePackages = [];
       }
       try {
         const rawRuns = JSON.parse(await fs.readFile(runsPath, 'utf8'));
@@ -1484,7 +2455,7 @@ export function createWorkflowStudioStore({
   async function saveWorkflows() {
     if (!persist) return;
     await fs.mkdir(path.dirname(workflowsPath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(workflowsPath, JSON.stringify({ schemaVersion: 1, updatedAt: nowIso(now), workflows }, null, 2), {
+    await fs.writeFile(workflowsPath, JSON.stringify({ schemaVersion: 1, updatedAt: nowIso(now), workflows, nodePackages }, null, 2), {
       mode: 0o600,
     });
   }
@@ -1529,31 +2500,91 @@ export function createWorkflowStudioStore({
     return workflow;
   }
 
-  function normalizeNodePackage(input = {}) {
-    const source = asObject(input);
-    const type = normalizeId(source.type || source.id, 'custom-node');
+  function normalizeGenericNodePackage(input = {}) {
+    const id = normalizeId(input.id || input.type || input.label, 'workflow-node-package');
+    const type = normalizeId(input.type || id, 'workflow-node');
+    const dependencies = asObject(input.dependencies);
+    const missingDependencies = [
+      ...normalizeStringArray(dependencies.profiles).map((value) => ({ kind: 'profile', id: value })),
+      ...normalizeStringArray(dependencies.agents).map((value) => ({ kind: 'agent', id: value })),
+      ...normalizeStringArray(dependencies.subagents).map((value) => ({ kind: 'subagent', id: value })),
+      ...normalizeStringArray(dependencies.mcpServers).map((value) => ({ kind: 'mcpServer', id: value })),
+      ...normalizeStringArray(dependencies.skills).map((value) => ({ kind: 'skill', id: value })),
+      ...normalizeStringArray(dependencies.permissions).map((value) => ({ kind: 'permission', id: value })),
+    ];
+    const status = missingDependencies.length > 0 ? 'missing_dependencies' : normalizeNodePackageStatus(input.status, input.enabled === false ? 'disabled' : 'ready');
+    const lifecycleState = normalizeNodePackageLifecycle(input.lifecycleState || input.state, input.enabled, status);
+    const enabled = lifecycleState === 'enabled' && status === 'ready';
     const definition = {
       type,
-      label: normalizeText(source.label || source.name || type, type, 120),
-      description: normalizeText(source.description, '', 500),
-      ports: asObject(source.ports),
-      configSchema: asObject(source.configSchema),
-      permissions: asObject(source.permissions),
-      outputSchema: asObject(source.outputSchema),
-      ui: asObject(source.ui),
-      layout: asObject(source.layout),
-      packageId: normalizeId(source.id || type, type),
-      version: normalizeText(source.version, '1.0.0', 40),
-      dependencies: asObject(source.dependencies),
+      label: normalizeText(input.label, type, 120),
+      description: normalizeText(input.description, 'Installed workflow node package.', 500),
+      ports: asObject(input.ports),
+      configSchema: {
+        fields: Array.isArray(input.configSchema?.fields) ? input.configSchema.fields.map(asObject) : [],
+      },
+      outputSchema: {
+        fields: Array.isArray(input.outputSchema?.fields) ? input.outputSchema.fields.map(asObject) : [],
+      },
+      permissions: asObject(input.permissions),
+      ui: {
+        materialGroup: 'custom',
+        schemaVersion: normalizeText(input.ui?.schemaVersion, '1.0', 20),
+        ...asObject(input.ui),
+      },
+      layout: asObject(input.layout),
     };
-    const hasDependencies = Object.values(definition.dependencies).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value));
+
     return {
-      id: definition.packageId,
-      enabled: source.enabled !== false && !hasDependencies,
-      status: hasDependencies ? 'missing_dependencies' : 'ready',
-      installedAt: source.installedAt || nowIso(now),
+      id,
+      enabled,
+      status,
+      lifecycleState,
+      state: lifecycleState,
+      installedAt: input.installedAt || nowIso(now),
       updatedAt: nowIso(now),
+      manifest: {
+        id,
+        type,
+        label: definition.label,
+        version: normalizeText(input.version, '1.0.0', 40),
+        language: normalizeText(input.language, 'manifest', 40),
+        dependencies,
+      },
       definition,
+      dependencies,
+      missingDependencies,
+    };
+  }
+
+  function normalizeNodePackage(input = {}) {
+    const wantsPythonManifest = input.language === 'python' || input.manifestVersion || input.entrypoint || input.codeFiles;
+    if (!wantsPythonManifest) {
+      return normalizeGenericNodePackage(input);
+    }
+
+    const validation = validatePythonNodeManifest(input);
+    const manifest = validation.manifest;
+    if (!validation.valid) {
+      const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
+      error.statusCode = 400;
+      error.validation = validation;
+      throw error;
+    }
+    const status = normalizeNodePackageStatus(input.status, input.enabled === false ? 'disabled' : 'ready');
+    const lifecycleState = normalizeNodePackageLifecycle(input.lifecycleState || input.state, input.enabled, status);
+    return {
+      id: manifest.id,
+      enabled: lifecycleState === 'enabled' && status === 'ready',
+      status,
+      lifecycleState,
+      state: lifecycleState,
+      installedAt: input.installedAt || nowIso(now),
+      updatedAt: nowIso(now),
+      manifest,
+      definition: manifest.definition,
+      testCases: manifest.testCases,
+      codeFiles: manifest.codeFiles,
     };
   }
 
@@ -1564,7 +2595,7 @@ export function createWorkflowStudioStore({
   function getStoreNodeTypeDefinitions() {
     return [
       ...getWorkflowNodeTypeDefinitions(),
-      ...nodePackages.map((item) => item.definition),
+      ...nodePackages.filter(isNodePackagePaletteAvailable).map((item) => item.definition),
     ].map(clone);
   }
 
@@ -1572,13 +2603,317 @@ export function createWorkflowStudioStore({
     await load();
     const normalized = normalizeNodePackage(input);
     const index = nodePackages.findIndex((item) => item.id === normalized.id);
-    if (index >= 0) nodePackages[index] = normalized;
-    else nodePackages.push(normalized);
-    return clone(normalized);
+    if (index >= 0) {
+      const current = nodePackages[index];
+      const compatibility = buildNodePackageCompatibility(current, normalized);
+      if (!compatibility.compatible) {
+        const error = new Error('Workflow node package upgrade is incompatible');
+        error.statusCode = 409;
+        error.compatibility = compatibility;
+        throw error;
+      }
+      nodePackages[index] = {
+        ...normalized,
+        installedAt: current.installedAt || normalized.installedAt,
+        compatibility,
+      };
+    } else {
+      nodePackages.push({
+        ...normalized,
+        compatibility: { compatible: true, reasons: [], warnings: [] },
+      });
+    }
+    await saveWorkflows();
+    return clone(nodePackages.find((item) => item.id === normalized.id) || normalized);
+  }
+
+  async function setNodePackageLifecycle(packageId, lifecycleState) {
+    await load();
+    const id = normalizeText(packageId, '', 120);
+    const index = nodePackages.findIndex((item) => item.id === id);
+    if (index < 0) {
+      const error = new Error('Workflow node package not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    const requestedState = normalizeNodePackageLifecycle(lifecycleState, lifecycleState !== 'enabled', lifecycleState === 'enabled' ? 'ready' : lifecycleState);
+    const current = nodePackages[index];
+    const nextStatus = requestedState === 'enabled' ? 'ready' : requestedState;
+    nodePackages[index] = {
+      ...current,
+      enabled: requestedState === 'enabled',
+      status: nextStatus,
+      lifecycleState: requestedState,
+      state: requestedState,
+      updatedAt: nowIso(now),
+    };
+    await saveWorkflows();
+    return clone(nodePackages[index]);
+  }
+
+  async function enableNodePackage(packageId) {
+    return setNodePackageLifecycle(packageId, 'enabled');
+  }
+
+  async function disableNodePackage(packageId) {
+    return setNodePackageLifecycle(packageId, 'disabled');
+  }
+
+  async function uninstallNodePackage(packageId) {
+    await load();
+    const id = normalizeText(packageId, '', 120);
+    const before = nodePackages.length;
+    nodePackages = nodePackages.filter((item) => item.id !== id);
+    if (nodePackages.length === before) {
+      const error = new Error('Workflow node package not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    await saveWorkflows();
+    return { removed: true, packageId: id };
+  }
+
+  async function getNodePackageImpactReport(packageId, { recentRunLimit = 25 } = {}) {
+    await load();
+    const id = normalizeText(packageId, '', 120);
+    const nodePackage = nodePackages.find((item) => item.id === id) || null;
+    const packageTypes = new Set([
+      normalizeText(nodePackage?.definition?.type, '', 120),
+      normalizeText(nodePackage?.manifest?.type, '', 120),
+      normalizeText(id, '', 120),
+    ].filter(Boolean));
+    const matchNodeIds = (workflow) => (workflow.nodes || [])
+      .filter((node) => packageTypes.has(normalizeText(node.type, '', 120)))
+      .map((node) => node.id);
+    const isTemplateWorkflow = (workflow) => Boolean(workflow.metadata?.templateManifest || workflow.metadata?.recipeId || String(workflow.id).startsWith('recipe-'));
+    const workflowEntries = [];
+    const templateEntries = [];
+    for (const workflow of workflows) {
+      const nodeIds = matchNodeIds(workflow);
+      const declaredPackageDeps = normalizeStringArray(workflow.metadata?.dependencies?.nodePackages || workflow.metadata?.templateManifest?.dependencies?.nodePackages);
+      const usesPackage = nodeIds.length > 0 || declaredPackageDeps.includes(id);
+      if (!usesPackage) continue;
+      const entry = {
+        objectType: isTemplateWorkflow(workflow) ? 'template' : 'workflow',
+        id: workflow.id,
+        title: workflow.name,
+        workflowId: workflow.id,
+        nodeIds,
+        severity: 'blocking',
+      };
+      if (isTemplateWorkflow(workflow)) templateEntries.push(entry);
+      else workflowEntries.push(entry);
+    }
+
+    const recentRuns = runs
+      .slice()
+      .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))
+      .slice(0, Math.max(1, Math.min(Number(recentRunLimit) || 25, 100)))
+      .map((run) => {
+        const snapshotPackages = [
+          ...(run.executionInputSnapshot?.dependencyRefs?.nodePackages || []),
+          ...(run.previewSnapshot?.dependencyRefs?.nodePackages || []),
+        ].map(asObject);
+        const packageRefs = snapshotPackages.filter((entry) => normalizeText(entry.id, '', 120) === id);
+        const nodeIds = new Set();
+        for (const nodeRun of Object.values(run.nodeRuns || {})) {
+          if (packageTypes.has(normalizeText(nodeRun.type, '', 120))) {
+            nodeIds.add(nodeRun.nodeId);
+          }
+        }
+        for (const snapshotNode of [
+          ...(Array.isArray(run.executionInputSnapshot?.nodes) ? run.executionInputSnapshot.nodes : []),
+          ...(Array.isArray(run.previewSnapshot?.nodes) ? run.previewSnapshot.nodes : []),
+        ]) {
+          if (packageTypes.has(normalizeText(snapshotNode?.type, '', 120))) {
+            nodeIds.add(snapshotNode.nodeId);
+          }
+        }
+        if (packageRefs.length === 0 && nodeIds.size === 0) return null;
+        return {
+          objectType: 'run',
+          id: run.id,
+          title: run.workflowName,
+          workflowId: run.workflowId,
+          nodeIds: [...nodeIds],
+          severity: 'warning',
+          status: run.status,
+          createdAt: run.createdAt || null,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      packageId: id,
+      exists: Boolean(nodePackage),
+      packageType: normalizeText(nodePackage?.definition?.type || nodePackage?.manifest?.type, '', 120),
+      status: normalizeText(nodePackage?.status, nodePackage ? 'ready' : 'missing', 80),
+      lifecycleState: normalizeText(nodePackage?.lifecycleState || nodePackage?.state, nodePackage ? 'enabled' : 'missing', 80),
+      affected: {
+        workflows: workflowEntries,
+        templates: templateEntries,
+        recentRuns,
+      },
+      totals: {
+        workflows: workflowEntries.length,
+        templates: templateEntries.length,
+        recentRuns: recentRuns.length,
+      },
+      destructiveActionRisk: workflowEntries.length + templateEntries.length > 0 ? 'blocking' : recentRuns.length > 0 ? 'warning' : 'none',
+    };
   }
 
   function getStoreNodeTypeDefinition(type) {
-    return getNodeTypeDefinition(type) || nodePackages.find((item) => item.definition.type === type)?.definition || null;
+    return getNodeTypeDefinition(type) || nodePackages.find((item) => isNodePackagePaletteAvailable(item) && item.definition.type === type)?.definition || null;
+  }
+
+  function getNodePackageForType(type) {
+    return nodePackages.find((item) => isNodePackagePaletteAvailable(item) && item.definition?.type === type) || null;
+  }
+
+  function buildRunInputs(workflow, providedInputs = {}) {
+    const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
+    Object.assign(runInputs, asObject(providedInputs));
+    return runInputs;
+  }
+
+  function collectWorkflowDependencyRefs(workflow) {
+    const packageRefs = new Map();
+    for (const node of workflow.nodes || []) {
+      const nodePackage = getNodePackageForType(node.type);
+      if (!nodePackage) continue;
+      packageRefs.set(nodePackage.id, {
+        id: nodePackage.id,
+        type: nodePackage.definition?.type || node.type,
+        version: normalizeText(nodePackage.manifest?.version || nodePackage.manifest?.packageVersion || nodePackage.definition?.version, '', 80),
+        language: normalizeText(nodePackage.manifest?.language, '', 40),
+        status: normalizeText(nodePackage.status, '', 80),
+      });
+    }
+    return {
+      workflowDigest: workflowDefinitionDigest(workflow),
+      profileId: workflow.profileId,
+      permissionPreset: workflow.permissionPreset,
+      nodePackages: [...packageRefs.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    };
+  }
+
+  function collectNodePackageSnapshots(workflow) {
+    const snapshots = new Map();
+    for (const node of workflow.nodes || []) {
+      const nodePackage = getNodePackageForType(node.type);
+      if (!nodePackage) continue;
+      snapshots.set(nodePackage.id, {
+        id: nodePackage.id,
+        type: nodePackage.definition?.type || node.type,
+        version: normalizeText(
+          nodePackage.manifest?.version || nodePackage.manifest?.packageVersion || nodePackage.definition?.version,
+          '',
+          80,
+        ),
+        status: normalizeText(nodePackage.status, '', 80),
+        lifecycleState: normalizeText(nodePackage.lifecycleState || nodePackage.state, '', 80),
+        language: normalizeText(nodePackage.manifest?.language, '', 40),
+        manifest: clone(nodePackage.manifest || {}),
+        definition: clone(nodePackage.definition || {}),
+        installedAt: nodePackage.installedAt || '',
+        updatedAt: nodePackage.updatedAt || '',
+      });
+    }
+    return [...snapshots.values()].sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  function buildWorkflowRunSnapshot({
+    workflow,
+    runnableWorkflow,
+    runInputs,
+    profileSnapshot,
+    agent,
+    runPlan,
+    reviewedPreviewSnapshot,
+    executionInputSnapshot,
+  }) {
+    return {
+      snapshotVersion: 1,
+      capturedAt: nowIso(now),
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      runnableWorkflowId: runnableWorkflow.id,
+      runnableWorkflowName: runnableWorkflow.name,
+      workflowDigest: workflowDefinitionDigest(runnableWorkflow),
+      resolverVersion: runPlan.resolverVersion,
+      definitionSnapshot: clone(runnableWorkflow),
+      profileSnapshot: {
+        ...clone(profileSnapshot),
+        agent: clone(agent || {}),
+      },
+      permissionSnapshot: {
+        source: 'workflow',
+        permissionPreset: runnableWorkflow.permissionPreset,
+        profileId: runnableWorkflow.profileId,
+        nodePermissions: Object.fromEntries((runnableWorkflow.nodes || []).map((node) => [
+          node.id,
+          {
+            type: node.type,
+            permission: node.permission || '',
+            riskLevel: node.riskLevel || '',
+          },
+        ])),
+      },
+      nodePackageSnapshots: collectNodePackageSnapshots(runnableWorkflow),
+      runInputsSnapshot: clone(runInputs),
+      previewSnapshot: clone(reviewedPreviewSnapshot),
+      executionInputSnapshot: clone(executionInputSnapshot),
+      dependencyRefs: clone(runPlan.dependencyRefs),
+    };
+  }
+
+  function generatePythonNodeDraft(input = {}) {
+    return clone(createPythonFormatterNodeDraft(input));
+  }
+
+  function validateNodePackageDraft(input = {}) {
+    return clone(validatePythonNodeManifest(input));
+  }
+
+  async function testNodePackageDraft(input = {}, options = {}) {
+    const validation = validatePythonNodeManifest(input);
+    const testCases = options.testCase
+      ? [asObject(options.testCase)]
+      : (Array.isArray(validation.manifest.testCases) ? validation.manifest.testCases.map(asObject) : []);
+    const runnerOptions = {
+      pythonCommand,
+      pythonArgs,
+      timeoutMs: normalizeInteger(options.timeoutMs, pythonTimeoutMs, 1, pythonTimeoutMs),
+      payloadLimitBytes: normalizeInteger(options.payloadLimitBytes, pythonPayloadLimitBytes, 1024, pythonPayloadLimitBytes),
+    };
+    const cases = [];
+    for (const [index, testCase] of testCases.entries()) {
+      const result = await runPythonNodeManifest(validation.manifest, {
+        input: asObject(options.input || testCase.input),
+        config: asObject(options.config || testCase.config),
+        context: asObject(options.context),
+      }, runnerOptions);
+      const assertedResult = evaluatePythonNodeTestAssertions(result, testCase);
+      cases.push({
+        ...assertedResult,
+        testCaseId: testCase.id || `case-${index + 1}`,
+        testCaseName: testCase.name || testCase.id || `Case ${index + 1}`,
+        index,
+      });
+    }
+    const representative = cases.find((entry) => !entry.ok) || cases[0] || await runPythonNodeManifest(validation.manifest, {
+      input: asObject(options.input),
+      config: asObject(options.config),
+      context: asObject(options.context),
+    }, runnerOptions);
+    const ok = cases.length > 0 ? cases.every((entry) => entry.ok) : Boolean(representative.ok);
+    return clone({
+      ...representative,
+      ok,
+      cases,
+      testCaseId: representative.testCaseId || '',
+    });
   }
 
   async function upsertWorkflow(input = {}) {
@@ -1616,7 +2951,7 @@ export function createWorkflowStudioStore({
         ].slice(-200),
       },
     };
-    const validation = validateWorkflowDefinition(normalized).validation;
+    const validation = validateWorkflowDefinition(normalized, getStoreNodeTypeDefinitions()).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -1814,25 +3149,52 @@ export function createWorkflowStudioStore({
         }
         nodeRun.output = asObject(artifactResult?.output || artifactResult);
       } else {
-        const executor = nodeExecutors[node.type];
-        if (typeof executor === 'function') {
-          nodeRun.output = asObject(await executor({
-            workflow,
-            run,
-            node,
-            nodeRun,
-            nodeInput: nodeRun.input,
-          }));
-          if (node.type === 'agent') {
-            nodeRun.output = applyAgentResultContract(node, nodeRun, nodeRun.output, { sessionId: run.sessionId });
+        const nodePackage = getNodePackageForType(node.type);
+        if (nodePackage?.manifest?.language === 'python') {
+          const result = await runPythonNodeManifest(nodePackage.manifest, {
+            input: nodeRun.input,
+            config: asObject(node.config),
+            context: {
+              workflowId: workflow.id,
+              runId: run.id,
+              nodeId: node.id,
+            },
+          }, {
+            pythonCommand,
+            pythonArgs,
+            timeoutMs: node.timeoutMs || pythonTimeoutMs,
+            payloadLimitBytes: pythonPayloadLimitBytes,
+          });
+          nodeRun.logs.push(...[result.stderr, result.stdout].filter(Boolean));
+          if (!result.ok) {
+            throw createPythonExecutionError(result.error?.category || 'runtime_error', result.error?.message || 'Python node failed.', {
+              stdout: result.stdout,
+              stderr: result.stderr,
+            });
           }
+          nodeRun.output = asObject(result.parsedOutput);
+          nodeRun.logs.push(`Python node completed in ${result.durationMs}ms.`);
         } else {
-          nodeRun.output = {
-            summary: `${node.title} completed.`,
-            nodeType: node.type,
-            toolName: nodeRun.input.toolName || node.toolName,
-            command: nodeRun.input.command || node.command,
-          };
+          const executor = nodeExecutors[node.type];
+          if (typeof executor === 'function') {
+            nodeRun.output = asObject(await executor({
+              workflow,
+              run,
+              node,
+              nodeRun,
+              nodeInput: nodeRun.input,
+            }));
+            if (node.type === 'agent') {
+              nodeRun.output = applyAgentResultContract(node, nodeRun, nodeRun.output, { sessionId: run.sessionId });
+            }
+          } else {
+            nodeRun.output = {
+              summary: `${node.title} completed.`,
+              nodeType: node.type,
+              toolName: nodeRun.input.toolName || node.toolName,
+              command: nodeRun.input.command || node.command,
+            };
+          }
         }
       }
 
@@ -1937,16 +3299,14 @@ export function createWorkflowStudioStore({
       throw error;
     }
     const runnableWorkflow = getRunnableWorkflow(workflow);
-    const validation = validateWorkflowDefinition(runnableWorkflow).validation;
+    const validation = validateWorkflowDefinition(runnableWorkflow, getStoreNodeTypeDefinitions()).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
       error.validation = validation;
       throw error;
     }
-    const providedInputs = asObject(input.inputs);
-    const runInputs = Object.fromEntries((runnableWorkflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
-    Object.assign(runInputs, providedInputs);
+    const runInputs = buildRunInputs(runnableWorkflow, input.inputs);
     const inputValidation = validateRunInputs(runnableWorkflow, runInputs);
     if (!inputValidation.valid) {
       const error = new Error(inputValidation.errors.map((entry) => entry.message).join('; '));
@@ -1954,9 +3314,31 @@ export function createWorkflowStudioStore({
       error.validation = inputValidation;
       throw error;
     }
+    const runPlan = resolveWorkflowRunPlan(runnableWorkflow, { runInputs });
+    const reviewedPreviewSnapshot = Object.keys(asObject(input.previewSnapshot)).length > 0
+      ? clone(asObject(input.previewSnapshot))
+      : runPlan.previewSnapshot;
+    const previewDiff = diffPreviewSnapshots(reviewedPreviewSnapshot, runPlan.executionInputSnapshot);
 
     const agent = await agentResolver(runnableWorkflow.profileId);
     const timestamp = now();
+    const profileSnapshot = {
+      profileId: runnableWorkflow.profileId,
+      permissionPreset: runnableWorkflow.permissionPreset,
+      agentName: agent?.name || runnableWorkflow.profileId,
+      governanceStatus: normalizeWorkflowGovernance(workflow).status,
+      publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
+    };
+    const runSnapshot = buildWorkflowRunSnapshot({
+      workflow,
+      runnableWorkflow,
+      runInputs,
+      profileSnapshot,
+      agent,
+      runPlan,
+      reviewedPreviewSnapshot,
+      executionInputSnapshot: runPlan.executionInputSnapshot,
+    });
     const run = normalizeRun({
       id: `workflow_run_${crypto.randomUUID()}`,
       workflowId: workflow.id,
@@ -1965,21 +3347,28 @@ export function createWorkflowStudioStore({
       projectPath: input.projectPath || '',
       sessionId: input.sessionId || '',
       inputs: runInputs,
-      profileSnapshot: {
-        profileId: runnableWorkflow.profileId,
-        permissionPreset: runnableWorkflow.permissionPreset,
-        agentName: agent?.name || runnableWorkflow.profileId,
-        governanceStatus: normalizeWorkflowGovernance(workflow).status,
-        publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
-      },
+      profileSnapshot,
+      runSnapshot,
+      previewSnapshot: reviewedPreviewSnapshot,
+      executionInputSnapshot: runPlan.executionInputSnapshot,
+      previewDiff,
+      previewMatched: previewDiff.matched,
+      previewChanged: previewDiff.changed,
+      resolverVersion: runPlan.resolverVersion,
       queue: {
         state: autoExecute ? 'running' : 'queued',
         maxConcurrency: runnableWorkflow.maxConcurrency,
         updatedAt: timestamp,
       },
       nodeRuns: Object.fromEntries(runnableWorkflow.nodes.map((node) => [node.id, createNodeRun(node, now)])),
-      logs: [`Created workflow run for ${workflow.name}.`],
-      timelineEvents: [createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name, governanceStatus: normalizeWorkflowGovernance(workflow).status }, now)],
+      logs: [
+        `Created workflow run for ${workflow.name}.`,
+        ...(previewDiff.changed ? [`Preview drift detected: ${previewDiff.reasons.join(', ') || 'changed node inputs'}.`] : []),
+      ],
+      timelineEvents: [
+        createRunEvent('workflow_run_created', { workflowId: workflow.id, workflowName: workflow.name, governanceStatus: normalizeWorkflowGovernance(workflow).status }, now),
+        ...(previewDiff.changed ? [createRunEvent('workflow_preview_changed', { reasons: previewDiff.reasons, changedNodes: previewDiff.changedNodes }, now)] : []),
+      ],
       createdAt: timestamp,
       startedAt: timestamp,
       updatedAt: timestamp,
@@ -2086,23 +3475,166 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function getReplayDefinitionSnapshot(run) {
+    const runSnapshot = asObject(run.runSnapshot);
+    const definitionSnapshot = asObject(runSnapshot.definitionSnapshot);
+    if (Array.isArray(definitionSnapshot.nodes)) {
+      return clone(definitionSnapshot);
+    }
+    const fallbackNodes = Object.values(asObject(run.nodeRuns)).map((nodeRun) => ({
+      id: nodeRun.nodeId,
+      type: nodeRun.type,
+      title: nodeRun.title,
+    }));
+    return {
+      id: run.workflowId,
+      name: run.workflowName,
+      nodes: fallbackNodes,
+      edges: [],
+    };
+  }
+
   function replayRun(runId) {
     const run = runs.find((item) => item.id === normalizeText(runId));
     if (!run) return null;
-    const nodes = Object.fromEntries(Object.entries(run.nodeRuns || {}).map(([nodeId, nodeRun]) => [nodeId, {
-      status: nodeRun.status,
-      attempt: nodeRun.attempt,
-      error: nodeRun.error || '',
-      startedAt: nodeRun.startedAt || null,
-      completedAt: nodeRun.completedAt || null,
+    const events = listRunEvents(run.id);
+    const definitionSnapshot = getReplayDefinitionSnapshot(run);
+    const diagnostics = [];
+    const nodes = Object.fromEntries((definitionSnapshot.nodes || []).map((node) => [node.id, {
+      nodeId: node.id,
+      type: node.type,
+      title: node.title,
+      status: 'pending',
+      attempt: 0,
+      error: '',
+      startedAt: null,
+      completedAt: null,
     }]));
+    const approvals = [];
+    const startedNodes = new Set();
+    let seenRunCreated = false;
+    let replayStatus = 'pending';
+    const ensureNode = (payload = {}) => {
+      const nodeId = normalizeText(payload.nodeId, '', 120);
+      if (!nodeId) return null;
+      if (!nodes[nodeId]) {
+        diagnostics.push({
+          code: 'event_references_unknown_node',
+          nodeId,
+          eventType: payload.eventType || '',
+          message: `Replay event references unknown node ${nodeId}.`,
+        });
+        nodes[nodeId] = {
+          nodeId,
+          type: normalizeText(payload.type, 'unknown', 80),
+          title: normalizeText(payload.title, nodeId, 180),
+          status: 'pending',
+          attempt: 0,
+          error: '',
+          startedAt: null,
+          completedAt: null,
+        };
+      }
+      return nodes[nodeId];
+    };
+    for (const event of events) {
+      const payload = asObject(event.payload);
+      if (event.type === 'workflow_run_created') {
+        seenRunCreated = true;
+        replayStatus = 'running';
+      } else if (event.type === 'workflow_run_queued') {
+        replayStatus = 'queued';
+      } else if (event.type === 'workflow_worker_acquired') {
+        replayStatus = 'running';
+      } else if (event.type === 'workflow_run_recovered') {
+        replayStatus = 'recovering';
+      } else if (event.type === 'workflow_run_cancelled') {
+        replayStatus = 'cancelled';
+      } else if (event.type === 'workflow_run_status') {
+        replayStatus = normalizeText(payload.status, replayStatus, 80);
+      } else if (event.type === 'workflow_node_started') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        node.status = 'running';
+        node.startedAt = event.createdAt;
+        node.error = '';
+        startedNodes.add(node.nodeId);
+      } else if (event.type === 'workflow_node_completed') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        if (!startedNodes.has(node.nodeId)) {
+          diagnostics.push({
+            code: 'out_of_order_node_completed',
+            nodeId: node.nodeId,
+            eventId: event.id,
+            message: `Node ${node.nodeId} completed before a started event was observed.`,
+          });
+        }
+        node.status = 'completed';
+        node.completedAt = event.createdAt;
+        node.error = '';
+      } else if (event.type === 'workflow_node_failed') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        if (!startedNodes.has(node.nodeId)) {
+          diagnostics.push({
+            code: 'out_of_order_node_failed',
+            nodeId: node.nodeId,
+            eventId: event.id,
+            message: `Node ${node.nodeId} failed before a started event was observed.`,
+          });
+        }
+        node.status = 'failed';
+        node.completedAt = event.createdAt;
+        node.error = normalizeText(payload.error, '', 2000);
+      } else if (event.type === 'workflow_node_waiting_approval') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        if (!startedNodes.has(node.nodeId)) {
+          diagnostics.push({
+            code: 'out_of_order_node_waiting_approval',
+            nodeId: node.nodeId,
+            eventId: event.id,
+            message: `Node ${node.nodeId} waited for approval before a started event was observed.`,
+          });
+        }
+        node.status = 'waiting_approval';
+      } else if (event.type === 'workflow_node_rejected') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        node.status = 'failed';
+        node.error = 'Rejected by approval decision.';
+        node.completedAt = event.createdAt;
+      } else if (event.type === 'workflow_node_retry_from') {
+        for (const nodeId of normalizeStringArray(payload.affected, 200)) {
+          if (nodes[nodeId]) nodes[nodeId].attempt += 1;
+        }
+      } else if (event.type === 'workflow_approval_decision') {
+        approvals.push({
+          nodeId: normalizeText(payload.nodeId, '', 120),
+          decision: normalizeText(payload.decision || payload.action, '', 80),
+          reason: normalizeText(payload.reason, '', 1000),
+          eventId: event.id,
+          createdAt: event.createdAt,
+        });
+      }
+    }
+    if (!seenRunCreated) {
+      diagnostics.push({
+        code: 'missing_run_created',
+        message: 'Replay did not observe workflow_run_created before later run events.',
+      });
+    }
     return {
       runId: run.id,
       workflowId: run.workflowId,
-      status: run.status,
+      status: replayStatus || run.status,
+      snapshot: clone(run.runSnapshot || {}),
+      definitionSnapshot,
       nodes,
-      events: listRunEvents(run.id),
-      diagnostics: [],
+      approvals,
+      events,
+      diagnostics,
     };
   }
 
@@ -2244,6 +3776,91 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function buildRunDryPreview(workflow, runInputs, validationErrors = [], nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+    const context = buildDryRunTemplateContext(workflow, runInputs, nodeTypeDefinitions);
+    const rows = (workflow.nodes || []).map((node) => {
+      const errors = validationErrors
+        .filter((entry) => entry?.nodeId === node.id)
+        .map((entry) => clone(entry));
+      let resolvedInput = {};
+      let resolvedInputLineage = {};
+      try {
+        const resolved = buildNodeInputWithLineageFromContext(node, context);
+        resolvedInput = resolved.resolvedInput;
+        resolvedInputLineage = resolved.lineage;
+      } catch (error) {
+        errors.push({
+          code: error?.code === 'missing_variable' ? 'missing_variable' : 'preview_resolution_failed',
+          nodeId: node.id,
+          variable: error?.variable || '',
+          message: error?.message || `Failed to resolve node ${node.id} input preview.`,
+        });
+      }
+      const permissionDecision = resolveNodePermission(workflow, node);
+      const upstream = incomingEdges(workflow, node.id).map((edge) => ({
+        edgeId: edge.id,
+        nodeId: edge.from,
+        mode: edge.mode,
+        condition: edge.condition || '',
+      }));
+      return {
+        nodeId: node.id,
+        type: node.type,
+        title: node.title,
+        resolvedInput,
+        resolvedInputLineage,
+        permissionDecision,
+        upstream,
+        blocked: errors.length > 0 || permissionDecision === 'deny',
+        errors,
+      };
+    });
+    return {
+      workflowId: workflow.id,
+      inputSnapshot: clone(runInputs || {}),
+      nodeCount: rows.length,
+      blockedCount: rows.filter((row) => row.blocked).length,
+      nodes: rows,
+    };
+  }
+
+  function resolveWorkflowRunPlan(workflow, { runInputs = {}, nodeTypeDefinitions = null } = {}) {
+    const definitions = Array.isArray(nodeTypeDefinitions) && nodeTypeDefinitions.length > 0
+      ? nodeTypeDefinitions
+      : getStoreNodeTypeDefinitions();
+    const definitionValidation = validateWorkflowDefinition(workflow, definitions).validation;
+    const inputValidation = validateRunInputs(workflow, runInputs);
+    const errors = [
+      ...definitionValidation.errors,
+      ...inputValidation.errors,
+      ...validateNodeConfigs(workflow, definitions),
+      ...validateWorkflowVariables(workflow, definitions),
+      ...validateWorkflowDependencies(workflow),
+    ];
+    const dependencyRefs = collectWorkflowDependencyRefs(workflow);
+    const preview = buildRunDryPreview(workflow, runInputs, errors, definitions);
+    const snapshot = {
+      ...preview,
+      resolverVersion: WORKFLOW_RUN_RESOLVER_VERSION,
+      generatedAt: nowIso(now),
+      dependencyRefs,
+    };
+    return {
+      valid: errors.length === 0,
+      workflowId: workflow.id,
+      runInputs: clone(runInputs),
+      errors,
+      warnings: definitionValidation.warnings,
+      nodeTypeDefinitions: definitions,
+      availableVariables: buildAvailableVariables(workflow, definitions),
+      dependencyRefs,
+      resolverVersion: WORKFLOW_RUN_RESOLVER_VERSION,
+      preview: clone(snapshot),
+      previewSnapshot: clone(snapshot),
+      executionInputSnapshot: clone(snapshot),
+    };
+  }
+
   async function validateRun(workflowId, input = {}) {
     await load();
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
@@ -2252,25 +3869,18 @@ export function createWorkflowStudioStore({
       error.statusCode = 404;
       throw error;
     }
-    const definitionValidation = validateWorkflowDefinition(workflow).validation;
-    const providedInputs = asObject(input.inputs);
-    const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
-    Object.assign(runInputs, providedInputs);
-    const inputValidation = validateRunInputs(workflow, runInputs);
-    const errors = [
-      ...definitionValidation.errors,
-      ...inputValidation.errors,
-      ...validateNodeConfigs(workflow),
-      ...validateWorkflowVariables(workflow),
-      ...validateWorkflowDependencies(workflow),
-    ];
+    const runnableWorkflow = getRunnableWorkflow(workflow);
+    const plan = resolveWorkflowRunPlan(runnableWorkflow, {
+      runInputs: buildRunInputs(runnableWorkflow, input.inputs),
+    });
     return {
-      valid: errors.length === 0,
-      workflowId: workflow.id,
-      errors,
-      warnings: definitionValidation.warnings,
-      availableVariables: buildAvailableVariables(workflow),
-      nodeTypes: getWorkflowNodeTypeDefinitions(),
+      valid: plan.valid,
+      workflowId: runnableWorkflow.id,
+      errors: plan.errors,
+      warnings: plan.warnings,
+      availableVariables: plan.availableVariables,
+      nodeTypes: plan.nodeTypeDefinitions,
+      preview: plan.preview,
     };
   }
 
@@ -2852,7 +4462,7 @@ export function createWorkflowStudioStore({
     await load();
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
     if (!workflow) return null;
-    const validation = validateWorkflowDefinition(workflow).validation;
+    const validation = validateWorkflowDefinition(workflow, getStoreNodeTypeDefinitions()).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -3598,7 +5208,14 @@ export function createWorkflowStudioStore({
     importWorkflow,
     exportWorkflowPackage,
     importWorkflowPackage,
+    generatePythonNodeDraft,
+    validateNodePackageDraft,
+    testNodePackageDraft,
     installNodePackage,
+    enableNodePackage,
+    disableNodePackage,
+    uninstallNodePackage,
+    getNodePackageImpactReport,
     listNodePackages,
     getWorkflowNodeTypeDefinitions: getStoreNodeTypeDefinitions,
     smokeTemplate,

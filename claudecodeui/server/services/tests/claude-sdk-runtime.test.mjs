@@ -8,12 +8,17 @@ import {
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
+  buildOpenAIScreenshotAnalysisMessages,
   canReuseMtlCodeSession,
   createMtlCodeFreshSessionOptionsForRuntimeChange,
+  handleImages,
   getMtlCodeToolUseNames,
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
+  analyzeScreenshotImagesWithOpenAI,
+  appendScreenshotVisionAnalysis,
+  resolveMtlCodeCanonicalSessionRegistration,
 } from '../../claude-sdk.js';
 
 test('Argus host allow rules do not narrow native Claude Code tools in normal modes', () => {
@@ -101,6 +106,151 @@ test('Argus result diagnostics expose native stop, turn, tool, and permission st
   assert.equal(payload.requestModel, 'gpt-5.5');
   assert.equal(payload.assistantTextLength, 'private model output'.length);
   assert.equal(Object.hasOwn(payload, 'assistantText'), false);
+});
+
+test('Argus screenshot vision bridge builds OpenAI-compatible image_url messages', () => {
+  const messages = buildOpenAIScreenshotAnalysisMessages({
+    command: 'Tell me what is wrong in this screenshot',
+    images: [
+      { data: 'data:image/png;base64,abc123' },
+      { data: 'data:image/jpeg;base64,def456' },
+    ],
+  });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content[0].type, 'text');
+  assert.match(messages[0].content[0].text, /Tell me what is wrong/);
+  assert.equal(messages[0].content[1].type, 'image_url');
+  assert.equal(messages[0].content[1].image_url.url, 'data:image/png;base64,abc123');
+  assert.equal(messages[0].content[2].type, 'image_url');
+  assert.equal(messages[0].content[2].image_url.url, 'data:image/jpeg;base64,def456');
+});
+
+test('Argus screenshot vision bridge calls OpenAI-compatible chat completions and returns analysis', async () => {
+  let requestedUrl = '';
+  let requestedBody = null;
+  let authorization = '';
+
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze the UI',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_BASE_URL: 'http://token.wd.com/v1',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_MODEL: 'glm-5',
+    },
+    fetchImpl: async (url, init) => {
+      requestedUrl = url;
+      requestedBody = JSON.parse(init.body);
+      authorization = init.headers.Authorization;
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'The screenshot shows a disabled send button.' } }] }),
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.analysis, 'The screenshot shows a disabled send button.');
+  assert.equal(requestedUrl, 'http://token.wd.com/v1/chat/completions');
+  assert.equal(authorization, 'Bearer sk-test');
+  assert.equal(requestedBody.model, 'glm-5');
+  assert.equal(requestedBody.stream, true);
+  assert.equal(requestedBody.messages[0].content[1].image_url.url, 'data:image/png;base64,abc123');
+});
+
+test('Argus screenshot vision bridge parses OpenAI-compatible streaming chat completion chunks', async () => {
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze the UI',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_BASE_URL: 'http://token.wd.com/v1',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_MODEL: 'glm-5',
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      headers: { get: () => 'text/event-stream' },
+      text: async () => [
+        'data: {"choices":[{"delta":{"content":"The screenshot "}}]}',
+        'data: {"choices":[{"delta":{"content":"shows a workflow canvas."}}]}',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.analysis, 'The screenshot shows a workflow canvas.');
+});
+
+test('Argus screenshot vision bridge works when OpenAI-compatible env is configured without the legacy feature flag', async () => {
+  let requestedUrl = '';
+
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze the UI',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: {
+      OPENAI_BASE_URL: 'http://token.wd.com/v1',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_MODEL: 'glm-5',
+    },
+    fetchImpl: async (url) => {
+      requestedUrl = url;
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'The screenshot shows a sidebar and chat panel.' } }] }),
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.analysis, 'The screenshot shows a sidebar and chat panel.');
+  assert.equal(requestedUrl, 'http://token.wd.com/v1/chat/completions');
+});
+
+test('Argus screenshot vision bridge falls back when OpenAI runtime is unavailable', async () => {
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: { MTL_CODE_USE_OPENAI: '0' },
+    fetchImpl: async () => {
+      throw new Error('should not fetch');
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'openai_runtime_unavailable');
+});
+
+test('Argus image handling can keep temp files private without appending path-only prompts', async () => {
+  const cwd = await fs.mkdtemp(path.join(process.cwd(), 'argus-image-test-'));
+  try {
+    const result = await handleImages(
+      'What is this UI?',
+      [{ data: 'data:image/png;base64,aGVsbG8=' }],
+      cwd,
+      { appendPathNote: false },
+    );
+
+    assert.equal(result.modifiedCommand, 'What is this UI?');
+    assert.equal(result.tempImagePaths.length, 1);
+    assert.equal(result.tempDir.includes(path.join(cwd, '.tmp', 'images')), true);
+    await fs.access(result.tempImagePaths[0]);
+  } finally {
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('Argus screenshot vision analysis is appended to the agent prompt', () => {
+  const command = appendScreenshotVisionAnalysis('Fix this UI', 'The screenshot shows the send button is disabled.');
+
+  assert.match(command, /Fix this UI/);
+  assert.match(command, /Screenshot analysis/);
+  assert.match(command, /send button is disabled/);
 });
 
 test('Argus direct close handling treats only explicit user abort as aborted', async () => {
@@ -308,7 +458,7 @@ test('Argus runtime signatures restart when provider endpoint identity changes',
   assert.equal(changedToken.includes('token-two'), false);
 });
 
-test('Argus runtime changes restart as a fresh native session instead of resuming stale runtime state', () => {
+test('Argus runtime changes restart the process while preserving the requested UI session', () => {
   const originalOptions = {
     sessionId: 'old-native-session',
     clientSessionId: 'old-native-session',
@@ -324,10 +474,37 @@ test('Argus runtime changes restart as a fresh native session instead of resumin
   });
 
   assert.equal(originalOptions.sessionId, 'old-native-session');
-  assert.equal(restartOptions.sessionId, undefined);
+  assert.equal(restartOptions.sessionId, 'old-native-session');
   assert.equal(restartOptions.clientSessionId, 'old-native-session');
-  assert.equal(args.includes('--resume'), false);
+  assert.equal(args.includes('--resume'), true);
+  assert.equal(args[args.indexOf('--resume') + 1], 'old-native-session');
   assert.equal(args.includes('--append-system-prompt'), true);
+});
+
+test('Argus resumed turns keep the requested session as the canonical UI session', () => {
+  const registration = resolveMtlCodeCanonicalSessionRegistration({
+    messageSessionId: 'native-reported-different-session',
+    capturedSessionId: 'existing-ui-session',
+    requestedSessionId: 'existing-ui-session',
+    clientSessionId: '',
+  });
+
+  assert.equal(registration.shouldAdoptMessageSessionId, false);
+  assert.equal(registration.canonicalSessionId, 'existing-ui-session');
+  assert.equal(registration.providerSessionAlias, 'native-reported-different-session');
+});
+
+test('Argus fresh turns still adopt the native session id', () => {
+  const registration = resolveMtlCodeCanonicalSessionRegistration({
+    messageSessionId: 'real-native-session',
+    capturedSessionId: '',
+    requestedSessionId: '',
+    clientSessionId: 'new-session-temp',
+  });
+
+  assert.equal(registration.shouldAdoptMessageSessionId, true);
+  assert.equal(registration.canonicalSessionId, 'real-native-session');
+  assert.equal(registration.providerSessionAlias, '');
 });
 
 test('Argus persistent idle sessions are not reported as currently processing', () => {

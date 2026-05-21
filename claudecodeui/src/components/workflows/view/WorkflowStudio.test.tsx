@@ -6,10 +6,107 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
+function readFlowGramNativeSource() {
+  return [
+    'WorkflowFlowGramEditor.tsx',
+    'flowgram/FlowGramWorkflowEditorShell.tsx',
+    'flowgram/FlowGramWorkflowNodeRegistry.tsx',
+    'flowgram/FlowGramWorkflowFormMeta.tsx',
+    'flowgram/FlowGramWorkflowVariableCatalog.ts',
+    'flowgram/FlowGramWorkflowVariablePanelAdapter.ts',
+    'flowgram/FlowGramRuntimeVisualBridge.ts',
+    'flowgram/FlowGramWorkflowNodeRenderer.tsx',
+    'flowgram/FlowGramWorkflowEditorProps.tsx',
+    'flowgram/FlowGramWorkflowMaterials.tsx',
+    'flowgram/FlowGramWorkflowLineGuards.ts',
+    'flowgram/FlowGramWorkflowVisualConfig.ts',
+    'flowgram/FlowGramWorkflowShortcuts.ts',
+    'flowgram/FlowGramWorkflowOperations.tsx',
+  ].map((file) => readFileSync(resolve(currentDir, file), 'utf8')).join('\n');
+}
+
 describe('WorkflowStudio source contract', () => {
+  it('keeps FlowGram code-level parity logic in dedicated native modules', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const compatibilityWrapperSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const shellSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorShell.tsx'), 'utf8');
+    const editorPropsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowEditorProps.tsx'), 'utf8');
+    const materialsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowMaterials.tsx'), 'utf8');
+    const operationsSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowOperations.tsx'), 'utf8');
+    const registrySource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRegistry.tsx'), 'utf8');
+    const formMetaSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowFormMeta.tsx'), 'utf8');
+    const variableSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowVariableCatalog.ts'), 'utf8');
+    const runtimeBridgeSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramRuntimeVisualBridge.ts'), 'utf8');
+
+    expect(compatibilityWrapperSource).toContain('FlowGramWorkflowEditorShell');
+    expect(compatibilityWrapperSource).not.toContain('function buildNodeRegistries');
+    expect(compatibilityWrapperSource).not.toContain('function FlowGramLineInsertButton');
+    expect(compatibilityWrapperSource).not.toContain('const workflowNodeFormMeta');
+
+    expect(shellSource).toContain('FreeLayoutEditor');
+    expect(shellSource).toContain('useWorkflowFlowGramEditorProps');
+    expect(shellSource).not.toContain('useMemo<FreeLayoutProps>');
+    expect(shellSource).not.toContain('function FlowGramLineInsertButton');
+    expect(shellSource).not.toContain('function FlowGramNodePanel');
+    expect(editorPropsSource).toContain('useWorkflowFlowGramEditorProps');
+    expect(editorPropsSource).toContain('createFreeLinesPlugin');
+    expect(editorPropsSource).toContain('createFreeNodePanelPlugin');
+    expect(editorPropsSource).toContain('buildFlowGramWorkflowNodeRegistries');
+    expect(editorPropsSource).toContain('createFlowGramWorkflowNode');
+    expect(editorPropsSource).toContain('buildFlowGramRuntimeVisualState');
+    expect(editorPropsSource).toContain('canAddWorkflowLine');
+    expect(editorPropsSource).toContain('workflowFlowGramI18n');
+    expect(editorPropsSource).toContain('workflowFlowGramShortcuts');
+    expect(editorPropsSource).toContain('workflowFlowGramSelectBox');
+    expect(materialsSource).toContain('FlowGramLineInsertButton');
+    expect(materialsSource).toContain('FlowGramNodePanel');
+    expect(operationsSource).toContain('FlowGramOperationToolbar');
+    expect(operationsSource).toContain('FlowGramSelectionOperationPanel');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(operationsSource).toContain('data-testid="workflow-selection-helper"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-primary-actions"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-more-actions"');
+    expect(operationsSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(operationsSource).toContain('isMoreOpen');
+    expect(operationsSource).toContain('No node selected');
+    expect(operationsSource).toContain('Node selected');
+    expect(operationsSource).not.toContain('Ctrl/Cmd D duplicate');
+    expect(operationsSource).not.toContain('Ctrl/Cmd 0 fit');
+
+    expect(registrySource).toContain('flowGramWorkflowNodeTypes');
+    expect(registrySource).toContain('onAdd');
+    expect(registrySource).toContain('defaultFlowGramWorkflowNodeMeta');
+    expect(formMetaSource).toContain('validateTrigger');
+    expect(formMetaSource).toContain('formatOnSubmit');
+    expect(variableSource).toContain('buildWorkflowFlowGramVariableCatalog');
+    expect(runtimeBridgeSource).toContain('setLineClassName');
+
+    expect(studioSource).not.toContain('const [historyPast');
+    expect(studioSource).not.toContain('const [historyFuture');
+    expect(studioSource).not.toContain('const insertNodeOnEdge');
+    expect(studioSource).not.toContain('historyPast.length > 0 || Boolean(flowGramEditorRef.current?.canUndo())');
+  });
+
+  it('keeps FlowGram MIT attribution visible for code-level architecture replication', () => {
+    const notice = readFileSync(resolve(currentDir, '../../../../NOTICE'), 'utf8');
+
+    expect(notice).toContain('FlowGram.AI');
+    expect(notice).toContain('https://github.com/bytedance/flowgram.ai');
+    expect(notice).toContain('licensed under the MIT License');
+  });
+
+  it('records the FlowGram parity audit as a closeable engineering artifact', () => {
+    const audit = readFileSync(resolve(currentDir, '../../../../docs/workflow-flowgram-parity-audit.md'), 'utf8');
+
+    expect(audit).toContain('REQ-197');
+    expect(audit).toContain('FlowGram native');
+    expect(audit).toContain('MTL runtime');
+    expect(audit).toContain('WorkflowFlowGramEditor.tsx is a compatibility wrapper');
+  });
+
   it('keeps the FlowGram migration clean and native-first', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
-    const flowGramSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
     const packageJson = readFileSync(resolve(currentDir, '../../../../package.json'), 'utf8');
 
     expect(studioSource).not.toContain("from '@xyflow" + "/react'");
@@ -32,17 +129,18 @@ describe('WorkflowStudio source contract', () => {
 
   it('uses FlowGram-native form, variable, line insertion, history, runtime state, and route loading', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
-    const flowGramSource = readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
     const mainContentSource = readFileSync(resolve(currentDir, '../../main-content/view/MainContent.tsx'), 'utf8');
 
-    expect(flowGramSource).toContain('export type WorkflowFlowGramEditorHandle');
-    expect(flowGramSource).toContain('export type WorkflowFlowGramFormValues');
-    expect(flowGramSource).toContain('export type WorkflowFlowGramVariableCatalog');
-    expect(flowGramSource).toContain('export type WorkflowRuntimeVisualState');
-    expect(flowGramSource).toContain('export type WorkflowLineInsertRequest');
+    expect(flowGramSource).toContain('WorkflowFlowGramEditorHandle');
+    expect(flowGramSource).toContain('WorkflowFlowGramFormValues');
+    expect(flowGramSource).toContain('WorkflowFlowGramVariableCatalog');
+    expect(flowGramSource).toContain('WorkflowRuntimeVisualState');
+    expect(flowGramSource).toContain('WorkflowLineInsertRequest');
 
     expect(flowGramSource).toContain('buildWorkflowFlowGramFormValues');
     expect(flowGramSource).toContain('buildWorkflowFlowGramVariableCatalog');
+    expect(flowGramSource).toContain('buildWorkflowFlowGramVariablePanelState');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-form-inspector"');
     expect(flowGramSource).toContain('data-testid="workflow-flowgram-variable-catalog"');
     expect(flowGramSource).not.toContain('data-testid="workflow-flowgram-form-meta"');
@@ -72,16 +170,30 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).toContain('setLineClassName');
     expect(flowGramSource).toContain('isErrorLine');
     expect(flowGramSource).toContain('isDisabledLine');
+    expect(flowGramSource).toContain('canDeleteWorkflowNode');
+    expect(flowGramSource).toContain('canResetWorkflowLine');
+    expect(flowGramSource).toContain('zoomIn');
+    expect(flowGramSource).toContain('zoomOut');
+    expect(flowGramSource).toContain('autoLayout');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-primary-actions"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-more-actions"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-toolbar"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-shortcut-hints"');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-operation-feedback"');
+    expect(flowGramSource).toContain('data-testid="workflow-selection-helper"');
 
     expect(mainContentSource).not.toContain("import WorkflowStudio from '../../workflows/view/WorkflowStudio'");
     expect(mainContentSource).toContain("lazy(() => import('../../workflows/view/WorkflowStudio'))");
     expect(mainContentSource).toContain('data-testid="workflow-route-lazy-boundary"');
+    expect(studioSource).toContain("import type { WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor'");
+    expect(studioSource).not.toContain("import { buildFlowGramRuntimeVisualState, type WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor'");
   });
 
   it('exposes visual DAG editor, runner, approval, and history hooks', () => {
     const source = [
       readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8'),
-      readFileSync(resolve(currentDir, 'WorkflowFlowGramEditor.tsx'), 'utf8'),
+      readFlowGramNativeSource(),
     ].join('\n');
 
     expect(source).toContain('data-testid="workflow-studio"');
@@ -123,7 +235,15 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('rollbackCheckpoint');
     expect(source).toContain('data-testid="workflow-node-dependency-status"');
     expect(source).toContain('data-testid="workflow-dry-run-debugger"');
+    expect(source).toContain('data-testid="workflow-dry-run-preview"');
+    expect(source).toContain('dryRunPreview');
+    expect(source).toContain('resolvedInput');
+    expect(source).toContain('permissionDecision');
     expect(source).toContain('data-testid="workflow-run-console"');
+    expect(source).toContain('data-testid="workflow-preview-consistency-chip"');
+    expect(source).toContain('data-testid="workflow-preview-diff-panel"');
+    expect(source).toContain('previewSnapshot: dryRunPreview || undefined');
+    expect(source).toContain('previewChangedNodes');
     expect(source).toContain('data-testid="workflow-run-events"');
     expect(source).toContain('data-testid="workflow-node-logs"');
     expect(source).toContain('data-testid="workflow-retry-from-node"');
@@ -190,6 +310,24 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('data-testid="workflow-transform-functions"');
     expect(source).toContain('data-testid="workflow-output-contract-test"');
     expect(source).toContain('data-testid="workflow-data-lineage-view"');
+    expect(source).toContain('data-testid="workflow-variable-debugger"');
+    expect(source).toContain('data-testid="workflow-variable-debugger-row"');
+    expect(source).toContain('data-testid="workflow-variable-copy-expression"');
+    expect(source).toContain('data-testid="workflow-run-lineage-detail"');
+    expect(source).toContain('data-testid="workflow-missing-variable-diagnostics"');
+    expect(source).toContain('data-testid="workflow-missing-variable-jump"');
+    expect(source).toContain('data-testid="workflow-missing-variable-node-badge"');
+    expect(source).toContain('data-testid="workflow-run-snapshot-badge"');
+    expect(source).toContain('data-testid="workflow-run-definition-drift"');
+    expect(source).toContain('data-testid="workflow-run-snapshot-details"');
+    expect(source).toContain('selectedRunSnapshotDetails');
+    expect(source).toContain('selectedRunDefinitionChanged');
+    expect(source).toContain('missingVariableDiagnostics');
+    expect(source).toContain('selectMissingVariableDiagnostic');
+    expect(source).toContain('resolvedInputLineage');
+    expect(source).toContain('inputLineage');
+    expect(source).toContain('lineageFieldRows');
+    expect(source).toContain('getNodeRunLineageRows');
     expect(source).toContain('schemaVersion');
     expect(source).toContain('saveNodeConfigPreset');
     expect(source).toContain('applyNodeConfigPreset');
@@ -370,5 +508,136 @@ describe('WorkflowStudio source contract', () => {
     expect(source).not.toContain('swarm');
     expect(source).not.toContain('message bus');
     expect(source).not.toContain('topology');
+  });
+
+  it('defaults Workflow Studio to a simplified human-guided interaction model', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
+
+    expect(studioSource).toContain('WorkflowUiMode');
+    expect(studioSource).toContain('workflowUiModeStorageKey');
+    expect(studioSource).toContain('data-testid="workflow-simple-mode"');
+    expect(studioSource).toContain('data-testid="workflow-advanced-toggle"');
+    expect(studioSource).toContain('data-testid="workflow-human-next-action"');
+    expect(studioSource).toContain('data-testid="workflow-guided-builder"');
+    expect(studioSource).toContain('data-testid="workflow-diagnostics-drawer"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-essential-fields"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-advanced-sections"');
+    expect(studioSource).toContain('data-testid="workflow-run-story"');
+    expect(studioSource).toContain('data-testid="workflow-run-advanced-tabs"');
+    expect(studioSource).toContain('Choose');
+    expect(studioSource).toContain('Configure');
+    expect(studioSource).toContain('Review');
+    expect(studioSource).toContain('Build and run an agent workflow for this project');
+    expect(studioSource).not.toContain('Compose Agent, Subagent, MCP, Tool, Shell, Artifact, Approval, Condition, and Join nodes as a visual DAG.');
+
+    expect(flowGramSource).toContain('showDiagnostics');
+    expect(flowGramSource).toContain('data-testid="workflow-flowgram-diagnostics-layer"');
+    expect(flowGramSource).not.toContain('FlowGram edits / MTL runtime executes');
+    expect(flowGramSource).not.toContain('{humanFeedback} 路 {operationFeedback}');
+  });
+
+  it('continues desktop-only Workflow Studio polish without mobile screenshot gates', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(studioSource).toContain('data-testid="workflow-desktop-focus-layout"');
+    expect(studioSource).toContain('data-testid="workflow-editor-setup-strip"');
+    expect(studioSource).toContain('data-testid="workflow-runs-approval-focus"');
+    expect(flowGramSource).toContain('data-testid="workflow-canvas-operation-polish"');
+    expect(flowGramSource).toContain('data-testid="workflow-selection-helper"');
+    expect(screenshotSpec).toContain('BUG-UI-019-editor-focus-layout.png');
+    expect(screenshotSpec).toContain('BUG-UI-020-canvas-operation-polish.png');
+    expect(screenshotSpec).toContain('BUG-UI-021-runs-approval-focus.png');
+    expect(screenshotSpec).not.toContain('BUG-UI-019-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-020-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-021-mobile');
+  });
+
+  it('applies a modern desktop product shell without adding mobile gates', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const flowGramSource = readFlowGramNativeSource();
+    const nodeRendererSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRenderer.tsx'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(studioSource).toContain('data-testid="workflow-modern-desktop-shell"');
+    expect(studioSource).toContain('data-testid="workflow-command-rail"');
+    expect(studioSource).toContain('data-testid="workflow-editor-quick-path"');
+    expect(studioSource).toContain('data-testid="workflow-properties-panel"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-node-summary"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-more-actions"');
+    expect(flowGramSource).toContain('data-testid="workflow-canvas-surface-modern"');
+    expect(flowGramSource).toContain('data-testid="workflow-canvas-surface-titlebar"');
+    expect(nodeRendererSource).toContain('data-testid="workflow-node-modern-block"');
+    expect(nodeRendererSource).toContain('workflow node status dot');
+    expect(screenshotSpec).toContain('BUG-UI-022-modern-desktop-shell.png');
+    expect(screenshotSpec).toContain('BUG-UI-023-inspector-properties-panel.png');
+    expect(screenshotSpec).toContain('BUG-UI-024-canvas-surface-node-polish.png');
+    expect(screenshotSpec).not.toContain('BUG-UI-022-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-023-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-024-mobile');
+  });
+
+  it('keeps the default Workflow Studio view low-noise and canvas first', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(studioSource).toContain('data-testid="workflow-quiet-default-header"');
+    expect(studioSource).toContain('data-testid="workflow-quiet-meta"');
+    expect(studioSource).toContain('data-testid="workflow-canvas-first-rail"');
+    expect(studioSource).toContain('data-testid="workflow-editor-metadata-details"');
+    expect(studioSource).toContain('data-testid="workflow-inspector-low-noise-defaults"');
+    expect(studioSource).toContain('data-density="compact"');
+    expect(screenshotSpec).toContain('BUG-UI-025-quiet-default-header.png');
+    expect(screenshotSpec).toContain('BUG-UI-026-canvas-first-simple-mode.png');
+    expect(screenshotSpec).toContain('BUG-UI-027-low-noise-inspector.png');
+    expect(screenshotSpec).not.toContain('BUG-UI-025-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-026-mobile');
+    expect(screenshotSpec).not.toContain('BUG-UI-027-mobile');
+  });
+
+  it('exposes AI generated Python custom node review and install UI without generated TSX injection', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const apiSource = readFileSync(resolve(currentDir, '../../../utils/api.js'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(apiSource).toContain('generateWorkflowNodePackageDraft');
+    expect(apiSource).toContain('validateWorkflowNodePackageDraft');
+    expect(apiSource).toContain('testWorkflowNodePackageDraft');
+    expect(apiSource).toContain('workflowNodePackageImpact');
+    expect(apiSource).toContain('disableWorkflowNodePackage');
+    expect(apiSource).toContain('enableWorkflowNodePackage');
+    expect(apiSource).toContain('uninstallWorkflowNodePackage');
+    expect(studioSource).toContain('data-testid="workflow-generate-custom-node"');
+    expect(studioSource).toContain('data-testid="workflow-ai-node-draft-review"');
+    expect(studioSource).toContain('data-testid="workflow-custom-schema-node-form"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-test-result"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-test-matrix"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-test-case"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-assertion-failures"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-manager"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-state"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-impact-report"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-disable"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-enable"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-uninstall"');
+    expect(studioSource).toContain('data-testid="workflow-node-package-upgrade-warning"');
+    expect(studioSource).toContain('Custom');
+    expect(studioSource).not.toContain('dangerouslySetInnerHTML');
+    expect(screenshotSpec).toContain('REQ-207-ai-node-draft.png');
+    expect(screenshotSpec).toContain('REQ-207-python-node-dependency-warning.png');
+    expect(screenshotSpec).toContain('REQ-207-python-node-test-stdout-stderr.png');
+    expect(screenshotSpec).toContain('REQ-207-custom-node-installed.png');
+    expect(screenshotSpec).toContain('REQ-207-custom-node-run-output.png');
+    expect(screenshotSpec).toContain('REQ-211C-package-manager-impact.png');
+    expect(screenshotSpec).toContain('REQ-211C-package-manager-disabled.png');
+    expect(screenshotSpec).toContain('REQ-211D-impact-report.png');
+    expect(screenshotSpec).toContain('REQ-211D-disabled-state.png');
+    expect(screenshotSpec).toContain('REQ-211D-incompatible-upgrade.png');
+    expect(screenshotSpec).toContain('REQ-212C-test-review-matrix.png');
+    expect(screenshotSpec).toContain('REQ-212D-test-matrix-pass.png');
+    expect(screenshotSpec).toContain('REQ-212D-test-matrix-assertion-failure.png');
+    expect(screenshotSpec).toContain('REQ-212D-test-matrix-runtime-error.png');
   });
 });

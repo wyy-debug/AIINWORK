@@ -42,12 +42,71 @@ const waitingRun = {
   status: 'waiting_approval',
   createdAt: Date.now(),
   nodeRuns: {
-    explore: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent', status: 'completed', attempt: 1, logs: ['Completed subagent node.'] },
+    explore: {
+      nodeId: 'explore',
+      type: 'subagent',
+      title: 'Explore Subagent',
+      status: 'completed',
+      attempt: 1,
+      logs: ['Completed subagent node.'],
+      input: { prompt: 'Explore impact for Trace Export frame export.', command: '', condition: '', toolName: '', config: {} },
+      output: { summary: 'Trace export impact found.' },
+      inputLineage: {
+        prompt: {
+          field: 'prompt',
+          status: 'resolved',
+          sourceExpression: 'inputs.change_request',
+          sourcePath: 'inputs.change_request',
+          valuePreview: 'Explore impact for Trace Export frame export.',
+          segments: [
+            { type: 'literal', valuePreview: 'Explore impact for ' },
+            { type: 'variable', status: 'resolved', sourceExpression: 'inputs.change_request', sourcePath: 'inputs.change_request', valuePreview: 'Trace Export frame export' },
+          ],
+        },
+        config: {
+          field: 'config',
+          status: 'literal',
+          sourceExpression: '',
+          sourcePath: '',
+          valuePreview: '{}',
+          segments: [{ type: 'literal', valuePreview: '{}' }],
+        },
+      },
+    },
     approval: { nodeId: 'approval', type: 'approval', title: 'Human Approval', status: 'waiting_approval', attempt: 1, waitingReason: 'Waiting for approval.', logs: ['Waiting for approval.'] },
     artifact: { nodeId: 'artifact', type: 'artifact', title: 'Delivery Artifact', status: 'pending', attempt: 0, logs: [] },
   },
   artifacts: [],
   timelineEvents: [],
+};
+
+const previewMatchedRun = {
+  ...waitingRun,
+  id: 'workflow-run-preview-matched',
+  previewMatched: true,
+  previewChanged: false,
+  previewDiff: {
+    matched: true,
+    changed: false,
+    reasons: [],
+    changedNodes: [],
+  },
+};
+
+const previewChangedRun = {
+  ...waitingRun,
+  id: 'workflow-run-preview-changed',
+  previewMatched: false,
+  previewChanged: true,
+  previewDiff: {
+    matched: false,
+    changed: true,
+    reasons: ['input_changed', 'node_input_changed'],
+    changedNodes: [
+      { nodeId: 'explore', fields: ['resolvedInput'], reasons: ['node_input_changed'] },
+      { nodeId: 'approval', fields: ['permissionDecision'], reasons: ['permission_changed'] },
+    ],
+  },
 };
 
 const completedRun = {
@@ -61,12 +120,164 @@ const completedRun = {
   artifacts: [{ id: 'artifact-1', kind: 'workflow-summary', title: 'Delivery Artifact' }],
 };
 
+const historicalRun = {
+  ...waitingRun,
+  id: 'workflow-run-historical',
+  timelineEvents: [
+    { id: 'event-created', category: 'workflow', type: 'workflow_run_created', payload: { workflowId: workflow.id, workflowName: 'Agent Review Delivery Snapshot' }, createdAt: Date.now() - 3000 },
+    { id: 'event-explore-started', category: 'workflow', type: 'workflow_node_started', payload: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent' }, createdAt: Date.now() - 2500 },
+    { id: 'event-explore-completed', category: 'workflow', type: 'workflow_node_completed', payload: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent' }, createdAt: Date.now() - 2000 },
+    { id: 'event-approval-waiting', category: 'workflow', type: 'workflow_node_waiting_approval', payload: { nodeId: 'approval', type: 'approval', title: 'Human Approval' }, createdAt: Date.now() - 1500 },
+    { id: 'event-status', category: 'workflow', type: 'workflow_run_status', payload: { status: 'waiting_approval' }, createdAt: Date.now() - 1000 },
+  ],
+  runSnapshot: {
+    snapshotVersion: 1,
+    capturedAt: '2026-05-21T09:00:00.000Z',
+    workflowId: workflow.id,
+    workflowName: 'Agent Review Delivery Snapshot',
+    resolverVersion: 'workflow-run-resolver/1',
+    definitionSnapshot: {
+      ...workflow,
+      name: 'Agent Review Delivery Snapshot',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      nodes: workflow.nodes,
+      edges: workflow.edges,
+    },
+    profileSnapshot: {
+      profileId: 'build',
+      agentName: 'Build',
+      permissionPreset: 'auto-edit',
+    },
+    permissionSnapshot: {
+      source: 'workflow',
+      permissionPreset: 'auto-edit',
+      profileId: 'build',
+    },
+    nodePackageSnapshots: [
+      { id: 'legacy-review-node', type: 'subagent', version: '1.0.0', status: 'ready' },
+    ],
+    runInputsSnapshot: { change_request: 'Snapshot request' },
+  },
+};
+
+const builtinNodeTypes = [
+  { type: 'agent', label: 'Agent', description: 'Run a primary agent.', ui: { materialGroup: 'agents' }, configSchema: { fields: [] } },
+  { type: 'subagent', label: 'Subagent', description: 'Run a subagent.', ui: { materialGroup: 'agents' }, configSchema: { fields: [] } },
+  { type: 'mcp', label: 'MCP', description: 'Call MCP.', ui: { materialGroup: 'integrations' }, configSchema: { fields: [] } },
+  { type: 'tool', label: 'Tool', description: 'Run a tool.', ui: { materialGroup: 'integrations' }, configSchema: { fields: [] } },
+  { type: 'shell', label: 'Shell', description: 'Run shell.', ui: { materialGroup: 'execution' }, configSchema: { fields: [] } },
+  { type: 'approval', label: 'Approval', description: 'Wait for approval.', ui: { materialGroup: 'execution' }, configSchema: { fields: [] } },
+  { type: 'condition', label: 'Condition', description: 'Branch.', ui: { materialGroup: 'control' }, configSchema: { fields: [] } },
+  { type: 'join', label: 'Join', description: 'Join branches.', ui: { materialGroup: 'control' }, configSchema: { fields: [] } },
+  { type: 'artifact', label: 'Artifact', description: 'Create artifact.', ui: { materialGroup: 'outputs' }, configSchema: { fields: [] } },
+];
+
+const customPythonManifest = {
+  manifestVersion: '1',
+  id: 'python-format-node',
+  type: 'python-format-node',
+  label: 'Python Format Node',
+  description: 'Formats text with a safe Python standard-library script.',
+  language: 'python',
+  dependencies: [],
+  entrypoint: 'main.py',
+  permissions: { risky: false, action: 'custom.python' },
+  configSchema: {
+    type: 'object',
+    properties: {
+      mode: { type: 'string', title: 'Format mode', enum: ['upper', 'lower', 'title'], default: 'upper' },
+    },
+    required: [],
+  },
+  inputSchema: { type: 'object', properties: { text: { type: 'string', title: 'Text' } } },
+  outputSchema: { type: 'object', properties: { result: { type: 'object', title: 'Result' }, status: { type: 'string', title: 'Status' } } },
+  codeFiles: {
+    'main.py': [
+      'import json',
+      'import sys',
+      'payload = json.load(sys.stdin)',
+      'text = str((payload.get("input") or {}).get("text") or "")',
+      'mode = str((payload.get("config") or {}).get("mode") or "upper")',
+      'result = text.upper() if mode == "upper" else text.lower()',
+      'print(json.dumps({"summary": "formatted", "result": {"text": result}, "status": "completed"}))',
+    ].join('\n'),
+  },
+  testCases: [{ id: 'formats-text', name: 'Formats text', input: { text: 'hello workflow' }, config: { mode: 'upper' } }],
+};
+
+const customPythonNodeType = {
+  type: 'python-format-node',
+  label: 'Python Format Node',
+  description: 'Formats text with a safe Python standard-library script.',
+  ui: { materialGroup: 'custom', schemaVersion: '1.0' },
+  configSchema: {
+    fields: [{ name: 'mode', label: 'Format mode', type: 'select', options: ['upper', 'lower', 'title'], defaultValue: 'upper' }],
+  },
+  outputSchema: { fields: [{ name: 'result', type: 'object', label: 'Result' }, { name: 'status', type: 'string', label: 'Status' }] },
+};
+
+const incompatibleCustomPythonManifest = {
+  ...customPythonManifest,
+  version: '2.0.0',
+  configSchema: {
+    type: 'object',
+    properties: {
+      mode: { type: 'number', title: 'Format mode' },
+    },
+    required: [],
+  },
+  outputSchema: { type: 'object', properties: { result: { type: 'object', title: 'Result' } } },
+};
+
+const installedPythonNodePackage = {
+  id: customPythonManifest.id,
+  enabled: true,
+  status: 'ready',
+  lifecycleState: 'enabled',
+  state: 'enabled',
+  manifest: customPythonManifest,
+  definition: customPythonNodeType,
+  dependencies: {},
+  missingDependencies: [],
+};
+
+const customRun = {
+  id: 'workflow-run-custom',
+  workflowId: workflow.id,
+  workflowName: workflow.name,
+  status: 'completed',
+  createdAt: Date.now(),
+  nodeRuns: {
+    explore: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent', status: 'completed', attempt: 1, logs: ['Completed subagent node.'] },
+    'python-format-node-1': {
+      nodeId: 'python-format-node-1',
+      type: 'python-format-node',
+      title: 'Python Format Node 1',
+      status: 'completed',
+      attempt: 1,
+      logs: ['stdout: {"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}'],
+      output: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+    },
+  },
+  artifacts: [{ id: 'python-output', kind: 'workflow-python-output', title: 'Python node output' }],
+  timelineEvents: [],
+};
+
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } = {}) {
-  let runState = waitingRun;
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean; historicalSnapshot?: boolean } = {}) {
+  let runState = options.previewConsistency === 'matched'
+    ? previewMatchedRun
+    : options.previewConsistency === 'changed'
+      ? previewChangedRun
+      : options.historicalSnapshot
+        ? historicalRun
+        : waitingRun;
+  let nodeTypes = options.withInstalledNodePackage ? [...builtinNodeTypes, customPythonNodeType] : [...builtinNodeTypes];
+  let installedPackages: unknown[] = options.withInstalledNodePackage ? [installedPythonNodePackage] : [];
 
   await page.addInitScript(() => {
     localStorage.setItem('activeTab', 'workflows');
@@ -79,10 +290,60 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } 
     if (path === '/api/projects') return json(route, [project]);
     if (path.startsWith('/api/conversations')) return json(route, { project: { ...project, name: 'Conversations', sessions: [] } });
     if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [workflow] });
+    if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes });
     if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
     if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
+    if (path === `/api/workflows/${workflow.id}/validate-run`) {
+      const previewNodes = Object.values(waitingRun.nodeRuns).map((nodeRun: any) => {
+        const missingVariableError = options.missingVariablePreview && nodeRun.nodeId === 'approval'
+          ? {
+            code: 'missing_output_field',
+            category: 'missing_variable',
+            nodeId: 'approval',
+            field: 'prompt',
+            variable: 'nodes.explore.output.missingSummary',
+            sourceNodeId: 'explore',
+            outputField: 'missingSummary',
+            message: 'Node approval references unavailable output nodes.explore.output.missingSummary.',
+            diagnostic: {
+              nodeId: 'approval',
+              field: 'prompt',
+              sourceExpression: 'nodes.explore.output.missingSummary',
+              sourceNodeId: 'explore',
+              outputField: 'missingSummary',
+            },
+          }
+          : null;
+        return {
+          nodeId: nodeRun.nodeId,
+          type: nodeRun.type,
+          title: nodeRun.title,
+          resolvedInput: nodeRun.input || {},
+          resolvedInputLineage: nodeRun.inputLineage || {},
+          permissionDecision: nodeRun.permissionDecision || 'allow',
+          upstream: workflow.edges.filter((edge) => edge.to === nodeRun.nodeId).map((edge) => ({ nodeId: edge.from, mode: edge.mode })),
+          blocked: Boolean(missingVariableError),
+          errors: missingVariableError ? [missingVariableError] : [],
+        };
+      });
+      return json(route, {
+        success: true,
+        validation: {
+          valid: !options.missingVariablePreview,
+          errors: options.missingVariablePreview ? previewNodes.flatMap((node) => node.errors) : [],
+          warnings: [],
+          preview: {
+            workflowId: workflow.id,
+            nodeCount: workflow.nodes.length,
+            blockedCount: previewNodes.filter((node) => node.blocked).length,
+            nodes: previewNodes,
+          },
+        },
+      }, options.missingVariablePreview ? 400 : 200);
+    }
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
     if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
+    if (path === `/api/workflow-runs/${runState.id}/events`) return json(route, { success: true, events: runState.timelineEvents || [] });
     if (path === `/api/workflow-runs/${waitingRun.id}/nodes/approval/control`) {
       runState = completedRun;
       return json(route, { success: true, run: runState });
@@ -94,6 +355,201 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } 
         { id: 'subagent-explore', name: 'Explore', status: 'enabled', mode: 'subagent' },
       ],
     });
+    if (path === '/api/workflow-node-packages') return json(route, { success: true, packages: installedPackages });
+    if (path === `/api/workflow-node-packages/${customPythonManifest.id}/impact`) {
+      return json(route, {
+        success: true,
+        report: {
+          packageId: customPythonManifest.id,
+          exists: true,
+          destructiveActionRisk: 'blocking',
+          totals: { workflows: 1, templates: 1, recentRuns: 1 },
+          affected: {
+            workflows: [{ objectType: 'workflow', id: workflow.id, title: workflow.name, nodeIds: ['python-format-node-1'], severity: 'blocking' }],
+            templates: [{ objectType: 'template', id: 'template-format', title: 'Format Template', nodeIds: ['python-format-node-1'], severity: 'blocking' }],
+            recentRuns: [{ objectType: 'run', id: customRun.id, title: customRun.workflowName, workflowId: customRun.workflowId, nodeIds: ['python-format-node-1'], severity: 'warning' }],
+          },
+        },
+      });
+    }
+    if (path === `/api/workflow-node-packages/${customPythonManifest.id}/disable`) {
+      installedPackages = [{ ...installedPythonNodePackage, enabled: false, status: 'disabled', lifecycleState: 'disabled', state: 'disabled' }];
+      nodeTypes = [...builtinNodeTypes];
+      return json(route, { success: true, package: installedPackages[0] });
+    }
+    if (path === `/api/workflow-node-packages/${customPythonManifest.id}/enable`) {
+      installedPackages = [installedPythonNodePackage];
+      nodeTypes = [...builtinNodeTypes, customPythonNodeType];
+      return json(route, { success: true, package: installedPackages[0] });
+    }
+    if (path === `/api/workflow-node-packages/${customPythonManifest.id}` && route.request().method() === 'DELETE') {
+      installedPackages = [];
+      nodeTypes = [...builtinNodeTypes];
+      return json(route, { success: true, removed: true, packageId: customPythonManifest.id });
+    }
+    if (path === '/api/workflow-node-packages/generate-draft') {
+      return json(route, { success: true, draft: { status: 'draft', prompt: 'Create formatter node', manifest: options.incompatibleUpgrade ? incompatibleCustomPythonManifest : customPythonManifest } }, 201);
+    }
+    if (path === '/api/workflow-node-packages/validate-draft') {
+      return json(route, {
+        success: true,
+        validation: {
+          valid: true,
+          errors: [],
+          warnings: [{ code: 'stage_one_standard_library_only', message: 'Stage one rejects undeclared third-party imports before install.' }],
+        },
+      });
+    }
+    if (path === '/api/workflow-node-packages/test-draft') {
+      if (options.customNodeTestMatrix === 'passing') {
+        return json(route, {
+          success: true,
+          result: {
+            ok: true,
+            exitCode: 0,
+            durationMs: 84,
+            stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+            stderr: '',
+            parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+            cases: [
+              {
+                ok: true,
+                testCaseId: 'formats-upper',
+                testCaseName: 'Formats upper',
+                exitCode: 0,
+                durationMs: 39,
+                stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+                assertionFailures: [],
+              },
+              {
+                ok: true,
+                testCaseId: 'formats-lower',
+                testCaseName: 'Formats lower',
+                exitCode: 0,
+                durationMs: 45,
+                stdout: '{"summary":"formatted","result":{"text":"hello workflow"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'formatted', result: { text: 'hello workflow' }, status: 'completed' },
+                assertionFailures: [],
+              },
+            ],
+          },
+        });
+      }
+      if (options.customNodeTestMatrix === 'mixed') {
+        return json(route, {
+          success: false,
+          result: {
+            ok: false,
+            exitCode: 0,
+            durationMs: 96,
+            stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+            stderr: 'assertion stderr captured',
+            parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+            error: { category: 'assertion_failed', message: 'Expected result.text to match GOODBYE but got HELLO WORKFLOW.' },
+            cases: [
+              {
+                ok: true,
+                testCaseId: 'formats-upper',
+                testCaseName: 'Formats upper',
+                exitCode: 0,
+                durationMs: 42,
+                stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+                assertionFailures: [],
+              },
+              {
+                ok: false,
+                testCaseId: 'assertion-fails',
+                testCaseName: 'Assertion fails',
+                exitCode: 0,
+                durationMs: 54,
+                stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+                stderr: 'assertion stderr captured',
+                parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+                error: { category: 'assertion_failed', message: 'Expected result.text to match GOODBYE but got HELLO WORKFLOW.' },
+                assertionFailures: [
+                  { path: 'result.text', expected: 'GOODBYE', actual: 'HELLO WORKFLOW', message: 'Expected result.text to match GOODBYE but got HELLO WORKFLOW.' },
+                ],
+              },
+            ],
+          },
+        }, 400);
+      }
+      if (options.customNodeTestMatrix === 'runtime') {
+        return json(route, {
+          success: false,
+          result: {
+            ok: false,
+            exitCode: 2,
+            durationMs: 103,
+            stdout: '',
+            stderr: 'runtime stderr captured: bad input',
+            parsedOutput: null,
+            error: { category: 'runtime_error', message: 'runtime stderr captured: bad input' },
+            cases: [
+              {
+                ok: true,
+                testCaseId: 'preflight-pass',
+                testCaseName: 'Preflight pass',
+                exitCode: 0,
+                durationMs: 42,
+                stdout: '{"summary":"ok","result":{"text":"OK"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'ok', result: { text: 'OK' }, status: 'completed' },
+                assertionFailures: [],
+              },
+              {
+                ok: false,
+                testCaseId: 'runtime-fail',
+                testCaseName: 'Runtime fail',
+                exitCode: 2,
+                durationMs: 61,
+                stdout: '',
+                stderr: 'runtime stderr captured: bad input',
+                parsedOutput: null,
+                error: { category: 'runtime_error', message: 'runtime stderr captured: bad input' },
+                assertionFailures: [],
+              },
+            ],
+          },
+        }, 400);
+      }
+      return json(route, {
+        success: true,
+        result: {
+          ok: true,
+          exitCode: 0,
+          durationMs: 42,
+          stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+          stderr: 'test stderr captured',
+          parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+        },
+      });
+    }
+    if (path === '/api/workflow-node-packages/install') {
+      if (options.incompatibleUpgrade) {
+        return json(route, {
+          success: false,
+          error: 'Workflow node package upgrade is incompatible',
+          compatibility: {
+            compatible: false,
+            reasons: [
+              { code: 'config_field_type_changed', field: 'mode', from: 'select', to: 'number', message: 'config field changed type: mode' },
+              { code: 'output_field_removed', field: 'status', message: 'output field was removed: status' },
+            ],
+            warnings: [],
+          },
+        }, 409);
+      }
+      nodeTypes = [...builtinNodeTypes, customPythonNodeType];
+      installedPackages = [{ id: customPythonManifest.id, enabled: true, status: 'ready', manifest: customPythonManifest, definition: customPythonNodeType }];
+      runState = customRun;
+      return json(route, { success: true, package: installedPackages[0] }, 201);
+    }
     if (path === '/api/git/status') return json(route, { files: [] });
     if (path === '/api/artifacts') return json(route, { artifacts: [] });
     if (path === '/api/settings/notification-preferences') return json(route, { success: true, preferences: {} });
@@ -108,6 +564,17 @@ async function screenshot(page: Page, name: string) {
   await page.screenshot({ path, fullPage: true });
   const file = await stat(path);
   expect(file.size).toBeGreaterThan(0);
+}
+
+async function openCustomNodeTestMatrix(page: Page) {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-generate-custom-node').first().click();
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toBeVisible();
 }
 
 test('REQ-049 captures Workflow Studio editor, runner, approval, and history @screenshot', async ({ page }) => {
@@ -130,6 +597,179 @@ test('REQ-049 captures Workflow Studio editor, runner, approval, and history @sc
   await screenshot(page, 'REQ-049-workflow-history-completed.png');
 });
 
+test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {
+  await installMockApi(page, { previewConsistency: 'matched' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toBeVisible();
+  await expect(page.getByTestId('workflow-preview-consistency-chip')).toContainText('Matched');
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toContainText('reviewed dry-run snapshot matches');
+  await screenshot(page, 'REQ-210C-preview-matched-run-console.png');
+});
+
+test('REQ-210C captures preview changed Run Console state @screenshot', async ({ page }) => {
+  await installMockApi(page, { previewConsistency: 'changed' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toBeVisible();
+  await expect(page.getByTestId('workflow-preview-consistency-chip')).toContainText('Review diff');
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toContainText('input_changed');
+  await expect(page.getByTestId('workflow-preview-diff-panel')).toContainText('explore');
+  await screenshot(page, 'REQ-210C-preview-changed-run-console.png');
+});
+
+test('REQ-211C captures custom node Package Manager impact and lifecycle state @screenshot', async ({ page }) => {
+  await installMockApi(page, { withInstalledNodePackage: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-generate-custom-node').first().click();
+  await expect(page.getByTestId('workflow-node-package-manager')).toBeVisible();
+  await expect(page.getByTestId('workflow-node-package-state')).toContainText('enabled / ready');
+  await page.getByRole('button', { name: 'Impact' }).click();
+  await expect(page.getByTestId('workflow-node-package-impact-report')).toContainText('Workflows 1');
+  await screenshot(page, 'REQ-211C-package-manager-impact.png');
+  await page.getByTestId('workflow-node-package-disable').click();
+  await expect(page.getByTestId('workflow-node-package-state')).toContainText('disabled / disabled');
+  await screenshot(page, 'REQ-211C-package-manager-disabled.png');
+});
+
+test('REQ-211D captures package lifecycle and incompatible upgrade evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { withInstalledNodePackage: true, incompatibleUpgrade: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-generate-custom-node').first().click();
+  await expect(page.getByTestId('workflow-node-package-manager')).toBeVisible();
+  await expect(page.getByTestId('workflow-node-package-state')).toContainText('enabled / ready');
+  await page.getByRole('button', { name: 'Impact' }).click();
+  await expect(page.getByTestId('workflow-node-package-impact-report')).toContainText('Workflows 1');
+  await screenshot(page, 'REQ-211D-impact-report.png');
+  await page.getByTestId('workflow-node-package-disable').click();
+  await expect(page.getByTestId('workflow-node-package-state')).toContainText('disabled / disabled');
+  await screenshot(page, 'REQ-211D-disabled-state.png');
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-result')).toContainText('Passed');
+  await page.getByRole('button', { name: 'Install node' }).click();
+  await expect(page.getByTestId('workflow-node-package-upgrade-warning')).toContainText('Incompatible package upgrade');
+  await expect(page.getByTestId('workflow-node-package-upgrade-warning')).toContainText('status');
+  await screenshot(page, 'REQ-211D-incompatible-upgrade.png');
+});
+
+test('REQ-212C captures custom node test matrix review UI @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'mixed' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-generate-custom-node').first().click();
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toBeVisible();
+  await expect(page.getByTestId('workflow-python-node-test-case')).toHaveCount(2);
+  await expect(page.getByTestId('workflow-python-node-assertion-failures')).toContainText('result.text');
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
+  await screenshot(page, 'REQ-212C-test-review-matrix.png');
+});
+
+test('REQ-212D captures passing custom node test matrix evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'passing' });
+  await openCustomNodeTestMatrix(page);
+  await expect(page.getByTestId('workflow-python-node-test-case')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeEnabled();
+  await screenshot(page, 'REQ-212D-test-matrix-pass.png');
+});
+
+test('REQ-212D captures assertion failure custom node test matrix evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'mixed' });
+  await openCustomNodeTestMatrix(page);
+  await expect(page.getByTestId('workflow-python-node-assertion-failures')).toContainText('result.text');
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
+  await screenshot(page, 'REQ-212D-test-matrix-assertion-failure.png');
+});
+
+test('REQ-212D captures runtime error custom node test matrix evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'runtime' });
+  await openCustomNodeTestMatrix(page);
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toContainText('runtime_error');
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toContainText('runtime stderr captured');
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
+  await screenshot(page, 'REQ-212D-test-matrix-runtime-error.png');
+});
+
+test('REQ-213B captures variable debugger and run lineage detail @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('workflowStudio.uiMode', 'advanced');
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await page.getByTestId('workflow-inspector-tabs').getByRole('button', { name: 'Data' }).click();
+  await expect(page.getByTestId('workflow-variable-debugger')).toBeVisible();
+  await expect(page.getByTestId('workflow-variable-debugger-row').first()).toContainText('inputs.change_request');
+  await expect(page.getByTestId('workflow-variable-copy-expression').first()).toBeEnabled();
+  await page.getByTestId('workflow-variable-debugger').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-213B-variable-debugger.png');
+
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-run-lineage-detail').first()).toBeVisible();
+  await page.getByTestId('workflow-run-lineage-detail').first().click();
+  await expect(page.getByTestId('workflow-run-lineage-detail').first()).toContainText('inputs.change_request');
+  await screenshot(page, 'REQ-213B-run-lineage-detail.png');
+});
+
+test('REQ-213C captures missing variable diagnostics and click-to-select @screenshot', async ({ page }) => {
+  await installMockApi(page, { missingVariablePreview: true });
+  await page.addInitScript(() => {
+    localStorage.setItem('workflowStudio.uiMode', 'advanced');
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-dry-run-debugger').first().click();
+  await expect(page.getByTestId('workflow-missing-variable-diagnostics')).toBeVisible();
+  await expect(page.getByTestId('workflow-missing-variable-diagnostics')).toContainText('nodes.explore.output.missingSummary');
+  await screenshot(page, 'REQ-213C-missing-variable-diagnostics.png');
+
+  await page.getByTestId('workflow-missing-variable-jump').first().click();
+  await expect(page.getByTestId('workflow-selection-helper')).toContainText('Human Approval');
+  await expect(page.getByTestId('workflow-missing-variable-node-badge')).toContainText('missingSummary');
+  await page.getByTestId('workflow-missing-variable-node-badge').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-213C-missing-variable-click-select.png');
+});
+
+test('REQ-214C captures historical run snapshot and drift indicators @screenshot', async ({ page }) => {
+  await installMockApi(page, { historicalSnapshot: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-run-snapshot-badge')).toContainText('Historical snapshot');
+  await expect(page.getByTestId('workflow-run-definition-drift')).toContainText('Changed since run');
+  await expect(page.getByTestId('workflow-run-snapshot-details')).toContainText('Agent Review Delivery Snapshot');
+  await screenshot(page, 'REQ-214C-historical-run-snapshot.png');
+});
+
+test('REQ-214D captures snapshot replay evidence gate @screenshot', async ({ page }) => {
+  await installMockApi(page, { historicalSnapshot: true });
+  await page.addInitScript(() => {
+    localStorage.setItem('workflowStudio.uiMode', 'advanced');
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-run-snapshot-badge')).toContainText('Historical snapshot');
+  await expect(page.getByTestId('workflow-replay-visualizer')).toContainText('events');
+  await expect(page.getByTestId('workflow-replay-visualizer')).toContainText('snapshot loaded');
+  await page.getByTestId('workflow-replay-visualizer').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-214D-snapshot-replay-evidence.png');
+});
+
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {
   await installMockApi(page);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -139,6 +779,26 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await expect(page.getByTestId('workflow-migration-doctor-local')).toContainText('Migration doctor');
   await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
   await expect(page.getByTestId('workflow-flowgram-free-layout-editor')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-primary-actions')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toContainText(/No node selected|Node selected/);
+  await screenshot(page, 'BUG-UI-012-workflow-simple-default.png');
+  await page.getByTestId('workflow-flowgram-more-toggle').click();
+  await expect(page.getByTestId('workflow-flowgram-more-actions')).toBeVisible();
+  await expect(page.getByTestId('workflow-flowgram-shortcut-hints')).toBeVisible();
+  await page.getByTestId('workflow-flowgram-zoom-in').click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Zoomed in');
+  await page.getByTestId('workflow-flowgram-zoom-out').click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Zoomed out');
+  await page.getByTestId('workflow-flowgram-fit-view').click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toContainText('Fit view');
+  await screenshot(page, 'REQ-213-flowgram-operation-toolbar.png');
+  await screenshot(page, 'BUG-UI-011-flowgram-visual-parity.png');
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-flowgram-operation-toolbar')).toContainText('Node selected');
+  await expect(page.getByTestId('workflow-selection-helper')).toContainText('Node selected');
+  await screenshot(page, 'REQ-214-flowgram-selection-panel.png');
+  await screenshot(page, 'BUG-UI-012-workflow-simple-selected.png');
   await expect(page.getByTestId('workflow-flowgram-line-insert').first()).toBeVisible();
   await screenshot(page, 'REQ-183-workgraph-command-center.png');
 
@@ -148,10 +808,13 @@ test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion
   await page.keyboard.press('Escape');
 
   await page.getByTestId('workflow-flowgram-line-insert').first().click();
+  await expect(page.getByTestId('workflow-flowgram-operation-feedback')).toBeVisible();
   await expect(page.getByTestId('workflow-form-meta-inspector')).toBeVisible();
   await expect(page.getByTestId('workflow-flow-reference-validation')).toContainText('Typed references');
   await expect(page.getByTestId('workflow-flowing-lines')).toBeVisible();
   await expect(page.getByTestId('workflow-flowgram-adapter')).toContainText('4 nodes');
+  await screenshot(page, 'REQ-215-flowgram-line-insert-operation.png');
+  await screenshot(page, 'REQ-216-flowgram-shortcut-feedback.png');
   await screenshot(page, 'REQ-183-line-add-formmeta-inspector.png');
 });
 
@@ -161,4 +824,148 @@ test('REQ-083 captures Workflow Studio empty state guide @screenshot', async ({ 
   await expect(page.getByTestId('workflow-studio')).toBeVisible();
   await expect(page.getByTestId('workflow-empty-state-guide')).toBeVisible();
   await screenshot(page, 'REQ-083-workflow-empty-state-guide.png');
+});
+
+test('BUG-UI-013 to BUG-UI-018 capture simplified Workflow Studio HCI @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+
+  await expect(page.getByTestId('workflow-simple-mode')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor').getByTestId('workflow-guided-builder')).toBeVisible();
+  await expect(page.getByTestId('workflow-human-next-action')).toBeVisible();
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('WorkGraph');
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('Migration doctor');
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('Benchmarks');
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-013-simple-editor-default.png');
+  await screenshot(page, 'BUG-UI-014-command-center-declutter.png');
+  await screenshot(page, 'BUG-UI-015-guided-builder.png');
+
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-inspector-essential-fields')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-advanced-sections')).toBeVisible();
+  await screenshot(page, 'BUG-UI-016-inspector-essential-fields.png');
+
+  await expect(page.getByTestId('workflow-flowgram-diagnostics-layer')).toBeHidden();
+  await screenshot(page, 'BUG-UI-017-canvas-visual-polish.png');
+
+  await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page.getByTestId('workflow-runs')).toBeVisible();
+  await expect(page.getByTestId('workflow-run-story')).toContainText(/approval|waiting|continue/i);
+  await expect(page.getByTestId('workflow-run-advanced-tabs')).toBeVisible();
+  await screenshot(page, 'BUG-UI-018-run-story-approval.png');
+});
+
+test('BUG-UI-019 to BUG-UI-021 capture desktop-only Workflow Studio polish @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+
+  await expect(page.getByTestId('workflow-desktop-focus-layout')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-setup-strip')).toBeVisible();
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-019-editor-focus-layout.png');
+
+  await expect(page.getByTestId('workflow-canvas-operation-polish')).toBeVisible();
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-selection-helper')).toBeVisible();
+  await screenshot(page, 'BUG-UI-020-canvas-operation-polish.png');
+
+  await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page.getByTestId('workflow-runs-approval-focus')).toBeVisible();
+  await screenshot(page, 'BUG-UI-021-runs-approval-focus.png');
+});
+
+test('BUG-UI-022 to BUG-UI-024 capture modern desktop Workflow Studio polish @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+
+  await expect(page.getByTestId('workflow-modern-desktop-shell')).toBeVisible();
+  await expect(page.getByTestId('workflow-command-rail')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-quick-path')).toBeVisible();
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-022-modern-desktop-shell.png');
+
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-properties-panel')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-node-summary')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-more-actions')).toBeVisible();
+  await screenshot(page, 'BUG-UI-023-inspector-properties-panel.png');
+
+  await expect(page.getByTestId('workflow-canvas-surface-modern')).toBeVisible();
+  await expect(page.getByTestId('workflow-canvas-surface-titlebar')).toBeVisible();
+  await expect(page.getByTestId('workflow-canvas-operation-polish')).toBeVisible();
+  await expect(page.getByTestId('workflow-node-modern-block').first()).toBeVisible();
+  await screenshot(page, 'BUG-UI-024-canvas-surface-node-polish.png');
+});
+
+test('BUG-UI-025 to BUG-UI-027 capture low-noise desktop Workflow Studio defaults @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await expect(page.getByTestId(/workflow-flowgram-node-/).first()).toBeVisible();
+
+  await expect(page.getByTestId('workflow-quiet-default-header')).toBeVisible();
+  await expect(page.getByTestId('workflow-quiet-meta')).toBeVisible();
+  await expect(page.getByTestId('workflow-command-center')).not.toContainText('Profile build');
+  await screenshot(page, 'BUG-UI-025-quiet-default-header.png');
+
+  await expect(page.getByTestId('workflow-canvas-first-rail')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-metadata-details')).toBeVisible();
+  await expect(page.getByTestId('workflow-editor-setup-strip')).not.toContainText('Permission');
+  await screenshot(page, 'BUG-UI-026-canvas-first-simple-mode.png');
+
+  await page.getByTestId(/workflow-flowgram-node-/).first().click();
+  await expect(page.getByTestId('workflow-inspector-low-noise-defaults')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-advanced-sections')).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-more-actions')).toBeVisible();
+  await screenshot(page, 'BUG-UI-027-low-noise-inspector.png');
+});
+
+test('REQ-207 captures AI generated Python custom node review, install, and run output @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await expect(page.getByTestId('workflow-generate-custom-node')).toBeVisible();
+
+  await page.getByTestId('workflow-generate-custom-node').click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-custom-schema-node-form')).toBeVisible();
+  await screenshot(page, 'REQ-207-ai-node-draft.png');
+
+  await page.getByRole('button', { name: 'Validate manifest' }).click();
+  await expect(page.getByTestId('workflow-python-node-dependency-warning')).toContainText('Stage one rejects');
+  await screenshot(page, 'REQ-207-python-node-dependency-warning.png');
+
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-result')).toContainText('stdout');
+  await expect(page.getByTestId('workflow-python-node-test-result')).toContainText('test stderr captured');
+  await screenshot(page, 'REQ-207-python-node-test-stdout-stderr.png');
+
+  await page.getByRole('button', { name: 'Install node' }).click();
+  await expect(page.getByTestId('workflow-custom-node-installed')).toContainText('Python Format Node installed');
+  await screenshot(page, 'REQ-207-custom-node-installed.png');
+
+  await page.getByLabel('Close custom node review').click();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByText('Custom')).toBeVisible();
+  await page.getByTestId('workflow-add-node').filter({ hasText: 'Python Format Node' }).click();
+  await expect(page.getByTestId('workflow-flowgram-node-python-format-node-1')).toBeVisible();
+  await expect(page.getByTestId('workflow-selection-helper')).toContainText('Python Format Node 1');
+
+  await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page.getByTestId('workflow-runs')).toBeVisible();
+  await expect(page.getByTestId('workflow-runs')).toContainText('HELLO WORKFLOW');
+  await screenshot(page, 'REQ-207-custom-node-run-output.png');
 });
