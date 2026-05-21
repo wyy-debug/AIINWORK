@@ -8,12 +8,15 @@ import {
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
   buildMtlCodeRuntimeSignature,
+  buildOpenAIScreenshotAnalysisMessages,
   canReuseMtlCodeSession,
   createMtlCodeFreshSessionOptionsForRuntimeChange,
   getMtlCodeToolUseNames,
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
   messageHasMtlCodeRepositoryInspectionToolUse,
+  analyzeScreenshotImagesWithOpenAI,
+  appendScreenshotVisionAnalysis,
   resolveMtlCodeCanonicalSessionRegistration,
 } from '../../claude-sdk.js';
 
@@ -102,6 +105,80 @@ test('Argus result diagnostics expose native stop, turn, tool, and permission st
   assert.equal(payload.requestModel, 'gpt-5.5');
   assert.equal(payload.assistantTextLength, 'private model output'.length);
   assert.equal(Object.hasOwn(payload, 'assistantText'), false);
+});
+
+test('Argus screenshot vision bridge builds OpenAI-compatible image_url messages', () => {
+  const messages = buildOpenAIScreenshotAnalysisMessages({
+    command: 'Tell me what is wrong in this screenshot',
+    images: [
+      { data: 'data:image/png;base64,abc123' },
+      { data: 'data:image/jpeg;base64,def456' },
+    ],
+  });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content[0].type, 'text');
+  assert.match(messages[0].content[0].text, /Tell me what is wrong/);
+  assert.equal(messages[0].content[1].type, 'image_url');
+  assert.equal(messages[0].content[1].image_url.url, 'data:image/png;base64,abc123');
+  assert.equal(messages[0].content[2].type, 'image_url');
+  assert.equal(messages[0].content[2].image_url.url, 'data:image/jpeg;base64,def456');
+});
+
+test('Argus screenshot vision bridge calls OpenAI-compatible chat completions and returns analysis', async () => {
+  let requestedUrl = '';
+  let requestedBody = null;
+  let authorization = '';
+
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze the UI',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_BASE_URL: 'http://token.wd.com/v1',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_MODEL: 'glm-5',
+    },
+    fetchImpl: async (url, init) => {
+      requestedUrl = url;
+      requestedBody = JSON.parse(init.body);
+      authorization = init.headers.Authorization;
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'The screenshot shows a disabled send button.' } }] }),
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.analysis, 'The screenshot shows a disabled send button.');
+  assert.equal(requestedUrl, 'http://token.wd.com/v1/chat/completions');
+  assert.equal(authorization, 'Bearer sk-test');
+  assert.equal(requestedBody.model, 'glm-5');
+  assert.equal(requestedBody.messages[0].content[1].image_url.url, 'data:image/png;base64,abc123');
+});
+
+test('Argus screenshot vision bridge falls back when OpenAI runtime is unavailable', async () => {
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: { MTL_CODE_USE_OPENAI: '0' },
+    fetchImpl: async () => {
+      throw new Error('should not fetch');
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'openai_runtime_unavailable');
+});
+
+test('Argus screenshot vision analysis is appended to the agent prompt', () => {
+  const command = appendScreenshotVisionAnalysis('Fix this UI', 'The screenshot shows the send button is disabled.');
+
+  assert.match(command, /Fix this UI/);
+  assert.match(command, /Screenshot analysis/);
+  assert.match(command, /send button is disabled/);
 });
 
 test('Argus direct close handling treats only explicit user abort as aborted', async () => {

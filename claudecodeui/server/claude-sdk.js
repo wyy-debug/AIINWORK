@@ -1364,6 +1364,160 @@ async function handleImages(command, images, cwd) {
   }
 }
 
+function isDataUrlImage(image) {
+  return Boolean(
+    image
+    && typeof image.data === 'string'
+    && /^data:image\/[a-z0-9.+-]+;base64,/i.test(image.data)
+  );
+}
+
+function buildOpenAIScreenshotAnalysisMessages({ command = '', images = [] } = {}) {
+  const validImages = Array.isArray(images) ? images.filter(isDataUrlImage).slice(0, 5) : [];
+  const userRequest = typeof command === 'string' && command.trim()
+    ? command.trim()
+    : 'Analyze the attached screenshot and describe the relevant UI, text, state, and possible issues.';
+  const content = [
+    {
+      type: 'text',
+      text: [
+        'You are a screenshot analysis bridge for a coding agent.',
+        'Analyze the attached image(s) and produce concise, actionable context for the next agent turn.',
+        'Focus on visible UI text, errors, disabled controls, layout issues, clicked/selected state, and anything the user is asking about.',
+        `User request: ${userRequest}`,
+      ].join('\n'),
+    },
+    ...validImages.map((image) => ({
+      type: 'image_url',
+      image_url: {
+        url: image.data,
+      },
+    })),
+  ];
+
+  return [{ role: 'user', content }];
+}
+
+function buildOpenAIChatCompletionsUrl(baseUrl) {
+  const normalized = typeof baseUrl === 'string' ? baseUrl.trim().replace(/\/+$/, '') : '';
+  if (!normalized) {
+    return '';
+  }
+  if (/\/v1\/chat\/completions$/i.test(normalized) || /\/chat\/completions$/i.test(normalized)) {
+    return normalized;
+  }
+  if (/\/v1$/i.test(normalized)) {
+    return `${normalized}/chat/completions`;
+  }
+  return `${normalized}/v1/chat/completions`;
+}
+
+function extractOpenAIChatCompletionText(payload) {
+  const messageContent = payload?.choices?.[0]?.message?.content;
+  if (typeof messageContent === 'string') {
+    return messageContent.trim();
+  }
+  if (Array.isArray(messageContent)) {
+    return messageContent
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        if (typeof part?.content === 'string') return part.content;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+async function analyzeScreenshotImagesWithOpenAI({
+  command = '',
+  images = [],
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const validImages = Array.isArray(images) ? images.filter(isDataUrlImage) : [];
+  if (validImages.length === 0) {
+    return { ok: false, reason: 'no_images' };
+  }
+
+  if (env?.MTL_CODE_USE_OPENAI !== '1') {
+    return { ok: false, reason: 'openai_runtime_unavailable' };
+  }
+
+  const apiKey = typeof env?.[OPENAI_MODEL_ENV_KEYS.apiKey] === 'string'
+    ? env[OPENAI_MODEL_ENV_KEYS.apiKey].trim()
+    : '';
+  const model = typeof env?.[OPENAI_MODEL_ENV_KEYS.model] === 'string'
+    ? env[OPENAI_MODEL_ENV_KEYS.model].trim()
+    : '';
+  const endpoint = buildOpenAIChatCompletionsUrl(env?.[OPENAI_MODEL_ENV_KEYS.baseUrl]);
+  if (!apiKey || !model || !endpoint || typeof fetchImpl !== 'function') {
+    return { ok: false, reason: 'openai_runtime_unavailable' };
+  }
+
+  const body = {
+    model,
+    messages: buildOpenAIScreenshotAnalysisMessages({ command, images: validImages }),
+    temperature: 0.1,
+    max_tokens: 1200,
+  };
+
+  try {
+    const response = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response?.ok) {
+      return {
+        ok: false,
+        reason: 'vision_request_failed',
+        status: response?.status || 0,
+      };
+    }
+
+    const payload = await response.json();
+    const analysis = extractOpenAIChatCompletionText(payload);
+    if (!analysis) {
+      return { ok: false, reason: 'empty_vision_response' };
+    }
+
+    return {
+      ok: true,
+      analysis,
+      model,
+      endpoint,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'vision_request_error',
+      errorMessage: error?.message || String(error),
+    };
+  }
+}
+
+function appendScreenshotVisionAnalysis(command, analysis) {
+  const base = typeof command === 'string' ? command.trimEnd() : '';
+  const text = typeof analysis === 'string' ? analysis.trim() : '';
+  if (!text) {
+    return base;
+  }
+  const section = [
+    '## Screenshot analysis',
+    'The attached screenshot(s) were parsed by the configured vision-capable model before this agent turn.',
+    text,
+  ].join('\n');
+  return base ? `${base}\n\n${section}` : section;
+}
+
 /**
  * Cleans up temporary image files
  * @param {Array<string>} tempImagePaths - Array of temp file paths to delete
@@ -2021,8 +2175,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
 
   try {
     const imageResult = await handleImages(command, options.images, options.cwd);
-    const finalCommand = imageResult.modifiedCommand;
-    promptDebugEffectiveCommand = finalCommand;
+    let finalCommand = imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
 
@@ -2038,6 +2191,29 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
       throw new Error(permission.reason || 'Argus backend spawn is not allowed by runtime permissions');
     }
     const childEnv = await buildMtlCodeSpawnEnv(options);
+    const screenshotAnalysis = await analyzeScreenshotImagesWithOpenAI({
+      command,
+      images: options.images,
+      env: childEnv,
+    });
+    if (screenshotAnalysis.ok && screenshotAnalysis.analysis) {
+      finalCommand = appendScreenshotVisionAnalysis(finalCommand, screenshotAnalysis.analysis);
+      logMtlCodeSessionLifecycle('screenshot_analysis_complete', {
+        sessionId: sessionId || clientSessionId,
+        clientSessionId,
+        apiProvider: getMtlCodeApiProvider(childEnv),
+        requestModel: getMtlCodeRequestModel(childEnv),
+      });
+    } else if (options.images?.length > 0 && screenshotAnalysis.reason && screenshotAnalysis.reason !== 'no_images') {
+      logMtlCodeSessionLifecycle('screenshot_analysis_skipped', {
+        sessionId: sessionId || clientSessionId,
+        clientSessionId,
+        reason: screenshotAnalysis.reason,
+        apiProvider: getMtlCodeApiProvider(childEnv),
+        requestModel: getMtlCodeRequestModel(childEnv),
+      });
+    }
+    promptDebugEffectiveCommand = finalCommand;
     let spawnOptions = options;
     let cliArgs = buildMtlCodeArgs(spawnOptions, childEnv);
     runtimeSignature = buildMtlCodeRuntimeSignature({ cwd, cliArgs, env: childEnv });
@@ -2822,6 +2998,9 @@ export {
   buildMtlCodeCloseFailureMessage,
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
+  buildOpenAIScreenshotAnalysisMessages,
+  analyzeScreenshotImagesWithOpenAI,
+  appendScreenshotVisionAnalysis,
   resolveMtlCodeCanonicalSessionRegistration,
   buildMtlCodeRuntimeSignature,
   canReuseMtlCodeSession,
