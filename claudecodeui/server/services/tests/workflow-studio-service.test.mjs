@@ -1262,4 +1262,110 @@ describe('workflow studio service', () => {
     });
     expect(restored).toMatchObject({ workflowCount: expect.any(Number), runCount: expect.any(Number) });
   });
+
+  test('validates AI generated Python node manifests before install', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node that uppercases text.',
+      sampleInput: { text: 'hello' },
+    });
+
+    const validation = store.validateNodePackageDraft(draft.manifest);
+    const dependencyValidation = store.validateNodePackageDraft({
+      ...draft.manifest,
+      dependencies: ['requests'],
+      codeFiles: {
+        'main.py': 'import requests\nprint("{}")\n',
+      },
+    });
+
+    expect(draft.status).toBe('draft');
+    expect(draft.manifest).toMatchObject({
+      manifestVersion: '1',
+      language: 'python',
+      dependencies: [],
+      entrypoint: 'main.py',
+    });
+    expect(validation.valid).toBe(true);
+    expect(dependencyValidation.valid).toBe(false);
+    expect(dependencyValidation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unsupported_dependency' }),
+      expect.objectContaining({ code: 'unsupported_import' }),
+    ]));
+  });
+
+  test('runs Python node drafts with JSON stdin/stdout and classifies execution failures', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const successDraft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const success = await store.testNodePackageDraft(successDraft.manifest, {
+      input: { text: 'hello' },
+      config: { mode: 'upper' },
+    });
+    const syntax = await store.testNodePackageDraft({
+      ...successDraft.manifest,
+      codeFiles: { 'main.py': 'def broken(:\n  pass\n' },
+      testCases: [{ id: 'syntax', input: {}, config: {}, expectedOutput: {} }],
+    });
+    const timeout = await store.testNodePackageDraft({
+      ...successDraft.manifest,
+      codeFiles: { 'main.py': 'while True:\n    pass\n' },
+      testCases: [{ id: 'timeout', input: {}, config: {}, expectedOutput: {} }],
+    }, { timeoutMs: 50 });
+    const invalidJson = await store.testNodePackageDraft({
+      ...successDraft.manifest,
+      codeFiles: { 'main.py': 'print("not json")\n' },
+      testCases: [{ id: 'invalid-json', input: {}, config: {}, expectedOutput: {} }],
+    });
+
+    expect(success.ok).toBe(true);
+    expect(success.parsedOutput).toMatchObject({ status: 'completed', result: expect.any(Object) });
+    expect(success.stdout).toContain('"status"');
+    expect(syntax.error.category).toBe('python_syntax_error');
+    expect(timeout.error.category).toBe('execution_timeout');
+    expect(invalidJson.error.category).toBe('invalid_json_output');
+  });
+
+  test('installs and runs a Python custom node in a workflow', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node that uppercases text.',
+      sampleInput: { text: 'hello' },
+    });
+    const installed = await store.installNodePackage(draft.manifest);
+
+    await store.upsertWorkflow({
+      id: 'python-format-flow',
+      name: 'Python Format Flow',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      inputs: [{ id: 'text', label: 'Text', type: 'text' }],
+      nodes: [
+        {
+          id: 'format',
+          type: installed.definition.type,
+          title: 'Format Text',
+          config: { mode: 'upper' },
+          prompt: '{{inputs.text}}',
+        },
+        {
+          id: 'artifact',
+          type: 'artifact',
+          prompt: '{{nodes.format.output.result}}',
+        },
+      ],
+      edges: [{ from: 'format', to: 'artifact' }],
+    });
+
+    const run = await store.createRun('python-format-flow', { inputs: { text: 'hello' } });
+
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.format.output).toMatchObject({
+      status: 'completed',
+      result: expect.objectContaining({ text: 'HELLO' }),
+    });
+    expect(run.nodeRuns.artifact.output.summary).toContain('HELLO');
+  });
 });

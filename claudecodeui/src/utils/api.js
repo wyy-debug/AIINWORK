@@ -442,6 +442,21 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   workflowNodePackages: () => apiFetch('/api/workflow-node-packages'),
+  generateWorkflowNodePackageDraft: (payload = {}) =>
+    apiFetch('/api/workflow-node-packages/generate-draft', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  validateWorkflowNodePackageDraft: (manifest = {}) =>
+    apiFetch('/api/workflow-node-packages/validate-draft', {
+      method: 'POST',
+      body: JSON.stringify({ manifest }),
+    }),
+  testWorkflowNodePackageDraft: (payload = {}) =>
+    apiFetch('/api/workflow-node-packages/test-draft', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   installWorkflowNodePackage: (workflowNodePackage = {}) =>
     apiFetch('/api/workflow-node-packages/install', {
       method: 'POST',

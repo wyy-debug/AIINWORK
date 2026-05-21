@@ -21,8 +21,39 @@ router.get('/', async (_req, res) => {
   }
 });
 
+router.post('/generate-draft', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const draft = defaultWorkflowStudioStore.generatePythonNodeDraft(req.body || {});
+    res.status(201).json({ success: true, draft });
+  } catch (error) {
+    sendNodePackageError(res, error, 400, 'Failed to generate workflow node package draft');
+  }
+});
+
+router.post('/validate-draft', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const validation = defaultWorkflowStudioStore.validateNodePackageDraft(req.body?.manifest || req.body || {});
+    res.status(validation.valid ? 200 : 400).json({ success: validation.valid, validation });
+  } catch (error) {
+    sendNodePackageError(res, error, 400, 'Failed to validate workflow node package draft');
+  }
+});
+
+router.post('/test-draft', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const result = await defaultWorkflowStudioStore.testNodePackageDraft(req.body?.manifest || req.body || {}, req.body || {});
+    res.status(result.ok ? 200 : 400).json({ success: result.ok, result });
+  } catch (error) {
+    sendNodePackageError(res, error, 400, 'Failed to test workflow node package draft');
+  }
+});
+
 router.post('/install', async (req, res) => {
   try {
+    await defaultWorkflowStudioStore.ready();
     const nodePackage = await defaultWorkflowStudioStore.installNodePackage(req.body?.package || req.body || {});
     res.status(201).json({ success: true, package: nodePackage });
   } catch (error) {

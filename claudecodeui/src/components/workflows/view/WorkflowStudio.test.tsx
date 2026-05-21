@@ -570,4 +570,25 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).not.toContain('BUG-UI-026-mobile');
     expect(screenshotSpec).not.toContain('BUG-UI-027-mobile');
   });
+
+  it('exposes AI generated Python custom node review and install UI without generated TSX injection', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const apiSource = readFileSync(resolve(currentDir, '../../../utils/api.js'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(apiSource).toContain('generateWorkflowNodePackageDraft');
+    expect(apiSource).toContain('validateWorkflowNodePackageDraft');
+    expect(apiSource).toContain('testWorkflowNodePackageDraft');
+    expect(studioSource).toContain('data-testid="workflow-generate-custom-node"');
+    expect(studioSource).toContain('data-testid="workflow-ai-node-draft-review"');
+    expect(studioSource).toContain('data-testid="workflow-custom-schema-node-form"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-test-result"');
+    expect(studioSource).toContain('Custom');
+    expect(studioSource).not.toContain('dangerouslySetInnerHTML');
+    expect(screenshotSpec).toContain('REQ-207-ai-node-draft.png');
+    expect(screenshotSpec).toContain('REQ-207-python-node-dependency-warning.png');
+    expect(screenshotSpec).toContain('REQ-207-python-node-test-stdout-stderr.png');
+    expect(screenshotSpec).toContain('REQ-207-custom-node-installed.png');
+    expect(screenshotSpec).toContain('REQ-207-custom-node-run-output.png');
+  });
 });

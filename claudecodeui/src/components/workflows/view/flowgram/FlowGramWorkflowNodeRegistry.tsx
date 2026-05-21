@@ -42,6 +42,10 @@ function defaultNodeTitle(type: WorkflowNodeType) {
     : type.split('-').map((part) => part.slice(0, 1).toUpperCase() + part.slice(1)).join(' ');
 }
 
+function nodeTitle(type: WorkflowNodeType, registry?: MtlWorkflowNodeRegistry) {
+  return registry?.byType.get(type)?.label || defaultNodeTitle(type);
+}
+
 function configDefaults(type: WorkflowNodeType, registry?: MtlWorkflowNodeRegistry) {
   const definition = registry?.byType.get(type);
   return Object.fromEntries((definition?.configSchema?.fields || [])
@@ -63,7 +67,7 @@ export function createFlowGramWorkflowNode(
   const workflowNode: WorkflowNode = {
     id,
     type,
-    title: defaultNodeTitle(type),
+    title: nodeTitle(type, options.registry),
     description: options.registry?.byType.get(type)?.description || '',
     agentId: '',
     toolName: '',
@@ -102,7 +106,11 @@ export function createFlowGramWorkflowNode(
 export function buildFlowGramWorkflowNodeRegistries(
   registry?: MtlWorkflowNodeRegistry,
 ): FlowGramWorkflowNodeRegistry[] {
-  return flowGramWorkflowNodeTypes.map((type) => ({
+  const nodeTypes = registry?.definitions?.length
+    ? registry.definitions.map((definition) => definition.type)
+    : flowGramWorkflowNodeTypes;
+
+  return nodeTypes.map((type) => ({
     type,
     meta: defaultFlowGramWorkflowNodeMeta,
     formMeta: workflowNodeFormMeta,
@@ -115,7 +123,10 @@ export function buildFlowGramWorkflowNodeRegistries(
 }
 
 export function getFlowGramWorkflowNodeDefaultRegistry(type: string, registry?: MtlWorkflowNodeRegistry): FlowGramWorkflowNodeRegistry {
-  const normalizedType = flowGramWorkflowNodeTypes.includes(type as WorkflowNodeType) ? type as WorkflowNodeType : 'tool';
+  const requestedType = type as WorkflowNodeType;
+  const normalizedType = registry?.byType.has(requestedType) || flowGramWorkflowNodeTypes.includes(requestedType)
+    ? requestedType
+    : 'tool';
   return {
     type,
     meta: defaultFlowGramWorkflowNodeMeta,

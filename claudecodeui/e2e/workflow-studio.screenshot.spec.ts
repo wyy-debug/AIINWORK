@@ -61,12 +61,92 @@ const completedRun = {
   artifacts: [{ id: 'artifact-1', kind: 'workflow-summary', title: 'Delivery Artifact' }],
 };
 
+const builtinNodeTypes = [
+  { type: 'agent', label: 'Agent', description: 'Run a primary agent.', ui: { materialGroup: 'agents' }, configSchema: { fields: [] } },
+  { type: 'subagent', label: 'Subagent', description: 'Run a subagent.', ui: { materialGroup: 'agents' }, configSchema: { fields: [] } },
+  { type: 'mcp', label: 'MCP', description: 'Call MCP.', ui: { materialGroup: 'integrations' }, configSchema: { fields: [] } },
+  { type: 'tool', label: 'Tool', description: 'Run a tool.', ui: { materialGroup: 'integrations' }, configSchema: { fields: [] } },
+  { type: 'shell', label: 'Shell', description: 'Run shell.', ui: { materialGroup: 'execution' }, configSchema: { fields: [] } },
+  { type: 'approval', label: 'Approval', description: 'Wait for approval.', ui: { materialGroup: 'execution' }, configSchema: { fields: [] } },
+  { type: 'condition', label: 'Condition', description: 'Branch.', ui: { materialGroup: 'control' }, configSchema: { fields: [] } },
+  { type: 'join', label: 'Join', description: 'Join branches.', ui: { materialGroup: 'control' }, configSchema: { fields: [] } },
+  { type: 'artifact', label: 'Artifact', description: 'Create artifact.', ui: { materialGroup: 'outputs' }, configSchema: { fields: [] } },
+];
+
+const customPythonManifest = {
+  manifestVersion: '1',
+  id: 'python-format-node',
+  type: 'python-format-node',
+  label: 'Python Format Node',
+  description: 'Formats text with a safe Python standard-library script.',
+  language: 'python',
+  dependencies: [],
+  entrypoint: 'main.py',
+  permissions: { risky: false, action: 'custom.python' },
+  configSchema: {
+    type: 'object',
+    properties: {
+      mode: { type: 'string', title: 'Format mode', enum: ['upper', 'lower', 'title'], default: 'upper' },
+    },
+    required: [],
+  },
+  inputSchema: { type: 'object', properties: { text: { type: 'string', title: 'Text' } } },
+  outputSchema: { type: 'object', properties: { result: { type: 'object', title: 'Result' }, status: { type: 'string', title: 'Status' } } },
+  codeFiles: {
+    'main.py': [
+      'import json',
+      'import sys',
+      'payload = json.load(sys.stdin)',
+      'text = str((payload.get("input") or {}).get("text") or "")',
+      'mode = str((payload.get("config") or {}).get("mode") or "upper")',
+      'result = text.upper() if mode == "upper" else text.lower()',
+      'print(json.dumps({"summary": "formatted", "result": {"text": result}, "status": "completed"}))',
+    ].join('\n'),
+  },
+  testCases: [{ id: 'formats-text', name: 'Formats text', input: { text: 'hello workflow' }, config: { mode: 'upper' } }],
+};
+
+const customPythonNodeType = {
+  type: 'python-format-node',
+  label: 'Python Format Node',
+  description: 'Formats text with a safe Python standard-library script.',
+  ui: { materialGroup: 'custom', schemaVersion: '1.0' },
+  configSchema: {
+    fields: [{ name: 'mode', label: 'Format mode', type: 'select', options: ['upper', 'lower', 'title'], defaultValue: 'upper' }],
+  },
+  outputSchema: { fields: [{ name: 'result', type: 'object', label: 'Result' }, { name: 'status', type: 'string', label: 'Status' }] },
+};
+
+const customRun = {
+  id: 'workflow-run-custom',
+  workflowId: workflow.id,
+  workflowName: workflow.name,
+  status: 'completed',
+  createdAt: Date.now(),
+  nodeRuns: {
+    explore: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent', status: 'completed', attempt: 1, logs: ['Completed subagent node.'] },
+    'python-format-node-1': {
+      nodeId: 'python-format-node-1',
+      type: 'python-format-node',
+      title: 'Python Format Node 1',
+      status: 'completed',
+      attempt: 1,
+      logs: ['stdout: {"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}'],
+      output: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+    },
+  },
+  artifacts: [{ id: 'python-output', kind: 'workflow-python-output', title: 'Python node output' }],
+  timelineEvents: [],
+};
+
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
 async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } = {}) {
   let runState = waitingRun;
+  let nodeTypes = [...builtinNodeTypes];
+  let installedPackages: unknown[] = [];
 
   await page.addInitScript(() => {
     localStorage.setItem('activeTab', 'workflows');
@@ -79,6 +159,7 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } 
     if (path === '/api/projects') return json(route, [project]);
     if (path.startsWith('/api/conversations')) return json(route, { project: { ...project, name: 'Conversations', sessions: [] } });
     if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [workflow] });
+    if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes });
     if (path === `/api/workflows/${workflow.id}`) return json(route, { success: true, workflow });
     if (path === '/api/workflows/validate') return json(route, { success: true, workflow, validation: { valid: true, errors: [], warnings: [] } });
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
@@ -94,6 +175,39 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean } 
         { id: 'subagent-explore', name: 'Explore', status: 'enabled', mode: 'subagent' },
       ],
     });
+    if (path === '/api/workflow-node-packages') return json(route, { success: true, packages: installedPackages });
+    if (path === '/api/workflow-node-packages/generate-draft') {
+      return json(route, { success: true, draft: { status: 'draft', prompt: 'Create formatter node', manifest: customPythonManifest } }, 201);
+    }
+    if (path === '/api/workflow-node-packages/validate-draft') {
+      return json(route, {
+        success: true,
+        validation: {
+          valid: true,
+          errors: [],
+          warnings: [{ code: 'stage_one_standard_library_only', message: 'Stage one rejects undeclared third-party imports before install.' }],
+        },
+      });
+    }
+    if (path === '/api/workflow-node-packages/test-draft') {
+      return json(route, {
+        success: true,
+        result: {
+          ok: true,
+          exitCode: 0,
+          durationMs: 42,
+          stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+          stderr: 'test stderr captured',
+          parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+        },
+      });
+    }
+    if (path === '/api/workflow-node-packages/install') {
+      nodeTypes = [...builtinNodeTypes, customPythonNodeType];
+      installedPackages = [{ id: customPythonManifest.id, enabled: true, status: 'ready', manifest: customPythonManifest, definition: customPythonNodeType }];
+      runState = customRun;
+      return json(route, { success: true, package: installedPackages[0] }, 201);
+    }
     if (path === '/api/git/status') return json(route, { files: [] });
     if (path === '/api/artifacts') return json(route, { artifacts: [] });
     if (path === '/api/settings/notification-preferences') return json(route, { success: true, preferences: {} });
@@ -288,4 +402,44 @@ test('BUG-UI-025 to BUG-UI-027 capture low-noise desktop Workflow Studio default
   await expect(page.getByTestId('workflow-inspector-advanced-sections')).toBeVisible();
   await expect(page.getByTestId('workflow-inspector-more-actions')).toBeVisible();
   await screenshot(page, 'BUG-UI-027-low-noise-inspector.png');
+});
+
+test('REQ-207 captures AI generated Python custom node review, install, and run output @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await expect(page.getByTestId('workflow-generate-custom-node')).toBeVisible();
+
+  await page.getByTestId('workflow-generate-custom-node').click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-custom-schema-node-form')).toBeVisible();
+  await screenshot(page, 'REQ-207-ai-node-draft.png');
+
+  await page.getByRole('button', { name: 'Validate manifest' }).click();
+  await expect(page.getByTestId('workflow-python-node-dependency-warning')).toContainText('Stage one rejects');
+  await screenshot(page, 'REQ-207-python-node-dependency-warning.png');
+
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-result')).toContainText('stdout');
+  await expect(page.getByTestId('workflow-python-node-test-result')).toContainText('test stderr captured');
+  await screenshot(page, 'REQ-207-python-node-test-stdout-stderr.png');
+
+  await page.getByRole('button', { name: 'Install node' }).click();
+  await expect(page.getByTestId('workflow-custom-node-installed')).toContainText('Python Format Node installed');
+  await screenshot(page, 'REQ-207-custom-node-installed.png');
+
+  await page.getByLabel('Close custom node review').click();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByText('Custom')).toBeVisible();
+  await page.getByTestId('workflow-add-node').filter({ hasText: 'Python Format Node' }).click();
+  await expect(page.getByTestId('workflow-flowgram-node-python-format-node-1')).toBeVisible();
+  await expect(page.getByTestId('workflow-selection-helper')).toContainText('Python Format Node 1');
+
+  await page.getByTestId('workflow-run').click();
+  await page.getByRole('button', { name: 'Start run' }).click();
+  await expect(page.getByTestId('workflow-runs')).toBeVisible();
+  await expect(page.getByTestId('workflow-runs')).toContainText('HELLO WORKFLOW');
+  await screenshot(page, 'REQ-207-custom-node-run-output.png');
 });

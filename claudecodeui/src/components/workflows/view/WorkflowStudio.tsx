@@ -84,6 +84,39 @@ type WorkflowHumanHint = {
   actionLabel: string;
 };
 
+type WorkflowPythonNodeManifest = {
+  id?: string;
+  type?: string;
+  label?: string;
+  description?: string;
+  manifestVersion?: string;
+  language?: string;
+  dependencies?: string[];
+  permissions?: Record<string, unknown>;
+  configSchema?: {
+    properties?: Record<string, { type?: string; title?: string; enum?: string[]; default?: unknown }>;
+    required?: string[];
+  };
+  codeFiles?: Record<string, string>;
+  testCases?: Array<{ id?: string; name?: string; input?: Record<string, unknown>; config?: Record<string, unknown> }>;
+};
+
+type WorkflowPythonNodeDraft = {
+  status?: string;
+  prompt?: string;
+  manifest?: WorkflowPythonNodeManifest;
+};
+
+type WorkflowPythonNodeTestResult = {
+  ok?: boolean;
+  error?: { code?: string; message?: string } | null;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number | null;
+  durationMs?: number;
+  parsedOutput?: Record<string, unknown>;
+};
+
 type WorkflowPaletteGroup = {
   id: string;
   label: string;
@@ -111,8 +144,6 @@ const baseNodeTypes: Array<{ type: WorkflowNodeType; label: string; icon: typeof
   icon: nodeIconByType[definition.type] || Bot,
   description: definition.description,
 }));
-
-const paletteGroups: WorkflowPaletteGroup[] = defaultWorkflowPaletteGroups;
 
 const inspectorTabs: WorkflowInspectorTab[] = ['Config', 'Data', 'Permissions', 'Runtime'];
 const libraryFilters: WorkflowLibraryFilter[] = ['All', 'Built-in', 'Enterprise', 'Needs setup', 'Recently used'];
@@ -169,14 +200,17 @@ function makeUniqueNodeId(nodes: WorkflowNode[], type: WorkflowNodeType) {
   return { id, count };
 }
 
-function buildWorkflowNode(type: WorkflowNodeType, current: WorkflowDefinition, position: { x: number; y: number }) {
+function buildWorkflowNode(type: WorkflowNodeType, current: WorkflowDefinition, position: { x: number; y: number }, definition?: WorkflowNodeTypeDefinition | null) {
   const { id, count } = makeUniqueNodeId(current.nodes, type);
-  const label = baseNodeTypes.find((item) => item.type === type)?.label || type;
+  const label = definition?.label || baseNodeTypes.find((item) => item.type === type)?.label || type;
+  const configDefaults = Object.fromEntries((definition?.configSchema?.fields || [])
+    .filter((field) => field.defaultValue !== undefined)
+    .map((field) => [field.name, field.defaultValue]));
   return {
     id,
     type,
     title: `${label} ${count + 1}`,
-    description: '',
+    description: definition?.description || '',
     agentId: type === 'subagent' ? 'subagent-general' : type === 'agent' ? current.profileId : '',
     toolName: type === 'tool' ? 'git-native-review' : '',
     command: type === 'shell' ? 'npm test' : '',
@@ -185,9 +219,27 @@ function buildWorkflowNode(type: WorkflowNodeType, current: WorkflowDefinition, 
     permission: type === 'shell' || type === 'mcp' || type === 'tool' ? 'ask' : '',
     retryLimit: 0,
     timeoutMs: 120000,
-    config: {},
+    config: configDefaults,
     position,
   } satisfies WorkflowNode;
+}
+
+function getManifestConfigFields(manifest?: WorkflowPythonNodeManifest | null) {
+  const schema = manifest?.configSchema || {};
+  const required = new Set(schema.required || []);
+  return Object.entries(schema.properties || {}).map(([name, property]) => ({
+    name,
+    label: property.title || name,
+    type: property.type || 'string',
+    options: Array.isArray(property.enum) ? property.enum : [],
+    required: required.has(name),
+    defaultValue: property.default,
+  }));
+}
+
+function firstManifestCodeFile(manifest?: WorkflowPythonNodeManifest | null) {
+  const entries = Object.entries(manifest?.codeFiles || {});
+  return entries[0] || ['main.py', ''];
 }
 
 function formatTime(value?: number | string | null) {
@@ -370,6 +422,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [permissionOverrideRequest, setPermissionOverrideRequest] = useState('');
   const [secretVaultRefs, setSecretVaultRefs] = useState<string[]>([]);
   const [mcpAllowlistRows, setMcpAllowlistRows] = useState<string[]>([]);
+  const [isCustomNodeReviewOpen, setIsCustomNodeReviewOpen] = useState(false);
+  const [customNodePrompt, setCustomNodePrompt] = useState('Create a formatter node that uppercases text safely.');
+  const [customNodeDraft, setCustomNodeDraft] = useState<WorkflowPythonNodeDraft | null>(null);
+  const [customNodeValidation, setCustomNodeValidation] = useState<{ valid?: boolean; errors?: Array<{ code?: string; message?: string }>; warnings?: Array<{ code?: string; message?: string }> } | null>(null);
+  const [customNodeTestResult, setCustomNodeTestResult] = useState<WorkflowPythonNodeTestResult | null>(null);
+  const [customNodeInstallMessage, setCustomNodeInstallMessage] = useState('');
   const [error, setError] = useState('');
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -399,6 +457,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       icon: nodeIconByType[definition.type] || Bot,
       description: definition.description,
     }));
+  }, [activeNodeRegistry]);
+  const paletteGroups = useMemo<WorkflowPaletteGroup[]>(() => {
+    const groupedTypes = new Set(defaultWorkflowPaletteGroups.flatMap((group) => group.types));
+    const customTypes = activeNodeRegistry.definitions
+      .filter((definition) => String(definition.ui?.materialGroup || '').toLowerCase() === 'custom' || !groupedTypes.has(definition.type))
+      .map((definition) => definition.type);
+    return customTypes.length > 0
+      ? [...defaultWorkflowPaletteGroups, { id: 'custom', label: 'Custom', types: customTypes }]
+      : defaultWorkflowPaletteGroups;
   }, [activeNodeRegistry]);
   const selectedNodeDefinition = useMemo(
     () => selectedNode ? activeNodeRegistry.byType.get(selectedNode.type) || null : null,
@@ -774,6 +841,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const fromRuns = runs.map((run) => workflows.find((workflow) => workflow.id === run.workflowId)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
     return [...new Map([...fromStorage, ...fromRuns].map((workflow) => [workflow.id, workflow])).values()].slice(0, 6);
   }, [recentWorkflowIds, runs, workflows]);
+  const customNodeConfigFields = useMemo(() => getManifestConfigFields(customNodeDraft?.manifest), [customNodeDraft]);
+  const customNodeCodeFile = useMemo(() => firstManifestCodeFile(customNodeDraft?.manifest), [customNodeDraft]);
+  const customNodeDependencyIssues = useMemo(() => {
+    const dependencyErrors = (customNodeValidation?.errors || []).filter((item) => /dependency|import|standard library/i.test(`${item.code || ''} ${item.message || ''}`));
+    const dependencyWarnings = (customNodeValidation?.warnings || []).filter((item) => /dependency|import|standard library/i.test(`${item.code || ''} ${item.message || ''}`));
+    const declaredDependencies = customNodeDraft?.manifest?.dependencies || [];
+    return [
+      ...declaredDependencies.map((dependency) => `Dependency declared: ${dependency}`),
+      ...dependencyErrors.map((item) => item.message || item.code || 'Dependency validation failed'),
+      ...dependencyWarnings.map((item) => item.message || item.code || 'Dependency warning'),
+    ];
+  }, [customNodeDraft, customNodeValidation]);
 
   const loadNodeTypes = useCallback(async () => {
     const response = await api.workflowNodeTypes();
@@ -1154,12 +1233,13 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const addNode = useCallback((type: WorkflowNodeType) => {
     commitDraft((current) => {
-      const node = buildWorkflowNode(type, current, { x: 80 + current.nodes.length * 220, y: 120 + (current.nodes.length % 2) * 140 });
+      const nodeDefinition = activeNodeRegistry.byType.get(type) || null;
+      const node = buildWorkflowNode(type, current, { x: 80 + current.nodes.length * 220, y: 120 + (current.nodes.length % 2) * 140 }, nodeDefinition);
       setSelectedNodeId(node.id);
       setSelectedNodeIds([node.id]);
       return { ...current, nodes: [...current.nodes, node] };
     });
-  }, [commitDraft]);
+  }, [activeNodeRegistry, commitDraft]);
 
   const deleteNode = useCallback((nodeId: string) => {
     commitDraft((current) => ({
@@ -1574,6 +1654,89 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     }
   }, [loadData, runInputs, selectedProject.fullPath, selectedProject.path]);
 
+  const generateCustomNodeDraft = useCallback(async () => {
+    setIsBusy(true);
+    setError('');
+    setCustomNodeInstallMessage('');
+    setCustomNodeTestResult(null);
+    try {
+      const response = await api.generateWorkflowNodePackageDraft({
+        prompt: customNodePrompt,
+        sampleInput: { text: 'hello workflow' },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to generate custom node draft');
+      setCustomNodeDraft(data.draft || null);
+      setCustomNodeValidation(null);
+      setIsCustomNodeReviewOpen(true);
+    } catch (draftError) {
+      setError(draftError instanceof Error ? draftError.message : 'Failed to generate custom node draft');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [customNodePrompt]);
+
+  const validateCustomNodeDraft = useCallback(async () => {
+    if (!customNodeDraft?.manifest) return;
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.validateWorkflowNodePackageDraft(customNodeDraft.manifest);
+      const data = await response.json();
+      setCustomNodeValidation({
+        valid: Boolean(data.valid || data.validation?.valid || response.ok),
+        errors: data.errors || data.validation?.errors || [],
+        warnings: data.warnings || data.validation?.warnings || [],
+      });
+      if (!response.ok) throw new Error(data?.error || data?.errors?.[0]?.message || 'Custom node draft is not ready');
+    } catch (validationError) {
+      setError(validationError instanceof Error ? validationError.message : 'Custom node draft is not ready');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [customNodeDraft]);
+
+  const testCustomNodeDraft = useCallback(async () => {
+    if (!customNodeDraft?.manifest) return;
+    const firstCase = customNodeDraft.manifest.testCases?.[0] || {};
+    setIsBusy(true);
+    setError('');
+    try {
+      const response = await api.testWorkflowNodePackageDraft({
+        manifest: customNodeDraft.manifest,
+        input: firstCase.input || { text: 'hello workflow' },
+        config: firstCase.config || { mode: 'upper' },
+      });
+      const data = await response.json();
+      setCustomNodeTestResult(data.result || data);
+      if (!response.ok || data?.ok === false || data?.result?.ok === false) {
+        throw new Error(data?.error || data?.result?.error?.message || 'Custom node test failed');
+      }
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : 'Custom node test failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [customNodeDraft]);
+
+  const installCustomNodeDraft = useCallback(async () => {
+    if (!customNodeDraft?.manifest) return;
+    setIsBusy(true);
+    setError('');
+    setCustomNodeInstallMessage('');
+    try {
+      const response = await api.installWorkflowNodePackage(customNodeDraft.manifest);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to install custom node');
+      setCustomNodeInstallMessage(`${data.package?.definition?.label || customNodeDraft.manifest.label || 'Custom node'} installed`);
+      await loadNodeTypes();
+    } catch (installError) {
+      setError(installError instanceof Error ? installError.message : 'Failed to install custom node');
+    } finally {
+      setIsBusy(false);
+    }
+  }, [customNodeDraft, loadNodeTypes]);
+
   const runBenchmarks = useCallback(async () => {
     setIsBusy(true);
     setError('');
@@ -1879,6 +2042,182 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               {commandPaletteItems.length === 0 && <div className="p-6 text-center text-sm text-muted-foreground">No matching command.</div>}
             </div>
           </div>
+        </div>
+      )}
+      {isCustomNodeReviewOpen && (
+        <div className="fixed inset-0 z-50 bg-black/20 p-4" data-testid="workflow-ai-node-draft-review" onClick={() => setIsCustomNodeReviewOpen(false)}>
+          <aside
+            className="ml-auto flex h-full max-h-[calc(100vh-2rem)] w-[760px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-50 text-violet-700">
+                    <Wand2 className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Generate Python workflow node</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">Draft first, review the manifest and code, run tests, then install into the Custom palette.</p>
+                  </div>
+                </div>
+              </div>
+              <button type="button" aria-label="Close custom node review" onClick={() => setIsCustomNodeReviewOpen(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <label className="block text-xs font-semibold text-slate-700">
+                  What should this node do?
+                  <textarea
+                    value={customNodePrompt}
+                    onChange={(event) => setCustomNodePrompt(event.target.value)}
+                    className="mt-2 min-h-20 w-full rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-950 outline-none focus:border-violet-300"
+                    placeholder="Example: Create a formatter node that normalizes a release note."
+                  />
+                </label>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={generateCustomNodeDraft} disabled={isBusy || !customNodePrompt.trim()} className="inline-flex h-9 items-center gap-2 rounded-md bg-violet-600 px-3 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                    <Wand2 className="h-4 w-4" />
+                    Generate draft
+                  </button>
+                  <span className="text-xs text-slate-500">Python only. Standard library only. No generated React UI code.</span>
+                </div>
+              </section>
+
+              {customNodeDraft?.manifest ? (
+                <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+                  <section className="space-y-3">
+                    <div className="rounded-md border border-slate-200 bg-white p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="truncate text-sm font-semibold text-slate-950">{customNodeDraft.manifest.label || customNodeDraft.manifest.id}</h4>
+                          <p className="mt-1 text-xs text-slate-500">{customNodeDraft.manifest.description || 'Generated Python workflow node draft.'}</p>
+                        </div>
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">{customNodeDraft.status || 'draft'}</span>
+                      </div>
+                      <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                        <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                          <span className="block text-slate-500">Manifest</span>
+                          <span className="font-medium text-slate-900">{customNodeDraft.manifest.manifestVersion || '1'}</span>
+                        </div>
+                        <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                          <span className="block text-slate-500">Language</span>
+                          <span className="font-medium text-slate-900">{customNodeDraft.manifest.language || 'python'}</span>
+                        </div>
+                        <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                          <span className="block text-slate-500">Dependencies</span>
+                          <span className="font-medium text-slate-900">{customNodeDraft.manifest.dependencies?.length || 0}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-slate-200 bg-white p-3" data-testid="workflow-custom-schema-node-form">
+                      <div className="flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-slate-950">Schema-rendered config</h4>
+                        <span className="rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">No TSX injection</span>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        {customNodeConfigFields.map((field) => (
+                          <label key={field.name} className="block text-xs font-medium text-slate-600">
+                            {field.label}{field.required ? ' *' : ''}
+                            {field.options.length > 0 ? (
+                              <select className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900" defaultValue={String(field.defaultValue || field.options[0] || '')}>
+                                {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+                              </select>
+                            ) : (
+                              <input className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900" defaultValue={field.defaultValue === undefined ? '' : String(field.defaultValue)} />
+                            )}
+                          </label>
+                        ))}
+                        {customNodeConfigFields.length === 0 && (
+                          <div className="rounded border border-dashed border-slate-200 p-3 text-xs text-slate-500">No configurable fields in this manifest.</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-slate-200 bg-slate-950 p-3 text-slate-100">
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+                        <span className="font-semibold">{customNodeCodeFile[0]}</span>
+                        <span className="text-slate-400">JSON stdin / JSON stdout</span>
+                      </div>
+                      <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-[11px] leading-5">{customNodeCodeFile[1]}</pre>
+                    </div>
+                  </section>
+
+                  <aside className="space-y-3">
+                    <div className={cn('rounded-md border p-3 text-xs', customNodeDependencyIssues.length > 0 ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800')} data-testid="workflow-python-node-dependency-warning">
+                      <span className="block text-sm font-semibold">{customNodeDependencyIssues.length > 0 ? 'Dependency review needed' : 'Standard library only'}</span>
+                      <div className="mt-2 space-y-1">
+                        {(customNodeDependencyIssues.length > 0 ? customNodeDependencyIssues : ['No third-party dependencies declared.']).map((item) => (
+                          <div key={item}>{item}</div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-slate-200 bg-white p-3">
+                      <h4 className="text-sm font-semibold text-slate-950">Review gates</h4>
+                      <div className="mt-3 grid gap-2">
+                        <button type="button" onClick={validateCustomNodeDraft} disabled={isBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 px-3 text-sm hover:bg-slate-50 disabled:opacity-50">
+                          <Check className="h-4 w-4" />
+                          Validate manifest
+                        </button>
+                        <button type="button" onClick={testCustomNodeDraft} disabled={isBusy} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 px-3 text-sm hover:bg-slate-50 disabled:opacity-50">
+                          <Play className="h-4 w-4" />
+                          Run tests
+                        </button>
+                        <button type="button" onClick={installCustomNodeDraft} disabled={isBusy || !customNodeTestResult?.ok} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+                          <Plus className="h-4 w-4" />
+                          Install node
+                        </button>
+                      </div>
+                      {customNodeValidation && (
+                        <div className={cn('mt-3 rounded border px-2 py-1 text-xs', customNodeValidation.valid ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700')}>
+                          {customNodeValidation.valid ? 'Manifest contract is valid.' : (customNodeValidation.errors || []).map((item) => item.message || item.code).join(', ')}
+                        </div>
+                      )}
+                      {customNodeInstallMessage && (
+                        <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700" data-testid="workflow-custom-node-installed">
+                          {customNodeInstallMessage}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-md border border-slate-200 bg-white p-3" data-testid="workflow-python-node-test-result">
+                      <h4 className="text-sm font-semibold text-slate-950">Test result</h4>
+                      {customNodeTestResult ? (
+                        <div className="mt-2 space-y-2 text-xs">
+                          <div className={cn('rounded border px-2 py-1', customNodeTestResult.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700')}>
+                            {customNodeTestResult.ok ? 'Passed' : customNodeTestResult.error?.code || 'Failed'} / exit {String(customNodeTestResult.exitCode ?? 0)} / {String(customNodeTestResult.durationMs || 0)}ms
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-700">stdout</span>
+                            <pre className="mt-1 max-h-24 overflow-auto rounded bg-slate-950 p-2 text-[10px] text-slate-100">{customNodeTestResult.stdout || 'empty'}</pre>
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-700">stderr</span>
+                            <pre className="mt-1 max-h-24 overflow-auto rounded bg-slate-950 p-2 text-[10px] text-slate-100">{customNodeTestResult.stderr || 'empty'}</pre>
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-700">parsed output</span>
+                            <pre className="mt-1 max-h-24 overflow-auto rounded bg-slate-50 p-2 text-[10px] text-slate-700">{stringifyValue(customNodeTestResult.parsedOutput || {})}</pre>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-slate-500">Run tests to capture stdout, stderr, parsed output, exit code, and duration.</p>
+                      )}
+                    </div>
+                  </aside>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-md border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
+                  No draft yet. Generate a draft to review the manifest, Python code, schemas, dependencies, and test cases.
+                </div>
+              )}
+            </div>
+          </aside>
         </div>
       )}
       {(isHelpOpen || isShortcutsOpen) && (
@@ -2484,6 +2823,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                         <Plus className="h-3.5 w-3.5" />
                         Add step
                       </button>
+                      <button type="button" data-testid="workflow-generate-custom-node" onClick={() => setIsCustomNodeReviewOpen(true)} className="inline-flex h-8 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-700 hover:bg-violet-100">
+                        <Wand2 className="h-3.5 w-3.5" />
+                        Generate node
+                      </button>
                       <button type="button" onClick={() => setActiveView('Library')} className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-3 text-xs hover:bg-muted">
                         <LibraryBig className="h-3.5 w-3.5" />
                         Templates
@@ -2529,6 +2872,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <button type="button" onClick={() => addNode('agent')} className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground">
                       <Plus className="h-3.5 w-3.5" />
                       Add step
+                    </button>
+                    <button type="button" data-testid="workflow-generate-custom-node" onClick={() => setIsCustomNodeReviewOpen(true)} className="inline-flex h-8 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-700 hover:bg-violet-100">
+                      <Wand2 className="h-3.5 w-3.5" />
+                      Generate node
                     </button>
                     <button type="button" onClick={() => setActiveView('Library')} className="inline-flex h-8 items-center gap-2 rounded-md border border-blue-200 bg-background px-3 text-xs hover:bg-blue-100">
                       <LibraryBig className="h-3.5 w-3.5" />

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { exec as execCallback } from 'node:child_process';
+import { exec as execCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { listBuiltInRecipes, renderRecipePrompt } from '../../shared/recipes.js';
@@ -58,6 +58,36 @@ const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 const WORKFLOW_GOVERNANCE_STATUSES = new Set(['draft', 'published', 'deprecated']);
 const WORKFLOW_COMPLIANCE_LABELS = new Set(['data-sensitive', 'external-network', 'code-write', 'secret-access', 'mcp-enabled']);
+const PYTHON_NODE_MANIFEST_VERSION = '1';
+const PYTHON_NODE_DEFAULT_TIMEOUT_MS = 30000;
+const PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES = 5 * 1024 * 1024;
+const PYTHON_STDLIB_IMPORT_ALLOWLIST = new Set([
+  'argparse',
+  'base64',
+  'collections',
+  'csv',
+  'datetime',
+  'decimal',
+  'enum',
+  'functools',
+  'hashlib',
+  'html',
+  'io',
+  'itertools',
+  'json',
+  'math',
+  'os',
+  'pathlib',
+  're',
+  'statistics',
+  'string',
+  'sys',
+  'textwrap',
+  'time',
+  'typing',
+  'urllib',
+  'uuid',
+]);
 
 const BUILT_IN_NODE_TYPES = new Set(WORKFLOW_NODE_TYPES);
 const BUILT_IN_TOOL_REGISTRY = Object.freeze([
@@ -335,6 +365,157 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function normalizeJsonSchema(value, fallbackType = 'object') {
+  const source = asObject(value);
+  return {
+    type: normalizeText(source.type, fallbackType, 40) || fallbackType,
+    properties: asObject(source.properties),
+    required: Array.isArray(source.required) ? source.required.map((item) => normalizeText(item, '', 120)).filter(Boolean) : [],
+    additionalProperties: source.additionalProperties === true,
+  };
+}
+
+function schemaToConfigFields(schema = {}) {
+  const properties = asObject(schema.properties);
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return Object.entries(properties).map(([name, definition]) => {
+    const field = asObject(definition);
+    const type = normalizeText(field.type, 'string', 40);
+    return {
+      name,
+      label: normalizeText(field.title || field.label || name, name, 120),
+      type: type === 'string' ? 'text' : type,
+      required: required.has(name),
+      defaultValue: field.default,
+      options: Array.isArray(field.enum) ? field.enum.map((item) => String(item)) : undefined,
+    };
+  });
+}
+
+function normalizeCodeFiles(value = {}) {
+  const source = asObject(value);
+  return Object.fromEntries(Object.entries(source)
+    .map(([fileName, content]) => [normalizeText(fileName, '', 240), typeof content === 'string' ? content : ''])
+    .filter(([fileName]) => fileName && !fileName.includes('..') && !path.isAbsolute(fileName)));
+}
+
+function collectPythonImports(codeFiles = {}) {
+  const imports = new Set();
+  for (const source of Object.values(codeFiles)) {
+    const text = typeof source === 'string' ? source : '';
+    for (const match of text.matchAll(/^\s*import\s+([a-zA-Z_][a-zA-Z0-9_., \t]*)/gm)) {
+      for (const item of match[1].split(',')) {
+        const moduleName = item.trim().split(/\s+as\s+/i)[0].split('.')[0];
+        if (moduleName) imports.add(moduleName);
+      }
+    }
+    for (const match of text.matchAll(/^\s*from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+import\s+/gm)) {
+      const moduleName = match[1].split('.')[0];
+      if (moduleName) imports.add(moduleName);
+    }
+  }
+  return [...imports];
+}
+
+function normalizePythonNodeManifest(input = {}) {
+  const source = asObject(input.manifest || input);
+  const id = normalizeId(source.id || source.type || source.label, 'python-custom-node');
+  const codeFiles = normalizeCodeFiles(source.codeFiles);
+  const entrypoint = normalizeText(source.entrypoint, 'main.py', 240);
+  const configSchema = normalizeJsonSchema(source.configSchema, 'object');
+  const inputSchema = normalizeJsonSchema(source.inputSchema, 'object');
+  const outputSchema = normalizeJsonSchema(source.outputSchema, 'object');
+  const dependencies = Array.isArray(source.dependencies)
+    ? source.dependencies.map((dependency) => normalizeText(dependency, '', 120)).filter(Boolean)
+    : [];
+  const manifest = {
+    manifestVersion: normalizeText(source.manifestVersion, '', 20),
+    id,
+    type: normalizeId(source.type || id, id),
+    label: normalizeText(source.label || source.name || id, id, 120),
+    description: normalizeText(source.description, '', 1000),
+    language: normalizeText(source.language, 'python', 40).toLowerCase(),
+    configSchema,
+    inputSchema,
+    outputSchema,
+    permissions: asObject(source.permissions),
+    dependencies,
+    entrypoint,
+    codeFiles,
+    testCases: Array.isArray(source.testCases) ? source.testCases.map((entry, index) => {
+      const testCase = asObject(entry);
+      return {
+        id: normalizeId(testCase.id || `case-${index + 1}`, `case-${index + 1}`),
+        name: normalizeText(testCase.name || testCase.id, `Case ${index + 1}`, 120),
+        input: asObject(testCase.input),
+        config: asObject(testCase.config),
+        expectedOutput: asObject(testCase.expectedOutput),
+      };
+    }) : [],
+  };
+  manifest.definition = {
+    type: manifest.type,
+    label: manifest.label,
+    description: manifest.description,
+    ports: {
+      inputs: Object.keys(inputSchema.properties || {}).length ? Object.keys(inputSchema.properties) : ['input'],
+      outputs: Object.keys(outputSchema.properties || {}).length ? Object.keys(outputSchema.properties) : ['summary', 'result', 'status'],
+    },
+    configSchema: { fields: schemaToConfigFields(configSchema) },
+    permissions: {
+      risky: Boolean(manifest.permissions.risky),
+      action: normalizeText(manifest.permissions.action, 'custom.python', 120),
+    },
+    outputSchema: {
+      fields: Object.entries(outputSchema.properties || {}).map(([name, value]) => ({
+        name,
+        type: normalizeText(asObject(value).type, 'json', 40),
+        label: normalizeText(asObject(value).title || name, name, 120),
+      })),
+    },
+    ui: { materialGroup: 'custom', language: 'python', customPackage: true },
+    layout: asObject(source.layout),
+    packageId: id,
+    version: normalizeText(source.version, '1.0.0', 40),
+    dependencies: { python: dependencies },
+  };
+  return manifest;
+}
+
+export function validatePythonNodeManifest(input = {}) {
+  const manifest = normalizePythonNodeManifest(input);
+  const errors = [];
+  const warnings = [];
+  if (manifest.manifestVersion !== PYTHON_NODE_MANIFEST_VERSION) {
+    errors.push({ code: 'invalid_manifest_version', message: 'Python node manifestVersion must be "1".' });
+  }
+  if (manifest.language !== 'python') {
+    errors.push({ code: 'unsupported_language', message: 'Only Python workflow node packages are supported in this phase.' });
+  }
+  if (!manifest.codeFiles[manifest.entrypoint]) {
+    errors.push({ code: 'missing_entrypoint', message: `Python node entrypoint is missing: ${manifest.entrypoint}` });
+  }
+  if (manifest.dependencies.length > 0) {
+    for (const dependency of manifest.dependencies) {
+      errors.push({ code: 'unsupported_dependency', dependency, message: `Third-party Python dependency is not supported yet: ${dependency}` });
+    }
+  }
+  for (const moduleName of collectPythonImports(manifest.codeFiles)) {
+    if (!PYTHON_STDLIB_IMPORT_ALLOWLIST.has(moduleName)) {
+      errors.push({ code: 'unsupported_import', module: moduleName, message: `Python import is not in the phase-one stdlib allowlist: ${moduleName}` });
+    }
+  }
+  if (manifest.testCases.length === 0) {
+    warnings.push({ code: 'missing_test_cases', message: 'Python node package should include at least one install-time test case.' });
+  }
+  return {
+    valid: errors.length === 0,
+    manifest,
+    errors,
+    warnings,
+  };
+}
+
 function normalizeInputOutput(entry, index, kind) {
   const item = asObject(entry);
   const id = normalizeId(item.id || item.name || `${kind}-${index + 1}`, `${kind}-${index + 1}`);
@@ -359,7 +540,7 @@ function normalizePosition(value, index) {
 
 export function normalizeWorkflowNode(entry, index = 0) {
   const node = asObject(entry);
-  const requestedType = normalizeText(node.type, 'agent', 40).toLowerCase();
+  const requestedType = normalizeText(node.type, 'agent', 120).toLowerCase();
   const type = requestedType || 'agent';
   const id = normalizeId(node.id || node.name || `${type}-${index + 1}`, `${type}-${index + 1}`);
   return {
@@ -654,11 +835,15 @@ export function createStarterWorkflow() {
   });
 }
 
-export function validateWorkflowDefinition(input = {}) {
+export function validateWorkflowDefinition(input = {}, extraNodeDefinitions = []) {
   const workflow = normalizeWorkflowDefinition(input);
   const errors = [];
   const warnings = [];
   const nodeIds = new Set();
+  const validNodeTypes = new Set([
+    ...WORKFLOW_NODE_TYPES,
+    ...(Array.isArray(extraNodeDefinitions) ? extraNodeDefinitions.map((definition) => definition?.type).filter(Boolean) : []),
+  ]);
 
   if (!workflow.profileId) {
     errors.push({ code: 'missing_profile', message: 'Workflow must bind an Agent Profile.' });
@@ -673,7 +858,7 @@ export function validateWorkflowDefinition(input = {}) {
       errors.push({ code: 'duplicate_node', nodeId: node.id, message: `Duplicate node id: ${node.id}` });
     }
     nodeIds.add(node.id);
-    if (!NODE_TYPES.has(node.type)) {
+    if (!validNodeTypes.has(node.type)) {
       errors.push({ code: 'invalid_node_type', nodeId: node.id, message: `Invalid node type: ${node.type}` });
     }
     if (node.permission === 'allow' && workflow.permissionPreset !== 'full-auto') {
@@ -1293,6 +1478,260 @@ async function collectGitReviewInput(projectPath = '') {
   };
 }
 
+function createPythonExecutionError(category, message, extra = {}) {
+  const error = new Error(message);
+  error.category = category;
+  error.code = category;
+  Object.assign(error, extra);
+  return error;
+}
+
+function classifyPythonExecutionError(stderr = '', fallback = 'runtime_error') {
+  if (/ModuleNotFoundError|No module named/i.test(stderr)) return 'missing_python_dependency';
+  if (/SyntaxError/i.test(stderr)) return 'python_syntax_error';
+  return fallback;
+}
+
+function createPythonFormatterNodeDraft({ prompt = '', sampleInput = {} } = {}) {
+  const label = normalizeText(prompt, 'Python Formatter Node', 80)
+    .replace(/^create\s+(a|an)\s+/i, '')
+    .replace(/\s+node.*$/i, ' node');
+  const id = normalizeId(label, 'python-formatter-node');
+  const code = [
+    'import json',
+    'import sys',
+    '',
+    'def pick_text(input_data):',
+    '    for key in ("text", "content", "value", "prompt"):',
+    '        value = input_data.get(key)',
+    '        if value is not None:',
+    '            return str(value)',
+    '    return ""',
+    '',
+    'payload = json.load(sys.stdin)',
+    'input_data = payload.get("input") or {}',
+    'config = payload.get("config") or {}',
+    'text = pick_text(input_data)',
+    'mode = str(config.get("mode") or "upper").lower()',
+    'if mode == "lower":',
+    '    formatted = text.lower()',
+    'elif mode == "title":',
+    '    formatted = text.title()',
+    'elif mode == "trim":',
+    '    formatted = text.strip()',
+    'else:',
+    '    formatted = text.upper()',
+    'print(json.dumps({',
+    '    "summary": f"Formatted {len(text)} characters with mode={mode}.",',
+    '    "result": {"text": formatted, "mode": mode},',
+    '    "status": "completed"',
+    '}))',
+    '',
+  ].join('\n');
+  const input = Object.keys(asObject(sampleInput)).length ? asObject(sampleInput) : { text: 'hello workflow' };
+  return {
+    status: 'draft',
+    prompt: normalizeText(prompt, '', 1000),
+    manifest: normalizePythonNodeManifest({
+      manifestVersion: PYTHON_NODE_MANIFEST_VERSION,
+      id,
+      type: id,
+      label: label || 'Python Formatter Node',
+      description: normalizeText(prompt, 'Formats text using a safe Python standard-library script.', 500),
+      language: 'python',
+      dependencies: [],
+      entrypoint: 'main.py',
+      configSchema: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            title: 'Format mode',
+            enum: ['upper', 'lower', 'title', 'trim'],
+            default: 'upper',
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', title: 'Text' },
+          prompt: { type: 'string', title: 'Rendered prompt' },
+        },
+        required: [],
+        additionalProperties: true,
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', title: 'Summary' },
+          result: { type: 'object', title: 'Result' },
+          status: { type: 'string', title: 'Status' },
+        },
+        required: ['summary', 'result', 'status'],
+        additionalProperties: true,
+      },
+      permissions: { risky: false, action: 'custom.python' },
+      codeFiles: { 'main.py': code },
+      testCases: [{
+        id: 'formats-text',
+        name: 'Formats text',
+        input,
+        config: { mode: 'upper' },
+        expectedOutput: { result: { text: String(input.text || input.prompt || '').toUpperCase() } },
+      }],
+    }),
+  };
+}
+
+async function writePythonNodeFiles(rootDir, codeFiles = {}) {
+  await fs.mkdir(rootDir, { recursive: true, mode: 0o700 });
+  for (const [fileName, content] of Object.entries(codeFiles)) {
+    const target = path.join(rootDir, fileName);
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await fs.writeFile(target, String(content), { mode: 0o600 });
+  }
+}
+
+async function runPythonNodeManifest(manifestInput, payload = {}, {
+  pythonCommand = 'python',
+  pythonArgs = [],
+  timeoutMs = PYTHON_NODE_DEFAULT_TIMEOUT_MS,
+  payloadLimitBytes = PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES,
+} = {}) {
+  const validation = validatePythonNodeManifest(manifestInput);
+  const manifest = validation.manifest;
+  if (!validation.valid) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      parsedOutput: null,
+      exitCode: null,
+      durationMs: 0,
+      error: { category: 'invalid_manifest', message: validation.errors.map((error) => error.message).join('; ') },
+      validation,
+    };
+  }
+
+  const stdin = JSON.stringify(payload);
+  if (Buffer.byteLength(stdin, 'utf8') > payloadLimitBytes) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      parsedOutput: null,
+      exitCode: null,
+      durationMs: 0,
+      error: { category: 'payload_too_large', message: `Python node stdin payload exceeds ${payloadLimitBytes} bytes.` },
+      validation,
+    };
+  }
+
+  const startedAt = Date.now();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-python-node-'));
+  await writePythonNodeFiles(tmpDir, manifest.codeFiles);
+
+  try {
+    return await new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      let timedOut = false;
+      let outputTooLarge = false;
+      const child = spawn(pythonCommand, [...pythonArgs, manifest.entrypoint], {
+        cwd: tmpDir,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ ...result, durationMs: Date.now() - startedAt, validation });
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGKILL');
+      }, Math.max(1, Number(timeoutMs) || PYTHON_NODE_DEFAULT_TIMEOUT_MS));
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString('utf8');
+        if (Buffer.byteLength(stdout, 'utf8') > payloadLimitBytes) {
+          outputTooLarge = true;
+          child.kill('SIGKILL');
+        }
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', (error) => {
+        finish({
+          ok: false,
+          stdout,
+          stderr,
+          parsedOutput: null,
+          exitCode: null,
+          error: { category: error.code === 'ENOENT' ? 'missing_python_runtime' : 'runtime_error', message: error.message },
+        });
+      });
+      child.on('close', (exitCode) => {
+        if (timedOut) {
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category: 'execution_timeout', message: `Python node execution timed out after ${timeoutMs}ms.` },
+          });
+          return;
+        }
+        if (outputTooLarge) {
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category: 'payload_too_large', message: `Python node stdout exceeds ${payloadLimitBytes} bytes.` },
+          });
+          return;
+        }
+        if (exitCode !== 0) {
+          const category = classifyPythonExecutionError(stderr);
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category, message: stderr.trim() || `Python node exited with code ${exitCode}.` },
+          });
+          return;
+        }
+        try {
+          const parsedOutput = JSON.parse(stdout || '');
+          finish({ ok: true, stdout, stderr, parsedOutput, exitCode, error: null });
+        } catch {
+          finish({
+            ok: false,
+            stdout,
+            stderr,
+            parsedOutput: null,
+            exitCode,
+            error: { category: 'invalid_json_output', message: 'Python node stdout must be a JSON object.' },
+          });
+        }
+      });
+      child.stdin.end(stdin);
+    });
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function createDefaultExecutors({ artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR } = {}) {
   return {
     async agent({ node, nodeInput, run }) {
@@ -1435,6 +1874,10 @@ export function createWorkflowStudioStore({
   checkpointService = defaultWorkflowCheckpointStore,
   artifactsDir = DEFAULT_WORKFLOW_ARTIFACTS_DIR,
   screenshotDir = DEFAULT_WORKFLOW_SCREENSHOT_DIR,
+  pythonCommand = 'python',
+  pythonArgs = [],
+  pythonTimeoutMs = PYTHON_NODE_DEFAULT_TIMEOUT_MS,
+  pythonPayloadLimitBytes = PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES,
 } = {}) {
   let loaded = false;
   let workflows = [];
@@ -1463,8 +1906,12 @@ export function createWorkflowStudioStore({
         workflows = Array.isArray(rawWorkflows.workflows)
           ? rawWorkflows.workflows.map((workflow) => normalizeWorkflowDefinition(workflow, workflow, now))
           : [];
+        nodePackages = Array.isArray(rawWorkflows.nodePackages)
+          ? rawWorkflows.nodePackages.map(asObject)
+          : [];
       } catch {
         workflows = [];
+        nodePackages = [];
       }
       try {
         const rawRuns = JSON.parse(await fs.readFile(runsPath, 'utf8'));
@@ -1484,7 +1931,7 @@ export function createWorkflowStudioStore({
   async function saveWorkflows() {
     if (!persist) return;
     await fs.mkdir(path.dirname(workflowsPath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(workflowsPath, JSON.stringify({ schemaVersion: 1, updatedAt: nowIso(now), workflows }, null, 2), {
+    await fs.writeFile(workflowsPath, JSON.stringify({ schemaVersion: 1, updatedAt: nowIso(now), workflows, nodePackages }, null, 2), {
       mode: 0o600,
     });
   }
@@ -1529,31 +1976,83 @@ export function createWorkflowStudioStore({
     return workflow;
   }
 
-  function normalizeNodePackage(input = {}) {
-    const source = asObject(input);
-    const type = normalizeId(source.type || source.id, 'custom-node');
+  function normalizeGenericNodePackage(input = {}) {
+    const id = normalizeId(input.id || input.type || input.label, 'workflow-node-package');
+    const type = normalizeId(input.type || id, 'workflow-node');
+    const dependencies = asObject(input.dependencies);
+    const missingDependencies = [
+      ...normalizeStringArray(dependencies.profiles).map((value) => ({ kind: 'profile', id: value })),
+      ...normalizeStringArray(dependencies.agents).map((value) => ({ kind: 'agent', id: value })),
+      ...normalizeStringArray(dependencies.subagents).map((value) => ({ kind: 'subagent', id: value })),
+      ...normalizeStringArray(dependencies.mcpServers).map((value) => ({ kind: 'mcpServer', id: value })),
+      ...normalizeStringArray(dependencies.skills).map((value) => ({ kind: 'skill', id: value })),
+      ...normalizeStringArray(dependencies.permissions).map((value) => ({ kind: 'permission', id: value })),
+    ];
+    const status = missingDependencies.length > 0 ? 'missing_dependencies' : normalizeText(input.status, 'ready', 80);
     const definition = {
       type,
-      label: normalizeText(source.label || source.name || type, type, 120),
-      description: normalizeText(source.description, '', 500),
-      ports: asObject(source.ports),
-      configSchema: asObject(source.configSchema),
-      permissions: asObject(source.permissions),
-      outputSchema: asObject(source.outputSchema),
-      ui: asObject(source.ui),
-      layout: asObject(source.layout),
-      packageId: normalizeId(source.id || type, type),
-      version: normalizeText(source.version, '1.0.0', 40),
-      dependencies: asObject(source.dependencies),
+      label: normalizeText(input.label, type, 120),
+      description: normalizeText(input.description, 'Installed workflow node package.', 500),
+      ports: asObject(input.ports),
+      configSchema: {
+        fields: Array.isArray(input.configSchema?.fields) ? input.configSchema.fields.map(asObject) : [],
+      },
+      outputSchema: {
+        fields: Array.isArray(input.outputSchema?.fields) ? input.outputSchema.fields.map(asObject) : [],
+      },
+      permissions: asObject(input.permissions),
+      ui: {
+        materialGroup: 'custom',
+        schemaVersion: normalizeText(input.ui?.schemaVersion, '1.0', 20),
+        ...asObject(input.ui),
+      },
+      layout: asObject(input.layout),
     };
-    const hasDependencies = Object.values(definition.dependencies).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value));
+
     return {
-      id: definition.packageId,
-      enabled: source.enabled !== false && !hasDependencies,
-      status: hasDependencies ? 'missing_dependencies' : 'ready',
-      installedAt: source.installedAt || nowIso(now),
+      id,
+      enabled: input.enabled === undefined ? status === 'ready' : input.enabled !== false,
+      status,
+      installedAt: input.installedAt || nowIso(now),
       updatedAt: nowIso(now),
+      manifest: {
+        id,
+        type,
+        label: definition.label,
+        version: normalizeText(input.version, '1.0.0', 40),
+        language: normalizeText(input.language, 'manifest', 40),
+        dependencies,
+      },
       definition,
+      dependencies,
+      missingDependencies,
+    };
+  }
+
+  function normalizeNodePackage(input = {}) {
+    const wantsPythonManifest = input.language === 'python' || input.manifestVersion || input.entrypoint || input.codeFiles;
+    if (!wantsPythonManifest) {
+      return normalizeGenericNodePackage(input);
+    }
+
+    const validation = validatePythonNodeManifest(input);
+    const manifest = validation.manifest;
+    if (!validation.valid) {
+      const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
+      error.statusCode = 400;
+      error.validation = validation;
+      throw error;
+    }
+    return {
+      id: manifest.id,
+      enabled: input.enabled !== false,
+      status: 'ready',
+      installedAt: input.installedAt || nowIso(now),
+      updatedAt: nowIso(now),
+      manifest,
+      definition: manifest.definition,
+      testCases: manifest.testCases,
+      codeFiles: manifest.codeFiles,
     };
   }
 
@@ -1574,11 +2073,43 @@ export function createWorkflowStudioStore({
     const index = nodePackages.findIndex((item) => item.id === normalized.id);
     if (index >= 0) nodePackages[index] = normalized;
     else nodePackages.push(normalized);
+    await saveWorkflows();
     return clone(normalized);
   }
 
   function getStoreNodeTypeDefinition(type) {
     return getNodeTypeDefinition(type) || nodePackages.find((item) => item.definition.type === type)?.definition || null;
+  }
+
+  function getNodePackageForType(type) {
+    return nodePackages.find((item) => item.enabled !== false && item.definition?.type === type) || null;
+  }
+
+  function generatePythonNodeDraft(input = {}) {
+    return clone(createPythonFormatterNodeDraft(input));
+  }
+
+  function validateNodePackageDraft(input = {}) {
+    return clone(validatePythonNodeManifest(input));
+  }
+
+  async function testNodePackageDraft(input = {}, options = {}) {
+    const validation = validatePythonNodeManifest(input);
+    const testCase = asObject(options.testCase || validation.manifest.testCases[0]);
+    const result = await runPythonNodeManifest(validation.manifest, {
+      input: asObject(options.input || testCase.input),
+      config: asObject(options.config || testCase.config),
+      context: asObject(options.context),
+    }, {
+      pythonCommand,
+      pythonArgs,
+      timeoutMs: normalizeInteger(options.timeoutMs, pythonTimeoutMs, 1, pythonTimeoutMs),
+      payloadLimitBytes: normalizeInteger(options.payloadLimitBytes, pythonPayloadLimitBytes, 1024, pythonPayloadLimitBytes),
+    });
+    return clone({
+      ...result,
+      testCaseId: testCase.id || '',
+    });
   }
 
   async function upsertWorkflow(input = {}) {
@@ -1616,7 +2147,7 @@ export function createWorkflowStudioStore({
         ].slice(-200),
       },
     };
-    const validation = validateWorkflowDefinition(normalized).validation;
+    const validation = validateWorkflowDefinition(normalized, getStoreNodeTypeDefinitions()).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -1814,25 +2345,52 @@ export function createWorkflowStudioStore({
         }
         nodeRun.output = asObject(artifactResult?.output || artifactResult);
       } else {
-        const executor = nodeExecutors[node.type];
-        if (typeof executor === 'function') {
-          nodeRun.output = asObject(await executor({
-            workflow,
-            run,
-            node,
-            nodeRun,
-            nodeInput: nodeRun.input,
-          }));
-          if (node.type === 'agent') {
-            nodeRun.output = applyAgentResultContract(node, nodeRun, nodeRun.output, { sessionId: run.sessionId });
+        const nodePackage = getNodePackageForType(node.type);
+        if (nodePackage?.manifest?.language === 'python') {
+          const result = await runPythonNodeManifest(nodePackage.manifest, {
+            input: nodeRun.input,
+            config: asObject(node.config),
+            context: {
+              workflowId: workflow.id,
+              runId: run.id,
+              nodeId: node.id,
+            },
+          }, {
+            pythonCommand,
+            pythonArgs,
+            timeoutMs: node.timeoutMs || pythonTimeoutMs,
+            payloadLimitBytes: pythonPayloadLimitBytes,
+          });
+          nodeRun.logs.push(...[result.stderr, result.stdout].filter(Boolean));
+          if (!result.ok) {
+            throw createPythonExecutionError(result.error?.category || 'runtime_error', result.error?.message || 'Python node failed.', {
+              stdout: result.stdout,
+              stderr: result.stderr,
+            });
           }
+          nodeRun.output = asObject(result.parsedOutput);
+          nodeRun.logs.push(`Python node completed in ${result.durationMs}ms.`);
         } else {
-          nodeRun.output = {
-            summary: `${node.title} completed.`,
-            nodeType: node.type,
-            toolName: nodeRun.input.toolName || node.toolName,
-            command: nodeRun.input.command || node.command,
-          };
+          const executor = nodeExecutors[node.type];
+          if (typeof executor === 'function') {
+            nodeRun.output = asObject(await executor({
+              workflow,
+              run,
+              node,
+              nodeRun,
+              nodeInput: nodeRun.input,
+            }));
+            if (node.type === 'agent') {
+              nodeRun.output = applyAgentResultContract(node, nodeRun, nodeRun.output, { sessionId: run.sessionId });
+            }
+          } else {
+            nodeRun.output = {
+              summary: `${node.title} completed.`,
+              nodeType: node.type,
+              toolName: nodeRun.input.toolName || node.toolName,
+              command: nodeRun.input.command || node.command,
+            };
+          }
         }
       }
 
@@ -1937,7 +2495,7 @@ export function createWorkflowStudioStore({
       throw error;
     }
     const runnableWorkflow = getRunnableWorkflow(workflow);
-    const validation = validateWorkflowDefinition(runnableWorkflow).validation;
+    const validation = validateWorkflowDefinition(runnableWorkflow, getStoreNodeTypeDefinitions()).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -2252,7 +2810,7 @@ export function createWorkflowStudioStore({
       error.statusCode = 404;
       throw error;
     }
-    const definitionValidation = validateWorkflowDefinition(workflow).validation;
+    const definitionValidation = validateWorkflowDefinition(workflow, getStoreNodeTypeDefinitions()).validation;
     const providedInputs = asObject(input.inputs);
     const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
     Object.assign(runInputs, providedInputs);
@@ -2270,7 +2828,7 @@ export function createWorkflowStudioStore({
       errors,
       warnings: definitionValidation.warnings,
       availableVariables: buildAvailableVariables(workflow),
-      nodeTypes: getWorkflowNodeTypeDefinitions(),
+      nodeTypes: getStoreNodeTypeDefinitions(),
     };
   }
 
@@ -2852,7 +3410,7 @@ export function createWorkflowStudioStore({
     await load();
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
     if (!workflow) return null;
-    const validation = validateWorkflowDefinition(workflow).validation;
+    const validation = validateWorkflowDefinition(workflow, getStoreNodeTypeDefinitions()).validation;
     if (!validation.valid) {
       const error = new Error(validation.errors.map((entry) => entry.message).join('; '));
       error.statusCode = 400;
@@ -3598,6 +4156,9 @@ export function createWorkflowStudioStore({
     importWorkflow,
     exportWorkflowPackage,
     importWorkflowPackage,
+    generatePythonNodeDraft,
+    validateNodePackageDraft,
+    testNodePackageDraft,
     installNodePackage,
     listNodePackages,
     getWorkflowNodeTypeDefinitions: getStoreNodeTypeDefinitions,
