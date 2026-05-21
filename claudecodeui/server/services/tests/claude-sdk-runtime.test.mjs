@@ -11,6 +11,7 @@ import {
   buildOpenAIScreenshotAnalysisMessages,
   canReuseMtlCodeSession,
   createMtlCodeFreshSessionOptionsForRuntimeChange,
+  handleImages,
   getMtlCodeToolUseNames,
   isMtlCodeSessionProcessing,
   messageHasMtlCodeRepositoryContentToolUse,
@@ -156,7 +157,59 @@ test('Argus screenshot vision bridge calls OpenAI-compatible chat completions an
   assert.equal(requestedUrl, 'http://token.wd.com/v1/chat/completions');
   assert.equal(authorization, 'Bearer sk-test');
   assert.equal(requestedBody.model, 'glm-5');
+  assert.equal(requestedBody.stream, true);
   assert.equal(requestedBody.messages[0].content[1].image_url.url, 'data:image/png;base64,abc123');
+});
+
+test('Argus screenshot vision bridge parses OpenAI-compatible streaming chat completion chunks', async () => {
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze the UI',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: {
+      MTL_CODE_USE_OPENAI: '1',
+      OPENAI_BASE_URL: 'http://token.wd.com/v1',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_MODEL: 'glm-5',
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      headers: { get: () => 'text/event-stream' },
+      text: async () => [
+        'data: {"choices":[{"delta":{"content":"The screenshot "}}]}',
+        'data: {"choices":[{"delta":{"content":"shows a workflow canvas."}}]}',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.analysis, 'The screenshot shows a workflow canvas.');
+});
+
+test('Argus screenshot vision bridge works when OpenAI-compatible env is configured without the legacy feature flag', async () => {
+  let requestedUrl = '';
+
+  const result = await analyzeScreenshotImagesWithOpenAI({
+    command: 'Analyze the UI',
+    images: [{ data: 'data:image/png;base64,abc123' }],
+    env: {
+      OPENAI_BASE_URL: 'http://token.wd.com/v1',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_MODEL: 'glm-5',
+    },
+    fetchImpl: async (url) => {
+      requestedUrl = url;
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'The screenshot shows a sidebar and chat panel.' } }] }),
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.analysis, 'The screenshot shows a sidebar and chat panel.');
+  assert.equal(requestedUrl, 'http://token.wd.com/v1/chat/completions');
 });
 
 test('Argus screenshot vision bridge falls back when OpenAI runtime is unavailable', async () => {
@@ -171,6 +224,25 @@ test('Argus screenshot vision bridge falls back when OpenAI runtime is unavailab
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'openai_runtime_unavailable');
+});
+
+test('Argus image handling can keep temp files private without appending path-only prompts', async () => {
+  const cwd = await fs.mkdtemp(path.join(process.cwd(), 'argus-image-test-'));
+  try {
+    const result = await handleImages(
+      'What is this UI?',
+      [{ data: 'data:image/png;base64,aGVsbG8=' }],
+      cwd,
+      { appendPathNote: false },
+    );
+
+    assert.equal(result.modifiedCommand, 'What is this UI?');
+    assert.equal(result.tempImagePaths.length, 1);
+    assert.equal(result.tempDir.includes(path.join(cwd, '.tmp', 'images')), true);
+    await fs.access(result.tempImagePaths[0]);
+  } finally {
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test('Argus screenshot vision analysis is appended to the agent prompt', () => {
@@ -386,7 +458,7 @@ test('Argus runtime signatures restart when provider endpoint identity changes',
   assert.equal(changedToken.includes('token-two'), false);
 });
 
-test('Argus runtime changes restart as a fresh native session instead of resuming stale runtime state', () => {
+test('Argus runtime changes restart the process while preserving the requested UI session', () => {
   const originalOptions = {
     sessionId: 'old-native-session',
     clientSessionId: 'old-native-session',
@@ -402,9 +474,10 @@ test('Argus runtime changes restart as a fresh native session instead of resumin
   });
 
   assert.equal(originalOptions.sessionId, 'old-native-session');
-  assert.equal(restartOptions.sessionId, undefined);
+  assert.equal(restartOptions.sessionId, 'old-native-session');
   assert.equal(restartOptions.clientSessionId, 'old-native-session');
-  assert.equal(args.includes('--resume'), false);
+  assert.equal(args.includes('--resume'), true);
+  assert.equal(args[args.indexOf('--resume') + 1], 'old-native-session');
   assert.equal(args.includes('--append-system-prompt'), true);
 });
 

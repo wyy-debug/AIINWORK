@@ -676,9 +676,7 @@ function buildMtlCodeArgs(options = {}, env = process.env) {
 }
 
 function createMtlCodeFreshSessionOptionsForRuntimeChange(options = {}) {
-  const freshOptions = { ...options };
-  delete freshOptions.sessionId;
-  return freshOptions;
+  return { ...options };
 }
 
 function normalizeMtlCodeSessionId(value) {
@@ -1313,15 +1311,17 @@ async function extractContextBudget(resultMessage, options = {}) {
 
 /**
  * Handles image processing for SDK queries
- * Saves base64 images to temporary files and returns modified prompt with file paths
+ * Saves base64 images to temporary files and optionally returns a prompt with file paths.
  * @param {string} command - Original user prompt
  * @param {Array} images - Array of image objects with base64 data
  * @param {string} cwd - Working directory for temp file creation
+ * @param {{appendPathNote?: boolean}} options - Image prompt handling options
  * @returns {Promise<Object>} {modifiedCommand, tempImagePaths, tempDir}
  */
-async function handleImages(command, images, cwd) {
+async function handleImages(command, images, cwd, options = {}) {
   const tempImagePaths = [];
   let tempDir = null;
+  const appendPathNote = options.appendPathNote !== false;
 
   if (!images || images.length === 0) {
     return { modifiedCommand: command, tempImagePaths, tempDir };
@@ -1352,9 +1352,8 @@ async function handleImages(command, images, cwd) {
       tempImagePaths.push(filepath);
     }
 
-    // Include the full image paths in the prompt
     let modifiedCommand = command;
-    if (tempImagePaths.length > 0 && command && command.trim()) {
+    if (appendPathNote && tempImagePaths.length > 0 && command && command.trim()) {
       const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
       modifiedCommand = command + imageNote;
     }
@@ -1435,6 +1434,39 @@ function extractOpenAIChatCompletionText(payload) {
   return '';
 }
 
+function extractOpenAIStreamingChatCompletionText(rawText) {
+  if (typeof rawText !== 'string' || !rawText.trim()) {
+    return '';
+  }
+
+  const chunks = [];
+  for (const line of rawText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) {
+      continue;
+    }
+    const data = trimmed.slice('data:'.length).trim();
+    if (!data || data === '[DONE]') {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(data);
+      const choice = payload?.choices?.[0];
+      const deltaContent = choice?.delta?.content;
+      const messageContent = choice?.message?.content;
+      if (typeof deltaContent === 'string') {
+        chunks.push(deltaContent);
+      } else if (typeof messageContent === 'string') {
+        chunks.push(messageContent);
+      }
+    } catch {
+      // Ignore malformed SSE housekeeping lines from OpenAI-compatible gateways.
+    }
+  }
+
+  return chunks.join('').trim();
+}
+
 async function analyzeScreenshotImagesWithOpenAI({
   command = '',
   images = [],
@@ -1446,7 +1478,7 @@ async function analyzeScreenshotImagesWithOpenAI({
     return { ok: false, reason: 'no_images' };
   }
 
-  if (env?.MTL_CODE_USE_OPENAI !== '1') {
+  if (env?.MTL_CODE_USE_OPENAI === '0') {
     return { ok: false, reason: 'openai_runtime_unavailable' };
   }
 
@@ -1466,6 +1498,7 @@ async function analyzeScreenshotImagesWithOpenAI({
     messages: buildOpenAIScreenshotAnalysisMessages({ command, images: validImages }),
     temperature: 0.1,
     max_tokens: 1200,
+    stream: true,
   };
 
   try {
@@ -1486,8 +1519,13 @@ async function analyzeScreenshotImagesWithOpenAI({
       };
     }
 
-    const payload = await response.json();
-    const analysis = extractOpenAIChatCompletionText(payload);
+    const contentType = typeof response.headers?.get === 'function'
+      ? String(response.headers.get('content-type') || '')
+      : '';
+    const shouldReadStream = /text\/event-stream/i.test(contentType) && typeof response.text === 'function';
+    const analysis = shouldReadStream
+      ? extractOpenAIStreamingChatCompletionText(await response.text())
+      : extractOpenAIChatCompletionText(await response.json());
     if (!analysis) {
       return { ok: false, reason: 'empty_vision_response' };
     }
@@ -2177,7 +2215,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
   };
 
   try {
-    const imageResult = await handleImages(command, options.images, options.cwd);
+    const imageResult = await handleImages(command, options.images, options.cwd, { appendPathNote: false });
     let finalCommand = imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
@@ -2294,7 +2332,7 @@ async function queryMtlCodeDirect(command, options = {}, ws) {
         clientSessionId,
         reuseSessionKey,
         runtimeSignature,
-        resumeSuppressedForRuntimeChange: true,
+        resumeSuppressedForRuntimeChange: false,
       });
       closeMtlCodePersistentSession(existingSession.instance, 'runtime_changed');
       removeSession(reuseSessionKey);
@@ -3001,6 +3039,7 @@ export {
   buildMtlCodeCloseFailureMessage,
   buildMtlCodeArgs,
   buildMtlCodeSessionLogPayload,
+  handleImages,
   buildOpenAIScreenshotAnalysisMessages,
   analyzeScreenshotImagesWithOpenAI,
   appendScreenshotVisionAnalysis,
