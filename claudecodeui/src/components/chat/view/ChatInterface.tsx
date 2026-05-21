@@ -1906,6 +1906,7 @@ function ChatInterface({
 
   useChatRealtimeHandlers({
     latestMessage,
+    sendMessage,
     provider,
     selectedProject,
     selectedSession,

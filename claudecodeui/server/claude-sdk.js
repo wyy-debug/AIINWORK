@@ -43,6 +43,7 @@ import {
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { evaluateRuntimePermission } from './services/runtime-permission-service.js';
+import { appendSessionRoutingDebugEvent } from './services/session-routing-debug-service.js';
 import {
   getArgusPlanModeAllowedTools,
   getArgusPlanModeDeniedTools,
@@ -399,7 +400,9 @@ function buildMtlCodeSessionLogPayload(event, details = {}) {
 
 function logMtlCodeSessionLifecycle(event, details = {}) {
   try {
-    console.log(`${ARGUS_SESSION_LOG_PREFIX} ${JSON.stringify(buildMtlCodeSessionLogPayload(event, details))}`);
+    const payload = buildMtlCodeSessionLogPayload(event, details);
+    console.log(`${ARGUS_SESSION_LOG_PREFIX} ${JSON.stringify(payload)}`);
+    appendSessionRoutingDebugEvent(`sdk.${event}`, payload);
   } catch (error) {
     console.warn('[ArgusSession] failed to serialize lifecycle log:', error?.message || error);
   }

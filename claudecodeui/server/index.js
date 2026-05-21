@@ -115,6 +115,7 @@ import { brainPostTurnExtractionService } from './services/brain-post-turn-extra
 import { brainRecallService } from './services/brain-recall-service.js';
 import { brainStore } from './services/brain-store-service.js';
 import { getRequestIpAddress } from './services/hub-usage-service.js';
+import { appendSessionRoutingDebugEvent } from './services/session-routing-debug-service.js';
 import {
     clearSessionGoal,
     completeSessionGoal,
@@ -3133,6 +3134,27 @@ function sendSubagentControlEvent(writer, event, { sessionId, provider = 'claude
     }));
 }
 
+const CHAT_COMMAND_TYPES = new Set(['claude-command', 'cursor-command', 'codex-command', 'gemini-command']);
+
+function appendInboundChatCommandRoutingDebug(data = {}) {
+    if (!CHAT_COMMAND_TYPES.has(data.type)) {
+        return;
+    }
+    const options = data.options && typeof data.options === 'object' ? data.options : {};
+    appendSessionRoutingDebugEvent('server.ws.command_received', {
+        commandType: data.type,
+        provider: data.provider || data.type.replace('-command', ''),
+        sessionId: data.sessionId || null,
+        optionSessionId: options.sessionId || null,
+        clientSessionId: options.clientSessionId || null,
+        projectName: options.projectName || null,
+        projectPath: options.projectPath || options.cwd || '',
+        resume: Boolean(options.resume || options.sessionId || data.sessionId),
+        clientMessageId: options.clientMessageId || data.clientMessageId || null,
+        command: typeof data.command === 'string' ? data.command : '',
+    });
+}
+
 // Handle chat WebSocket connections
 function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
@@ -3150,6 +3172,14 @@ function handleChatConnection(ws, request) {
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
+            if (data.type === 'argus-routing-debug') {
+                appendSessionRoutingDebugEvent(data.event || 'client.unknown', {
+                    ...(data.details && typeof data.details === 'object' ? data.details : {}),
+                    source: 'client',
+                });
+                return;
+            }
+            appendInboundChatCommandRoutingDebug(data);
 
             if (data.type === 'claude-command') {
                 const commandWithIntent = applyArgusToolInspectionIntentToChatCommand(
@@ -3165,6 +3195,19 @@ function handleChatConnection(ws, request) {
                         debugPromptInjectionOriginalCommand: typeof data.command === 'string' ? data.command : '',
                     };
                 }
+                appendSessionRoutingDebugEvent('server.claude.command_transformed', {
+                    sessionId: commandData?.options?.sessionId || null,
+                    clientSessionId: commandData?.options?.clientSessionId || null,
+                    projectName: commandData?.options?.projectName || null,
+                    projectPath: commandData?.options?.projectPath || commandData?.options?.cwd || '',
+                    resume: Boolean(commandData?.options?.resume || commandData?.options?.sessionId),
+                    clientMessageId: commandData?.options?.clientMessageId || null,
+                    model: commandData?.options?.model || null,
+                    modelProfileId: commandData?.options?.modelProfileId || null,
+                    agentProfileKind: commandData?.options?.agentProfileKind || '',
+                    permissionPreset: commandData?.options?.permissionPreset || '',
+                    command: typeof commandData?.command === 'string' ? commandData.command : '',
+                });
                 captureBrainCommandForChat(writer, commandData, 'claude');
                 emitRuntimeDiagnostics(writer, commandData);
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');

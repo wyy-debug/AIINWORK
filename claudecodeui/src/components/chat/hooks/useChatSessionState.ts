@@ -15,6 +15,7 @@ import {
   type ScrollAnchorBox,
   type ScrollRestoreState,
 } from '../utils/chatScrollRestore';
+import { emitChatRoutingDebug } from '../utils/chatRoutingDebug';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -506,6 +507,13 @@ export function useChatSessionState({
   // Main session loading effect - store-based
   useEffect(() => {
     if (!selectedSession || !selectedProject) {
+      emitChatRoutingDebug(sendMessage, 'client.session_state.reset_no_selection', {
+        selectedProjectName: selectedProject?.name || null,
+        selectedProjectPath: selectedProject?.fullPath || selectedProject?.path || '',
+        selectedSessionId: selectedSession?.id || null,
+        currentSessionId: currentSessionIdRef.current,
+        pendingViewSessionId: pendingViewSessionRef.current?.sessionId || null,
+      });
       resetStreamingState();
       pendingViewSessionRef.current = null;
       setClaudeStatus(null);
@@ -527,6 +535,16 @@ export function useChatSessionState({
     let cancelled = false;
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
     const sessionKey = `${requestSessionId}:${selectedProject.name}:${provider}`;
+    emitChatRoutingDebug(sendMessage, 'client.session_state.load_selected', {
+      selectedProjectName: selectedProject.name,
+      selectedProjectPath: selectedProject.fullPath || selectedProject.path || '',
+      selectedSessionId: requestSessionId,
+      selectedSessionTitle: selectedSession.title || selectedSession.name || selectedSession.summary || '',
+      currentSessionId: currentSessionIdRef.current,
+      pendingViewSessionId: pendingViewSessionRef.current?.sessionId || null,
+      provider,
+      sessionKey,
+    });
 
     // Skip if already loaded and fresh
     if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(requestSessionId) && !sessionStore.isStale(requestSessionId)) {

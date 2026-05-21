@@ -42,6 +42,7 @@ import {
   isTemporaryChatSessionId as isTemporarySessionId,
   resolveChatSendSessionRouting,
 } from '../utils/chatSessionRouting';
+import { emitChatRoutingDebug } from '../utils/chatRoutingDebug';
 import {
   DEFAULT_AGENT_PROFILE_KIND,
   getAgentProfile,
@@ -1009,6 +1010,7 @@ export function useChatComposerState({
         }
       }
 
+      const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const storedCursorSessionId =
         provider === 'cursor' ? sessionStorage.getItem('cursorSessionId') : null;
       const sessionRouting = resolveChatSendSessionRouting({
@@ -1025,6 +1027,26 @@ export function useChatComposerState({
       const backendSessionId = sessionRouting.backendSessionId;
       const sessionToActivate = sessionRouting.sessionToActivate;
       const clientMessageId = createClientUserMessageId();
+      emitChatRoutingDebug(sendMessage, 'client.send.route_resolved', {
+        clientMessageId,
+        provider,
+        selectedProjectName: selectedProject.name,
+        selectedProjectPath: resolvedProjectPath,
+        selectedSessionId: selectedSession?.id || null,
+        selectedSessionTitle: selectedSession?.title || selectedSession?.name || selectedSession?.summary || '',
+        currentSessionId,
+        storedCursorSessionId,
+        oneShotSourceSessionId: oneShotSourceSessionIdRef.current,
+        effectiveSessionId,
+        backendSessionId,
+        sessionToActivate,
+        blockedByMissingProgrammaticSource: sessionRouting.blockedByMissingProgrammaticSource,
+        selectedAgentId: activeAgent?.id || null,
+        selectedAgentName: activeAgent?.name || null,
+        messageContent,
+        uploadedImageCount: uploadedImages.length,
+        uploadedFileCount: uploadedFiles.length,
+      });
       const displayUserText = oneShotDisplayTextRef.current;
       oneShotDisplayTextRef.current = null;
 
@@ -1102,8 +1124,31 @@ export function useChatComposerState({
         || toolsSettings?.permissionMode === 'bypassPermissions'
         || permissionModeForSend === 'bypassPermissions',
       );
-      const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
+      const commandEnvelopeType =
+        provider === 'cursor'
+          ? 'cursor-command'
+          : provider === 'codex'
+            ? 'codex-command'
+            : provider === 'gemini'
+              ? 'gemini-command'
+              : 'claude-command';
+      emitChatRoutingDebug(sendMessage, 'client.send.dispatch', {
+        clientMessageId,
+        provider,
+        commandEnvelopeType,
+        selectedProjectName: selectedProject.name,
+        selectedProjectPath: resolvedProjectPath,
+        selectedSessionId: selectedSession?.id || null,
+        currentSessionId,
+        backendSessionId,
+        sessionToActivate,
+        resume: Boolean(backendSessionId),
+        permissionMode: permissionModeForSend,
+        modelProfileId,
+        agentProfileKind: activeAgentProfile?.kind || '',
+        permissionPreset: activeAgentProfile?.permissionPreset || '',
+      });
       if (provider === 'claude' && debugPromptInjection) {
         const pendingPromptInjection = buildPendingPromptInjectionDebug({
           originalCommand: currentInput,
