@@ -618,5 +618,8 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).toContain('REQ-211D-disabled-state.png');
     expect(screenshotSpec).toContain('REQ-211D-incompatible-upgrade.png');
     expect(screenshotSpec).toContain('REQ-212C-test-review-matrix.png');
+    expect(screenshotSpec).toContain('REQ-212D-test-matrix-pass.png');
+    expect(screenshotSpec).toContain('REQ-212D-test-matrix-assertion-failure.png');
+    expect(screenshotSpec).toContain('REQ-212D-test-matrix-runtime-error.png');
   });
 });

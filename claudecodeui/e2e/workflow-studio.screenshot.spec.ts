@@ -197,7 +197,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' } = {}) {
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime' } = {}) {
   let runState = options.previewConsistency === 'matched'
     ? previewMatchedRun
     : options.previewConsistency === 'changed'
@@ -279,6 +279,43 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
       });
     }
     if (path === '/api/workflow-node-packages/test-draft') {
+      if (options.customNodeTestMatrix === 'passing') {
+        return json(route, {
+          success: true,
+          result: {
+            ok: true,
+            exitCode: 0,
+            durationMs: 84,
+            stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+            stderr: '',
+            parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+            cases: [
+              {
+                ok: true,
+                testCaseId: 'formats-upper',
+                testCaseName: 'Formats upper',
+                exitCode: 0,
+                durationMs: 39,
+                stdout: '{"summary":"formatted","result":{"text":"HELLO WORKFLOW"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'formatted', result: { text: 'HELLO WORKFLOW' }, status: 'completed' },
+                assertionFailures: [],
+              },
+              {
+                ok: true,
+                testCaseId: 'formats-lower',
+                testCaseName: 'Formats lower',
+                exitCode: 0,
+                durationMs: 45,
+                stdout: '{"summary":"formatted","result":{"text":"hello workflow"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'formatted', result: { text: 'hello workflow' }, status: 'completed' },
+                assertionFailures: [],
+              },
+            ],
+          },
+        });
+      }
       if (options.customNodeTestMatrix === 'mixed') {
         return json(route, {
           success: false,
@@ -315,6 +352,45 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
                 assertionFailures: [
                   { path: 'result.text', expected: 'GOODBYE', actual: 'HELLO WORKFLOW', message: 'Expected result.text to match GOODBYE but got HELLO WORKFLOW.' },
                 ],
+              },
+            ],
+          },
+        }, 400);
+      }
+      if (options.customNodeTestMatrix === 'runtime') {
+        return json(route, {
+          success: false,
+          result: {
+            ok: false,
+            exitCode: 2,
+            durationMs: 103,
+            stdout: '',
+            stderr: 'runtime stderr captured: bad input',
+            parsedOutput: null,
+            error: { category: 'runtime_error', message: 'runtime stderr captured: bad input' },
+            cases: [
+              {
+                ok: true,
+                testCaseId: 'preflight-pass',
+                testCaseName: 'Preflight pass',
+                exitCode: 0,
+                durationMs: 42,
+                stdout: '{"summary":"ok","result":{"text":"OK"},"status":"completed"}',
+                stderr: '',
+                parsedOutput: { summary: 'ok', result: { text: 'OK' }, status: 'completed' },
+                assertionFailures: [],
+              },
+              {
+                ok: false,
+                testCaseId: 'runtime-fail',
+                testCaseName: 'Runtime fail',
+                exitCode: 2,
+                durationMs: 61,
+                stdout: '',
+                stderr: 'runtime stderr captured: bad input',
+                parsedOutput: null,
+                error: { category: 'runtime_error', message: 'runtime stderr captured: bad input' },
+                assertionFailures: [],
               },
             ],
           },
@@ -366,6 +442,17 @@ async function screenshot(page: Page, name: string) {
   await page.screenshot({ path, fullPage: true });
   const file = await stat(path);
   expect(file.size).toBeGreaterThan(0);
+}
+
+async function openCustomNodeTestMatrix(page: Page) {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Editor' }).click();
+  await page.getByTestId('workflow-generate-custom-node').first().click();
+  await page.getByRole('button', { name: 'Generate draft' }).click();
+  await expect(page.getByTestId('workflow-ai-node-draft-review')).toBeVisible();
+  await page.getByRole('button', { name: 'Run tests' }).click();
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toBeVisible();
 }
 
 test('REQ-049 captures Workflow Studio editor, runner, approval, and history @screenshot', async ({ page }) => {
@@ -465,6 +552,31 @@ test('REQ-212C captures custom node test matrix review UI @screenshot', async ({
   await expect(page.getByTestId('workflow-python-node-assertion-failures')).toContainText('result.text');
   await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
   await screenshot(page, 'REQ-212C-test-review-matrix.png');
+});
+
+test('REQ-212D captures passing custom node test matrix evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'passing' });
+  await openCustomNodeTestMatrix(page);
+  await expect(page.getByTestId('workflow-python-node-test-case')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeEnabled();
+  await screenshot(page, 'REQ-212D-test-matrix-pass.png');
+});
+
+test('REQ-212D captures assertion failure custom node test matrix evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'mixed' });
+  await openCustomNodeTestMatrix(page);
+  await expect(page.getByTestId('workflow-python-node-assertion-failures')).toContainText('result.text');
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
+  await screenshot(page, 'REQ-212D-test-matrix-assertion-failure.png');
+});
+
+test('REQ-212D captures runtime error custom node test matrix evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { customNodeTestMatrix: 'runtime' });
+  await openCustomNodeTestMatrix(page);
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toContainText('runtime_error');
+  await expect(page.getByTestId('workflow-python-node-test-matrix')).toContainText('runtime stderr captured');
+  await expect(page.getByRole('button', { name: 'Install node' })).toBeDisabled();
+  await screenshot(page, 'REQ-212D-test-matrix-runtime-error.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {
