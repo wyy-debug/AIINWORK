@@ -24,8 +24,9 @@ describe('useChatComposerState OpenCode-style subagent invocation', () => {
 
     expect(source).toContain('sourceSessionId?: string');
     expect(source).toContain('oneShotSourceSessionIdRef');
-    expect(source).toContain('const concreteProgrammaticSessionId');
-    expect(source).toContain('concreteProgrammaticSessionId || fallbackConcreteSessionId');
+    expect(source).toContain('resolveChatSendSessionRouting');
+    expect(source).toContain('oneShotSourceSessionId: oneShotSourceSessionIdRef.current');
+    expect(source).toContain('const backendSessionId = sessionRouting.backendSessionId');
     expect(source).toContain('oneShotSourceSessionIdRef.current = null');
   });
 });

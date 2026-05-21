@@ -3,6 +3,10 @@ import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, t
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import { notifyAgentCompletion } from '../../../utils/nativeNotifications';
+import {
+  isTemporaryChatSessionId as isTemporarySessionId,
+  shouldPromoteCreatedSessionToActiveView,
+} from '../utils/chatSessionRouting';
 import type {
   AgentRuntimeDiagnostics,
   PendingPermissionRequest,
@@ -13,9 +17,6 @@ type PendingViewSession = {
   sessionId: string | null;
   startedAt: number;
 };
-
-const isTemporarySessionId = (sessionId: string | null | undefined) =>
-  Boolean(sessionId && sessionId.startsWith('new-session-'));
 
 type LatestChatMessage = {
   type?: string;
@@ -356,8 +357,19 @@ export function useChatRealtimeHandlers({
         const temporarySessionId = isTemporarySessionId(currentSessionId)
           ? currentSessionId
           : pendingViewSessionRef.current?.sessionId;
+        const shouldPromoteCreatedSession = shouldPromoteCreatedSessionToActiveView({
+          selectedSessionId: selectedSession?.id || null,
+          currentSessionId,
+          pendingViewSessionId: pendingViewSessionRef.current?.sessionId || null,
+          newSessionId,
+        });
 
-        if (temporarySessionId && isTemporarySessionId(temporarySessionId) && temporarySessionId !== newSessionId) {
+        if (
+          shouldPromoteCreatedSession
+          && temporarySessionId
+          && isTemporarySessionId(temporarySessionId)
+          && temporarySessionId !== newSessionId
+        ) {
           sessionStore.replaceSessionId(temporarySessionId, newSessionId);
           temporarySessionAliasesRef.current.set(temporarySessionId, newSessionId);
           setPromptInjectionDebug?.((previous) => {
@@ -372,7 +384,7 @@ export function useChatRealtimeHandlers({
           });
         }
 
-        if (!currentSessionId || currentSessionId.startsWith('new-session-')) {
+        if (shouldPromoteCreatedSession) {
           sessionStorage.setItem('pendingSessionId', newSessionId);
           if (
             pendingViewSessionRef.current
@@ -385,8 +397,8 @@ export function useChatRealtimeHandlers({
           setPendingPermissionRequests((prev) =>
             prev.map((r) => (r.sessionId ? r : { ...r, sessionId: newSessionId })),
           );
+          onNavigateToSession?.(newSessionId);
         }
-        onNavigateToSession?.(newSessionId);
         scheduleProjectsRefresh(350);
         break;
       }
