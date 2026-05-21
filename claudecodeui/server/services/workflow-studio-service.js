@@ -1488,14 +1488,15 @@ function buildAgentPromptPreview(workflow, node, inputs = {}) {
 
 function applyAgentResultContract(node, nodeRun, output = {}, extra = {}) {
   const source = asObject(output);
+  const sessionId = normalizeText(source.sessionId || extra.sessionId, '', 200);
   return {
     ...source,
     summary: normalizeText(source.summary || source.result || `${node.title} completed.`, '', 12000),
     artifacts: Array.isArray(source.artifacts) ? source.artifacts : nodeRun.artifacts || [],
     diffRefs: Array.isArray(source.diffRefs) ? source.diffRefs : [],
     status: normalizeText(source.status, nodeRun.status || 'completed', 80),
-    sessionId: normalizeText(source.sessionId || extra.sessionId, '', 200),
-    sessionLink: normalizeText(source.sessionLink || (extra.sessionId ? `#session=${encodeURIComponent(extra.sessionId)}` : ''), '', 500),
+    sessionId,
+    sessionLink: normalizeText(source.sessionLink || (sessionId ? `#session=${encodeURIComponent(sessionId)}` : ''), '', 500),
     result: source.result ?? source,
   };
 }
@@ -3444,10 +3445,20 @@ export function createWorkflowStudioStore({
           subagentRun,
           Math.min(Math.max(1, Number(node.timeoutMs) || 1000), 1000),
         );
+        const bridgedLogs = [
+          ...(Array.isArray(subagentRun.logs) ? subagentRun.logs : []),
+          ...(Array.isArray(terminalRun.logs) ? terminalRun.logs : []),
+        ].map((entry) => normalizeText(entry?.message || entry, '', 4000)).filter(Boolean);
+        for (const logEntry of bridgedLogs) {
+          if (!nodeRun.logs.includes(logEntry)) nodeRun.logs.push(logEntry);
+        }
+        const subagentArtifacts = Array.isArray(terminalRun.artifacts) ? terminalRun.artifacts : [];
         nodeRun.output = {
           subagentRunId: terminalRun.id,
           status: terminalRun.status,
           result: terminalRun.result || terminalRun.output || null,
+          artifacts: subagentArtifacts,
+          diffRefs: Array.isArray(terminalRun.diffRefs) ? terminalRun.diffRefs : [],
           error: terminalRun.error || '',
         };
         nodeRun.output = applyAgentResultContract(node, nodeRun, {
@@ -3456,6 +3467,7 @@ export function createWorkflowStudioStore({
           sessionId: terminalRun.id,
           sessionLink: `#subagent-run=${encodeURIComponent(terminalRun.id)}`,
         }, { sessionId: terminalRun.id });
+        nodeRun.artifacts.push(...subagentArtifacts);
         nodeRun.artifacts.push({ kind: 'subagent-run', refId: terminalRun.id, title: node.title });
         if (terminalRun.status === 'failed' || terminalRun.status === 'stopped' || terminalRun.status === 'cancelled') {
           throw new Error(terminalRun.error || `Subagent run failed: ${terminalRun.id}`);

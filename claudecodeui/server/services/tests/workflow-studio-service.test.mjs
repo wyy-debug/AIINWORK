@@ -586,6 +586,87 @@ describe('workflow studio service', () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
+  test('agent terminal result can drive downstream node input', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        agent: async () => ({
+          summary: 'Agent summary for downstream review.',
+          status: 'completed',
+          sessionId: 'agent-session-handoff',
+          artifacts: [{ type: 'markdown', title: 'Agent Notes', content: 'handoff notes' }],
+          diffRefs: ['diff://agent-session-handoff'],
+        }),
+        artifact: async ({ nodeInput }) => ({
+          artifact: { type: 'markdown', title: 'Handoff Artifact', content: nodeInput.prompt },
+          output: { summary: nodeInput.prompt },
+        }),
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'agent-handoff-flow',
+      name: 'Agent Handoff Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [
+        { id: 'agent', type: 'agent', title: 'Build Agent', prompt: 'Summarize change' },
+        { id: 'artifact', type: 'artifact', title: 'Review Artifact', prompt: 'Review: {{nodes.agent.output.summary}}' },
+      ],
+      edges: [{ from: 'agent', to: 'artifact' }],
+    });
+
+    const run = await store.createRun('agent-handoff-flow');
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.agent.output).toEqual(expect.objectContaining({
+      summary: 'Agent summary for downstream review.',
+      status: 'completed',
+      sessionId: 'agent-session-handoff',
+      sessionLink: '#session=agent-session-handoff',
+      diffRefs: ['diff://agent-session-handoff'],
+    }));
+    expect(run.nodeRuns.agent.artifacts).toEqual([
+      expect.objectContaining({ type: 'markdown', title: 'Agent Notes', nodeId: 'agent' }),
+    ]);
+    expect(run.nodeRuns.artifact.input.prompt).toBe('Review: Agent summary for downstream review.');
+    expect(run.nodeRuns.artifact.output.summary).toBe('Review: Agent summary for downstream review.');
+  });
+
+  test('subagent terminal logs are bridged into workflow node logs', async () => {
+    const subagentStore = {
+      async createRun() {
+        return { id: 'subagent-run-streaming', status: 'running', logs: ['created subagent'] };
+      },
+      async getRun() {
+        return {
+          id: 'subagent-run-streaming',
+          status: 'completed',
+          result: 'subagent final summary',
+          logs: ['stream: inspected files', 'stream: wrote summary'],
+          artifacts: [{ type: 'markdown', title: 'Subagent Report', content: 'report' }],
+        };
+      },
+    };
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, subagentRunStore: subagentStore });
+    await store.upsertWorkflow({
+      id: 'subagent-stream-flow',
+      name: 'Subagent Stream Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      nodes: [{ id: 'explore', type: 'subagent', title: 'Explore', agentId: 'subagent-explore', prompt: 'Explore', timeoutMs: 1000 }],
+      edges: [],
+    });
+
+    const run = await store.createRun('subagent-stream-flow');
+    expect(run.status).toBe('completed');
+    expect(run.nodeRuns.explore.output.summary).toBe('subagent final summary');
+    expect(run.nodeRuns.explore.logs).toEqual(expect.arrayContaining(['stream: inspected files', 'stream: wrote summary']));
+    expect(run.nodeRuns.explore.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'markdown', title: 'Subagent Report', nodeId: 'explore' }),
+      expect.objectContaining({ kind: 'subagent-run', refId: 'subagent-run-streaming' }),
+    ]));
+  });
+
   test('records checkpoint refs and exposes workflow timeline events', async () => {
     const store = createWorkflowStudioStore({
       persist: false,

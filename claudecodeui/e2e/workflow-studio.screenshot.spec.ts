@@ -239,6 +239,93 @@ const mcpDeniedRun = {
   },
 };
 
+const agentHandoffWorkflow = {
+  ...workflow,
+  id: 'agent-terminal-handoff',
+  name: 'Agent Terminal Handoff',
+  description: 'Explore with subagents, then hand context to a primary agent.',
+  permissionPreset: 'full-auto',
+  nodes: [
+    { id: 'explore', type: 'subagent', title: 'Explore Subagent', agentId: 'subagent-explore', prompt: 'Explore {{inputs.change_request}}', permission: '', position: { x: 80, y: 160 } },
+    { id: 'reviewer', type: 'subagent', title: 'Reviewer Subagent', agentId: 'subagent-reviewer', prompt: 'Review {{nodes.explore.output.summary}}', permission: '', position: { x: 360, y: 160 } },
+    { id: 'build', type: 'agent', title: 'Build Agent', agentId: 'build', prompt: 'Implement using {{nodes.reviewer.output.summary}}', permission: '', position: { x: 640, y: 160 } },
+  ],
+  edges: [
+    { id: 'explore-reviewer', from: 'explore', to: 'reviewer', mode: 'success' },
+    { id: 'reviewer-build', from: 'reviewer', to: 'build', mode: 'success' },
+  ],
+};
+
+const agentHandoffRun = {
+  id: 'workflow-run-agent-handoff',
+  workflowId: agentHandoffWorkflow.id,
+  workflowName: agentHandoffWorkflow.name,
+  status: 'completed',
+  createdAt: Date.now(),
+  nodeRuns: {
+    explore: {
+      nodeId: 'explore',
+      type: 'subagent',
+      title: 'Explore Subagent',
+      status: 'completed',
+      attempt: 1,
+      logs: ['created subagent', 'stream: inspected files', 'stream: wrote exploration summary'],
+      input: { prompt: 'Explore trace exporter change' },
+      output: {
+        subagentRunId: 'subagent-run-explore',
+        status: 'completed',
+        summary: 'Explore summary: trace exporter uses strict bookmark windows.',
+        result: 'Explore summary: trace exporter uses strict bookmark windows.',
+        sessionLink: '#session=subagent-run-explore',
+      },
+      artifacts: [{ id: 'artifact-explore', nodeId: 'explore', nodeTitle: 'Explore Subagent', type: 'markdown', title: 'Explore Report', summary: 'Exploration report' }],
+    },
+    reviewer: {
+      nodeId: 'reviewer',
+      type: 'subagent',
+      title: 'Reviewer Subagent',
+      status: 'completed',
+      attempt: 1,
+      logs: ['stream: reviewed downstream risk', 'stream: wrote review summary'],
+      input: { prompt: 'Review Explore summary: trace exporter uses strict bookmark windows.' },
+      output: {
+        subagentRunId: 'subagent-run-reviewer',
+        status: 'completed',
+        summary: 'Reviewer summary: keep bookmark filtering and validate frame ranges.',
+        result: 'Reviewer summary: keep bookmark filtering and validate frame ranges.',
+        sessionLink: '#session=subagent-run-reviewer',
+      },
+      artifacts: [{ id: 'artifact-reviewer', nodeId: 'reviewer', nodeTitle: 'Reviewer Subagent', type: 'markdown', title: 'Reviewer Report', summary: 'Reviewer report' }],
+    },
+    build: {
+      nodeId: 'build',
+      type: 'agent',
+      title: 'Build Agent',
+      status: 'completed',
+      attempt: 1,
+      logs: ['Started agent node.', 'Completed agent node.'],
+      input: { prompt: 'Implement using Reviewer summary: keep bookmark filtering and validate frame ranges.' },
+      output: {
+        summary: 'Build summary: strict export handoff completed.',
+        status: 'completed',
+        sessionId: 'agent-session-build',
+        sessionLink: '#session=agent-session-build',
+        diffRefs: ['diff://agent-session-build'],
+        artifacts: [{ id: 'artifact-build', type: 'markdown', title: 'Build Notes', summary: 'Build notes artifact' }],
+      },
+      artifacts: [{ id: 'artifact-build', nodeId: 'build', nodeTitle: 'Build Agent', type: 'markdown', title: 'Build Notes', summary: 'Build notes artifact' }],
+    },
+  },
+  artifacts: [
+    { id: 'artifact-build', runId: 'workflow-run-agent-handoff', nodeId: 'build', nodeTitle: 'Build Agent', type: 'markdown', title: 'Build Notes', summary: 'Build notes artifact' },
+    { id: 'workflow_artifact_summary_workflow-run-agent-handoff', runId: 'workflow-run-agent-handoff', nodeId: '', type: 'workflow-run-summary', title: 'Agent Terminal Handoff run summary', summary: 'Agent handoff completed.' },
+  ],
+  timelineEvents: [
+    { id: 'event-subagent-stream', category: 'workflow', type: 'workflow_node_completed', payload: { nodeId: 'reviewer' }, createdAt: Date.now() },
+    { id: 'event-agent-terminal', category: 'workflow', type: 'workflow_node_completed', payload: { nodeId: 'build' }, createdAt: Date.now() },
+  ],
+};
+
 const approvalRequest = {
   id: `workflow_approval_${waitingRun.id}_approval`,
   runId: waitingRun.id,
@@ -455,9 +542,11 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean; historicalSnapshot?: boolean; mcpRuntime?: 'success' | 'denied' } = {}) {
-  const activeWorkflow = options.mcpRuntime ? mcpWorkflow : workflow;
-  let runState = options.mcpRuntime === 'success'
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean; historicalSnapshot?: boolean; mcpRuntime?: 'success' | 'denied'; agentHandoff?: boolean } = {}) {
+  const activeWorkflow = options.agentHandoff ? agentHandoffWorkflow : options.mcpRuntime ? mcpWorkflow : workflow;
+  let runState = options.agentHandoff
+    ? agentHandoffRun
+    : options.mcpRuntime === 'success'
     ? mcpSuccessRun
     : options.mcpRuntime === 'denied'
       ? mcpDeniedRun
@@ -893,6 +982,20 @@ test('REQ-217 captures MCP permission deny evidence @screenshot', async ({ page 
   await expect(page.getByTestId('workflow-permission-dry-run')).toContainText('not in workflow allowlist');
   await expect(page.getByTestId('workflow-failure-classifier')).toContainText('permission');
   await screenshot(page, 'REQ-217D-mcp-permission-deny.png');
+});
+
+test('REQ-218 captures agent terminal handoff run evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { agentHandoff: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-agent-node-result')).toContainText('Build summary');
+  await expect(page.getByTestId('workflow-agent-session-open')).toContainText('#session=agent-session-build');
+  await expect(page.getByTestId('workflow-subagent-streaming-logs')).toContainText('stream: wrote review summary');
+  await expect(page.getByTestId('workflow-agent-handoff-output')).toContainText('Reviewer summary');
+  await screenshot(page, 'REQ-218D-agent-handoff-run.png');
 });
 
 test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {

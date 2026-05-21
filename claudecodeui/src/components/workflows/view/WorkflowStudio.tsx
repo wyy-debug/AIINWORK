@@ -1038,11 +1038,39 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
       ? dangerous.map((node) => `${node.title}: force approval for ${node.command}`).join('; ')
       : 'No dangerous shell pattern detected; destructive/download/reset commands force approval.';
   }, [draft.nodes, workflowSecurity]);
+  const agentTerminalRows = useMemo(() => Object.values(selectedRun?.nodeRuns || {})
+    .filter((nodeRun) => nodeRun.type === 'agent' || nodeRun.type === 'subagent')
+    .map((nodeRun) => {
+      const output = isRecord(nodeRun.output) ? nodeRun.output : {};
+      const sessionId = String(output.sessionId || output.subagentRunId || '');
+      const sessionLink = String(output.sessionLink || (sessionId ? `#session=${encodeURIComponent(sessionId)}` : ''));
+      const result = output.result ?? output.summary ?? '';
+      const logs = [
+        ...(Array.isArray(nodeRun.logs) ? nodeRun.logs : []),
+        ...(Array.isArray(output.logs) ? output.logs.map((entry) => isRecord(entry) ? String(entry.message || '') : String(entry || '')) : []),
+      ].filter(Boolean);
+      return {
+        nodeId: nodeRun.nodeId,
+        title: nodeRun.title,
+        type: nodeRun.type,
+        status: nodeRun.status,
+        summary: String(output.summary || (typeof result === 'string' ? result : stringifyValue(result)) || nodeRun.error || nodeRun.status),
+        sessionId,
+        sessionLink,
+        diffRefs: Array.isArray(output.diffRefs) ? output.diffRefs.map((entry) => String(entry)) : [],
+        artifactCount: (nodeRun.artifacts || []).length,
+        logs,
+        handoffInput: stringifyValue(nodeRun.input || {}).slice(0, 260),
+      };
+    }), [selectedRun]);
   const agentSessionLinks = useMemo(() => (Array.isArray(agentBridgeState?.sessionLinks) && agentBridgeState.sessionLinks.length > 0
     ? agentBridgeState.sessionLinks.map((link: any) => `${link.nodeId}: ${link.sessionLink || link.sessionId || link.status}`)
     : runs.flatMap((run) => Object.values(run.nodeRuns || {})
     .filter((nodeRun) => nodeRun.type === 'agent' || nodeRun.type === 'subagent')
-    .map((nodeRun) => `${run.workflowName} / ${nodeRun.title}: ${nodeRun.status}`))).slice(0, 4), [agentBridgeState, runs]);
+    .map((nodeRun) => {
+      const output = isRecord(nodeRun.output) ? nodeRun.output : {};
+      return `${run.workflowName} / ${nodeRun.title}: ${String(output.sessionLink || output.sessionId || output.subagentRunId || nodeRun.status)}`;
+    }))).slice(0, 4), [agentBridgeState, runs]);
   const agentPromptPreview = useMemo(() => {
     const backendNode = agentBridgeState?.agentNodes?.find((node: any) => node.nodeId === selectedNode?.id);
     return backendNode?.promptPreview || (selectedNode ? `${selectedNode.title}: ${selectedNode.prompt || selectedNode.command || selectedNode.condition || 'No prompt configured.'}` : 'Select an agent node to preview final prompt/context.');
@@ -4484,6 +4512,37 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <div className="rounded border border-border p-2" data-testid="workflow-agent-result-contract">
                   <span className="block font-semibold text-foreground">Agent result contract</span>
                   <span>{agentResultContract}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-agent-node-result">
+                  <span className="block font-semibold text-foreground">Agent terminal result</span>
+                  {agentTerminalRows.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {agentTerminalRows.map((row) => (
+                        <div key={row.nodeId} className="rounded border border-border bg-background/70 p-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-foreground">{row.title}</span>
+                            <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', statusTone[row.status] || statusTone.pending)}>{row.status}</span>
+                          </div>
+                          <p className="mt-1 text-foreground">{row.summary}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">Artifacts: {row.artifactCount} · Diff refs: {row.diffRefs.join(', ') || 'none'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span>No agent or subagent terminal results yet.</span>
+                  )}
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-agent-session-open">
+                  <span className="block font-semibold text-foreground">Open agent sessions</span>
+                  <span>{agentTerminalRows.map((row) => row.sessionLink || row.sessionId).filter(Boolean).join(' | ') || 'No terminal session links recorded.'}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-subagent-streaming-logs">
+                  <span className="block font-semibold text-foreground">Subagent streaming logs</span>
+                  <span>{agentTerminalRows.filter((row) => row.type === 'subagent').flatMap((row) => row.logs).slice(-4).join(' | ') || 'No subagent stream logs bridged yet.'}</span>
+                </div>
+                <div className="rounded border border-border p-2" data-testid="workflow-agent-handoff-output">
+                  <span className="block font-semibold text-foreground">Agent handoff input</span>
+                  <span>{agentTerminalRows.map((row) => `${row.title}: ${row.handoffInput}`).join(' | ') || 'No upstream output has been handed to an agent node yet.'}</span>
                 </div>
                 <div className="rounded border border-border p-2" data-testid="workflow-subagent-pool-limit">
                   <span className="block font-semibold text-foreground">Subagent pool limit</span>

@@ -652,4 +652,20 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).toContain('REQ-212D-test-matrix-assertion-failure.png');
     expect(screenshotSpec).toContain('REQ-212D-test-matrix-runtime-error.png');
   });
+
+  it('shows workflow agent and subagent terminal handoff evidence in Runs', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const serviceSource = readFileSync(resolve(currentDir, '../../../../server/services/workflow-studio-service.js'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(serviceSource).toContain('applyAgentResultContract');
+    expect(serviceSource).toContain('waitForSubagentTerminal');
+    expect(serviceSource).toContain('subagentArtifacts');
+    expect(studioSource).toContain('agentTerminalRows');
+    expect(studioSource).toContain('data-testid="workflow-agent-node-result"');
+    expect(studioSource).toContain('data-testid="workflow-agent-session-open"');
+    expect(studioSource).toContain('data-testid="workflow-subagent-streaming-logs"');
+    expect(studioSource).toContain('data-testid="workflow-agent-handoff-output"');
+    expect(screenshotSpec).toContain('REQ-218D-agent-handoff-run.png');
+  });
 });
