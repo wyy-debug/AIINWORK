@@ -762,6 +762,56 @@ describe('workflow studio service', () => {
     ]));
   });
 
+  test('creates runs with resolver-backed preview and execution snapshots', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      autoExecute: false,
+      agentResolver,
+    });
+    await store.upsertWorkflow({
+      id: 'snapshot-flow',
+      name: 'Snapshot Flow',
+      profileId: 'build',
+      permissionPreset: 'full-auto',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'agent', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+
+    const validation = await store.validateRun('snapshot-flow', { inputs: { change_request: 'snapshot me' } });
+    const run = await store.createRun('snapshot-flow', {
+      inputs: { change_request: 'snapshot me' },
+      projectPath: 'E:\\AIINWORK',
+      sessionId: 'session-snapshot',
+    });
+
+    expect(run.status).toBe('queued');
+    expect(run.previewSnapshot).toMatchObject({
+      workflowId: 'snapshot-flow',
+      resolverVersion: expect.any(String),
+      inputSnapshot: { change_request: 'snapshot me' },
+      dependencyRefs: expect.objectContaining({
+        workflowDigest: expect.any(String),
+        profileId: 'build',
+        permissionPreset: 'full-auto',
+        nodePackages: [],
+      }),
+    });
+    expect(run.executionInputSnapshot).toMatchObject({
+      workflowId: 'snapshot-flow',
+      resolverVersion: run.previewSnapshot.resolverVersion,
+      inputSnapshot: { change_request: 'snapshot me' },
+      dependencyRefs: run.previewSnapshot.dependencyRefs,
+    });
+
+    const previewAgent = validation.preview.nodes.find((node) => node.nodeId === 'agent');
+    const executionAgent = run.executionInputSnapshot.nodes.find((node) => node.nodeId === 'agent');
+    expect(executionAgent.resolvedInput).toEqual(previewAgent.resolvedInput);
+    expect(run.executionInputSnapshot.nodes).toEqual(run.previewSnapshot.nodes);
+  });
+
   test('clones workflow templates with manifest metadata into editable workflows', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.ready();

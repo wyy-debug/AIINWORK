@@ -58,6 +58,7 @@ const PERMISSION_ACTIONS = new Set(['allow', 'ask', 'deny']);
 const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
 const WORKFLOW_GOVERNANCE_STATUSES = new Set(['draft', 'published', 'deprecated']);
 const WORKFLOW_COMPLIANCE_LABELS = new Set(['data-sensitive', 'external-network', 'code-write', 'secret-access', 'mcp-enabled']);
+const WORKFLOW_RUN_RESOLVER_VERSION = 'workflow-run-resolver/1';
 const PYTHON_NODE_MANIFEST_VERSION = '1';
 const PYTHON_NODE_DEFAULT_TIMEOUT_MS = 30000;
 const PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES = 5 * 1024 * 1024;
@@ -1939,6 +1940,9 @@ function normalizeRun(input, now) {
     sessionId: normalizeText(source.sessionId, '', 240),
     inputs: asObject(source.inputs),
     profileSnapshot: asObject(source.profileSnapshot),
+    previewSnapshot: asObject(source.previewSnapshot),
+    executionInputSnapshot: asObject(source.executionInputSnapshot),
+    resolverVersion: normalizeText(source.resolverVersion || source.executionInputSnapshot?.resolverVersion || source.previewSnapshot?.resolverVersion, '', 80),
     nodeRuns,
     queue: createQueueState(source.queue, now),
     logs: Array.isArray(source.logs) ? source.logs : [],
@@ -2191,6 +2195,33 @@ export function createWorkflowStudioStore({
 
   function getNodePackageForType(type) {
     return nodePackages.find((item) => item.enabled !== false && item.definition?.type === type) || null;
+  }
+
+  function buildRunInputs(workflow, providedInputs = {}) {
+    const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
+    Object.assign(runInputs, asObject(providedInputs));
+    return runInputs;
+  }
+
+  function collectWorkflowDependencyRefs(workflow) {
+    const packageRefs = new Map();
+    for (const node of workflow.nodes || []) {
+      const nodePackage = getNodePackageForType(node.type);
+      if (!nodePackage) continue;
+      packageRefs.set(nodePackage.id, {
+        id: nodePackage.id,
+        type: nodePackage.definition?.type || node.type,
+        version: normalizeText(nodePackage.manifest?.version || nodePackage.manifest?.packageVersion || nodePackage.definition?.version, '', 80),
+        language: normalizeText(nodePackage.manifest?.language, '', 40),
+        status: normalizeText(nodePackage.status, '', 80),
+      });
+    }
+    return {
+      workflowDigest: workflowDefinitionDigest(workflow),
+      profileId: workflow.profileId,
+      permissionPreset: workflow.permissionPreset,
+      nodePackages: [...packageRefs.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    };
   }
 
   function generatePythonNodeDraft(input = {}) {
@@ -2610,9 +2641,7 @@ export function createWorkflowStudioStore({
       error.validation = validation;
       throw error;
     }
-    const providedInputs = asObject(input.inputs);
-    const runInputs = Object.fromEntries((runnableWorkflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
-    Object.assign(runInputs, providedInputs);
+    const runInputs = buildRunInputs(runnableWorkflow, input.inputs);
     const inputValidation = validateRunInputs(runnableWorkflow, runInputs);
     if (!inputValidation.valid) {
       const error = new Error(inputValidation.errors.map((entry) => entry.message).join('; '));
@@ -2620,6 +2649,7 @@ export function createWorkflowStudioStore({
       error.validation = inputValidation;
       throw error;
     }
+    const runPlan = resolveWorkflowRunPlan(runnableWorkflow, { runInputs });
 
     const agent = await agentResolver(runnableWorkflow.profileId);
     const timestamp = now();
@@ -2638,6 +2668,9 @@ export function createWorkflowStudioStore({
         governanceStatus: normalizeWorkflowGovernance(workflow).status,
         publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
       },
+      previewSnapshot: runPlan.previewSnapshot,
+      executionInputSnapshot: runPlan.executionInputSnapshot,
+      resolverVersion: runPlan.resolverVersion,
       queue: {
         state: autoExecute ? 'running' : 'queued',
         maxConcurrency: runnableWorkflow.maxConcurrency,
@@ -2954,6 +2987,43 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function resolveWorkflowRunPlan(workflow, { runInputs = {}, nodeTypeDefinitions = null } = {}) {
+    const definitions = Array.isArray(nodeTypeDefinitions) && nodeTypeDefinitions.length > 0
+      ? nodeTypeDefinitions
+      : getStoreNodeTypeDefinitions();
+    const definitionValidation = validateWorkflowDefinition(workflow, definitions).validation;
+    const inputValidation = validateRunInputs(workflow, runInputs);
+    const errors = [
+      ...definitionValidation.errors,
+      ...inputValidation.errors,
+      ...validateNodeConfigs(workflow, definitions),
+      ...validateWorkflowVariables(workflow, definitions),
+      ...validateWorkflowDependencies(workflow),
+    ];
+    const dependencyRefs = collectWorkflowDependencyRefs(workflow);
+    const preview = buildRunDryPreview(workflow, runInputs, errors, definitions);
+    const snapshot = {
+      ...preview,
+      resolverVersion: WORKFLOW_RUN_RESOLVER_VERSION,
+      generatedAt: nowIso(now),
+      dependencyRefs,
+    };
+    return {
+      valid: errors.length === 0,
+      workflowId: workflow.id,
+      runInputs: clone(runInputs),
+      errors,
+      warnings: definitionValidation.warnings,
+      nodeTypeDefinitions: definitions,
+      availableVariables: buildAvailableVariables(workflow, definitions),
+      dependencyRefs,
+      resolverVersion: WORKFLOW_RUN_RESOLVER_VERSION,
+      preview: clone(snapshot),
+      previewSnapshot: clone(snapshot),
+      executionInputSnapshot: clone(snapshot),
+    };
+  }
+
   async function validateRun(workflowId, input = {}) {
     await load();
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
@@ -2962,28 +3032,18 @@ export function createWorkflowStudioStore({
       error.statusCode = 404;
       throw error;
     }
-    const nodeTypeDefinitions = getStoreNodeTypeDefinitions();
-    const definitionValidation = validateWorkflowDefinition(workflow, nodeTypeDefinitions).validation;
-    const providedInputs = asObject(input.inputs);
-    const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
-    Object.assign(runInputs, providedInputs);
-    const inputValidation = validateRunInputs(workflow, runInputs);
-    const errors = [
-      ...definitionValidation.errors,
-      ...inputValidation.errors,
-      ...validateNodeConfigs(workflow, nodeTypeDefinitions),
-      ...validateWorkflowVariables(workflow, nodeTypeDefinitions),
-      ...validateWorkflowDependencies(workflow),
-    ];
-    const preview = buildRunDryPreview(workflow, runInputs, errors, nodeTypeDefinitions);
+    const runnableWorkflow = getRunnableWorkflow(workflow);
+    const plan = resolveWorkflowRunPlan(runnableWorkflow, {
+      runInputs: buildRunInputs(runnableWorkflow, input.inputs),
+    });
     return {
-      valid: errors.length === 0,
-      workflowId: workflow.id,
-      errors,
-      warnings: definitionValidation.warnings,
-      availableVariables: buildAvailableVariables(workflow, nodeTypeDefinitions),
-      nodeTypes: nodeTypeDefinitions,
-      preview,
+      valid: plan.valid,
+      workflowId: runnableWorkflow.id,
+      errors: plan.errors,
+      warnings: plan.warnings,
+      availableVariables: plan.availableVariables,
+      nodeTypes: plan.nodeTypeDefinitions,
+      preview: plan.preview,
     };
   }
 
