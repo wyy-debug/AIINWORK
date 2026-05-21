@@ -22,6 +22,7 @@ describe('E2E screenshot evidence gate', () => {
     expect(existsSync(resolve(root, '../docs/verification/req-001-008-screenshot-backfill.md'))).toBe(true);
     expect(existsSync(resolve(root, '../docs/verification/workflow-real-screenshot-gate.md'))).toBe(true);
     expect(existsSync(resolve(root, '../docs/verification/workflow-studio-req213-data-contract.md'))).toBe(true);
+    expect(existsSync(resolve(root, '../docs/verification/workflow-studio-req214-snapshot-replay.md'))).toBe(true);
 
     const spec = readFileSync(resolve(root, 'e2e/agent-capabilities.screenshot.spec.ts'), 'utf8');
     [
@@ -151,6 +152,8 @@ describe('E2E screenshot evidence gate', () => {
       'REQ-213B-run-lineage-detail.png',
       'REQ-213C-missing-variable-diagnostics.png',
       'REQ-213C-missing-variable-click-select.png',
+      'REQ-214C-historical-run-snapshot.png',
+      'REQ-214D-snapshot-replay-evidence.png',
     ].forEach((screenshotName) => {
       const workflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
       const realWorkflowSpec = readFileSync(resolve(root, 'e2e/workflow-studio-real.screenshot.spec.ts'), 'utf8');

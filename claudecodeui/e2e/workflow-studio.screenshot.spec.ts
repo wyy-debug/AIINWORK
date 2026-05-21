@@ -123,6 +123,13 @@ const completedRun = {
 const historicalRun = {
   ...waitingRun,
   id: 'workflow-run-historical',
+  timelineEvents: [
+    { id: 'event-created', category: 'workflow', type: 'workflow_run_created', payload: { workflowId: workflow.id, workflowName: 'Agent Review Delivery Snapshot' }, createdAt: Date.now() - 3000 },
+    { id: 'event-explore-started', category: 'workflow', type: 'workflow_node_started', payload: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent' }, createdAt: Date.now() - 2500 },
+    { id: 'event-explore-completed', category: 'workflow', type: 'workflow_node_completed', payload: { nodeId: 'explore', type: 'subagent', title: 'Explore Subagent' }, createdAt: Date.now() - 2000 },
+    { id: 'event-approval-waiting', category: 'workflow', type: 'workflow_node_waiting_approval', payload: { nodeId: 'approval', type: 'approval', title: 'Human Approval' }, createdAt: Date.now() - 1500 },
+    { id: 'event-status', category: 'workflow', type: 'workflow_run_status', payload: { status: 'waiting_approval' }, createdAt: Date.now() - 1000 },
+  ],
   runSnapshot: {
     snapshotVersion: 1,
     capturedAt: '2026-05-21T09:00:00.000Z',
@@ -336,6 +343,7 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
     }
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
     if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
+    if (path === `/api/workflow-runs/${runState.id}/events`) return json(route, { success: true, events: runState.timelineEvents || [] });
     if (path === `/api/workflow-runs/${waitingRun.id}/nodes/approval/control`) {
       runState = completedRun;
       return json(route, { success: true, run: runState });
@@ -745,6 +753,21 @@ test('REQ-214C captures historical run snapshot and drift indicators @screenshot
   await expect(page.getByTestId('workflow-run-definition-drift')).toContainText('Changed since run');
   await expect(page.getByTestId('workflow-run-snapshot-details')).toContainText('Agent Review Delivery Snapshot');
   await screenshot(page, 'REQ-214C-historical-run-snapshot.png');
+});
+
+test('REQ-214D captures snapshot replay evidence gate @screenshot', async ({ page }) => {
+  await installMockApi(page, { historicalSnapshot: true });
+  await page.addInitScript(() => {
+    localStorage.setItem('workflowStudio.uiMode', 'advanced');
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-run-snapshot-badge')).toContainText('Historical snapshot');
+  await expect(page.getByTestId('workflow-replay-visualizer')).toContainText('events');
+  await expect(page.getByTestId('workflow-replay-visualizer')).toContainText('snapshot loaded');
+  await page.getByTestId('workflow-replay-visualizer').scrollIntoViewIfNeeded();
+  await screenshot(page, 'REQ-214D-snapshot-replay-evidence.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {
