@@ -36,6 +36,7 @@ run(bunExe, ['run', 'typecheck'], { cwd: claudeCodeRoot });
 run('npm', ['run', 'test:unit']);
 run('npm', ['run', 'typecheck']);
 run('npm', ['run', 'check:mojibake']);
+run('npm', ['run', 'workflow:quality-gate']);
 run(process.execPath, ['scripts/package-electron-win.mjs'], {
   env: {
     ARGUS_PACKAGE_CHANNEL: 'release',

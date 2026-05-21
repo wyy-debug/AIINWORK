@@ -35,6 +35,7 @@
     "test:e2e:ui": "playwright test --ui --config=playwright.config.ts",
     "test:e2e:screenshots": "playwright test --config=playwright.config.ts --grep @screenshot",
     "test:e2e:workflow-real": "playwright test --config=playwright.config.ts e2e/workflow-studio-real.screenshot.spec.ts",
+    "workflow:quality-gate": "node scripts/workflow-release-quality-gate.mjs",
     "check:mojibake": "node scripts/check-mojibake.mjs",
     "icons:app": "node scripts/generate-app-icons.mjs",
     "package:preview-win": "node scripts/package-preview-win.mjs",

@@ -683,4 +683,17 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).toContain('REQ-219C-package-export-governance.png');
     expect(screenshotSpec).toContain('REQ-219D-trust-smoke-governance.png');
   });
+
+  it('surfaces release quality gate evidence before Windows packaging', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const packageJson = readFileSync(resolve(currentDir, '../../../../package.json'), 'utf8');
+    const packageRelease = readFileSync(resolve(currentDir, '../../../../scripts/package-release-win.mjs'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(packageJson).toContain('workflow:quality-gate');
+    expect(packageRelease).toContain("workflow:quality-gate");
+    expect(studioSource).toContain('data-testid="workflow-release-quality-gate"');
+    expect(screenshotSpec).toContain('REQ-220C-readiness-dashboard.png');
+    expect(screenshotSpec).not.toContain('REQ-220-mobile');
+  });
 });

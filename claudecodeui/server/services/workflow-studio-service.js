@@ -5657,13 +5657,58 @@ export function createWorkflowStudioStore({
 
   function getReleaseSmokeMatrix() {
     const readiness = getReleaseReadiness();
+    const allNodeRuns = runs.flatMap((run) => Object.values(run.nodeRuns || {}));
     const matrix = [
-      { id: 'templates', label: 'Template smoke', status: templateSmokeResults.some((item) => item.status === 'passed') ? 'passed' : 'needs_evidence' },
-      { id: 'permissions', label: 'Permission allow/ask/deny', status: 'passed' },
-      { id: 'approvals', label: 'Approval continue/reject', status: runs.some((run) => (run.timelineEvents || []).some((event) => event.type.includes('approval') || event.type.includes('approved'))) ? 'passed' : 'needs_evidence' },
-      { id: 'screenshots', label: 'Real screenshots', status: readiness.gates.find((gate) => gate.id === 'real-screenshot-evidence')?.status || 'needs_evidence' },
-      { id: 'mobile', label: 'Mobile run/approval', status: 'needs_evidence' },
-    ];
+      {
+        id: 'dry-run-preview',
+        label: 'Dry-run preview',
+        status: runs.some((run) => run.previewMatched || run.previewSnapshot || run.executionInputSnapshot) ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "REQ-210"',
+        failureReason: 'No preview snapshot evidence recorded yet.',
+      },
+      {
+        id: 'python-custom-node',
+        label: 'Python custom node',
+        status: getStoreNodeTypeDefinitions().some((definition) => String(definition.type).includes('python') || String(definition.label).toLowerCase().includes('python')) ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "REQ-207"',
+        failureReason: 'No installed Python custom node evidence recorded yet.',
+      },
+      {
+        id: 'approval-ask-deny',
+        label: 'Approval allow/ask/deny',
+        status: runs.some((run) => (run.timelineEvents || []).some((event) => String(event.type).includes('approval') || String(event.type).includes('approved'))) ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "REQ-215"',
+        failureReason: 'No approval decision evidence recorded yet.',
+      },
+      {
+        id: 'artifact-output',
+        label: 'Artifact output',
+        status: runs.some((run) => (run.artifacts || []).length > 0 || Object.values(run.nodeRuns || {}).some((nodeRun) => (nodeRun.artifacts || []).length > 0)) ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "REQ-216"',
+        failureReason: 'No artifact gallery evidence recorded yet.',
+      },
+      {
+        id: 'retry-failed-node',
+        label: 'Retry failed node',
+        status: allNodeRuns.some((nodeRun) => Number(nodeRun.attempt || 0) > 1) ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "retry"',
+        failureReason: 'No retry attempt evidence recorded yet.',
+      },
+      {
+        id: 'mcp-fixture',
+        label: 'MCP fixture',
+        status: allNodeRuns.some((nodeRun) => nodeRun.type === 'mcp' && nodeRun.status === 'completed') ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "REQ-217"',
+        failureReason: 'No completed MCP fixture run recorded yet.',
+      },
+      {
+        id: 'agent-subagent-handoff',
+        label: 'Agent/Subagent handoff',
+        status: allNodeRuns.some((nodeRun) => (nodeRun.type === 'agent' || nodeRun.type === 'subagent') && nodeRun.status === 'completed') ? 'passed' : 'needs_evidence',
+        command: 'npm run test:e2e:screenshots -- --grep "REQ-218"',
+        failureReason: 'No terminal agent/subagent handoff evidence recorded yet.',
+      },
+    ].map((item) => item.status === 'passed' ? { ...item, failureReason: '' } : item);
     return {
       generatedAt: nowIso(now),
       passed: matrix.filter((item) => item.status === 'passed').length,

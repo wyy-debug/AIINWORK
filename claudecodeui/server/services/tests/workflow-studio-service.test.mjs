@@ -2301,7 +2301,17 @@ describe('workflow studio service', () => {
     expect(retention).toMatchObject({ maxRuns: 1, maxLogEntriesPerNode: 1 });
     expect(applied).toMatchObject({ removedRuns: expect.any(Number), policy: expect.objectContaining({ maxRuns: 1 }) });
     expect(sizeGuard).toMatchObject({ workflowCount: 1, status: 'ok', estimatedBytes: expect.any(Number) });
-    expect(smokeMatrix).toMatchObject({ total: 5, matrix: expect.any(Array) });
+    expect(smokeMatrix).toMatchObject({ total: 7, matrix: expect.any(Array) });
+    expect(smokeMatrix.matrix.map((item) => item.id)).toEqual(expect.arrayContaining([
+      'dry-run-preview',
+      'python-custom-node',
+      'approval-ask-deny',
+      'artifact-output',
+      'retry-failed-node',
+      'mcp-fixture',
+      'agent-subagent-handoff',
+    ]));
+    expect(smokeMatrix.matrix.some((item) => item.id === 'mobile')).toBe(false);
     expect(doctor).toMatchObject({ status: expect.stringMatching(/passed|warning|failed/), findings: expect.any(Array) });
     expect(dashboard).toMatchObject({
       status: expect.stringMatching(/ready|needs_attention/),

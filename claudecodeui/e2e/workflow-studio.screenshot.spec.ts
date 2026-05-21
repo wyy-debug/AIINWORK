@@ -559,6 +559,32 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
         : waitingRun;
   let nodeTypes = options.withInstalledNodePackage ? [...builtinNodeTypes, customPythonNodeType] : [...builtinNodeTypes];
   let installedPackages: unknown[] = options.withInstalledNodePackage ? [installedPythonNodePackage] : [];
+  const releaseSmokeMatrix = {
+    generatedAt: new Date().toISOString(),
+    passed: 6,
+    total: 7,
+    matrix: [
+      { id: 'dry-run-preview', label: 'Dry-run preview', status: 'passed', command: 'npm run test:e2e:screenshots -- --grep "REQ-210C"', failureReason: '' },
+      { id: 'python-custom-node', label: 'Python custom node', status: 'passed', command: 'npm run test:e2e:screenshots -- --grep "REQ-207"', failureReason: '' },
+      { id: 'approval-ask-deny', label: 'Approval ask/deny', status: 'passed', command: 'npm run test:e2e:screenshots -- --grep "REQ-215"', failureReason: '' },
+      { id: 'artifact-output', label: 'Artifact output', status: 'passed', command: 'npm run test:e2e:screenshots -- --grep "REQ-216"', failureReason: '' },
+      { id: 'retry-failed-node', label: 'Retry failed node', status: 'needs_evidence', command: 'npm run test:e2e:screenshots -- --grep "REQ-210D"', failureReason: 'No retry attempt evidence recorded yet.' },
+      { id: 'mcp-fixture', label: 'MCP fixture', status: 'passed', command: 'npm run test:e2e:screenshots -- --grep "REQ-217"', failureReason: '' },
+      { id: 'agent-subagent-handoff', label: 'Agent/Subagent handoff', status: 'passed', command: 'npm run test:e2e:screenshots -- --grep "REQ-218"', failureReason: '' },
+    ],
+  };
+  const productionDashboard = {
+    generatedAt: new Date().toISOString(),
+    status: 'needs_attention',
+    performance: [],
+    quality: { gates: [] },
+    dependencies: [],
+    security: [],
+    templateSmoke: [],
+    recentFailures: [],
+    migrationDoctor: { status: 'passed', findings: [] },
+    releaseSmokeMatrix,
+  };
 
   await page.addInitScript(() => {
     localStorage.setItem('activeTab', 'workflows');
@@ -572,6 +598,8 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
     if (path.startsWith('/api/conversations')) return json(route, { project: { ...project, name: 'Conversations', sessions: [] } });
     if (path === '/api/workflows/mcp-tool-catalog') return json(route, { success: true, tools: options.mcpRuntime ? mcpToolCatalog : [] });
     if (path === '/api/workflows/mcp-argument-schema') return json(route, { success: true, schema: options.mcpRuntime ? mcpToolCatalog[0].argumentSchema : { fields: [] } });
+    if (path === '/api/workflows/release-smoke-matrix') return json(route, { success: true, matrix: releaseSmokeMatrix });
+    if (path === '/api/workflows/production-readiness') return json(route, { success: true, dashboard: productionDashboard });
     if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [activeWorkflow] });
     if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes });
     if (path === `/api/workflows/${activeWorkflow.id}`) return json(route, { success: true, workflow: activeWorkflow });
@@ -1039,6 +1067,29 @@ test('REQ-219 captures workflow package governance evidence @screenshot', async 
   await expect(page.getByTestId('workflow-package-trust-smoke-state')).toContainText('community');
   await expect(page.getByTestId('workflow-package-trust-smoke-state')).toContainText('failed');
   await screenshot(page, 'REQ-219D-trust-smoke-governance.png');
+});
+
+test('REQ-220 captures release readiness dashboard evidence @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-release-smoke-matrix')).toContainText('6/7');
+  await expect(page.getByTestId('workflow-release-quality-gate')).toContainText('workflow:quality-gate');
+  await expect(page.getByTestId('workflow-production-readiness-dashboard')).toContainText('needs_attention');
+  await screenshot(page, 'REQ-220C-readiness-dashboard.png');
+});
+
+test('REQ-210D captures retry from failed node evidence @screenshot', async ({ page }) => {
+  await installMockApi(page, { mcpRuntime: 'denied' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-runs').getByText('failed').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-retry-node-only')).toBeVisible();
+  await expect(page.getByTestId('workflow-retry-from-node')).toBeVisible();
+  await screenshot(page, 'REQ-210D-retry-controls.png');
 });
 
 test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {

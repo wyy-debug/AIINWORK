@@ -1244,7 +1244,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     : 'Export/import warns on oversized screenshots, logs, and artifacts.';
   const releaseSmokeMatrix = readinessState?.smokeMatrix
     ? `${readinessState.smokeMatrix.passed}/${readinessState.smokeMatrix.total} release smoke gates passed`
-    : 'Release matrix covers templates, permissions, approvals, screenshots, mobile.';
+    : 'Release matrix covers dry-run, Python node, approval, artifact, retry, MCP, and Agent/Subagent evidence.';
+  const releaseQualityGate = readinessState?.production?.releaseSmokeMatrix
+    ? `${readinessState.production.status}: ${readinessState.production.releaseSmokeMatrix.passed}/${readinessState.production.releaseSmokeMatrix.total} gates; evidence manifest produced by npm run workflow:quality-gate`
+    : 'Run npm run workflow:quality-gate before release packaging to produce the evidence manifest.';
   const migrationDoctor = readinessState?.migrationDoctor
     ? `${readinessState.migrationDoctor.status}: ${readinessState.migrationDoctor.findings?.length || 0} finding(s)`
     : 'Upgrade doctor checks workflow schema, node packages, templates, and compatibility.';
@@ -4691,6 +4694,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <div className="rounded border border-border p-2" data-testid="workflow-data-retention-policy">{dataRetentionPolicy}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-package-size-guard">{packageSizeGuard}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-release-smoke-matrix">{releaseSmokeMatrix}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-release-quality-gate">{releaseQualityGate}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-migration-doctor">{migrationDoctor}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-production-readiness-dashboard">{productionReadinessDashboard}</div>
               </div>
