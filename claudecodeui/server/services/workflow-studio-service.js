@@ -1221,14 +1221,44 @@ function buildTemplateContext(run) {
   };
 }
 
-function buildNodeInput(node, run) {
-  const context = buildTemplateContext(run);
+function buildNodeInputFromContext(node, context) {
   return {
     prompt: renderTemplate(node.prompt || '', context),
     command: renderTemplate(node.command || '', context),
     condition: renderTemplate(node.condition || '', context),
     toolName: renderTemplate(node.toolName || '', context),
     config: clone(node.config || {}),
+  };
+}
+
+function buildNodeInput(node, run) {
+  return buildNodeInputFromContext(node, buildTemplateContext(run));
+}
+
+function previewValueForType(type, pathName) {
+  if (type === 'number' || type === 'integer') return 0;
+  if (type === 'boolean') return false;
+  if (type === 'object') return { preview: pathName };
+  if (type === 'array') return [{ preview: pathName }];
+  return `<${pathName}>`;
+}
+
+function buildDryRunTemplateContext(workflow, runInputs, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+  return {
+    inputs: runInputs || {},
+    nodes: Object.fromEntries((workflow.nodes || []).map((node) => {
+      const definition = getNodeTypeDefinitionFromList(node.type, nodeTypeDefinitions);
+      const output = Object.fromEntries((definition?.outputSchema?.fields || []).map((field) => {
+        const pathName = `nodes.${node.id}.output.${field.name}`;
+        return [field.name, previewValueForType(field.type, pathName)];
+      }));
+      return [node.id, {
+        input: {},
+        output,
+        status: 'preview',
+        error: '',
+      }];
+    })),
   };
 }
 
@@ -2880,6 +2910,50 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function buildRunDryPreview(workflow, runInputs, validationErrors = [], nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+    const context = buildDryRunTemplateContext(workflow, runInputs, nodeTypeDefinitions);
+    const rows = (workflow.nodes || []).map((node) => {
+      const errors = validationErrors
+        .filter((entry) => entry?.nodeId === node.id)
+        .map((entry) => clone(entry));
+      let resolvedInput = {};
+      try {
+        resolvedInput = buildNodeInputFromContext(node, context);
+      } catch (error) {
+        errors.push({
+          code: error?.code === 'missing_variable' ? 'missing_variable' : 'preview_resolution_failed',
+          nodeId: node.id,
+          variable: error?.variable || '',
+          message: error?.message || `Failed to resolve node ${node.id} input preview.`,
+        });
+      }
+      const permissionDecision = resolveNodePermission(workflow, node);
+      const upstream = incomingEdges(workflow, node.id).map((edge) => ({
+        edgeId: edge.id,
+        nodeId: edge.from,
+        mode: edge.mode,
+        condition: edge.condition || '',
+      }));
+      return {
+        nodeId: node.id,
+        type: node.type,
+        title: node.title,
+        resolvedInput,
+        permissionDecision,
+        upstream,
+        blocked: errors.length > 0 || permissionDecision === 'deny',
+        errors,
+      };
+    });
+    return {
+      workflowId: workflow.id,
+      inputSnapshot: clone(runInputs || {}),
+      nodeCount: rows.length,
+      blockedCount: rows.filter((row) => row.blocked).length,
+      nodes: rows,
+    };
+  }
+
   async function validateRun(workflowId, input = {}) {
     await load();
     const workflow = workflows.find((item) => item.id === normalizeText(workflowId));
@@ -2901,6 +2975,7 @@ export function createWorkflowStudioStore({
       ...validateWorkflowVariables(workflow, nodeTypeDefinitions),
       ...validateWorkflowDependencies(workflow),
     ];
+    const preview = buildRunDryPreview(workflow, runInputs, errors, nodeTypeDefinitions);
     return {
       valid: errors.length === 0,
       workflowId: workflow.id,
@@ -2908,6 +2983,7 @@ export function createWorkflowStudioStore({
       warnings: definitionValidation.warnings,
       availableVariables: buildAvailableVariables(workflow, nodeTypeDefinitions),
       nodeTypes: nodeTypeDefinitions,
+      preview,
     };
   }
 

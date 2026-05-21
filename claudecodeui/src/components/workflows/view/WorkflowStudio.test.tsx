@@ -235,6 +235,10 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('rollbackCheckpoint');
     expect(source).toContain('data-testid="workflow-node-dependency-status"');
     expect(source).toContain('data-testid="workflow-dry-run-debugger"');
+    expect(source).toContain('data-testid="workflow-dry-run-preview"');
+    expect(source).toContain('dryRunPreview');
+    expect(source).toContain('resolvedInput');
+    expect(source).toContain('permissionDecision');
     expect(source).toContain('data-testid="workflow-run-console"');
     expect(source).toContain('data-testid="workflow-run-events"');
     expect(source).toContain('data-testid="workflow-node-logs"');

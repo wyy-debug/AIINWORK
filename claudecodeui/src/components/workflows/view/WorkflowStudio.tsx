@@ -117,6 +117,22 @@ type WorkflowPythonNodeTestResult = {
   parsedOutput?: Record<string, unknown>;
 };
 
+type WorkflowDryRunPreview = {
+  workflowId?: string;
+  nodeCount?: number;
+  blockedCount?: number;
+  nodes?: Array<{
+    nodeId?: string;
+    type?: string;
+    title?: string;
+    resolvedInput?: Record<string, unknown>;
+    permissionDecision?: string;
+    upstream?: Array<{ nodeId?: string; mode?: string }>;
+    blocked?: boolean;
+    errors?: Array<{ code?: string; message?: string }>;
+  }>;
+};
+
 type WorkflowPaletteGroup = {
   id: string;
   label: string;
@@ -398,6 +414,7 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const [recentWorkflowIds, setRecentWorkflowIds] = useState<string[]>(() => readStoredIds(recentStorageKey));
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
+  const [dryRunPreview, setDryRunPreview] = useState<WorkflowDryRunPreview | null>(null);
   const [runEvents, setRunEvents] = useState<Record<string, WorkflowRunEvent[]>>({});
   const [nodeLogs, setNodeLogs] = useState<Record<string, WorkflowNodeLog[]>>({});
   const [approvalRequests, setApprovalRequests] = useState<Array<Record<string, unknown>>>([]);
@@ -1423,10 +1440,12 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const validateRun = useCallback(async () => {
     setIsBusy(true);
     setError('');
+    setDryRunPreview(null);
     try {
       const response = await api.validateWorkflowRun(draft.id, { inputs: runInputs });
       const data = await response.json();
       const validation = data.validation || {};
+      setDryRunPreview(validation.preview || null);
       const messages = [
         ...(validation.errors || []).map((item: { message?: string }) => item.message || 'Workflow run validation failed'),
         ...(validation.warnings || []).map((item: { message?: string }) => item.message || 'Workflow run warning'),
@@ -2945,6 +2964,35 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800" data-testid="workflow-dry-run-debugger">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-700">Dry run debugger</h3>
                 {dryRunMessages.map((message) => <div key={message} className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{message}</div>)}
+              </div>
+            )}
+            {dryRunPreview?.nodes && dryRunPreview.nodes.length > 0 && (
+              <div className="mb-3 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700" data-testid="workflow-dry-run-preview">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h3 className="font-semibold text-slate-950">Dry run preview</h3>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600">
+                    {dryRunPreview.blockedCount || 0} blocked / {dryRunPreview.nodeCount || dryRunPreview.nodes.length} nodes
+                  </span>
+                </div>
+                <div className="grid gap-2">
+                  {dryRunPreview.nodes.slice(0, 6).map((node) => (
+                    <div key={node.nodeId || node.title} className={cn('rounded-md border p-2', node.blocked ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50')}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-slate-900">{node.title || node.nodeId}</span>
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-600">{node.permissionDecision || 'allow'}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        {node.type} / upstream {(node.upstream || []).map((edge) => `${edge.nodeId}:${edge.mode}`).join(', ') || 'entry'}
+                      </div>
+                      {node.errors && node.errors.length > 0 && (
+                        <div className="mt-1 text-[11px] text-amber-700">{node.errors.map((item) => item.message || item.code).join('; ')}</div>
+                      )}
+                      {node.resolvedInput && (
+                        <pre className="mt-2 max-h-20 overflow-auto rounded bg-white/80 p-2 text-[10px] text-slate-600">{stringifyValue(node.resolvedInput)}</pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             {renderCanvas()}

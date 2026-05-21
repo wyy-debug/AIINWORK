@@ -707,6 +707,61 @@ describe('workflow studio service', () => {
     ]));
   });
 
+  test('returns per-node dry preview with resolved inputs, blockers, and permission decisions', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'preview-flow',
+      name: 'Preview Flow',
+      profileId: 'build',
+      permissionPreset: 'enterprise-safe',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'explore', type: 'agent', agentId: 'build', prompt: 'Explore {{inputs.change_request}}' },
+        { id: 'review', type: 'agent', agentId: 'build', prompt: 'Review {{nodes.explore.output.summary}}' },
+        { id: 'broken', type: 'agent', agentId: 'build', prompt: 'Broken {{inputs.missing}}' },
+        { id: 'shell', type: 'shell', command: 'npm test' },
+      ],
+      edges: [
+        { from: 'explore', to: 'review' },
+        { from: 'review', to: 'broken' },
+        { from: 'broken', to: 'shell' },
+      ],
+    });
+
+    const result = await store.validateRun('preview-flow', { inputs: { change_request: 'preview me' } });
+
+    expect(result.preview).toMatchObject({
+      workflowId: 'preview-flow',
+      nodeCount: 4,
+      blockedCount: 2,
+    });
+    expect(result.preview.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'explore',
+        type: 'agent',
+        resolvedInput: expect.objectContaining({ prompt: 'Explore preview me' }),
+        permissionDecision: 'allow',
+        blocked: false,
+      }),
+      expect.objectContaining({
+        nodeId: 'review',
+        upstream: expect.arrayContaining([expect.objectContaining({ nodeId: 'explore', mode: 'success' })]),
+        resolvedInput: expect.objectContaining({ prompt: expect.stringContaining('nodes.explore.output.summary') }),
+      }),
+      expect.objectContaining({
+        nodeId: 'broken',
+        blocked: true,
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'missing_input_variable', variable: 'inputs.missing' })]),
+      }),
+      expect.objectContaining({
+        nodeId: 'shell',
+        permissionDecision: 'deny',
+        blocked: true,
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'permission_denied' })]),
+      }),
+    ]));
+  });
+
   test('clones workflow templates with manifest metadata into editable workflows', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     await store.ready();
