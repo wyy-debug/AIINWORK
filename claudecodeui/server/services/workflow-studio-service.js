@@ -3475,23 +3475,166 @@ export function createWorkflowStudioStore({
     };
   }
 
+  function getReplayDefinitionSnapshot(run) {
+    const runSnapshot = asObject(run.runSnapshot);
+    const definitionSnapshot = asObject(runSnapshot.definitionSnapshot);
+    if (Array.isArray(definitionSnapshot.nodes)) {
+      return clone(definitionSnapshot);
+    }
+    const fallbackNodes = Object.values(asObject(run.nodeRuns)).map((nodeRun) => ({
+      id: nodeRun.nodeId,
+      type: nodeRun.type,
+      title: nodeRun.title,
+    }));
+    return {
+      id: run.workflowId,
+      name: run.workflowName,
+      nodes: fallbackNodes,
+      edges: [],
+    };
+  }
+
   function replayRun(runId) {
     const run = runs.find((item) => item.id === normalizeText(runId));
     if (!run) return null;
-    const nodes = Object.fromEntries(Object.entries(run.nodeRuns || {}).map(([nodeId, nodeRun]) => [nodeId, {
-      status: nodeRun.status,
-      attempt: nodeRun.attempt,
-      error: nodeRun.error || '',
-      startedAt: nodeRun.startedAt || null,
-      completedAt: nodeRun.completedAt || null,
+    const events = listRunEvents(run.id);
+    const definitionSnapshot = getReplayDefinitionSnapshot(run);
+    const diagnostics = [];
+    const nodes = Object.fromEntries((definitionSnapshot.nodes || []).map((node) => [node.id, {
+      nodeId: node.id,
+      type: node.type,
+      title: node.title,
+      status: 'pending',
+      attempt: 0,
+      error: '',
+      startedAt: null,
+      completedAt: null,
     }]));
+    const approvals = [];
+    const startedNodes = new Set();
+    let seenRunCreated = false;
+    let replayStatus = 'pending';
+    const ensureNode = (payload = {}) => {
+      const nodeId = normalizeText(payload.nodeId, '', 120);
+      if (!nodeId) return null;
+      if (!nodes[nodeId]) {
+        diagnostics.push({
+          code: 'event_references_unknown_node',
+          nodeId,
+          eventType: payload.eventType || '',
+          message: `Replay event references unknown node ${nodeId}.`,
+        });
+        nodes[nodeId] = {
+          nodeId,
+          type: normalizeText(payload.type, 'unknown', 80),
+          title: normalizeText(payload.title, nodeId, 180),
+          status: 'pending',
+          attempt: 0,
+          error: '',
+          startedAt: null,
+          completedAt: null,
+        };
+      }
+      return nodes[nodeId];
+    };
+    for (const event of events) {
+      const payload = asObject(event.payload);
+      if (event.type === 'workflow_run_created') {
+        seenRunCreated = true;
+        replayStatus = 'running';
+      } else if (event.type === 'workflow_run_queued') {
+        replayStatus = 'queued';
+      } else if (event.type === 'workflow_worker_acquired') {
+        replayStatus = 'running';
+      } else if (event.type === 'workflow_run_recovered') {
+        replayStatus = 'recovering';
+      } else if (event.type === 'workflow_run_cancelled') {
+        replayStatus = 'cancelled';
+      } else if (event.type === 'workflow_run_status') {
+        replayStatus = normalizeText(payload.status, replayStatus, 80);
+      } else if (event.type === 'workflow_node_started') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        node.status = 'running';
+        node.startedAt = event.createdAt;
+        node.error = '';
+        startedNodes.add(node.nodeId);
+      } else if (event.type === 'workflow_node_completed') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        if (!startedNodes.has(node.nodeId)) {
+          diagnostics.push({
+            code: 'out_of_order_node_completed',
+            nodeId: node.nodeId,
+            eventId: event.id,
+            message: `Node ${node.nodeId} completed before a started event was observed.`,
+          });
+        }
+        node.status = 'completed';
+        node.completedAt = event.createdAt;
+        node.error = '';
+      } else if (event.type === 'workflow_node_failed') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        if (!startedNodes.has(node.nodeId)) {
+          diagnostics.push({
+            code: 'out_of_order_node_failed',
+            nodeId: node.nodeId,
+            eventId: event.id,
+            message: `Node ${node.nodeId} failed before a started event was observed.`,
+          });
+        }
+        node.status = 'failed';
+        node.completedAt = event.createdAt;
+        node.error = normalizeText(payload.error, '', 2000);
+      } else if (event.type === 'workflow_node_waiting_approval') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        if (!startedNodes.has(node.nodeId)) {
+          diagnostics.push({
+            code: 'out_of_order_node_waiting_approval',
+            nodeId: node.nodeId,
+            eventId: event.id,
+            message: `Node ${node.nodeId} waited for approval before a started event was observed.`,
+          });
+        }
+        node.status = 'waiting_approval';
+      } else if (event.type === 'workflow_node_rejected') {
+        const node = ensureNode({ ...payload, eventType: event.type });
+        if (!node) continue;
+        node.status = 'failed';
+        node.error = 'Rejected by approval decision.';
+        node.completedAt = event.createdAt;
+      } else if (event.type === 'workflow_node_retry_from') {
+        for (const nodeId of normalizeStringArray(payload.affected, 200)) {
+          if (nodes[nodeId]) nodes[nodeId].attempt += 1;
+        }
+      } else if (event.type === 'workflow_approval_decision') {
+        approvals.push({
+          nodeId: normalizeText(payload.nodeId, '', 120),
+          decision: normalizeText(payload.decision || payload.action, '', 80),
+          reason: normalizeText(payload.reason, '', 1000),
+          eventId: event.id,
+          createdAt: event.createdAt,
+        });
+      }
+    }
+    if (!seenRunCreated) {
+      diagnostics.push({
+        code: 'missing_run_created',
+        message: 'Replay did not observe workflow_run_created before later run events.',
+      });
+    }
     return {
       runId: run.id,
       workflowId: run.workflowId,
-      status: run.status,
+      status: replayStatus || run.status,
+      snapshot: clone(run.runSnapshot || {}),
+      definitionSnapshot,
       nodes,
-      events: listRunEvents(run.id),
-      diagnostics: [],
+      approvals,
+      events,
+      diagnostics,
     };
   }
 

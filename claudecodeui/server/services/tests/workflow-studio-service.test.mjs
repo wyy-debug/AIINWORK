@@ -1195,6 +1195,90 @@ describe('workflow studio service', () => {
     expect(replay.events.map((event) => event.type)).toEqual(expect.arrayContaining(['workflow_node_started', 'workflow_node_completed']));
   });
 
+  test('replays historical runs from snapshots and event logs after definition changes', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      agentResolver,
+      executors: {
+        agent: async ({ node }) => {
+          if (node.id === 'review') throw new Error('review failed from event log');
+          return { summary: `${node.id} done` };
+        },
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'event-replay-flow',
+      name: 'Event Replay Flow',
+      profileId: 'build',
+      nodes: [
+        { id: 'explore', type: 'agent', prompt: 'Explore' },
+        { id: 'review', type: 'agent', prompt: 'Review {{nodes.explore.output.summary}}' },
+      ],
+      edges: [{ from: 'explore', to: 'review' }],
+    });
+
+    const failed = await store.createRun('event-replay-flow');
+    await store.upsertWorkflow({
+      id: 'event-replay-flow',
+      name: 'Changed Current Flow',
+      profileId: 'debug',
+      nodes: [{ id: 'changed', type: 'agent', prompt: 'Changed current definition' }],
+      edges: [],
+    });
+
+    const replay = store.replayRun(failed.id);
+    expect(replay.status).toBe('failed');
+    expect(replay.snapshot.workflowName).toBe('Event Replay Flow');
+    expect(replay.definitionSnapshot.nodes.map((node) => node.id)).toEqual(['explore', 'review']);
+    expect(Object.keys(replay.nodes)).toEqual(['explore', 'review']);
+    expect(replay.nodes.explore.status).toBe('completed');
+    expect(replay.nodes.review.status).toBe('failed');
+    expect(replay.nodes.review.error).toBe('review failed from event log');
+    expect(replay.diagnostics).toEqual([]);
+  });
+
+  test('reports replay diagnostics for missing created events and out-of-order node transitions', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-replay-'));
+    const workflowsPath = path.join(rootDir, 'workflows.json');
+    const runsPath = path.join(rootDir, 'runs.json');
+    const store = createWorkflowStudioStore({
+      workflowsPath,
+      runsPath,
+      persist: true,
+      agentResolver,
+      executors: {
+        agent: async () => ({ summary: 'done' }),
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'diagnostic-replay-flow',
+      name: 'Diagnostic Replay Flow',
+      profileId: 'build',
+      nodes: [{ id: 'agent', type: 'agent', prompt: 'Run' }],
+      edges: [],
+    });
+    const run = await store.createRun('diagnostic-replay-flow');
+    const raw = JSON.parse(await fs.readFile(runsPath, 'utf8'));
+    raw.runs[0].timelineEvents = [
+      raw.runs[0].timelineEvents.find((event) => event.type === 'workflow_node_completed'),
+      ...raw.runs[0].timelineEvents.filter((event) => !['workflow_run_created', 'workflow_node_completed'].includes(event.type)),
+    ].filter(Boolean);
+    await fs.writeFile(runsPath, JSON.stringify(raw, null, 2));
+
+    const reloaded = await createWorkflowStudioStore({
+      workflowsPath,
+      runsPath,
+      persist: true,
+      autoExecute: false,
+      agentResolver,
+    }).ready();
+    const replay = reloaded.replayRun(run.id);
+    expect(replay.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_run_created' }),
+      expect.objectContaining({ code: 'out_of_order_node_completed', nodeId: 'agent' }),
+    ]));
+  });
+
   test('lists approval inbox requests and records audited decisions', async () => {
     const store = createWorkflowStudioStore({
       persist: false,
