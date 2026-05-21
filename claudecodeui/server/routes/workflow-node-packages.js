@@ -61,4 +61,34 @@ router.post('/install', async (req, res) => {
   }
 });
 
+router.post('/:packageId/enable', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const nodePackage = await defaultWorkflowStudioStore.enableNodePackage(req.params.packageId);
+    res.json({ success: true, package: nodePackage });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to enable workflow node package');
+  }
+});
+
+router.post('/:packageId/disable', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const nodePackage = await defaultWorkflowStudioStore.disableNodePackage(req.params.packageId);
+    res.json({ success: true, package: nodePackage });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to disable workflow node package');
+  }
+});
+
+router.delete('/:packageId', async (req, res) => {
+  try {
+    await defaultWorkflowStudioStore.ready();
+    const result = await defaultWorkflowStudioStore.uninstallNodePackage(req.params.packageId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendNodePackageError(res, error, error?.statusCode || 400, 'Failed to uninstall workflow node package');
+  }
+});
+
 export default router;

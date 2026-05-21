@@ -1136,9 +1136,51 @@ describe('workflow studio service', () => {
 
     expect(registered.status).toBe('missing_dependencies');
     expect(store.listNodePackages()).toEqual([
-      expect.objectContaining({ id: 'crashsight-node', enabled: false, status: 'missing_dependencies' }),
+      expect.objectContaining({ id: 'crashsight-node', enabled: false, status: 'missing_dependencies', lifecycleState: 'broken' }),
     ]);
-    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('crashsight-analysis');
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).not.toContain('crashsight-analysis');
+  });
+
+  test('manages workflow node package lifecycle without deleting dependent workflows', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const installed = await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.0.0',
+      configSchema: { fields: [{ name: 'mode', label: 'Mode', type: 'text' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'markdown' }] },
+    });
+
+    expect(installed).toMatchObject({ id: 'formatter-node', enabled: true, status: 'ready', lifecycleState: 'enabled' });
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('formatter');
+
+    await store.upsertWorkflow({
+      id: 'uses-formatter',
+      name: 'Uses Formatter',
+      nodes: [{ id: 'format', type: 'formatter', title: 'Format' }],
+      edges: [],
+    });
+
+    const disabled = await store.disableNodePackage('formatter-node');
+    const disabledAgain = await store.disableNodePackage('formatter-node');
+    expect(disabled).toMatchObject({ id: 'formatter-node', enabled: false, status: 'disabled', lifecycleState: 'disabled' });
+    expect(disabledAgain).toMatchObject({ id: 'formatter-node', enabled: false, status: 'disabled', lifecycleState: 'disabled' });
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).not.toContain('formatter');
+    expect(store.getWorkflow('uses-formatter')).toMatchObject({
+      id: 'uses-formatter',
+      nodes: [expect.objectContaining({ id: 'format', type: 'formatter' })],
+    });
+
+    const enabled = await store.enableNodePackage('formatter-node');
+    expect(enabled).toMatchObject({ id: 'formatter-node', enabled: true, status: 'ready', lifecycleState: 'enabled' });
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).toContain('formatter');
+
+    const removed = await store.uninstallNodePackage('formatter-node');
+    expect(removed).toMatchObject({ removed: true, packageId: 'formatter-node' });
+    expect(store.listNodePackages()).toHaveLength(0);
+    expect(store.getWorkflowNodeTypeDefinitions().map((definition) => definition.type)).not.toContain('formatter');
+    expect(store.getWorkflow('uses-formatter')).toBeTruthy();
   });
 
   test('smokes workflow templates and exposes benchmark release readiness results', async () => {

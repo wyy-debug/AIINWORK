@@ -462,6 +462,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ package: workflowNodePackage }),
     }),
+  enableWorkflowNodePackage: (packageId) =>
+    apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/enable`, {
+      method: 'POST',
+    }),
+  disableWorkflowNodePackage: (packageId) =>
+    apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}/disable`, {
+      method: 'POST',
+    }),
+  uninstallWorkflowNodePackage: (packageId) =>
+    apiFetch(`/api/workflow-node-packages/${encodeURIComponent(packageId)}`, {
+      method: 'DELETE',
+    }),
   smokeWorkflowTemplate: (templateId, payload = {}) =>
     apiFetch(`/api/workflow-templates/${encodeURIComponent(templateId)}/smoke`, {
       method: 'POST',

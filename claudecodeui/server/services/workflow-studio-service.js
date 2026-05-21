@@ -59,6 +59,8 @@ const SUBAGENT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'c
 const WORKFLOW_GOVERNANCE_STATUSES = new Set(['draft', 'published', 'deprecated']);
 const WORKFLOW_COMPLIANCE_LABELS = new Set(['data-sensitive', 'external-network', 'code-write', 'secret-access', 'mcp-enabled']);
 const WORKFLOW_RUN_RESOLVER_VERSION = 'workflow-run-resolver/1';
+const NODE_PACKAGE_STATUSES = new Set(['ready', 'disabled', 'missing_dependencies', 'broken', 'update_available']);
+const NODE_PACKAGE_LIFECYCLE_STATES = new Set(['enabled', 'disabled', 'broken', 'update_available']);
 const PYTHON_NODE_MANIFEST_VERSION = '1';
 const PYTHON_NODE_DEFAULT_TIMEOUT_MS = 30000;
 const PYTHON_NODE_DEFAULT_PAYLOAD_LIMIT_BYTES = 5 * 1024 * 1024;
@@ -360,6 +362,29 @@ function normalizeInteger(value, fallback, min = 1, max = 32) {
 function normalizePermission(value, fallback = '') {
   const normalized = normalizeText(value, fallback, 20).toLowerCase();
   return PERMISSION_ACTIONS.has(normalized) ? normalized : fallback;
+}
+
+function normalizeNodePackageStatus(value, fallback = 'ready') {
+  const status = normalizeText(value, fallback, 80).toLowerCase();
+  return NODE_PACKAGE_STATUSES.has(status) ? status : fallback;
+}
+
+function normalizeNodePackageLifecycle(value, enabled, status = 'ready') {
+  const requested = normalizeText(value, '', 80).toLowerCase();
+  if (NODE_PACKAGE_LIFECYCLE_STATES.has(requested)) return requested;
+  if (enabled === false || status === 'disabled') return 'disabled';
+  if (status === 'missing_dependencies' || status === 'broken') return 'broken';
+  if (status === 'update_available') return 'update_available';
+  return 'enabled';
+}
+
+function isNodePackagePaletteAvailable(nodePackage = {}) {
+  const status = normalizeNodePackageStatus(nodePackage.status, 'ready');
+  const lifecycleState = normalizeNodePackageLifecycle(nodePackage.lifecycleState || nodePackage.state, nodePackage.enabled, status);
+  return nodePackage.enabled !== false
+    && lifecycleState !== 'disabled'
+    && lifecycleState !== 'broken'
+    && (status === 'ready' || status === 'update_available');
 }
 
 function clone(value) {
@@ -2226,7 +2251,9 @@ export function createWorkflowStudioStore({
       ...normalizeStringArray(dependencies.skills).map((value) => ({ kind: 'skill', id: value })),
       ...normalizeStringArray(dependencies.permissions).map((value) => ({ kind: 'permission', id: value })),
     ];
-    const status = missingDependencies.length > 0 ? 'missing_dependencies' : normalizeText(input.status, 'ready', 80);
+    const status = missingDependencies.length > 0 ? 'missing_dependencies' : normalizeNodePackageStatus(input.status, input.enabled === false ? 'disabled' : 'ready');
+    const lifecycleState = normalizeNodePackageLifecycle(input.lifecycleState || input.state, input.enabled, status);
+    const enabled = lifecycleState === 'enabled' && status === 'ready';
     const definition = {
       type,
       label: normalizeText(input.label, type, 120),
@@ -2249,8 +2276,10 @@ export function createWorkflowStudioStore({
 
     return {
       id,
-      enabled: input.enabled === undefined ? status === 'ready' : input.enabled !== false,
+      enabled,
       status,
+      lifecycleState,
+      state: lifecycleState,
       installedAt: input.installedAt || nowIso(now),
       updatedAt: nowIso(now),
       manifest: {
@@ -2281,10 +2310,14 @@ export function createWorkflowStudioStore({
       error.validation = validation;
       throw error;
     }
+    const status = normalizeNodePackageStatus(input.status, input.enabled === false ? 'disabled' : 'ready');
+    const lifecycleState = normalizeNodePackageLifecycle(input.lifecycleState || input.state, input.enabled, status);
     return {
       id: manifest.id,
-      enabled: input.enabled !== false,
-      status: 'ready',
+      enabled: lifecycleState === 'enabled' && status === 'ready',
+      status,
+      lifecycleState,
+      state: lifecycleState,
       installedAt: input.installedAt || nowIso(now),
       updatedAt: nowIso(now),
       manifest,
@@ -2301,7 +2334,7 @@ export function createWorkflowStudioStore({
   function getStoreNodeTypeDefinitions() {
     return [
       ...getWorkflowNodeTypeDefinitions(),
-      ...nodePackages.map((item) => item.definition),
+      ...nodePackages.filter(isNodePackagePaletteAvailable).map((item) => item.definition),
     ].map(clone);
   }
 
@@ -2315,12 +2348,58 @@ export function createWorkflowStudioStore({
     return clone(normalized);
   }
 
+  async function setNodePackageLifecycle(packageId, lifecycleState) {
+    await load();
+    const id = normalizeText(packageId, '', 120);
+    const index = nodePackages.findIndex((item) => item.id === id);
+    if (index < 0) {
+      const error = new Error('Workflow node package not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    const requestedState = normalizeNodePackageLifecycle(lifecycleState, lifecycleState !== 'enabled', lifecycleState === 'enabled' ? 'ready' : lifecycleState);
+    const current = nodePackages[index];
+    const nextStatus = requestedState === 'enabled' ? 'ready' : requestedState;
+    nodePackages[index] = {
+      ...current,
+      enabled: requestedState === 'enabled',
+      status: nextStatus,
+      lifecycleState: requestedState,
+      state: requestedState,
+      updatedAt: nowIso(now),
+    };
+    await saveWorkflows();
+    return clone(nodePackages[index]);
+  }
+
+  async function enableNodePackage(packageId) {
+    return setNodePackageLifecycle(packageId, 'enabled');
+  }
+
+  async function disableNodePackage(packageId) {
+    return setNodePackageLifecycle(packageId, 'disabled');
+  }
+
+  async function uninstallNodePackage(packageId) {
+    await load();
+    const id = normalizeText(packageId, '', 120);
+    const before = nodePackages.length;
+    nodePackages = nodePackages.filter((item) => item.id !== id);
+    if (nodePackages.length === before) {
+      const error = new Error('Workflow node package not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    await saveWorkflows();
+    return { removed: true, packageId: id };
+  }
+
   function getStoreNodeTypeDefinition(type) {
-    return getNodeTypeDefinition(type) || nodePackages.find((item) => item.definition.type === type)?.definition || null;
+    return getNodeTypeDefinition(type) || nodePackages.find((item) => isNodePackagePaletteAvailable(item) && item.definition.type === type)?.definition || null;
   }
 
   function getNodePackageForType(type) {
-    return nodePackages.find((item) => item.enabled !== false && item.definition?.type === type) || null;
+    return nodePackages.find((item) => isNodePackagePaletteAvailable(item) && item.definition?.type === type) || null;
   }
 
   function buildRunInputs(workflow, providedInputs = {}) {
@@ -4514,6 +4593,9 @@ export function createWorkflowStudioStore({
     validateNodePackageDraft,
     testNodePackageDraft,
     installNodePackage,
+    enableNodePackage,
+    disableNodePackage,
+    uninstallNodePackage,
     listNodePackages,
     getWorkflowNodeTypeDefinitions: getStoreNodeTypeDefinitions,
     smokeTemplate,
