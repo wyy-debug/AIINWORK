@@ -851,6 +851,75 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const previewChangedNodes = useMemo(() => (
     selectedRun?.previewDiff?.changedNodes || []
   ), [selectedRun]);
+  const selectedRunSnapshot = useMemo(() => (
+    selectedRun?.runSnapshot && isRecord(selectedRun.runSnapshot) ? selectedRun.runSnapshot as Record<string, unknown> : null
+  ), [selectedRun]);
+  const selectedRunDefinitionSnapshot = useMemo(() => {
+    const definition = selectedRunSnapshot?.definitionSnapshot;
+    return definition && isRecord(definition) ? definition : null;
+  }, [selectedRunSnapshot]);
+  const selectedRunSnapshotDetails = useMemo(() => {
+    const definitionNodes = Array.isArray(selectedRunDefinitionSnapshot?.nodes) ? selectedRunDefinitionSnapshot.nodes : [];
+    const packageSnapshots = Array.isArray(selectedRunSnapshot?.nodePackageSnapshots) ? selectedRunSnapshot.nodePackageSnapshots : [];
+    const runInputs = isRecord(selectedRunSnapshot?.runInputsSnapshot) ? selectedRunSnapshot.runInputsSnapshot : {};
+    const profileSnapshot = isRecord(selectedRunSnapshot?.profileSnapshot) ? selectedRunSnapshot.profileSnapshot : {};
+    const permissionSnapshot = isRecord(selectedRunSnapshot?.permissionSnapshot) ? selectedRunSnapshot.permissionSnapshot : {};
+    return {
+      hasSnapshot: Boolean(selectedRunSnapshot),
+      workflowName: String(selectedRunSnapshot?.workflowName || selectedRunDefinitionSnapshot?.name || selectedRun?.workflowName || 'Workflow'),
+      capturedAt: String(selectedRunSnapshot?.capturedAt || ''),
+      resolverVersion: String(selectedRunSnapshot?.resolverVersion || selectedRun?.resolverVersion || ''),
+      profileId: String(profileSnapshot.profileId || selectedRunDefinitionSnapshot?.profileId || ''),
+      permissionPreset: String(permissionSnapshot.permissionPreset || selectedRunDefinitionSnapshot?.permissionPreset || ''),
+      nodeCount: definitionNodes.length,
+      packageCount: packageSnapshots.length,
+      inputKeys: Object.keys(runInputs),
+      packageLabels: packageSnapshots.map((entry) => isRecord(entry) ? String(entry.id || entry.type || 'package') : 'package').slice(0, 4),
+    };
+  }, [selectedRun, selectedRunDefinitionSnapshot, selectedRunSnapshot]);
+  const selectedRunDefinitionDriftReasons = useMemo(() => {
+    if (!selectedRunSnapshot || !selectedRunDefinitionSnapshot) return [];
+    const reasons: string[] = [];
+    if (selectedRunDefinitionSnapshot.name && selectedRunDefinitionSnapshot.name !== draft.name) reasons.push('name');
+    if (selectedRunDefinitionSnapshot.profileId && selectedRunDefinitionSnapshot.profileId !== draft.profileId) reasons.push('profile');
+    if (selectedRunDefinitionSnapshot.permissionPreset && selectedRunDefinitionSnapshot.permissionPreset !== draft.permissionPreset) reasons.push('permission');
+    const snapshotNodes = Array.isArray(selectedRunDefinitionSnapshot.nodes) ? selectedRunDefinitionSnapshot.nodes : [];
+    const snapshotNodeSignature = JSON.stringify(snapshotNodes.map((node) => isRecord(node) ? {
+      id: node.id,
+      type: node.type,
+      title: node.title,
+      prompt: node.prompt,
+      command: node.command,
+      toolName: node.toolName,
+      agentId: node.agentId,
+    } : node));
+    const currentNodeSignature = JSON.stringify(draft.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      title: node.title,
+      prompt: node.prompt,
+      command: node.command,
+      toolName: node.toolName,
+      agentId: node.agentId,
+    })));
+    if (snapshotNodeSignature !== currentNodeSignature) reasons.push('nodes');
+    const snapshotEdges = Array.isArray(selectedRunDefinitionSnapshot.edges) ? selectedRunDefinitionSnapshot.edges : [];
+    const snapshotEdgeSignature = JSON.stringify(snapshotEdges.map((edge) => isRecord(edge) ? {
+      from: edge.from,
+      to: edge.to,
+      mode: edge.mode,
+      condition: edge.condition,
+    } : edge));
+    const currentEdgeSignature = JSON.stringify(draft.edges.map((edge) => ({
+      from: edge.from,
+      to: edge.to,
+      mode: edge.mode,
+      condition: edge.condition,
+    })));
+    if (snapshotEdgeSignature !== currentEdgeSignature) reasons.push('edges');
+    return reasons;
+  }, [draft, selectedRunDefinitionSnapshot, selectedRunSnapshot]);
+  const selectedRunDefinitionChanged = selectedRunDefinitionDriftReasons.length > 0;
   const activeApprovalNode = useMemo(() => (
     selectedRun
       ? Object.values(selectedRun.nodeRuns || {}).find((nodeRun) => nodeRun.status === 'waiting_approval') || null
@@ -3987,6 +4056,57 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 </div>
               )}
             </section>
+            {selectedRun && selectedRunSnapshotDetails.hasSnapshot && (
+              <section className="mb-4 rounded-md border border-slate-200 bg-card p-3 text-xs text-muted-foreground" data-testid="workflow-run-snapshot-badge">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-slate-200 bg-background px-2 py-0.5 text-[11px] font-semibold text-foreground">Historical snapshot</span>
+                      <span
+                        className={cn(
+                          'rounded-full border px-2 py-0.5 text-[11px]',
+                          selectedRunDefinitionChanged
+                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-800',
+                        )}
+                        data-testid="workflow-run-definition-drift"
+                      >
+                        {selectedRunDefinitionChanged ? `Changed since run: ${selectedRunDefinitionDriftReasons.join(', ')}` : 'Current definition matches snapshot'}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm text-foreground">{selectedRunSnapshotDetails.workflowName}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Captured {selectedRunSnapshotDetails.capturedAt || 'at run start'} · {selectedRunSnapshotDetails.resolverVersion || 'resolver snapshot'}
+                    </p>
+                  </div>
+                  <div className="grid shrink-0 grid-cols-2 gap-1 text-[11px]">
+                    <span className="rounded border border-border bg-background px-2 py-1">{selectedRunSnapshotDetails.nodeCount} nodes</span>
+                    <span className="rounded border border-border bg-background px-2 py-1">{selectedRunSnapshotDetails.packageCount} packages</span>
+                  </div>
+                </div>
+                <details className="mt-3 rounded-md border border-border bg-background p-2" data-testid="workflow-run-snapshot-details" open>
+                  <summary className="cursor-pointer font-semibold text-foreground">Snapshot details</summary>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded border border-border bg-muted/20 px-2 py-1">
+                      <span className="block font-semibold text-foreground">Workflow</span>
+                      <span className="block">{selectedRunSnapshotDetails.workflowName}</span>
+                    </div>
+                    <div className="rounded border border-border bg-muted/20 px-2 py-1">
+                      <span className="block font-semibold text-foreground">Profile</span>
+                      <span className="block">{selectedRunSnapshotDetails.profileId || 'None'} / {selectedRunSnapshotDetails.permissionPreset || 'None'}</span>
+                    </div>
+                    <div className="rounded border border-border bg-muted/20 px-2 py-1">
+                      <span className="block font-semibold text-foreground">Inputs</span>
+                      <span className="block">{selectedRunSnapshotDetails.inputKeys.join(', ') || 'No inputs'}</span>
+                    </div>
+                    <div className="rounded border border-border bg-muted/20 px-2 py-1">
+                      <span className="block font-semibold text-foreground">Packages</span>
+                      <span className="block">{selectedRunSnapshotDetails.packageLabels.join(', ') || 'No custom packages'}</span>
+                    </div>
+                  </div>
+                </details>
+              </section>
+            )}
             {selectedRun && (
               <section
                 className={cn(

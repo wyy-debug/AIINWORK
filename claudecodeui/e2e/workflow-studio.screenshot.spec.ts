@@ -120,6 +120,40 @@ const completedRun = {
   artifacts: [{ id: 'artifact-1', kind: 'workflow-summary', title: 'Delivery Artifact' }],
 };
 
+const historicalRun = {
+  ...waitingRun,
+  id: 'workflow-run-historical',
+  runSnapshot: {
+    snapshotVersion: 1,
+    capturedAt: '2026-05-21T09:00:00.000Z',
+    workflowId: workflow.id,
+    workflowName: 'Agent Review Delivery Snapshot',
+    resolverVersion: 'workflow-run-resolver/1',
+    definitionSnapshot: {
+      ...workflow,
+      name: 'Agent Review Delivery Snapshot',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      nodes: workflow.nodes,
+      edges: workflow.edges,
+    },
+    profileSnapshot: {
+      profileId: 'build',
+      agentName: 'Build',
+      permissionPreset: 'auto-edit',
+    },
+    permissionSnapshot: {
+      source: 'workflow',
+      permissionPreset: 'auto-edit',
+      profileId: 'build',
+    },
+    nodePackageSnapshots: [
+      { id: 'legacy-review-node', type: 'subagent', version: '1.0.0', status: 'ready' },
+    ],
+    runInputsSnapshot: { change_request: 'Snapshot request' },
+  },
+};
+
 const builtinNodeTypes = [
   { type: 'agent', label: 'Agent', description: 'Run a primary agent.', ui: { materialGroup: 'agents' }, configSchema: { fields: [] } },
   { type: 'subagent', label: 'Subagent', description: 'Run a subagent.', ui: { materialGroup: 'agents' }, configSchema: { fields: [] } },
@@ -227,12 +261,14 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean } = {}) {
+async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; previewConsistency?: 'matched' | 'changed'; withInstalledNodePackage?: boolean; incompatibleUpgrade?: boolean; customNodeTestMatrix?: 'mixed' | 'passing' | 'runtime'; missingVariablePreview?: boolean; historicalSnapshot?: boolean } = {}) {
   let runState = options.previewConsistency === 'matched'
     ? previewMatchedRun
     : options.previewConsistency === 'changed'
       ? previewChangedRun
-      : waitingRun;
+      : options.historicalSnapshot
+        ? historicalRun
+        : waitingRun;
   let nodeTypes = options.withInstalledNodePackage ? [...builtinNodeTypes, customPythonNodeType] : [...builtinNodeTypes];
   let installedPackages: unknown[] = options.withInstalledNodePackage ? [installedPythonNodePackage] : [];
 
@@ -698,6 +734,17 @@ test('REQ-213C captures missing variable diagnostics and click-to-select @screen
   await expect(page.getByTestId('workflow-missing-variable-node-badge')).toContainText('missingSummary');
   await page.getByTestId('workflow-missing-variable-node-badge').scrollIntoViewIfNeeded();
   await screenshot(page, 'REQ-213C-missing-variable-click-select.png');
+});
+
+test('REQ-214C captures historical run snapshot and drift indicators @screenshot', async ({ page }) => {
+  await installMockApi(page, { historicalSnapshot: true });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-run-snapshot-badge')).toContainText('Historical snapshot');
+  await expect(page.getByTestId('workflow-run-definition-drift')).toContainText('Changed since run');
+  await expect(page.getByTestId('workflow-run-snapshot-details')).toContainText('Agent Review Delivery Snapshot');
+  await screenshot(page, 'REQ-214C-historical-run-snapshot.png');
 });
 
 test('REQ-183 captures WorkGraph adapter, FormMeta inspector, and line insertion @screenshot', async ({ page }) => {
