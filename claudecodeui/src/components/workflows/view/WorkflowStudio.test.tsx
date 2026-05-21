@@ -363,6 +363,8 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('cancelConfirmation');
     expect(source).toContain('resumeBannerRuns');
     expect(source).toContain('data-testid="workflow-approval-risk-explanation"');
+    expect(source).toContain('data-testid="workflow-approval-requested-capabilities"');
+    expect(source).toContain('data-testid="workflow-approval-risk-reasons"');
     expect(source).toContain('data-testid="workflow-approval-diff-summary"');
     expect(source).toContain('data-testid="workflow-approval-timeout-policy"');
     expect(source).toContain('data-testid="workflow-approval-delegation"');
@@ -378,6 +380,9 @@ describe('WorkflowStudio source contract', () => {
     expect(source).toContain('approvalDelegationTarget');
     expect(source).toContain('approvalAuditExport');
     expect(source).toContain('permissionDryRunRows');
+    expect(source).toContain('requestedCapabilities');
+    expect(source).toContain('effectiveCapabilities');
+    expect(source).toContain('riskReasons');
     expect(source).toContain('permissionOverrideRequest');
     expect(source).toContain('secretVaultRefs');
     expect(source).toContain('mcpAllowlistRows');

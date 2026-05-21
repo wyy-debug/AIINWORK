@@ -120,6 +120,74 @@ const completedRun = {
   artifacts: [{ id: 'artifact-1', kind: 'workflow-summary', title: 'Delivery Artifact' }],
 };
 
+const approvalRequest = {
+  id: `workflow_approval_${waitingRun.id}_approval`,
+  runId: waitingRun.id,
+  workflowId: workflow.id,
+  workflowName: workflow.name,
+  nodeId: 'approval',
+  nodeTitle: 'Human Approval',
+  nodeType: 'approval',
+  status: 'pending',
+  riskLevel: 'high',
+  reason: 'Human approval required before continuing.',
+  riskExplanation: {
+    riskLevel: 'high',
+    permissionPreset: 'auto-edit',
+    permissionDecision: 'ask',
+    requestedCapabilities: ['human.approval'],
+    effectiveCapabilities: ['human.approval'],
+    riskReasons: ['Workflow pauses before code-writing steps'],
+    reason: 'Workflow pauses before code-writing steps',
+    explain: 'Human Approval requires approval under auto-edit: Workflow pauses before code-writing steps.',
+  },
+  diffSummary: { summary: 'No checkpoint diff yet; approval protects the downstream artifact step.' },
+};
+
+const workflowSecurity = {
+  workflowId: workflow.id,
+  timeoutPolicy: { action: 'fail', timeoutMinutes: 30, escalateAfterMinutes: 10 },
+  delegation: { target: 'local-owner', allowedTargets: ['local-owner', 'security-reviewer'] },
+  secretRefs: [],
+  mcpAllowlist: [],
+  permissionDryRun: {
+    workflowId: workflow.id,
+    permissionPreset: workflow.permissionPreset,
+    rows: [
+      {
+        nodeId: 'explore',
+        title: 'Explore Subagent',
+        type: 'subagent',
+        decision: 'allow',
+        reason: 'Read-only or control-flow capability',
+        requestedCapabilities: ['subagent.run'],
+        effectiveCapabilities: ['subagent.run'],
+        riskReasons: ['Read-only or control-flow capability'],
+      },
+      {
+        nodeId: 'approval',
+        title: 'Human Approval',
+        type: 'approval',
+        decision: 'ask',
+        reason: 'Workflow pauses before code-writing steps',
+        requestedCapabilities: ['human.approval'],
+        effectiveCapabilities: ['human.approval'],
+        riskReasons: ['Workflow pauses before code-writing steps'],
+      },
+      {
+        nodeId: 'artifact',
+        title: 'Delivery Artifact',
+        type: 'artifact',
+        decision: 'allow',
+        reason: 'Read-only or control-flow capability',
+        requestedCapabilities: ['artifact.write'],
+        effectiveCapabilities: ['artifact.write'],
+        riskReasons: ['Read-only or control-flow capability'],
+      },
+    ],
+  },
+};
+
 const historicalRun = {
   ...waitingRun,
   id: 'workflow-run-historical',
@@ -348,6 +416,9 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
       runState = completedRun;
       return json(route, { success: true, run: runState });
     }
+    if (path === '/api/workflow-approvals') return json(route, { success: true, approvals: [approvalRequest] });
+    if (path === `/api/workflows/${workflow.id}/security`) return json(route, { success: true, security: workflowSecurity });
+    if (path === `/api/workflows/${workflow.id}/permission-dry-run`) return json(route, { success: true, dryRun: workflowSecurity.permissionDryRun });
     if (path === '/api/agents') return json(route, {
       success: true,
       agents: [
@@ -595,6 +666,22 @@ test('REQ-049 captures Workflow Studio editor, runner, approval, and history @sc
   await page.getByTestId('workflow-approve-node').click();
   await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
   await screenshot(page, 'REQ-049-workflow-history-completed.png');
+});
+
+test('REQ-215 captures permission explanation and approval capability context @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await expect(page.getByTestId('workflow-approval-risk-explanation')).toContainText('requires approval');
+  await expect(page.getByTestId('workflow-approval-requested-capabilities')).toContainText('human.approval');
+  await expect(page.getByTestId('workflow-approval-risk-reasons')).toContainText('pauses');
+  await screenshot(page, 'REQ-215B-approval-capability-context.png');
+
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-permission-dry-run')).toContainText('requested:');
+  await expect(page.getByTestId('workflow-permission-dry-run')).toContainText('effective:');
+  await screenshot(page, 'REQ-215D-allow-ask-deny-evidence.png');
 });
 
 test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {

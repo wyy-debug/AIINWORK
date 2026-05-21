@@ -1150,6 +1150,7 @@ function createNodeRun(node, now) {
     error: '',
     waitingReason: '',
     permissionDecision: '',
+    permissionExplanation: null,
     updatedAt: now(),
   };
 }
@@ -1187,10 +1188,10 @@ function summarizeNode(node) {
 }
 
 function resolveNodePermission(workflow, node) {
-  if (node.type === 'shell' && detectDangerousCommand(node.command || node.config?.command)) return 'ask';
   if (node.permission) return node.permission;
   if (workflow.permissionPreset === 'full-auto') return 'allow';
   if (workflow.permissionPreset === 'enterprise-safe') return RISKY_NODE_TYPES.has(node.type) ? 'deny' : 'allow';
+  if (node.type === 'shell' && detectDangerousCommand(node.command || node.config?.command)) return 'ask';
   if (RISKY_NODE_TYPES.has(node.type)) return 'ask';
   return 'allow';
 }
@@ -1205,6 +1206,72 @@ function detectDangerousCommand(command = '') {
   ];
   const match = checks.find((check) => check.pattern.test(text));
   return match ? { dangerous: true, reason: match.reason, command: text } : null;
+}
+
+function getNodeRequestedCapabilities(node, dangerous = null) {
+  const toolName = normalizeText(node.toolName || node.config?.toolName, 'unknown', 240);
+  const capabilitiesByType = {
+    agent: ['agent.run'],
+    subagent: ['subagent.run'],
+    mcp: [`mcp.call:${toolName}`],
+    tool: [`tool.run:${toolName}`],
+    shell: ['shell.execute', 'workspace.write'],
+    artifact: ['artifact.write'],
+    approval: ['human.approval'],
+    condition: ['control-flow.evaluate'],
+    join: ['control-flow.join'],
+  };
+  const capabilities = [...(capabilitiesByType[node.type] || [`${node.type || 'node'}.run`])];
+  if (node.type === 'tool' && toolName.includes('git')) capabilities.push('git.read');
+  if (node.type === 'shell' && dangerous?.reason === 'destructive git workspace operation') capabilities.push('git.destructive');
+  if (node.type === 'shell' && dangerous?.reason === 'recursive delete') capabilities.push('workspace.delete');
+  if (node.type === 'shell' && dangerous?.reason === 'network download or remote script fetch') capabilities.push('network.download');
+  if (node.type === 'shell' && dangerous?.reason === 'file overwrite redirection') capabilities.push('file.overwrite');
+  return [...new Set(capabilities)];
+}
+
+function buildPermissionExplanation(workflow, node, { decisionOverride = '', nodeRun = null } = {}) {
+  const security = getWorkflowSecurity(workflow);
+  const dangerous = detectDangerousCommand(node.command || node.config?.command);
+  const baseDecision = decisionOverride || resolveNodePermission(workflow, node);
+  const mcpAllowed = !security.mcpAllowlist.length || node.type !== 'mcp' || security.mcpAllowlist.includes(node.toolName);
+  const permissionDecision = mcpAllowed ? baseDecision : 'deny';
+  const requestedCapabilities = getNodeRequestedCapabilities(node, dangerous);
+  const riskReasons = [];
+  if (!mcpAllowed) {
+    riskReasons.push(`MCP tool ${node.toolName || 'unknown'} is not in workflow allowlist`);
+  }
+  if (dangerous?.reason) {
+    riskReasons.push(dangerous.reason);
+  }
+  if (RISKY_NODE_TYPES.has(node.type) && !riskReasons.length) {
+    riskReasons.push(`${node.type} is controlled by ${workflow.permissionPreset}`);
+  }
+  if (!riskReasons.length) {
+    riskReasons.push('Read-only or control-flow capability');
+  }
+  const riskLevel = dangerous ? 'critical' : RISKY_NODE_TYPES.has(node.type) ? 'high' : 'low';
+  const effectiveCapabilities = permissionDecision === 'deny' ? [] : requestedCapabilities;
+  const verb = permissionDecision === 'allow' ? 'allowed' : permissionDecision === 'ask' ? 'requires approval' : 'denied';
+  const explain = `${node.title || node.id} is ${verb} under ${workflow.permissionPreset}: ${riskReasons.join('; ')}.`;
+  return {
+    nodeId: node.id,
+    title: node.title,
+    type: node.type,
+    permissionPreset: workflow.permissionPreset,
+    permissionDecision,
+    decision: permissionDecision,
+    requestedCapabilities,
+    effectiveCapabilities,
+    riskLevel,
+    riskReasons,
+    reason: riskReasons.join('; '),
+    explain,
+    requiresApproval: permissionDecision === 'ask',
+    dangerousCommand: dangerous,
+    command: node.command || nodeRun?.input?.command || '',
+    toolName: node.toolName || nodeRun?.input?.toolName || '',
+  };
 }
 
 function normalizeStringArray(value = [], limit = 200) {
@@ -1240,30 +1307,26 @@ function collectWorkflowSecretRefs(workflow) {
 }
 
 function buildPermissionDryRun(workflow) {
-  const security = getWorkflowSecurity(workflow);
   return {
     workflowId: workflow.id,
     permissionPreset: workflow.permissionPreset,
     generatedAt: nowIso(() => Date.now()),
     rows: workflow.nodes.map((node) => {
-      const dangerous = detectDangerousCommand(node.command || node.config?.command);
-      const decision = resolveNodePermission(workflow, node);
-      const mcpAllowed = !security.mcpAllowlist.length || node.type !== 'mcp' || security.mcpAllowlist.includes(node.toolName);
+      const explanation = buildPermissionExplanation(workflow, node);
       return {
         nodeId: node.id,
         title: node.title,
         type: node.type,
-        decision: mcpAllowed ? decision : 'deny',
-        reason: !mcpAllowed
-          ? `MCP tool ${node.toolName || 'unknown'} is not in workflow allowlist.`
-          : dangerous
-            ? `Dangerous command policy forces approval: ${dangerous.reason}.`
-            : RISKY_NODE_TYPES.has(node.type)
-              ? `${node.type} is controlled by ${workflow.permissionPreset}.`
-              : 'Read-only or control-flow node.',
-        riskLevel: dangerous ? 'critical' : RISKY_NODE_TYPES.has(node.type) ? 'high' : 'low',
-        requiresApproval: decision === 'ask',
-        dangerousCommand: dangerous,
+        decision: explanation.permissionDecision,
+        permissionDecision: explanation.permissionDecision,
+        reason: explanation.reason,
+        explain: explanation.explain,
+        riskLevel: explanation.riskLevel,
+        riskReasons: explanation.riskReasons,
+        requestedCapabilities: explanation.requestedCapabilities,
+        effectiveCapabilities: explanation.effectiveCapabilities,
+        requiresApproval: explanation.requiresApproval,
+        dangerousCommand: explanation.dangerousCommand,
       };
     }),
   };
@@ -1271,15 +1334,16 @@ function buildPermissionDryRun(workflow) {
 
 function buildApprovalRiskExplanation(workflow, run, nodeRun) {
   const node = workflow.nodes.find((item) => item.id === nodeRun.nodeId) || {};
-  const dryRun = buildPermissionDryRun(workflow).rows.find((row) => row.nodeId === nodeRun.nodeId);
+  const explanation = nodeRun.permissionExplanation || buildPermissionExplanation(workflow, node, { nodeRun });
   return {
-    riskLevel: dryRun?.riskLevel || (RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium'),
+    ...explanation,
+    riskLevel: explanation.riskLevel || (RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium'),
     permissionPreset: workflow.permissionPreset,
-    permissionDecision: nodeRun.permissionDecision || dryRun?.decision || resolveNodePermission(workflow, node),
-    reason: nodeRun.waitingReason || dryRun?.reason || 'Workflow is waiting for human approval.',
+    permissionDecision: nodeRun.permissionDecision || explanation.permissionDecision || resolveNodePermission(workflow, node),
+    reason: nodeRun.waitingReason || explanation.reason || 'Workflow is waiting for human approval.',
     command: node.command || nodeRun.input?.command || '',
     toolName: node.toolName || nodeRun.input?.toolName || '',
-    dangerousCommand: dryRun?.dangerousCommand || null,
+    dangerousCommand: explanation.dangerousCommand || null,
     inputSummary: Object.keys(asObject(nodeRun.input)).join(', '),
     runId: run.id,
     nodeId: nodeRun.nodeId,
@@ -3039,21 +3103,30 @@ export function createWorkflowStudioStore({
     run.timelineEvents.push(createRunEvent('workflow_node_started', summarizeNode(node), now));
 
     const permission = resolveNodePermission(workflow, node);
+    const permissionExplanation = buildPermissionExplanation(workflow, node, { decisionOverride: permission, nodeRun });
+    nodeRun.permissionExplanation = permissionExplanation;
     if (permission === 'deny') {
       nodeRun.status = 'failed';
       nodeRun.error = 'Node denied by Agent Profile permission boundary.';
       nodeRun.completedAt = now();
       nodeRun.durationMs = nodeRun.completedAt - nodeRun.startedAt;
       nodeRun.permissionDecision = 'deny';
-      run.timelineEvents.push(createRunEvent('workflow_node_failed', { ...summarizeNode(node), error: nodeRun.error }, now));
+      run.timelineEvents.push(createRunEvent('workflow_node_failed', {
+        ...summarizeNode(node),
+        error: nodeRun.error,
+        permissionExplanation,
+      }, now));
       return;
     }
     if (permission === 'ask' && RISKY_NODE_TYPES.has(node.type) && nodeRun.permissionDecision !== 'approved') {
       nodeRun.status = 'waiting_approval';
-      nodeRun.waitingReason = `${node.type} node requires approval before execution.`;
+      nodeRun.waitingReason = permissionExplanation.explain || `${node.type} node requires approval before execution.`;
       nodeRun.permissionDecision = 'ask';
       nodeRun.logs.push(nodeRun.waitingReason);
-      run.timelineEvents.push(createRunEvent('workflow_node_waiting_approval', summarizeNode(node), now));
+      run.timelineEvents.push(createRunEvent('workflow_node_waiting_approval', {
+        ...summarizeNode(node),
+        permissionExplanation,
+      }, now));
       return;
     }
 
@@ -3061,8 +3134,12 @@ export function createWorkflowStudioStore({
       nodeRun.status = 'waiting_approval';
       nodeRun.waitingReason = node.prompt || 'Waiting for approval.';
       nodeRun.permissionDecision = 'ask';
+      nodeRun.permissionExplanation = buildPermissionExplanation(workflow, node, { decisionOverride: 'ask', nodeRun });
       nodeRun.logs.push(nodeRun.waitingReason);
-      run.timelineEvents.push(createRunEvent('workflow_node_waiting_approval', summarizeNode(node), now));
+      run.timelineEvents.push(createRunEvent('workflow_node_waiting_approval', {
+        ...summarizeNode(node),
+        permissionExplanation: nodeRun.permissionExplanation,
+      }, now));
       return;
     }
 
@@ -4100,7 +4177,7 @@ export function createWorkflowStudioStore({
       nodeTitle: nodeRun.title,
       nodeType: nodeRun.type,
       status: nodeRun.status === 'waiting_approval' ? 'pending' : nodeRun.status,
-      riskLevel: RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium',
+      riskLevel: buildApprovalRiskExplanation(workflow, run, nodeRun).riskLevel || (RISKY_NODE_TYPES.has(nodeRun.type) ? 'high' : 'medium'),
       reason: nodeRun.waitingReason || 'Workflow is waiting for human approval.',
       riskExplanation: buildApprovalRiskExplanation(workflow, run, nodeRun),
       diffSummary: buildApprovalDiffSummary(run, nodeRun),

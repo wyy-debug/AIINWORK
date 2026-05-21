@@ -939,14 +939,24 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   }, [selectedRun]);
   const approvalRiskExplanation = useMemo(() => {
     const approval = approvalRequests[0] as any;
-    if (approval?.riskExplanation?.reason) {
-      return `${approval.riskExplanation.riskLevel}: ${approval.riskExplanation.reason}`;
+    if (approval?.riskExplanation?.explain || approval?.riskExplanation?.reason) {
+      return approval.riskExplanation.explain || `${approval.riskExplanation.riskLevel}: ${approval.riskExplanation.reason}`;
     }
     const riskyNodes = draft.nodes.filter((node) => riskyNodeTypes.has(node.type));
     return riskyNodes.length > 0
       ? riskyNodes.map((node) => `${node.title}: ${node.type} uses ${node.permission || draft.permissionPreset}`).join('; ')
       : 'No high-risk nodes in this workflow.';
   }, [approvalRequests, draft.nodes, draft.permissionPreset]);
+  const approvalRequestedCapabilities = useMemo(() => {
+    const approval = approvalRequests[0] as any;
+    const capabilities = approval?.riskExplanation?.requestedCapabilities;
+    return Array.isArray(capabilities) && capabilities.length > 0 ? capabilities.join(', ') : 'No elevated capability requested.';
+  }, [approvalRequests]);
+  const approvalRiskReasons = useMemo(() => {
+    const approval = approvalRequests[0] as any;
+    const reasons = approval?.riskExplanation?.riskReasons;
+    return Array.isArray(reasons) && reasons.length > 0 ? reasons.join('; ') : 'No extra risk reason recorded.';
+  }, [approvalRequests]);
   const approvalDiffSummary = useMemo(() => {
     const approval = approvalRequests[0] as any;
     if (approval?.diffSummary?.summary) return approval.diffSummary.summary;
@@ -965,16 +975,33 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     decisions: Array.isArray(approvalAudit?.records) ? approvalAudit.records.length : approvalRequests.length,
     exportedFields: ['decision', 'actor', 'time', 'reason', 'run', 'node'],
   }), [approvalAudit, approvalRequests.length, selectedRun?.id]);
-  const permissionDryRunRows = useMemo<Array<{ node: Partial<WorkflowNode> & { id: string; title: string; type: string }; decision: string; reason: string }>>(() => Array.isArray(workflowSecurity?.permissionDryRun?.rows)
+  const permissionDryRunRows = useMemo<Array<{
+    node: Partial<WorkflowNode> & { id: string; title: string; type: string };
+    decision: string;
+    reason: string;
+    requestedCapabilities: string[];
+    effectiveCapabilities: string[];
+    riskReasons: string[];
+  }>>(() => Array.isArray(workflowSecurity?.permissionDryRun?.rows)
     ? workflowSecurity.permissionDryRun.rows.map((row: any) => ({
       node: draft.nodes.find((node) => node.id === row.nodeId) || { id: row.nodeId, title: row.title, type: row.type },
       decision: row.decision,
       reason: row.reason,
+      requestedCapabilities: Array.isArray(row.requestedCapabilities) ? row.requestedCapabilities : [],
+      effectiveCapabilities: Array.isArray(row.effectiveCapabilities) ? row.effectiveCapabilities : [],
+      riskReasons: Array.isArray(row.riskReasons) ? row.riskReasons : [],
     }))
     : draft.nodes.map((node) => {
     const risky = riskyNodeTypes.has(node.type);
     const decision = draft.permissionPreset === 'enterprise-safe' && risky ? 'deny' : risky ? node.permission || 'ask' : 'allow';
-    return { node, decision, reason: risky ? `${node.type} requires explicit permission` : 'read-only/control node' };
+    return {
+      node,
+      decision,
+      reason: risky ? `${node.type} requires explicit permission` : 'read-only/control node',
+      requestedCapabilities: risky ? [`${node.type}.run`] : ['control-flow.read'],
+      effectiveCapabilities: decision === 'deny' ? [] : (risky ? [`${node.type}.run`] : ['control-flow.read']),
+      riskReasons: [risky ? `${node.type} requires explicit permission` : 'Read-only or control-flow capability'],
+    };
   }), [draft.nodes, draft.permissionPreset, workflowSecurity]);
   const dangerousCommandPolicy = useMemo(() => {
     const backendRow = workflowSecurity?.permissionDryRun?.rows?.find((row: any) => row.dangerousCommand);
@@ -4185,6 +4212,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                     <span className="block font-semibold text-foreground">Risk explanation</span>
                     <span className="mt-1 block text-amber-800">{approvalRiskExplanation}</span>
                   </div>
+                  <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-requested-capabilities">
+                    <span className="block font-semibold text-foreground">Requested capability</span>
+                    <span className="mt-1 block font-mono text-[11px] text-amber-800">{approvalRequestedCapabilities}</span>
+                  </div>
+                  <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-risk-reasons">
+                    <span className="block font-semibold text-foreground">Risk reasons</span>
+                    <span className="mt-1 block text-amber-800">{approvalRiskReasons}</span>
+                  </div>
                   <div className="rounded border border-amber-200 bg-background p-2 text-xs" data-testid="workflow-approval-diff-summary">
                     <span className="block font-semibold text-foreground">Diff summary</span>
                     <span className="mt-1 block text-amber-800">{approvalDiffSummary}</span>
@@ -4273,9 +4308,15 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
               <span className="block font-semibold text-foreground">Permission dry run</span>
               <div className="mt-2 max-h-32 space-y-1 overflow-auto">
                 {permissionDryRunRows.map((row) => (
-                  <div key={row.node.id} className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1">
-                    <span className="truncate">{row.node.title}</span>
-                    <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', row.decision === 'deny' ? 'border-red-200 bg-red-50 text-red-700' : row.decision === 'ask' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700')}>{row.decision}</span>
+                  <div key={row.node.id} className="rounded border border-border px-2 py-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-medium text-foreground">{row.node.title}</span>
+                      <span className={cn('rounded-full border px-2 py-0.5 text-[10px]', row.decision === 'deny' ? 'border-red-200 bg-red-50 text-red-700' : row.decision === 'ask' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700')}>{row.decision}</span>
+                    </div>
+                    <div className="mt-1 text-[11px]">{row.reason}</div>
+                    <div className="mt-1 font-mono text-[10px]">requested: {row.requestedCapabilities.join(', ') || 'none'}</div>
+                    <div className="mt-1 font-mono text-[10px]">effective: {row.effectiveCapabilities.join(', ') || 'none'}</div>
+                    <div className="mt-1 text-[10px]">risk: {row.riskReasons.join('; ') || 'none'}</div>
                   </div>
                 ))}
               </div>

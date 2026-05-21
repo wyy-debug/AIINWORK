@@ -120,6 +120,24 @@ export interface WorkflowNodeRun {
   error?: string;
   waitingReason?: string;
   permissionDecision?: string;
+  permissionExplanation?: {
+    nodeId?: string;
+    title?: string;
+    type?: string;
+    permissionPreset?: string;
+    permissionDecision?: string;
+    decision?: string;
+    requestedCapabilities?: string[];
+    effectiveCapabilities?: string[];
+    riskLevel?: string;
+    riskReasons?: string[];
+    reason?: string;
+    explain?: string;
+    requiresApproval?: boolean;
+    dangerousCommand?: Record<string, unknown> | null;
+    command?: string;
+    toolName?: string;
+  } | null;
 }
 
 export interface WorkflowPreviewDiff {

@@ -1400,6 +1400,87 @@ describe('workflow studio service', () => {
     ]);
   });
 
+  test('explains workflow permission decisions and denies dangerous shell commands in enterprise-safe', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'permission-explain-flow',
+      name: 'Permission Explain Flow',
+      profileId: 'review',
+      permissionPreset: 'enterprise-safe',
+      metadata: {
+        security: {
+          mcpAllowlist: ['redmine.get_issue'],
+        },
+      },
+      nodes: [
+        { id: 'safe-agent', type: 'agent', title: 'Safe Agent', prompt: 'Summarize.' },
+        { id: 'missing-mcp', type: 'mcp', title: 'Missing MCP', toolName: 'crashsight.get_issue' },
+        { id: 'danger-shell', type: 'shell', title: 'Danger Shell', command: 'git reset --hard HEAD' },
+      ],
+      edges: [{ from: 'safe-agent', to: 'missing-mcp' }, { from: 'missing-mcp', to: 'danger-shell' }],
+    });
+
+    const dryRun = store.permissionDryRun('permission-explain-flow');
+    expect(dryRun.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'safe-agent',
+        decision: 'allow',
+        requestedCapabilities: expect.arrayContaining(['agent.run']),
+        effectiveCapabilities: expect.arrayContaining(['agent.run']),
+        riskReasons: expect.arrayContaining(['Read-only or control-flow capability']),
+        explain: expect.stringContaining('allowed'),
+      }),
+      expect.objectContaining({
+        nodeId: 'missing-mcp',
+        decision: 'deny',
+        requestedCapabilities: expect.arrayContaining(['mcp.call:crashsight.get_issue']),
+        effectiveCapabilities: [],
+        riskReasons: expect.arrayContaining(['MCP tool crashsight.get_issue is not in workflow allowlist']),
+        explain: expect.stringContaining('denied'),
+      }),
+      expect.objectContaining({
+        nodeId: 'danger-shell',
+        decision: 'deny',
+        riskLevel: 'critical',
+        requestedCapabilities: expect.arrayContaining(['shell.execute', 'workspace.write', 'git.destructive']),
+        effectiveCapabilities: [],
+        riskReasons: expect.arrayContaining(['destructive git workspace operation']),
+        explain: expect.stringContaining('enterprise-safe'),
+      }),
+    ]));
+
+    await store.upsertWorkflow({
+      id: 'danger-exec-flow',
+      name: 'Danger Exec Flow',
+      profileId: 'review',
+      permissionPreset: 'enterprise-safe',
+      nodes: [
+        { id: 'danger-shell', type: 'shell', title: 'Danger Shell', command: 'git reset --hard HEAD' },
+      ],
+      edges: [],
+    });
+
+    const run = await store.createRun('danger-exec-flow');
+    expect(run.nodeRuns['danger-shell'].permissionDecision).toBe('deny');
+    expect(run.nodeRuns['danger-shell'].permissionExplanation).toMatchObject({
+      permissionPreset: 'enterprise-safe',
+      permissionDecision: 'deny',
+      riskLevel: 'critical',
+      requestedCapabilities: expect.arrayContaining(['shell.execute', 'workspace.write', 'git.destructive']),
+      effectiveCapabilities: [],
+      riskReasons: expect.arrayContaining(['destructive git workspace operation']),
+    });
+    expect(store.listRunEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'workflow_node_failed',
+        payload: expect.objectContaining({
+          nodeId: 'danger-shell',
+          permissionExplanation: expect.objectContaining({ permissionDecision: 'deny' }),
+        }),
+      }),
+    ]));
+  });
+
   test('registers workflow node packages and validates missing dependencies', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver });
     const registered = await store.installNodePackage({
