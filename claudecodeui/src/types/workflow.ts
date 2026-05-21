@@ -133,6 +133,25 @@ export interface WorkflowPreviewDiff {
   }>;
 }
 
+export interface WorkflowRunSnapshot {
+  snapshotVersion?: number;
+  capturedAt?: string;
+  workflowId?: string;
+  workflowName?: string;
+  runnableWorkflowId?: string;
+  runnableWorkflowName?: string;
+  workflowDigest?: string;
+  resolverVersion?: string;
+  definitionSnapshot?: WorkflowDefinition;
+  profileSnapshot?: Record<string, unknown>;
+  permissionSnapshot?: Record<string, unknown>;
+  nodePackageSnapshots?: Array<Record<string, unknown>>;
+  runInputsSnapshot?: Record<string, unknown>;
+  previewSnapshot?: Record<string, unknown>;
+  executionInputSnapshot?: Record<string, unknown>;
+  dependencyRefs?: Record<string, unknown>;
+}
+
 export interface WorkflowRun {
   id: string;
   workflowId: string;
@@ -142,6 +161,7 @@ export interface WorkflowRun {
   sessionId?: string;
   inputs?: Record<string, unknown>;
   profileSnapshot?: Record<string, unknown>;
+  runSnapshot?: WorkflowRunSnapshot;
   previewSnapshot?: Record<string, unknown>;
   executionInputSnapshot?: Record<string, unknown>;
   previewDiff?: WorkflowPreviewDiff;

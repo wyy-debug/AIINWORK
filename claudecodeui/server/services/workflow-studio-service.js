@@ -2348,6 +2348,7 @@ function normalizeRun(input, now) {
     sessionId: normalizeText(source.sessionId, '', 240),
     inputs: asObject(source.inputs),
     profileSnapshot: asObject(source.profileSnapshot),
+    runSnapshot: asObject(source.runSnapshot),
     previewSnapshot,
     executionInputSnapshot,
     previewDiff,
@@ -2794,6 +2795,76 @@ export function createWorkflowStudioStore({
       profileId: workflow.profileId,
       permissionPreset: workflow.permissionPreset,
       nodePackages: [...packageRefs.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    };
+  }
+
+  function collectNodePackageSnapshots(workflow) {
+    const snapshots = new Map();
+    for (const node of workflow.nodes || []) {
+      const nodePackage = getNodePackageForType(node.type);
+      if (!nodePackage) continue;
+      snapshots.set(nodePackage.id, {
+        id: nodePackage.id,
+        type: nodePackage.definition?.type || node.type,
+        version: normalizeText(
+          nodePackage.manifest?.version || nodePackage.manifest?.packageVersion || nodePackage.definition?.version,
+          '',
+          80,
+        ),
+        status: normalizeText(nodePackage.status, '', 80),
+        lifecycleState: normalizeText(nodePackage.lifecycleState || nodePackage.state, '', 80),
+        language: normalizeText(nodePackage.manifest?.language, '', 40),
+        manifest: clone(nodePackage.manifest || {}),
+        definition: clone(nodePackage.definition || {}),
+        installedAt: nodePackage.installedAt || '',
+        updatedAt: nodePackage.updatedAt || '',
+      });
+    }
+    return [...snapshots.values()].sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  function buildWorkflowRunSnapshot({
+    workflow,
+    runnableWorkflow,
+    runInputs,
+    profileSnapshot,
+    agent,
+    runPlan,
+    reviewedPreviewSnapshot,
+    executionInputSnapshot,
+  }) {
+    return {
+      snapshotVersion: 1,
+      capturedAt: nowIso(now),
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      runnableWorkflowId: runnableWorkflow.id,
+      runnableWorkflowName: runnableWorkflow.name,
+      workflowDigest: workflowDefinitionDigest(runnableWorkflow),
+      resolverVersion: runPlan.resolverVersion,
+      definitionSnapshot: clone(runnableWorkflow),
+      profileSnapshot: {
+        ...clone(profileSnapshot),
+        agent: clone(agent || {}),
+      },
+      permissionSnapshot: {
+        source: 'workflow',
+        permissionPreset: runnableWorkflow.permissionPreset,
+        profileId: runnableWorkflow.profileId,
+        nodePermissions: Object.fromEntries((runnableWorkflow.nodes || []).map((node) => [
+          node.id,
+          {
+            type: node.type,
+            permission: node.permission || '',
+            riskLevel: node.riskLevel || '',
+          },
+        ])),
+      },
+      nodePackageSnapshots: collectNodePackageSnapshots(runnableWorkflow),
+      runInputsSnapshot: clone(runInputs),
+      previewSnapshot: clone(reviewedPreviewSnapshot),
+      executionInputSnapshot: clone(executionInputSnapshot),
+      dependencyRefs: clone(runPlan.dependencyRefs),
     };
   }
 
@@ -3251,6 +3322,23 @@ export function createWorkflowStudioStore({
 
     const agent = await agentResolver(runnableWorkflow.profileId);
     const timestamp = now();
+    const profileSnapshot = {
+      profileId: runnableWorkflow.profileId,
+      permissionPreset: runnableWorkflow.permissionPreset,
+      agentName: agent?.name || runnableWorkflow.profileId,
+      governanceStatus: normalizeWorkflowGovernance(workflow).status,
+      publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
+    };
+    const runSnapshot = buildWorkflowRunSnapshot({
+      workflow,
+      runnableWorkflow,
+      runInputs,
+      profileSnapshot,
+      agent,
+      runPlan,
+      reviewedPreviewSnapshot,
+      executionInputSnapshot: runPlan.executionInputSnapshot,
+    });
     const run = normalizeRun({
       id: `workflow_run_${crypto.randomUUID()}`,
       workflowId: workflow.id,
@@ -3259,13 +3347,8 @@ export function createWorkflowStudioStore({
       projectPath: input.projectPath || '',
       sessionId: input.sessionId || '',
       inputs: runInputs,
-      profileSnapshot: {
-        profileId: runnableWorkflow.profileId,
-        permissionPreset: runnableWorkflow.permissionPreset,
-        agentName: agent?.name || runnableWorkflow.profileId,
-        governanceStatus: normalizeWorkflowGovernance(workflow).status,
-        publishedRevisionId: normalizeWorkflowGovernance(workflow).publishedRevisionId,
-      },
+      profileSnapshot,
+      runSnapshot,
       previewSnapshot: reviewedPreviewSnapshot,
       executionInputSnapshot: runPlan.executionInputSnapshot,
       previewDiff,

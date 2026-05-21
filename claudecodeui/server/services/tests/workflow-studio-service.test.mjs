@@ -937,6 +937,84 @@ describe('workflow studio service', () => {
     });
   });
 
+  test('persists auditable workflow run snapshots across definition and package changes', async () => {
+    const store = createWorkflowStudioStore({
+      persist: false,
+      autoExecute: false,
+      agentResolver,
+    });
+    await store.installNodePackage({
+      id: 'formatter-node',
+      type: 'formatter',
+      label: 'Formatter',
+      version: '1.2.3',
+      configSchema: { fields: [{ name: 'style', type: 'text', defaultValue: 'compact' }] },
+      outputSchema: { fields: [{ name: 'summary', type: 'text' }] },
+    });
+    await store.upsertWorkflow({
+      id: 'auditable-run-flow',
+      name: 'Auditable Run Flow',
+      profileId: 'build',
+      permissionPreset: 'auto-edit',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'format', type: 'formatter', title: 'Format input', config: { style: 'compact' }, prompt: 'Format {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+
+    const run = await store.createRun('auditable-run-flow', {
+      inputs: { change_request: 'keep this snapshot' },
+      projectPath: 'E:\\AIINWORK',
+      sessionId: 'session-audit',
+    });
+
+    await store.upsertWorkflow({
+      id: 'auditable-run-flow',
+      name: 'Auditable Run Flow Changed',
+      profileId: 'review',
+      permissionPreset: 'enterprise-safe',
+      inputs: [{ id: 'change_request', label: 'Change request', type: 'text', required: true }],
+      nodes: [
+        { id: 'format', type: 'agent', agentId: 'review', title: 'Changed node', prompt: 'Changed {{inputs.change_request}}' },
+      ],
+      edges: [],
+    });
+    await store.uninstallNodePackage('formatter-node');
+
+    const historical = store.getRun(run.id);
+    expect(historical.runSnapshot).toMatchObject({
+      workflowId: 'auditable-run-flow',
+      workflowName: 'Auditable Run Flow',
+      resolverVersion: expect.any(String),
+      runInputsSnapshot: { change_request: 'keep this snapshot' },
+      definitionSnapshot: expect.objectContaining({
+        name: 'Auditable Run Flow',
+        profileId: 'build',
+        permissionPreset: 'auto-edit',
+        nodes: [expect.objectContaining({ id: 'format', type: 'formatter', prompt: 'Format {{inputs.change_request}}' })],
+      }),
+      profileSnapshot: expect.objectContaining({
+        profileId: 'build',
+        agentName: 'build',
+      }),
+      permissionSnapshot: expect.objectContaining({
+        permissionPreset: 'auto-edit',
+        source: 'workflow',
+      }),
+      nodePackageSnapshots: [
+        expect.objectContaining({
+          id: 'formatter-node',
+          type: 'formatter',
+          version: '1.2.3',
+          manifest: expect.objectContaining({ id: 'formatter-node' }),
+        }),
+      ],
+    });
+    expect(historical.runSnapshot.definitionSnapshot.nodes[0].type).toBe('formatter');
+    expect(historical.runSnapshot.nodePackageSnapshots[0].manifest).toBeTruthy();
+  });
+
   test('reports preview diff when execution inputs drift from the reviewed preview snapshot', async () => {
     const store = createWorkflowStudioStore({
       persist: false,
