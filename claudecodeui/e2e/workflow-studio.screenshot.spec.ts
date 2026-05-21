@@ -115,9 +115,55 @@ const completedRun = {
   nodeRuns: {
     ...waitingRun.nodeRuns,
     approval: { ...waitingRun.nodeRuns.approval, status: 'completed', waitingReason: '', logs: ['Approval decision: continue.'] },
-    artifact: { ...waitingRun.nodeRuns.artifact, status: 'completed', attempt: 1, logs: ['Completed artifact node.'] },
+    artifact: {
+      ...waitingRun.nodeRuns.artifact,
+      status: 'completed',
+      attempt: 1,
+      logs: ['Completed artifact node.'],
+      artifacts: [
+        {
+          id: 'workflow_artifact_workflow-run-1_artifact_delivery-artifact',
+          runId: 'workflow-run-1',
+          nodeId: 'artifact',
+          nodeTitle: 'Delivery Artifact',
+          type: 'markdown',
+          title: 'Delivery Artifact',
+          path: 'E:\\AIINWORK\\artifacts\\delivery-artifact.md',
+          mimeType: 'text/markdown',
+          size: 512,
+          summary: 'Delivery artifact generated from the approved run.',
+          createdAt: Date.now(),
+        },
+      ],
+    },
   },
-  artifacts: [{ id: 'artifact-1', kind: 'workflow-summary', title: 'Delivery Artifact' }],
+  artifacts: [
+    {
+      id: 'workflow_artifact_workflow-run-1_artifact_delivery-artifact',
+      runId: 'workflow-run-1',
+      nodeId: 'artifact',
+      nodeTitle: 'Delivery Artifact',
+      type: 'markdown',
+      title: 'Delivery Artifact',
+      path: 'E:\\AIINWORK\\artifacts\\delivery-artifact.md',
+      mimeType: 'text/markdown',
+      size: 512,
+      summary: 'Delivery artifact generated from the approved run.',
+      createdAt: Date.now(),
+    },
+    {
+      id: 'workflow_artifact_summary_workflow-run-1',
+      runId: 'workflow-run-1',
+      nodeId: '',
+      nodeTitle: '',
+      type: 'workflow-run-summary',
+      title: 'Agent Review Delivery run summary',
+      mimeType: 'text/markdown',
+      summary: 'Workflow Agent Review Delivery completed with 3 nodes.',
+      content: '# Agent Review Delivery\n\nStatus: completed\n',
+      createdAt: Date.now(),
+    },
+  ],
 };
 
 const approvalRequest = {
@@ -411,6 +457,7 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
     }
     if (path === `/api/workflows/${workflow.id}/runs`) return json(route, { success: true, run: runState }, 201);
     if (path === '/api/workflow-runs') return json(route, { success: true, runs: [runState] });
+    if (path === `/api/workflow-runs/${runState.id}/artifacts`) return json(route, { success: true, artifacts: { runId: runState.id, artifacts: runState.artifacts || [] } });
     if (path === `/api/workflow-runs/${runState.id}/events`) return json(route, { success: true, events: runState.timelineEvents || [] });
     if (path === `/api/workflow-runs/${waitingRun.id}/nodes/approval/control`) {
       runState = completedRun;
@@ -682,6 +729,21 @@ test('REQ-215 captures permission explanation and approval capability context @s
   await expect(page.getByTestId('workflow-permission-dry-run')).toContainText('requested:');
   await expect(page.getByTestId('workflow-permission-dry-run')).toContainText('effective:');
   await screenshot(page, 'REQ-215D-allow-ask-deny-evidence.png');
+});
+
+test('REQ-216 captures workflow artifact gallery contract @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await page.getByTestId('workflow-approve-node').click();
+  await expect(page.getByTestId('workflow-runs').getByText('completed').first()).toBeVisible();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-artifact-gallery-row')).toHaveCount(2);
+  await expect(page.getByTestId('workflow-artifact-gallery')).toContainText('workflow-run-summary');
+  await expect(page.getByTestId('workflow-artifact-copy-path').first()).toBeVisible();
+  await expect(page.getByTestId('workflow-artifact-attach-evidence').first()).toBeVisible();
+  await screenshot(page, 'REQ-216B-artifact-gallery-contract.png');
 });
 
 test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {

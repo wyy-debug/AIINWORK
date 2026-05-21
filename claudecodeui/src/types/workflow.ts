@@ -86,6 +86,24 @@ export interface WorkflowNodeLog {
   payload?: Record<string, unknown>;
 }
 
+export interface WorkflowArtifactRef {
+  id: string;
+  runId?: string;
+  nodeId?: string;
+  nodeTitle?: string;
+  type?: string;
+  kind?: string;
+  title?: string;
+  path?: string;
+  mimeType?: string;
+  size?: number;
+  summary?: string;
+  content?: string;
+  createdAt?: number | string;
+  source?: string;
+  [key: string]: unknown;
+}
+
 export interface WorkflowDefinition {
   id: string;
   name: string;
@@ -115,7 +133,7 @@ export interface WorkflowNodeRun {
   input?: Record<string, unknown>;
   inputLineage?: Record<string, unknown>;
   output?: Record<string, unknown>;
-  artifacts?: Array<Record<string, unknown>>;
+  artifacts?: WorkflowArtifactRef[];
   checkpoints?: Record<string, Record<string, unknown>>;
   error?: string;
   waitingReason?: string;
@@ -197,7 +215,7 @@ export interface WorkflowRun {
   };
   nodeRuns: Record<string, WorkflowNodeRun>;
   logs?: string[];
-  artifacts?: Array<Record<string, unknown>>;
+  artifacts?: WorkflowArtifactRef[];
   timelineEvents?: Array<Record<string, unknown>>;
   createdAt?: number;
   startedAt?: number;

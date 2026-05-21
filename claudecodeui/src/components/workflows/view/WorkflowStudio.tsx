@@ -1062,7 +1062,34 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const recommendedRecoveryAction = useMemo(() => observabilityState?.recovery?.actions?.length
     ? observabilityState.recovery.actions.flatMap((item: any) => item.recommendations || []).slice(0, 3).join(', ')
     : failedRuns.length > 0 ? 'Retry node, retry from node, rollback checkpoint, or edit config.' : 'No recovery action needed.', [failedRuns.length, observabilityState]);
-  const artifactGallery = useMemo(() => (observabilityState?.artifacts?.artifacts || selectedRun?.artifacts || []).map((artifact: any) => String(artifact.title || artifact.path || artifact.id)).slice(0, 4), [observabilityState, selectedRun]);
+  const artifactGallery = useMemo(() => {
+    const observedArtifacts = observabilityState?.artifacts?.artifacts;
+    const runArtifacts = selectedRun?.artifacts;
+    const rawArtifacts = (Array.isArray(observedArtifacts) && observedArtifacts.length > 0
+      ? observedArtifacts
+      : Array.isArray(runArtifacts)
+        ? runArtifacts
+        : []) as any[];
+    return rawArtifacts
+      .map((artifact, index) => ({
+        id: String(artifact.id || `artifact-${index}`),
+        title: String(artifact.title || artifact.path || artifact.id || `Artifact ${index + 1}`),
+        type: String(artifact.type || artifact.kind || 'artifact'),
+        nodeTitle: String(artifact.nodeTitle || artifact.nodeId || 'Run'),
+        path: artifact.path ? String(artifact.path) : '',
+        summary: String(artifact.summary || artifact.content || ''),
+        createdAt: artifact.createdAt,
+      }))
+      .slice(0, 8);
+  }, [observabilityState, selectedRun]);
+  const copyArtifactReference = useCallback((artifact: { id: string; title: string; path?: string; type?: string }) => {
+    const value = artifact.path || `${artifact.type || 'artifact'}:${artifact.id}`;
+    void navigator.clipboard?.writeText(value);
+  }, []);
+  const attachArtifactEvidence = useCallback((artifact: { id: string; title: string; path?: string; type?: string }) => {
+    const value = `workflow-artifact ${artifact.title} (${artifact.type || 'artifact'}): ${artifact.path || artifact.id}`;
+    void navigator.clipboard?.writeText(value);
+  }, []);
   const screenshotEvidenceViewer = observabilityState?.evidence?.screenshots?.length
     ? `${observabilityState.evidence.screenshots.length} screenshot evidence file(s) available.`
     : 'Run screenshots are available from output/playwright/screenshots with issue-linked filenames.';
@@ -4428,7 +4455,43 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <div className="rounded border border-border p-2" data-testid="workflow-replay-visualizer">{replayVisualizer}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-failure-classifier">{failureClassifier}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-recommended-recovery-action">{recommendedRecoveryAction}</div>
-                <div className="rounded border border-border p-2" data-testid="workflow-artifact-gallery">{artifactGallery.join(' | ') || 'No artifacts yet.'}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-artifact-gallery">
+                  {artifactGallery.length > 0 ? (
+                    <div className="space-y-2">
+                      {artifactGallery.map((artifact) => (
+                        <div key={artifact.id} className="rounded border border-border bg-background/70 p-2" data-testid="workflow-artifact-gallery-row">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <span className="block truncate font-semibold text-foreground">{artifact.title}</span>
+                              <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">{artifact.type} · {artifact.nodeTitle}</span>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <button
+                                type="button"
+                                className="rounded border border-border px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted"
+                                data-testid="workflow-artifact-copy-path"
+                                onClick={() => copyArtifactReference(artifact)}
+                              >
+                                Copy path
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border border-border px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted"
+                                data-testid="workflow-artifact-attach-evidence"
+                                onClick={() => attachArtifactEvidence(artifact)}
+                              >
+                                Attach evidence
+                              </button>
+                            </div>
+                          </div>
+                          <p className="mt-1 truncate text-muted-foreground">{artifact.path || artifact.summary || artifact.id}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span>No artifacts yet.</span>
+                  )}
+                </div>
                 <div className="rounded border border-border p-2" data-testid="workflow-screenshot-evidence-viewer">{screenshotEvidenceViewer}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-benchmark-trend">{benchmarkTrend}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-release-readiness-detail">{releaseReadinessDetail}</div>

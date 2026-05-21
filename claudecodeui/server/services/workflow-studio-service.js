@@ -1155,6 +1155,106 @@ function createNodeRun(node, now) {
   };
 }
 
+function inferArtifactMimeType(artifact) {
+  const explicit = normalizeText(artifact.mimeType || artifact.contentType, '', 120);
+  if (explicit) return explicit;
+  const artifactPath = normalizeText(artifact.path || artifact.filePath, '', 1000).toLowerCase();
+  if (artifactPath.endsWith('.md')) return 'text/markdown';
+  if (artifactPath.endsWith('.json')) return 'application/json';
+  if (artifactPath.endsWith('.png')) return 'image/png';
+  if (artifactPath.endsWith('.jpg') || artifactPath.endsWith('.jpeg')) return 'image/jpeg';
+  if (artifactPath.endsWith('.txt')) return 'text/plain';
+  return artifact.content ? 'text/markdown' : 'application/octet-stream';
+}
+
+function normalizeWorkflowArtifactRef(input, { run = {}, node = {}, nodeRun = {}, source = 'node', now = () => Date.now() } = {}) {
+  const artifact = asObject(input);
+  const type = normalizeText(artifact.type || artifact.kind, 'workflow-artifact', 120);
+  const title = normalizeText(artifact.title || artifact.name, nodeRun.title || node.title || 'Workflow artifact', 240);
+  const content = artifact.content === undefined ? '' : String(artifact.content);
+  const summary = normalizeText(artifact.summary || artifact.description || content, title, 4000);
+  const artifactPath = normalizeText(artifact.path || artifact.filePath || '', '', 1000);
+  const createdAt = Number(artifact.createdAt) || now();
+  const size = Number(artifact.size) || (content ? Buffer.byteLength(content, 'utf8') : 0);
+  return {
+    ...artifact,
+    id: normalizeText(artifact.id, `workflow_artifact_${crypto.randomUUID()}`, 160),
+    runId: normalizeText(artifact.runId || run.id, '', 160),
+    nodeId: normalizeText(artifact.nodeId || nodeRun.nodeId || node.id, '', 160),
+    nodeTitle: normalizeText(artifact.nodeTitle || nodeRun.title || node.title, '', 240),
+    type,
+    kind: normalizeText(artifact.kind || type, type, 120),
+    title,
+    path: artifactPath,
+    mimeType: inferArtifactMimeType({ ...artifact, path: artifactPath, content }),
+    size,
+    createdAt,
+    summary,
+    content,
+    source,
+  };
+}
+
+function addUniqueArtifact(target, artifact) {
+  if (!artifact?.id) return;
+  const index = target.findIndex((item) => item.id === artifact.id);
+  if (index >= 0) {
+    target[index] = artifact;
+  } else {
+    target.push(artifact);
+  }
+}
+
+function captureNodeArtifacts(run, node, nodeRun, now = () => Date.now()) {
+  const output = asObject(nodeRun.output);
+  const rawArtifacts = [
+    ...((Array.isArray(output.artifacts) ? output.artifacts : [])),
+    ...(output.artifact ? [output.artifact] : []),
+    ...((Array.isArray(nodeRun.artifacts) ? nodeRun.artifacts : [])),
+  ];
+  const normalized = [];
+  for (const rawArtifact of rawArtifacts) {
+    const artifact = normalizeWorkflowArtifactRef(rawArtifact, { run, node, nodeRun, source: 'node', now });
+    addUniqueArtifact(normalized, artifact);
+  }
+  nodeRun.artifacts = normalized;
+}
+
+function buildRunSummaryContent(run) {
+  const nodeRows = Object.values(run.nodeRuns || {})
+    .map((nodeRun) => `- ${nodeRun.title || nodeRun.nodeId}: ${nodeRun.status}${nodeRun.error ? ` (${nodeRun.error})` : ''}`)
+    .join('\n');
+  const artifactCount = Object.values(run.nodeRuns || {}).reduce((count, nodeRun) => count + (nodeRun.artifacts || []).length, (run.artifacts || []).length);
+  return [
+    `# ${run.workflowName} run summary`,
+    '',
+    `Status: ${run.status}`,
+    `Run: ${run.id}`,
+    `Artifacts: ${artifactCount}`,
+    '',
+    'Nodes:',
+    nodeRows || '- No nodes recorded.',
+  ].join('\n');
+}
+
+function ensureRunSummaryArtifact(run, now = () => Date.now()) {
+  if (!TERMINAL_RUN_STATUSES.has(run.status)) return;
+  const content = buildRunSummaryContent(run);
+  const artifact = normalizeWorkflowArtifactRef({
+    id: `workflow_artifact_summary_${run.id}`,
+    type: 'workflow-run-summary',
+    kind: 'workflow-run-summary',
+    title: `${run.workflowName} run summary`,
+    mimeType: 'text/markdown',
+    content,
+    summary: `${run.workflowName} ${run.status} with ${Object.keys(run.nodeRuns || {}).length} node(s).`,
+    createdAt: run.completedAt || now(),
+  }, { run, source: 'run', now });
+  artifact.nodeId = '';
+  artifact.nodeTitle = '';
+  addUniqueArtifact(run.artifacts, artifact);
+}
+
 function createRunEvent(type, payload, now) {
   return {
     id: `workflow_event_${crypto.randomUUID()}`,
@@ -3274,6 +3374,7 @@ export function createWorkflowStudioStore({
           }
         }
       }
+      captureNodeArtifacts(run, node, nodeRun, now);
 
       if (shouldCheckpoint && checkpointService?.createCheckpoint) {
         nodeRun.checkpoints.after = await checkpointService.createCheckpoint({
@@ -3361,6 +3462,7 @@ export function createWorkflowStudioStore({
       }
     }
     run.updatedAt = now();
+    ensureRunSummaryArtifact(run, now);
     run.logs.push(`Run status: ${run.status}`);
     run.timelineEvents.push(createRunEvent('workflow_run_status', { status: run.status, summary: buildRunSummary(run) }, now));
     await saveRuns();
@@ -3771,17 +3873,21 @@ export function createWorkflowStudioStore({
   function listRunArtifacts(runId) {
     const run = runs.find((item) => item.id === normalizeText(runId));
     if (!run) return null;
+    const artifactMap = new Map();
+    for (const artifact of run.artifacts || []) {
+      const normalized = normalizeWorkflowArtifactRef(artifact, { run, source: 'run', now });
+      artifactMap.set(normalized.id, normalized);
+    }
+    for (const nodeRun of Object.values(run.nodeRuns || {})) {
+      const node = { id: nodeRun.nodeId, title: nodeRun.title, type: nodeRun.type };
+      for (const artifact of nodeRun.artifacts || []) {
+        const normalized = normalizeWorkflowArtifactRef(artifact, { run, node, nodeRun, source: 'node', now });
+        artifactMap.set(normalized.id, normalized);
+      }
+    }
     return {
       runId: run.id,
-      artifacts: [
-        ...(run.artifacts || []).map((artifact) => ({ ...artifact, source: 'run' })),
-        ...Object.values(run.nodeRuns || {}).flatMap((nodeRun) => (nodeRun.artifacts || []).map((artifact) => ({
-          ...artifact,
-          source: 'node',
-          nodeId: nodeRun.nodeId,
-          nodeTitle: nodeRun.title,
-        }))),
-      ].map(clone),
+      artifacts: [...artifactMap.values()].map(clone),
     };
   }
 
