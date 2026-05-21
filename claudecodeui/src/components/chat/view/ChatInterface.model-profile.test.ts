@@ -19,6 +19,16 @@ test('project binding load does not rerun just because the selected model profil
   expect(effectBlock).not.toContain('selectedModelProfileId, selectedSession?.id');
 });
 
+test('normal project conversations use session agent binding so agent selection survives restart', async () => {
+  const source = (await readFile(sourcePath, 'utf8')).replace(/\r\n/g, '\n');
+  const gateStart = source.indexOf('const agentBindingEnabled =');
+  const gateEnd = source.indexOf('const projectSkillBindingEnabled =', gateStart);
+  const gateBlock = source.slice(gateStart, gateEnd);
+
+  expect(gateBlock).toContain('Boolean(selectedProject)');
+  expect(gateBlock).not.toContain('isConversationSpace || isWorktreeProject');
+});
+
 test('project skill selection survives concrete session id hydration but resets for a new conversation', async () => {
   const source = (await readFile(sourcePath, 'utf8')).replace(/\r\n/g, '\n');
   const clearEffectStart = source.indexOf('useEffect(() => {\n    if (agentBindingEnabled) {\n      return;\n    }\n    setSelectedProjectSkillNames([]);');

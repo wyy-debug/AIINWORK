@@ -262,7 +262,7 @@ function ChatInterface({
   const workspacePath = selectedProject?.fullPath || selectedProject?.path || '';
   const worktreeMeta = selectedProject?.worktree || null;
   const isWorktreeProject = Boolean(!isConversationSpace && worktreeMeta?.id);
-  const agentBindingEnabled = isConversationSpace || isWorktreeProject;
+  const agentBindingEnabled = Boolean(selectedProject) || isConversationSpace;
   const projectSkillBindingEnabled = Boolean(selectedProject && !agentBindingEnabled);
   const showPromptInjectionPanel = argusDebugSettings.showPromptInjectionPanel;
   const showRuntimeTimelinePanel = argusDebugSettings.showRuntimeTimelinePanel;
