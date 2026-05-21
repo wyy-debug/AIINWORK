@@ -668,4 +668,19 @@ describe('WorkflowStudio source contract', () => {
     expect(studioSource).toContain('data-testid="workflow-agent-handoff-output"');
     expect(screenshotSpec).toContain('REQ-218D-agent-handoff-run.png');
   });
+
+  it('surfaces workflow package governance manifest, import preview, trust, and smoke evidence', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const serviceSource = readFileSync(resolve(currentDir, '../../../../server/services/workflow-studio-service.js'), 'utf8');
+    const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
+
+    expect(serviceSource).toContain('manifestVersion');
+    expect(serviceSource).toContain('dependencyLock');
+    expect(serviceSource).toContain('importPreview: importWorkflowPackagePreview(pkg)');
+    expect(studioSource).toContain('data-testid="workflow-package-manifest-summary"');
+    expect(studioSource).toContain('data-testid="workflow-package-import-preview-governance"');
+    expect(studioSource).toContain('data-testid="workflow-package-trust-smoke-state"');
+    expect(screenshotSpec).toContain('REQ-219C-package-export-governance.png');
+    expect(screenshotSpec).toContain('REQ-219D-trust-smoke-governance.png');
+  });
 });

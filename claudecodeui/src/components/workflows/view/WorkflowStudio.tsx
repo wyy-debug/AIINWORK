@@ -1109,9 +1109,17 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     : 'No breaking migration notes for the selected template.';
   const templateFork = templateProductState?.detail?.trust ? `Fork creates project-private copy from ${templateProductState.detail.trust} template.` : 'Built-in templates can be forked into project-private workflows.';
   const packageExportWizard = templateProductState?.exportPreview
-    ? `Export preview: ${templateProductState.exportPreview.workflowCount} workflow(s), ${templateProductState.exportPreview.packageSizeEstimateBytes} bytes.`
+    ? `Export preview: ${templateProductState.exportPreview.workflowCount} workflow(s), ${templateProductState.exportPreview.packageId || 'workflow-package'} ${templateProductState.exportPreview.packageVersion || '1.0.0'}, ${templateProductState.exportPreview.packageSizeEstimateBytes} bytes.`
     : 'Export wizard collects workflow, dependencies, sample inputs, screenshots.';
-  const packageImportPreview = 'Import preview API lists added/overwritten workflows, packages, templates before writing.';
+  const packageManifestSummary = templateProductState?.exportPreview
+    ? `manifestVersion 1 / trust ${templateProductState.exportPreview.trustLevel || 'local'} / deps ${Object.values(templateProductState.exportPreview.dependencies || {}).flat().filter(Boolean).join(', ') || 'none'}`
+    : 'Manifest preview waits for export wizard input.';
+  const packageImportPreview = templateProductState?.exportPreview?.importPreview
+    ? `${templateProductState.exportPreview.importPreview.changes?.map((change: any) => `${change.id}:${change.action}`).join(', ') || 'no changes'} / missing ${(templateProductState.exportPreview.importPreview.missingDependencies || []).map((dependency: any) => dependency.id || dependency.name).join(', ') || 'none'}`
+    : 'Import preview API lists added/overwritten workflows, packages, templates before writing.';
+  const packageTrustSmokeState = templateProductState?.exportPreview
+    ? `Trust ${templateProductState.exportPreview.trustLevel || 'local'} / smoke ${templateProductState.exportPreview.smoke?.status || 'not-run'}${templateProductState.exportPreview.smoke?.failureReason ? `: ${templateProductState.exportPreview.smoke.failureReason}` : ''}`
+    : 'Trust and smoke governance waits for package preview.';
   const marketplaceTrustBadge = templateProductState?.detail?.trust ? `Trust: ${templateProductState.detail.trust}` : 'Trust: built-in / local enterprise / community / unsigned.';
   const enterpriseTemplatePack = workflows.filter((workflow) => ['recipe-crashsight-analysis', 'recipe-redmine-review', 'recipe-code-impact-analysis', 'recipe-pr-description'].includes(workflow.id)).map((workflow) => workflow.name).join(', ') || 'CrashSight Analysis, Redmine Review, Code Impact Analysis, Publish PR.';
   const eventTimelineCorrelation = useMemo(() => selectedRun ? `${selectedRun.id}: timeline events link back to run nodes` : 'No run selected.', [selectedRun]);
@@ -4584,7 +4592,10 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                 <div className="rounded border border-border p-2" data-testid="workflow-template-migration-notes">{templateMigrationNotes}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-template-fork">{templateFork}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-package-export-wizard">{packageExportWizard}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-package-manifest-summary">{packageManifestSummary}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-package-import-preview">{packageImportPreview}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-package-import-preview-governance">{packageImportPreview}</div>
+                <div className="rounded border border-border p-2" data-testid="workflow-package-trust-smoke-state">{packageTrustSmokeState}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-marketplace-trust-badge">{marketplaceTrustBadge}</div>
                 <div className="rounded border border-border p-2" data-testid="workflow-enterprise-template-pack">{enterpriseTemplatePack}</div>
               </div>

@@ -575,6 +575,34 @@ async function installMockApi(page: Page, options: { emptyWorkflows?: boolean; p
     if (path === '/api/workflows') return json(route, { success: true, workflows: options.emptyWorkflows ? [] : [activeWorkflow] });
     if (path === '/api/workflows/node-types') return json(route, { success: true, nodeTypes });
     if (path === `/api/workflows/${activeWorkflow.id}`) return json(route, { success: true, workflow: activeWorkflow });
+    if (path === '/api/workflows/package/export/preview') return json(route, {
+      success: true,
+      preview: {
+        packageId: 'enterprise-flow-pack',
+        packageVersion: '1.2.0',
+        trustLevel: 'community',
+        workflowCount: 1,
+        packageSizeEstimateBytes: 4096,
+        screenshots: ['REQ-219-export.png'],
+        smoke: { status: 'failed', failureReason: 'smoke fixture failed' },
+        dependencies: { skills: ['missing-skill'], mcpServers: ['known-mcp'] },
+        dependencyLock: {
+          skills: [{ id: 'missing-skill', version: 'unlocked' }],
+          mcpServers: [{ id: 'known-mcp', version: 'unlocked' }],
+        },
+        workflows: [{ id: activeWorkflow.id, name: activeWorkflow.name, dependencyReport: { ready: false }, screenshots: ['REQ-219-export.png'] }],
+        importPreview: {
+          packageId: 'enterprise-flow-pack',
+          trustLevel: 'community',
+          trustWarning: 'community package: review manifest, dependencies, and smoke result before import.',
+          changes: [
+            { id: activeWorkflow.id, name: activeWorkflow.name, action: 'overwrite', conflict: true },
+            { id: 'package-new', name: 'Package New', action: 'add', conflict: false },
+          ],
+          missingDependencies: [{ type: 'skill', id: 'missing-skill' }],
+        },
+      },
+    });
     if (path === '/api/workflows/validate') return json(route, { success: true, workflow: activeWorkflow, validation: { valid: true, errors: [], warnings: [] } });
     if (path === `/api/workflows/${activeWorkflow.id}/validate-run`) {
       const previewNodes = Object.values(waitingRun.nodeRuns).map((nodeRun: any) => {
@@ -996,6 +1024,21 @@ test('REQ-218 captures agent terminal handoff run evidence @screenshot', async (
   await expect(page.getByTestId('workflow-subagent-streaming-logs')).toContainText('stream: wrote review summary');
   await expect(page.getByTestId('workflow-agent-handoff-output')).toContainText('Reviewer summary');
   await screenshot(page, 'REQ-218D-agent-handoff-run.png');
+});
+
+test('REQ-219 captures workflow package governance evidence @screenshot', async ({ page }) => {
+  await installMockApi(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('workflow-studio')).toBeVisible();
+  await page.getByTestId('workflow-view-tabs').getByRole('button', { name: 'Runs' }).click();
+  await page.getByTestId('workflow-advanced-toggle').click();
+  await expect(page.getByTestId('workflow-package-export-wizard')).toContainText('enterprise-flow-pack');
+  await expect(page.getByTestId('workflow-package-manifest-summary')).toContainText('manifestVersion 1');
+  await expect(page.getByTestId('workflow-package-import-preview-governance')).toContainText('package-new:add');
+  await screenshot(page, 'REQ-219C-package-export-governance.png');
+  await expect(page.getByTestId('workflow-package-trust-smoke-state')).toContainText('community');
+  await expect(page.getByTestId('workflow-package-trust-smoke-state')).toContainText('failed');
+  await screenshot(page, 'REQ-219D-trust-smoke-governance.png');
 });
 
 test('REQ-210C captures preview matched Run Console state @screenshot', async ({ page }) => {

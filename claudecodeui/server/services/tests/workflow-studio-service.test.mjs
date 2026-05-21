@@ -8,6 +8,7 @@ import {
   getWorkflowNodeTypeDefinitions,
   normalizeWorkflowDefinition,
   validateWorkflowDefinition,
+  validateWorkflowPackage,
 } from '../workflow-studio-service.js';
 
 const agentResolver = async (agentId) => ({
@@ -2032,6 +2033,97 @@ describe('workflow studio service', () => {
     const upgraded = await store.upgradeTemplateWorkflow('template-installed');
     expect(upgraded.upgraded).toBe(true);
     expect(store.getTemplateUpgradeStatus('template-installed').updateAvailable).toBe(false);
+  });
+
+  test('governs workflow package manifests, import previews, dependency locks, trust, and smoke metadata', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    await store.upsertWorkflow({
+      id: 'package-existing',
+      name: 'Package Existing',
+      profileId: 'build',
+      metadata: {
+        trust: 'local',
+        dependencies: { skills: ['installed-skill'], mcpServers: ['known-mcp'] },
+        templateManifest: {
+          id: 'package-existing',
+          version: '1.0.0',
+          screenshots: ['REQ-219-existing.png'],
+          dependencies: { skills: ['installed-skill'], mcpServers: ['known-mcp'] },
+        },
+      },
+      nodes: [{ id: 'agent', type: 'agent', title: 'Agent', prompt: 'Package existing' }],
+      edges: [],
+    });
+
+    const pkg = await store.exportWorkflowPackage(['package-existing'], {
+      packageId: 'enterprise-flow-pack',
+      packageVersion: '1.2.0',
+      trustLevel: 'local-enterprise',
+      screenshots: ['REQ-219-export.png'],
+      smoke: { status: 'passed', verifiedAt: '2026-05-21T00:00:00.000Z', failureReason: '' },
+    });
+    expect(pkg).toMatchObject({
+      manifestVersion: '1',
+      schemaVersion: 1,
+      kind: 'workflow-package',
+      packageId: 'enterprise-flow-pack',
+      packageVersion: '1.2.0',
+      trustLevel: 'local-enterprise',
+      screenshots: ['REQ-219-export.png'],
+      smoke: expect.objectContaining({ status: 'passed' }),
+      dependencies: expect.objectContaining({ skills: ['installed-skill'], mcpServers: ['known-mcp'] }),
+      dependencyLock: expect.objectContaining({
+        skills: [expect.objectContaining({ id: 'installed-skill' })],
+        mcpServers: [expect.objectContaining({ id: 'known-mcp' })],
+      }),
+    });
+
+    expect(() => validateWorkflowPackage({ ...pkg, manifestVersion: '' })).toThrow(/manifestVersion/);
+    expect(() => validateWorkflowPackage({ ...pkg, dependencyLock: { skills: [{ id: '' }] } })).toThrow(/dependency lock/i);
+
+    const incoming = {
+      ...pkg,
+      packageId: 'community-import',
+      trustLevel: 'community',
+      workflows: [
+        ...pkg.workflows,
+        {
+          ...pkg.workflows[0],
+          id: 'package-new',
+          name: 'Package New',
+          metadata: {
+            ...pkg.workflows[0].metadata,
+            dependencies: { skills: ['missing-skill'], mcpServers: ['known-mcp'] },
+          },
+        },
+      ],
+    };
+    const beforeCount = store.listWorkflows().length;
+    const preview = store.importWorkflowPackagePreview(incoming);
+    expect(store.listWorkflows().length).toBe(beforeCount);
+    expect(preview).toMatchObject({
+      packageId: 'community-import',
+      trustLevel: 'community',
+      trustWarning: expect.stringContaining('community'),
+    });
+    expect(preview.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'package-existing', action: 'overwrite' }),
+      expect.objectContaining({ id: 'package-new', action: 'add' }),
+    ]));
+    expect(preview.missingDependencies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'skill', id: 'missing-skill' }),
+    ]));
+
+    const imported = await store.importWorkflowPackage(incoming, { confirmConflicts: true });
+    const importedWorkflow = imported.workflows.find((workflow) => workflow.id === 'package-new');
+    expect(importedWorkflow?.metadata).toEqual(expect.objectContaining({
+      installedPackageManifest: expect.objectContaining({
+        manifestVersion: '1',
+        packageId: 'community-import',
+        trustLevel: 'community',
+      }),
+      packageSmoke: expect.objectContaining({ status: 'passed' }),
+    }));
   });
 
   test('exports real observability, replay, failure, artifact, screenshot, benchmark, coverage, and evidence data', async () => {

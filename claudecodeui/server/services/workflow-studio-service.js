@@ -993,9 +993,142 @@ export function createTemplateManifest({
   };
 }
 
+const workflowPackageDependencyKeys = ['profiles', 'agents', 'subagents', 'mcpServers', 'skills', 'permissions', 'secrets'];
+
+function normalizePackageDependencies(...sources) {
+  const result = Object.fromEntries(workflowPackageDependencyKeys.map((key) => [key, []]));
+  for (const source of sources) {
+    const value = asObject(source);
+    for (const key of workflowPackageDependencyKeys) {
+      for (const item of normalizeStringArray(value[key])) {
+        if (!result[key].includes(item)) result[key].push(item);
+      }
+    }
+  }
+  return result;
+}
+
+function collectWorkflowPackageDependencies({ workflows = [], templates = [], nodePackages = [] } = {}) {
+  const sources = [];
+  for (const workflow of workflows) {
+    sources.push(workflow?.metadata?.templateManifest?.dependencies);
+    sources.push(workflow?.metadata?.dependencies);
+  }
+  for (const template of templates) {
+    sources.push(template?.manifest?.dependencies || template?.dependencies);
+  }
+  for (const nodePackage of nodePackages) {
+    sources.push(nodePackage?.manifest?.dependencies || nodePackage?.dependencies);
+  }
+  return normalizePackageDependencies(...sources);
+}
+
+function normalizeWorkflowPackageDependencyLock(lock = {}, dependencies = {}) {
+  const source = asObject(lock);
+  const result = {};
+  for (const key of workflowPackageDependencyKeys) {
+    const entries = Array.isArray(source[key])
+      ? source[key]
+      : normalizeStringArray(dependencies[key]).map((id) => ({ id, version: 'unlocked' }));
+    result[key] = entries.map((entry) => {
+      const item = asObject(entry);
+      const id = normalizeText(item.id || item.name, '', 200);
+      if (!id) {
+        throw new Error(`Invalid dependency lock entry for ${key}: id is required`);
+      }
+      return {
+        id,
+        version: normalizeText(item.version, 'unlocked', 80),
+        optional: Boolean(item.optional),
+      };
+    });
+  }
+  return result;
+}
+
+function normalizeWorkflowPackageTrustLevel(value = '') {
+  const trust = normalizeText(value, 'local', 80);
+  return ['built-in', 'local', 'local-enterprise', 'community', 'unsigned'].includes(trust) ? trust : 'unsigned';
+}
+
+function normalizeWorkflowPackageSmoke(value = {}) {
+  const smoke = asObject(value);
+  const status = normalizeText(smoke.status, 'not-run', 40);
+  return {
+    status: ['passed', 'failed', 'not-run', 'unknown'].includes(status) ? status : 'unknown',
+    verifiedAt: normalizeText(smoke.verifiedAt || smoke.lastRunAt, '', 80),
+    runId: normalizeText(smoke.runId, '', 120),
+    failureReason: normalizeText(smoke.failureReason || smoke.error, '', 500),
+  };
+}
+
+function createWorkflowPackageManifestSnapshot(pkg = {}) {
+  return {
+    manifestVersion: '1',
+    schemaVersion: 1,
+    kind: 'workflow-package',
+    packageId: pkg.packageId,
+    packageVersion: pkg.packageVersion,
+    exportedAt: pkg.exportedAt,
+    trustLevel: pkg.trustLevel,
+    dependencies: clone(pkg.dependencies || {}),
+    dependencyLock: clone(pkg.dependencyLock || {}),
+    screenshots: clone(pkg.screenshots || []),
+    smoke: clone(pkg.smoke || {}),
+  };
+}
+
+function collectAvailableWorkflowPackageDependencies(workflows = []) {
+  const dependencies = normalizePackageDependencies(
+    { profiles: ['build', 'plan', 'explore', 'review', 'debug', 'docs'], permissions: ['suggest', 'auto-edit', 'full-auto', 'enterprise-safe'] },
+  );
+  for (const workflow of workflows) {
+    const workflowDeps = collectWorkflowPackageDependencies({ workflows: [workflow] });
+    for (const key of workflowPackageDependencyKeys) {
+      for (const item of workflowDeps[key] || []) {
+        if (!dependencies[key].includes(item)) dependencies[key].push(item);
+      }
+    }
+    if (workflow.profileId && !dependencies.profiles.includes(workflow.profileId)) dependencies.profiles.push(workflow.profileId);
+    if (workflow.permissionPreset && !dependencies.permissions.includes(workflow.permissionPreset)) dependencies.permissions.push(workflow.permissionPreset);
+    const security = asObject(workflow.metadata?.security);
+    for (const allowlistedTool of normalizeStringArray(security.mcpAllowlist)) {
+      const server = String(allowlistedTool).split('.')[0];
+      if (server && !dependencies.mcpServers.includes(server)) dependencies.mcpServers.push(server);
+    }
+  }
+  return dependencies;
+}
+
+function getWorkflowPackageMissingDependencies(pkg = {}, available = {}) {
+  const missing = [];
+  const dependencies = normalizePackageDependencies(pkg.dependencies);
+  const availableDependencies = normalizePackageDependencies(available);
+  const typeByKey = {
+    profiles: 'profile',
+    agents: 'agent',
+    subagents: 'subagent',
+    mcpServers: 'mcp-server',
+    skills: 'skill',
+    permissions: 'permission',
+    secrets: 'secret',
+  };
+  for (const key of workflowPackageDependencyKeys) {
+    for (const id of dependencies[key] || []) {
+      if (!availableDependencies[key]?.includes(id)) {
+        missing.push({ type: typeByKey[key] || key, id, key });
+      }
+    }
+  }
+  return missing;
+}
+
 export function validateWorkflowPackage(value = {}) {
   if (!value || typeof value !== 'object') {
     throw new Error('Workflow package must be an object');
+  }
+  if (normalizeText(value.manifestVersion, '') !== '1') {
+    throw new Error('Workflow package manifestVersion must be "1"');
   }
   const workflows = Array.isArray(value.workflows)
     ? value.workflows.map((workflow) => normalizeWorkflowDefinition(workflow))
@@ -1003,6 +1136,13 @@ export function validateWorkflowPackage(value = {}) {
   if (workflows.length === 0) {
     throw new Error('Workflow package requires at least one workflow');
   }
+  const templates = Array.isArray(value.templates) ? value.templates.map(clone) : [];
+  const nodePackages = Array.isArray(value.nodePackages) ? value.nodePackages.map(clone) : [];
+  const dependencies = normalizePackageDependencies(
+    collectWorkflowPackageDependencies({ workflows, templates, nodePackages }),
+    value.dependencies,
+  );
+  const dependencyLock = normalizeWorkflowPackageDependencyLock(value.dependencyLock, dependencies);
   for (const workflow of workflows) {
     const result = validateWorkflowDefinition(workflow);
     if (!result.validation.valid) {
@@ -1012,9 +1152,19 @@ export function validateWorkflowPackage(value = {}) {
     }
   }
   return {
+    manifestVersion: '1',
     schemaVersion: 1,
     kind: 'workflow-package',
+    packageId: normalizeId(value.packageId || value.id || value.name, 'workflow-package'),
+    packageVersion: normalizeText(value.packageVersion || value.version, '1.0.0', 80),
     exportedAt: value.exportedAt || nowIso(Date.now),
+    trustLevel: normalizeWorkflowPackageTrustLevel(value.trustLevel || value.trust),
+    dependencies,
+    dependencyLock,
+    templates,
+    nodePackages,
+    screenshots: normalizeStringArray(value.screenshots, 200),
+    smoke: normalizeWorkflowPackageSmoke(value.smoke),
     workflows,
   };
 }
@@ -4388,10 +4538,17 @@ export function createWorkflowStudioStore({
     return upsertWorkflow(fork);
   }
 
-  async function exportWorkflowPackagePreview(workflowIds = []) {
-    const pkg = await exportWorkflowPackage(workflowIds);
+  async function exportWorkflowPackagePreview(workflowIds = [], options = {}) {
+    const pkg = await exportWorkflowPackage(workflowIds, options);
     const sizeGuard = getPackageSizeGuard(workflowIds);
     return {
+      packageId: pkg.packageId,
+      packageVersion: pkg.packageVersion,
+      trustLevel: pkg.trustLevel,
+      screenshots: pkg.screenshots,
+      smoke: pkg.smoke,
+      dependencies: pkg.dependencies,
+      dependencyLock: pkg.dependencyLock,
       workflowCount: pkg.workflows.length,
       workflows: pkg.workflows.map((workflow) => ({
         id: workflow.id,
@@ -4401,17 +4558,33 @@ export function createWorkflowStudioStore({
       })),
       packageSizeEstimateBytes: Buffer.byteLength(JSON.stringify(pkg), 'utf8'),
       sizeGuard,
+      importPreview: importWorkflowPackagePreview(pkg),
     };
   }
 
   function importWorkflowPackagePreview(value = {}) {
     const pkg = validateWorkflowPackage(value);
+    const availableDependencies = collectAvailableWorkflowPackageDependencies(workflows);
+    const missingDependencies = getWorkflowPackageMissingDependencies(pkg, availableDependencies);
+    const trustWarning = ['community', 'unsigned'].includes(pkg.trustLevel)
+      ? `${pkg.trustLevel} package: review manifest, dependencies, and smoke result before import.`
+      : '';
     return {
+      packageId: pkg.packageId,
+      packageVersion: pkg.packageVersion,
+      trustLevel: pkg.trustLevel,
+      trustWarning,
+      smoke: clone(pkg.smoke),
+      screenshots: clone(pkg.screenshots),
+      dependencies: clone(pkg.dependencies),
+      dependencyLock: clone(pkg.dependencyLock),
+      missingDependencies,
       workflowCount: pkg.workflows.length,
       changes: pkg.workflows.map((workflow) => ({
         id: workflow.id,
         name: workflow.name,
         action: workflows.some((item) => item.id === workflow.id) ? 'overwrite' : 'add',
+        conflict: workflows.some((item) => item.id === workflow.id),
         dependencyReport: {
           dependencies: workflow.metadata?.templateManifest?.dependencies || workflow.metadata?.dependencies || {},
         },
@@ -5143,28 +5316,59 @@ export function createWorkflowStudioStore({
       .map(clone);
   }
 
-  async function exportWorkflowPackage(workflowIds = []) {
+  async function exportWorkflowPackage(workflowIds = [], options = {}) {
     await load();
     const ids = Array.isArray(workflowIds) ? workflowIds.map((id) => normalizeText(id)).filter(Boolean) : [];
     const selected = workflows.filter((workflow) => ids.length === 0 || ids.includes(workflow.id));
+    const dependencies = normalizePackageDependencies(
+      collectWorkflowPackageDependencies({ workflows: selected }),
+      options.dependencies,
+    );
     return {
+      manifestVersion: '1',
       schemaVersion: 1,
       kind: 'workflow-package',
+      packageId: normalizeId(options.packageId || selected[0]?.id || 'workflow-package', 'workflow-package'),
+      packageVersion: normalizeText(options.packageVersion || options.version, '1.0.0', 80),
       exportedAt: nowIso(now),
+      trustLevel: normalizeWorkflowPackageTrustLevel(options.trustLevel || options.trust || selected[0]?.metadata?.trust || 'local'),
+      dependencies,
+      dependencyLock: normalizeWorkflowPackageDependencyLock(options.dependencyLock, dependencies),
+      templates: Array.isArray(options.templates) ? options.templates.map(clone) : [],
+      nodePackages: Array.isArray(options.nodePackages) ? options.nodePackages.map(clone) : [],
+      screenshots: normalizeStringArray(options.screenshots, 200),
+      smoke: normalizeWorkflowPackageSmoke(options.smoke),
       workflows: selected.map(clone),
     };
   }
 
-  async function importWorkflowPackage(value = {}) {
+  async function importWorkflowPackage(value = {}, options = {}) {
     await load();
     const pkg = validateWorkflowPackage(value);
+    const preview = importWorkflowPackagePreview(pkg);
+    if (preview.changes.some((change) => change.conflict) && options.blockOnConflict && !options.confirmConflicts) {
+      const error = new Error('Workflow package import has conflicts; explicit conflict resolution is required');
+      error.preview = preview;
+      throw error;
+    }
+    const installedPackageManifest = createWorkflowPackageManifestSnapshot(pkg);
     const imported = [];
     for (const workflow of pkg.workflows) {
-      const saved = await upsertWorkflow(workflow);
+      const saved = await upsertWorkflow({
+        ...workflow,
+        metadata: {
+          ...asObject(workflow.metadata),
+          installedPackageManifest,
+          packageSmoke: clone(pkg.smoke),
+          trust: pkg.trustLevel,
+        },
+      });
       imported.push(saved.id);
     }
     return {
       imported,
+      preview,
+      manifest: installedPackageManifest,
       workflows: imported.map((id) => getWorkflow(id)).filter(Boolean),
     };
   }
