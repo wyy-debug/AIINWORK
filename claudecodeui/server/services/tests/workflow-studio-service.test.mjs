@@ -1368,4 +1368,83 @@ describe('workflow studio service', () => {
     });
     expect(run.nodeRuns.artifact.output.summary).toContain('HELLO');
   });
+
+  test('includes installed custom node schemas in dry-run variables and config validation', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node that uppercases text.',
+      sampleInput: { text: 'hello' },
+    });
+    const installed = await store.installNodePackage({
+      ...draft.manifest,
+      configSchema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', title: 'Mode', enum: ['upper', 'lower'] },
+        },
+        required: ['mode'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', title: 'Summary' },
+          result: { type: 'object', title: 'Result' },
+          status: { type: 'string', title: 'Status' },
+          formattedText: { type: 'string', title: 'Formatted text' },
+        },
+        required: ['summary', 'result', 'status', 'formattedText'],
+      },
+    });
+    await store.upsertWorkflow({
+      id: 'custom-node-dry-run-flow',
+      name: 'Custom Node Dry Run Flow',
+      profileId: 'build',
+      inputs: [{ id: 'text', label: 'Text', type: 'text', required: true }],
+      nodes: [
+        { id: 'format', type: installed.definition.type, prompt: '{{inputs.text}}' },
+        { id: 'artifact', type: 'artifact', prompt: '{{nodes.format.output.formattedText}}' },
+      ],
+      edges: [{ from: 'format', to: 'artifact' }],
+    });
+
+    const result = await store.validateRun('custom-node-dry-run-flow', { inputs: { text: 'hello' } });
+
+    expect(result.availableVariables).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'nodes.format.output.formattedText', type: 'string' }),
+    ]));
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_required_config', nodeId: 'format', field: 'mode' }),
+    ]));
+    expect(result.errors).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_output_field', variable: 'nodes.format.output.formattedText' }),
+    ]));
+  });
+
+  test('rejects Python node stdout that violates the manifest output contract', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      codeFiles: {
+        'main.py': 'import json\nprint(json.dumps({"summary": "missing result", "status": "completed"}))\n',
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string' },
+          result: { type: 'object' },
+          status: { type: 'string' },
+        },
+        required: ['summary', 'result', 'status'],
+      },
+      testCases: [{ id: 'invalid-contract', input: {}, config: {}, expectedOutput: {} }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error.category).toBe('invalid_output_contract');
+    expect(result.error.message).toMatch(/result/);
+  });
 });

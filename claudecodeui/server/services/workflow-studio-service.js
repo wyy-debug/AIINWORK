@@ -569,8 +569,15 @@ function getNodeTypeDefinition(type) {
   return NODE_TYPE_DEFINITIONS.find((definition) => definition.type === type) || null;
 }
 
-function getNodeOutputFieldNames(type) {
-  const definition = getNodeTypeDefinition(type);
+function getNodeTypeDefinitionFromList(type, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+  const definitions = Array.isArray(nodeTypeDefinitions) && nodeTypeDefinitions.length > 0
+    ? nodeTypeDefinitions
+    : NODE_TYPE_DEFINITIONS;
+  return definitions.find((definition) => definition?.type === type) || null;
+}
+
+function getNodeOutputFieldNames(type, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
+  const definition = getNodeTypeDefinitionFromList(type, nodeTypeDefinitions);
   return new Set((definition?.outputSchema?.fields || []).map((field) => field.name));
 }
 
@@ -1269,7 +1276,7 @@ function extractTemplateVariables(value, field = 'prompt') {
     .map((match) => ({ field, expression: match[1] }));
 }
 
-function buildAvailableVariables(workflow) {
+function buildAvailableVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const variables = [];
   for (const input of workflow.inputs || []) {
     variables.push({
@@ -1280,7 +1287,7 @@ function buildAvailableVariables(workflow) {
     });
   }
   for (const node of workflow.nodes || []) {
-    const definition = getNodeTypeDefinition(node.type);
+    const definition = getNodeTypeDefinitionFromList(node.type, nodeTypeDefinitions);
     for (const field of definition?.outputSchema?.fields || []) {
       variables.push({
         path: `nodes.${node.id}.output.${field.name}`,
@@ -1316,10 +1323,10 @@ function getNodeConfigValue(node, fieldName) {
   return node.config?.[fieldName];
 }
 
-function validateNodeConfigs(workflow) {
+function validateNodeConfigs(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const errors = [];
   for (const node of workflow.nodes || []) {
-    const definition = getNodeTypeDefinition(node.type);
+    const definition = getNodeTypeDefinitionFromList(node.type, nodeTypeDefinitions);
     if (!definition) continue;
     for (const field of definition.configSchema?.fields || []) {
       validateConfigField(getNodeConfigValue(node, field.name), field, node, errors);
@@ -1328,7 +1335,7 @@ function validateNodeConfigs(workflow) {
   return errors;
 }
 
-function validateWorkflowVariables(workflow) {
+function validateWorkflowVariables(workflow, nodeTypeDefinitions = NODE_TYPE_DEFINITIONS) {
   const errors = [];
   const nodesById = new Map((workflow.nodes || []).map((node) => [node.id, node]));
   const inputIds = new Set((workflow.inputs || []).map((input) => input.id));
@@ -1367,7 +1374,7 @@ function validateWorkflowVariables(workflow) {
           });
           continue;
         }
-        if (!getNodeOutputFieldNames(sourceNode.type).has(outputField)) {
+        if (!getNodeOutputFieldNames(sourceNode.type, nodeTypeDefinitions).has(outputField)) {
           errors.push({
             code: 'missing_output_field',
             nodeId: node.id,
@@ -1490,6 +1497,65 @@ function classifyPythonExecutionError(stderr = '', fallback = 'runtime_error') {
   if (/ModuleNotFoundError|No module named/i.test(stderr)) return 'missing_python_dependency';
   if (/SyntaxError/i.test(stderr)) return 'python_syntax_error';
   return fallback;
+}
+
+function jsonSchemaTypeMatches(value, type) {
+  if (!type || type === 'json') return true;
+  if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'object') return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  if (type === 'boolean') return typeof value === 'boolean';
+  if (type === 'string' || type === 'text' || type === 'markdown' || type === 'path') return typeof value === 'string';
+  return true;
+}
+
+function validateJsonSchemaObject(value, schema = {}, pathPrefix = 'output') {
+  const errors = [];
+  const source = asObject(value);
+  const properties = asObject(schema.properties);
+  const required = Array.isArray(schema.required) ? schema.required : [];
+
+  for (const fieldName of required) {
+    if (source[fieldName] === undefined || source[fieldName] === null) {
+      errors.push(`Missing required ${pathPrefix}.${fieldName}`);
+    }
+  }
+
+  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+    if (source[fieldName] === undefined || source[fieldName] === null) continue;
+    const type = normalizeText(asObject(fieldSchema).type, '', 40);
+    if (type && !jsonSchemaTypeMatches(source[fieldName], type)) {
+      errors.push(`Invalid type for ${pathPrefix}.${fieldName}: expected ${type}`);
+    }
+  }
+
+  return errors;
+}
+
+function validatePythonNodeOutputContract(output, manifest = {}) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return ['Python node stdout must be a JSON object.'];
+  }
+
+  const errors = [];
+  for (const fieldName of ['summary', 'result', 'status']) {
+    if (output[fieldName] === undefined || output[fieldName] === null) {
+      errors.push(`Missing required output.${fieldName}`);
+    }
+  }
+  if (output.summary !== undefined && typeof output.summary !== 'string') {
+    errors.push('Invalid type for output.summary: expected string');
+  }
+  if (output.status !== undefined && typeof output.status !== 'string') {
+    errors.push('Invalid type for output.status: expected string');
+  }
+  if (output.artifacts !== undefined && !Array.isArray(output.artifacts)) {
+    errors.push('Invalid type for output.artifacts: expected array');
+  }
+
+  errors.push(...validateJsonSchemaObject(output, manifest.outputSchema, 'output'));
+  return [...new Set(errors)];
 }
 
 function createPythonFormatterNodeDraft({ prompt = '', sampleInput = {} } = {}) {
@@ -1713,6 +1779,18 @@ async function runPythonNodeManifest(manifestInput, payload = {}, {
         }
         try {
           const parsedOutput = JSON.parse(stdout || '');
+          const outputContractErrors = validatePythonNodeOutputContract(parsedOutput, manifest);
+          if (outputContractErrors.length > 0) {
+            finish({
+              ok: false,
+              stdout,
+              stderr,
+              parsedOutput,
+              exitCode,
+              error: { category: 'invalid_output_contract', message: outputContractErrors.join('; ') },
+            });
+            return;
+          }
           finish({ ok: true, stdout, stderr, parsedOutput, exitCode, error: null });
         } catch {
           finish({
@@ -2810,7 +2888,8 @@ export function createWorkflowStudioStore({
       error.statusCode = 404;
       throw error;
     }
-    const definitionValidation = validateWorkflowDefinition(workflow, getStoreNodeTypeDefinitions()).validation;
+    const nodeTypeDefinitions = getStoreNodeTypeDefinitions();
+    const definitionValidation = validateWorkflowDefinition(workflow, nodeTypeDefinitions).validation;
     const providedInputs = asObject(input.inputs);
     const runInputs = Object.fromEntries((workflow.inputs || []).map((entry) => [entry.id, entry.defaultValue]));
     Object.assign(runInputs, providedInputs);
@@ -2818,8 +2897,8 @@ export function createWorkflowStudioStore({
     const errors = [
       ...definitionValidation.errors,
       ...inputValidation.errors,
-      ...validateNodeConfigs(workflow),
-      ...validateWorkflowVariables(workflow),
+      ...validateNodeConfigs(workflow, nodeTypeDefinitions),
+      ...validateWorkflowVariables(workflow, nodeTypeDefinitions),
       ...validateWorkflowDependencies(workflow),
     ];
     return {
@@ -2827,8 +2906,8 @@ export function createWorkflowStudioStore({
       workflowId: workflow.id,
       errors,
       warnings: definitionValidation.warnings,
-      availableVariables: buildAvailableVariables(workflow),
-      nodeTypes: getStoreNodeTypeDefinitions(),
+      availableVariables: buildAvailableVariables(workflow, nodeTypeDefinitions),
+      nodeTypes: nodeTypeDefinitions,
     };
   }
 
