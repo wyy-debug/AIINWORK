@@ -1671,6 +1671,34 @@ describe('workflow studio service', () => {
     expect(result.cases[1]).toMatchObject({ testCaseId: 'still-runs', ok: true, parsedOutput: { result: { text: 'OK' } } });
   });
 
+  test('checks Python node expectedOutput subsets and expectedStatus per test case', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      testCases: [
+        { id: 'subset-pass', input: { text: 'hello' }, config: { mode: 'upper' }, expectedOutput: { result: { text: 'HELLO' } }, expectedStatus: 'completed' },
+        { id: 'subset-fail', input: { text: 'hello' }, config: { mode: 'upper' }, expectedOutput: { result: { text: 'GOODBYE' }, missing: true }, expectedStatus: 'completed' },
+        { id: 'status-fail', input: { text: 'hello' }, config: { mode: 'upper' }, expectedOutput: { result: { text: 'HELLO' } }, expectedStatus: 'failed' },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.cases[0]).toMatchObject({ testCaseId: 'subset-pass', ok: true, assertionFailures: [] });
+    expect(result.cases[1]).toMatchObject({ testCaseId: 'subset-fail', ok: false, error: { category: 'assertion_failed' } });
+    expect(result.cases[1].assertionFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'result.text', expected: 'GOODBYE', actual: 'HELLO' }),
+      expect.objectContaining({ path: 'missing', expected: true }),
+    ]));
+    expect(result.cases[2]).toMatchObject({ testCaseId: 'status-fail', ok: false, error: { category: 'assertion_failed' } });
+    expect(result.cases[2].assertionFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'status', expected: 'failed', actual: 'completed' }),
+    ]));
+  });
+
   test('installs and runs a Python custom node in a workflow', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
     const draft = store.generatePythonNodeDraft({
@@ -1788,6 +1816,8 @@ describe('workflow studio service', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error.category).toBe('invalid_output_contract');
+    expect(result.error.category).not.toBe('assertion_failed');
+    expect(result.assertionFailures || []).toEqual([]);
     expect(result.error.message).toMatch(/result/);
   });
 });

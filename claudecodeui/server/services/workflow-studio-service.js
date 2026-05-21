@@ -653,6 +653,7 @@ function normalizePythonNodeManifest(input = {}) {
         input: asObject(testCase.input),
         config: asObject(testCase.config),
         expectedOutput: asObject(testCase.expectedOutput),
+        expectedStatus: normalizeText(testCase.expectedStatus, '', 80),
       };
     }) : [],
   };
@@ -1791,6 +1792,69 @@ function validatePythonNodeOutputContract(output, manifest = {}) {
   return [...new Set(errors)];
 }
 
+function assertionValuePreview(value) {
+  if (value === undefined) return '<missing>';
+  const text = typeof value === 'string' ? value : stableJson(value);
+  return String(text ?? '').slice(0, 240);
+}
+
+function collectExpectedOutputAssertionFailures(expected, actual, pathPrefix = '') {
+  const failures = [];
+  if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      const childPath = pathPrefix ? `${pathPrefix}.${key}` : key;
+      failures.push(...collectExpectedOutputAssertionFailures(expectedValue, actual?.[key], childPath));
+    }
+    return failures;
+  }
+  if (!isSameJson(expected, actual)) {
+    failures.push({
+      code: 'expected_output_mismatch',
+      path: pathPrefix || 'output',
+      expected,
+      actual,
+      expectedPreview: assertionValuePreview(expected),
+      actualPreview: assertionValuePreview(actual),
+      message: `Expected ${pathPrefix || 'output'} to match ${assertionValuePreview(expected)} but got ${assertionValuePreview(actual)}.`,
+    });
+  }
+  return failures;
+}
+
+function evaluatePythonNodeTestAssertions(result = {}, testCase = {}) {
+  if (!result.ok) {
+    return { ...result, assertionFailures: [] };
+  }
+  const assertionFailures = [];
+  const expectedStatus = normalizeText(testCase.expectedStatus, '', 80);
+  if (expectedStatus && result.parsedOutput?.status !== expectedStatus) {
+    assertionFailures.push({
+      code: 'expected_status_mismatch',
+      path: 'status',
+      expected: expectedStatus,
+      actual: result.parsedOutput?.status,
+      expectedPreview: assertionValuePreview(expectedStatus),
+      actualPreview: assertionValuePreview(result.parsedOutput?.status),
+      message: `Expected status to be ${expectedStatus} but got ${assertionValuePreview(result.parsedOutput?.status)}.`,
+    });
+  }
+  if (testCase.expectedOutput !== undefined) {
+    assertionFailures.push(...collectExpectedOutputAssertionFailures(testCase.expectedOutput, result.parsedOutput));
+  }
+  if (assertionFailures.length === 0) {
+    return { ...result, assertionFailures };
+  }
+  return {
+    ...result,
+    ok: false,
+    assertionFailures,
+    error: {
+      category: 'assertion_failed',
+      message: assertionFailures.map((entry) => entry.message).join('; '),
+    },
+  };
+}
+
 function createPythonFormatterNodeDraft({ prompt = '', sampleInput = {} } = {}) {
   const label = normalizeText(prompt, 'Python Formatter Node', 80)
     .replace(/^create\s+(a|an)\s+/i, '')
@@ -2622,8 +2686,9 @@ export function createWorkflowStudioStore({
         config: asObject(options.config || testCase.config),
         context: asObject(options.context),
       }, runnerOptions);
+      const assertedResult = evaluatePythonNodeTestAssertions(result, testCase);
       cases.push({
-        ...result,
+        ...assertedResult,
         testCaseId: testCase.id || `case-${index + 1}`,
         testCaseName: testCase.name || testCase.id || `Case ${index + 1}`,
         index,
