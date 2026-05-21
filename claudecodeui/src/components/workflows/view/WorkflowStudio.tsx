@@ -98,7 +98,7 @@ type WorkflowPythonNodeManifest = {
     required?: string[];
   };
   codeFiles?: Record<string, string>;
-  testCases?: Array<{ id?: string; name?: string; input?: Record<string, unknown>; config?: Record<string, unknown> }>;
+  testCases?: Array<{ id?: string; name?: string; input?: Record<string, unknown>; config?: Record<string, unknown>; expectedOutput?: Record<string, unknown>; expectedStatus?: string }>;
 };
 
 type WorkflowPythonNodeDraft = {
@@ -109,12 +109,16 @@ type WorkflowPythonNodeDraft = {
 
 type WorkflowPythonNodeTestResult = {
   ok?: boolean;
-  error?: { code?: string; message?: string } | null;
+  error?: { code?: string; category?: string; message?: string } | null;
   stdout?: string;
   stderr?: string;
   exitCode?: number | null;
   durationMs?: number;
   parsedOutput?: Record<string, unknown>;
+  testCaseId?: string;
+  testCaseName?: string;
+  assertionFailures?: Array<{ code?: string; path?: string; expected?: unknown; actual?: unknown; message?: string }>;
+  cases?: WorkflowPythonNodeTestResult[];
 };
 
 type WorkflowNodePackageRecord = {
@@ -1805,14 +1809,11 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
 
   const testCustomNodeDraft = useCallback(async () => {
     if (!customNodeDraft?.manifest) return;
-    const firstCase = customNodeDraft.manifest.testCases?.[0] || {};
     setIsBusy(true);
     setError('');
     try {
       const response = await api.testWorkflowNodePackageDraft({
         manifest: customNodeDraft.manifest,
-        input: firstCase.input || { text: 'hello workflow' },
-        config: firstCase.config || { mode: 'upper' },
       });
       const data = await response.json();
       setCustomNodeTestResult(data.result || data);
@@ -2449,6 +2450,43 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
                           <div className={cn('rounded border px-2 py-1', customNodeTestResult.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700')}>
                             {customNodeTestResult.ok ? 'Passed' : customNodeTestResult.error?.code || 'Failed'} / exit {String(customNodeTestResult.exitCode ?? 0)} / {String(customNodeTestResult.durationMs || 0)}ms
                           </div>
+                          {(customNodeTestResult.cases || []).length > 0 && (
+                            <div className="space-y-2" data-testid="workflow-python-node-test-matrix">
+                              {(customNodeTestResult.cases || []).map((testCase, index) => (
+                                <details key={`${testCase.testCaseId || 'case'}-${index}`} open={Boolean(!testCase.ok)} className="rounded border border-slate-200 bg-slate-50 p-2" data-testid="workflow-python-node-test-case">
+                                  <summary className="cursor-pointer text-xs font-semibold text-slate-800">
+                                    {testCase.ok ? 'Passed' : testCase.error?.category || testCase.error?.code || 'Failed'} · {testCase.testCaseName || testCase.testCaseId || `Case ${index + 1}`}
+                                  </summary>
+                                  {(testCase.assertionFailures || []).length > 0 && (
+                                    <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-red-700" data-testid="workflow-python-node-assertion-failures">
+                                      <span className="font-semibold">Assertion failures</span>
+                                      <div className="mt-1 space-y-1">
+                                        {(testCase.assertionFailures || []).map((failure, failureIndex) => (
+                                          <div key={`${failure.path || 'path'}-${failureIndex}`}>
+                                            {failure.path || 'output'}: {failure.message || `${stringifyValue(failure.expected)} != ${stringifyValue(failure.actual)}`}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="mt-2 grid gap-2">
+                                    <div>
+                                      <span className="font-semibold text-slate-700">stdout</span>
+                                      <pre className="mt-1 max-h-20 overflow-auto rounded bg-slate-950 p-2 text-[10px] text-slate-100">{testCase.stdout || 'empty'}</pre>
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold text-slate-700">stderr</span>
+                                      <pre className="mt-1 max-h-20 overflow-auto rounded bg-slate-950 p-2 text-[10px] text-slate-100">{testCase.stderr || 'empty'}</pre>
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold text-slate-700">parsed output</span>
+                                      <pre className="mt-1 max-h-20 overflow-auto rounded bg-white p-2 text-[10px] text-slate-700">{stringifyValue(testCase.parsedOutput || {})}</pre>
+                                    </div>
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                          )}
                           <div>
                             <span className="font-semibold text-slate-700">stdout</span>
                             <pre className="mt-1 max-h-24 overflow-auto rounded bg-slate-950 p-2 text-[10px] text-slate-100">{customNodeTestResult.stdout || 'empty'}</pre>

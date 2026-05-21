@@ -595,6 +595,9 @@ describe('WorkflowStudio source contract', () => {
     expect(studioSource).toContain('data-testid="workflow-ai-node-draft-review"');
     expect(studioSource).toContain('data-testid="workflow-custom-schema-node-form"');
     expect(studioSource).toContain('data-testid="workflow-python-node-test-result"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-test-matrix"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-test-case"');
+    expect(studioSource).toContain('data-testid="workflow-python-node-assertion-failures"');
     expect(studioSource).toContain('data-testid="workflow-node-package-manager"');
     expect(studioSource).toContain('data-testid="workflow-node-package-state"');
     expect(studioSource).toContain('data-testid="workflow-node-package-impact-report"');
@@ -614,5 +617,6 @@ describe('WorkflowStudio source contract', () => {
     expect(screenshotSpec).toContain('REQ-211D-impact-report.png');
     expect(screenshotSpec).toContain('REQ-211D-disabled-state.png');
     expect(screenshotSpec).toContain('REQ-211D-incompatible-upgrade.png');
+    expect(screenshotSpec).toContain('REQ-212C-test-review-matrix.png');
   });
 });
