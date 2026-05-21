@@ -2606,20 +2606,40 @@ export function createWorkflowStudioStore({
 
   async function testNodePackageDraft(input = {}, options = {}) {
     const validation = validatePythonNodeManifest(input);
-    const testCase = asObject(options.testCase || validation.manifest.testCases[0]);
-    const result = await runPythonNodeManifest(validation.manifest, {
-      input: asObject(options.input || testCase.input),
-      config: asObject(options.config || testCase.config),
-      context: asObject(options.context),
-    }, {
+    const testCases = options.testCase
+      ? [asObject(options.testCase)]
+      : (Array.isArray(validation.manifest.testCases) ? validation.manifest.testCases.map(asObject) : []);
+    const runnerOptions = {
       pythonCommand,
       pythonArgs,
       timeoutMs: normalizeInteger(options.timeoutMs, pythonTimeoutMs, 1, pythonTimeoutMs),
       payloadLimitBytes: normalizeInteger(options.payloadLimitBytes, pythonPayloadLimitBytes, 1024, pythonPayloadLimitBytes),
-    });
+    };
+    const cases = [];
+    for (const [index, testCase] of testCases.entries()) {
+      const result = await runPythonNodeManifest(validation.manifest, {
+        input: asObject(options.input || testCase.input),
+        config: asObject(options.config || testCase.config),
+        context: asObject(options.context),
+      }, runnerOptions);
+      cases.push({
+        ...result,
+        testCaseId: testCase.id || `case-${index + 1}`,
+        testCaseName: testCase.name || testCase.id || `Case ${index + 1}`,
+        index,
+      });
+    }
+    const representative = cases.find((entry) => !entry.ok) || cases[0] || await runPythonNodeManifest(validation.manifest, {
+      input: asObject(options.input),
+      config: asObject(options.config),
+      context: asObject(options.context),
+    }, runnerOptions);
+    const ok = cases.length > 0 ? cases.every((entry) => entry.ok) : Boolean(representative.ok);
     return clone({
-      ...result,
-      testCaseId: testCase.id || '',
+      ...representative,
+      ok,
+      cases,
+      testCaseId: representative.testCaseId || '',
     });
   }
 

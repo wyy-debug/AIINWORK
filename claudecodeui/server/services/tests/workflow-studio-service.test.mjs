@@ -1614,6 +1614,63 @@ describe('workflow studio service', () => {
     expect(invalidJson.error.category).toBe('invalid_json_output');
   });
 
+  test('runs every Python node draft test case and preserves partial failures', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      codeFiles: {
+        'main.py': [
+          'import json',
+          'import sys',
+          'payload = json.load(sys.stdin)',
+          'text = str((payload.get("input") or {}).get("text") or "")',
+          'if text == "bad":',
+          '    print("case failed", file=sys.stderr)',
+          '    sys.exit(2)',
+          'print(json.dumps({"summary": text.upper(), "result": {"text": text.upper()}, "status": "completed"}))',
+        ].join('\n'),
+      },
+      testCases: [
+        { id: 'first-pass', input: { text: 'hello' }, config: {} },
+        { id: 'middle-fail', input: { text: 'bad' }, config: {} },
+        { id: 'last-pass', input: { text: 'again' }, config: {} },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.cases).toHaveLength(3);
+    expect(result.cases.map((entry) => entry.testCaseId)).toEqual(['first-pass', 'middle-fail', 'last-pass']);
+    expect(result.cases[0]).toMatchObject({ ok: true, parsedOutput: { result: { text: 'HELLO' } } });
+    expect(result.cases[1]).toMatchObject({ ok: false, error: { category: 'runtime_error' } });
+    expect(result.cases[1].stderr).toContain('case failed');
+    expect(result.cases[2]).toMatchObject({ ok: true, parsedOutput: { result: { text: 'AGAIN' } } });
+    expect(result.error).toMatchObject({ category: 'runtime_error' });
+  });
+
+  test('keeps Python node test case payload limits isolated per case', async () => {
+    const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
+    const draft = store.generatePythonNodeDraft({
+      prompt: 'Create a formatter node.',
+      sampleInput: { text: 'hello' },
+    });
+    const result = await store.testNodePackageDraft({
+      ...draft.manifest,
+      testCases: [
+        { id: 'too-large', input: { text: 'x'.repeat(2000) }, config: {} },
+        { id: 'still-runs', input: { text: 'ok' }, config: {} },
+      ],
+    }, { payloadLimitBytes: 1024 });
+
+    expect(result.ok).toBe(false);
+    expect(result.cases).toHaveLength(2);
+    expect(result.cases[0]).toMatchObject({ testCaseId: 'too-large', ok: false, error: { category: 'payload_too_large' } });
+    expect(result.cases[1]).toMatchObject({ testCaseId: 'still-runs', ok: true, parsedOutput: { result: { text: 'OK' } } });
+  });
+
   test('installs and runs a Python custom node in a workflow', async () => {
     const store = createWorkflowStudioStore({ persist: false, agentResolver, pythonCommand: 'python' });
     const draft = store.generatePythonNodeDraft({
