@@ -33,6 +33,7 @@ function readWorkflowStudioBoundarySource() {
     'WorkflowHomeView.tsx',
     'WorkflowLibraryView.tsx',
     'WorkflowNodePalette.tsx',
+    'WorkflowEditorSetupStrip.tsx',
     'WorkflowRunConsole.tsx',
     'WorkflowArtifactGallery.tsx',
     'WorkflowPermissionPanels.tsx',
@@ -622,6 +623,21 @@ describe('WorkflowStudio source contract', () => {
     expect(nodePaletteSource).toContain('permission gate');
   });
 
+  it('keeps the Workflow editor setup strip in a dedicated view component', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const setupStripSource = readFileSync(resolve(currentDir, 'WorkflowEditorSetupStrip.tsx'), 'utf8');
+
+    expect(studioSource).toContain("import { WorkflowEditorSetupStrip } from './WorkflowEditorSetupStrip'");
+    expect(studioSource).toContain('<WorkflowEditorSetupStrip');
+    expect(studioSource).not.toContain('data-testid="workflow-editor-setup-strip"');
+    expect(studioSource).not.toContain('data-testid="workflow-dry-run-preview"');
+    expect(studioSource).not.toContain('data-testid="workflow-missing-variable-diagnostics"');
+
+    expect(setupStripSource).toContain('data-testid="workflow-editor-setup-strip"');
+    expect(setupStripSource).toContain('data-testid="workflow-dry-run-preview"');
+    expect(setupStripSource).toContain('data-testid="workflow-missing-variable-diagnostics"');
+  });
+
   it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
     const runConsoleSource = readFileSync(resolve(currentDir, 'WorkflowRunConsole.tsx'), 'utf8');
@@ -709,7 +725,7 @@ describe('WorkflowStudio source contract', () => {
   });
 
   it('exposes AI generated Python custom node review and install UI without generated TSX injection', () => {
-    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const studioSource = readWorkflowStudioBoundarySource();
     const apiSource = readFileSync(resolve(currentDir, '../../../utils/api.js'), 'utf8');
     const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
 
