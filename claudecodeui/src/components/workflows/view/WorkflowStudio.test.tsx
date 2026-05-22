@@ -25,6 +25,16 @@ function readFlowGramNativeSource() {
   ].map((file) => readFileSync(resolve(currentDir, file), 'utf8')).join('\n');
 }
 
+function readWorkflowStudioBoundarySource() {
+  return [
+    'WorkflowStudio.tsx',
+    'WorkflowStudioViewModel.ts',
+    'WorkflowRunConsole.tsx',
+    'WorkflowArtifactGallery.tsx',
+    'WorkflowPermissionPanels.tsx',
+  ].map((file) => readFileSync(resolve(currentDir, file), 'utf8')).join('\n');
+}
+
 describe('WorkflowStudio source contract', () => {
   it('keeps FlowGram code-level parity logic in dedicated native modules', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
@@ -192,7 +202,7 @@ describe('WorkflowStudio source contract', () => {
 
   it('exposes visual DAG editor, runner, approval, and history hooks', () => {
     const source = [
-      readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8'),
+      readWorkflowStudioBoundarySource(),
       readFlowGramNativeSource(),
     ].join('\n');
 
@@ -515,7 +525,7 @@ describe('WorkflowStudio source contract', () => {
   });
 
   it('keeps legacy swarm language out of the workflow UI', () => {
-    const source = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8').toLowerCase();
+    const source = readWorkflowStudioBoundarySource().toLowerCase();
 
     expect(source).not.toContain('swarm');
     expect(source).not.toContain('message bus');
@@ -523,7 +533,7 @@ describe('WorkflowStudio source contract', () => {
   });
 
   it('defaults Workflow Studio to a simplified human-guided interaction model', () => {
-    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const studioSource = readWorkflowStudioBoundarySource();
     const flowGramSource = readFlowGramNativeSource();
 
     expect(studioSource).toContain('WorkflowUiMode');
@@ -549,8 +559,34 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).not.toContain('{humanFeedback} 路 {operationFeedback}');
   });
 
-  it('continues desktop-only Workflow Studio polish without mobile screenshot gates', () => {
+  it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const runConsoleSource = readFileSync(resolve(currentDir, 'WorkflowRunConsole.tsx'), 'utf8');
+    const artifactGallerySource = readFileSync(resolve(currentDir, 'WorkflowArtifactGallery.tsx'), 'utf8');
+    const permissionPanelsSource = readFileSync(resolve(currentDir, 'WorkflowPermissionPanels.tsx'), 'utf8');
+
+    expect(studioSource).toContain('WorkflowRunConsole');
+    expect(studioSource).toContain('WorkflowArtifactGallery');
+    expect(studioSource).toContain('WorkflowPermissionPanels');
+    expect(studioSource).not.toContain('data-testid="workflow-artifact-gallery-row"');
+    expect(studioSource).not.toContain('data-testid="workflow-permission-override-request"');
+
+    expect(runConsoleSource).toContain('data-testid="workflow-run-console"');
+    expect(runConsoleSource).toContain('data-testid="workflow-run-story"');
+    expect(runConsoleSource).toContain('data-testid="workflow-approval-inbox"');
+    expect(runConsoleSource).toContain('data-testid="workflow-run-advanced-tabs"');
+
+    expect(artifactGallerySource).toContain('data-testid="workflow-artifact-gallery"');
+    expect(artifactGallerySource).toContain('data-testid="workflow-artifact-gallery-row"');
+    expect(artifactGallerySource).toContain('data-testid="workflow-artifact-copy-path"');
+
+    expect(permissionPanelsSource).toContain('data-testid="workflow-permission-dry-run"');
+    expect(permissionPanelsSource).toContain('data-testid="workflow-permission-override-request"');
+    expect(permissionPanelsSource).toContain('data-testid="workflow-mcp-allowlist-ui"');
+  });
+
+  it('continues desktop-only Workflow Studio polish without mobile screenshot gates', () => {
+    const studioSource = readWorkflowStudioBoundarySource();
     const flowGramSource = readFlowGramNativeSource();
     const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
 
