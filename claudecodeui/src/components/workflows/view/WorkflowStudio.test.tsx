@@ -31,6 +31,7 @@ function readWorkflowStudioBoundarySource() {
     'WorkflowStudioViewModel.ts',
     'WorkflowCommandCenter.tsx',
     'WorkflowHomeView.tsx',
+    'WorkflowLibraryView.tsx',
     'WorkflowRunConsole.tsx',
     'WorkflowArtifactGallery.tsx',
     'WorkflowPermissionPanels.tsx',
@@ -588,6 +589,21 @@ describe('WorkflowStudio source contract', () => {
     expect(homeViewSource).toContain('data-testid="workflow-home-overview"');
     expect(homeViewSource).toContain('data-testid="workflow-empty-state-guide"');
     expect(homeViewSource).toContain('data-testid="workflow-first-run-wizard"');
+  });
+
+  it('keeps the Workflow library gallery in a dedicated view component', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const libraryViewSource = readFileSync(resolve(currentDir, 'WorkflowLibraryView.tsx'), 'utf8');
+
+    expect(studioSource).toContain("import { WorkflowLibraryView } from './WorkflowLibraryView'");
+    expect(studioSource).toContain('<WorkflowLibraryView');
+    expect(studioSource).not.toContain('data-testid="workflow-library"');
+    expect(studioSource).not.toContain('data-testid="workflow-library-gallery"');
+    expect(studioSource).not.toContain('data-testid="workflow-template-preview"');
+
+    expect(libraryViewSource).toContain('data-testid="workflow-library"');
+    expect(libraryViewSource).toContain('data-testid="workflow-library-gallery"');
+    expect(libraryViewSource).toContain('data-testid="workflow-template-preview"');
   });
 
   it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {
