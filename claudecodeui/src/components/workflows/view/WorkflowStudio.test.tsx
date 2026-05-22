@@ -30,6 +30,7 @@ function readWorkflowStudioBoundarySource() {
     'WorkflowStudio.tsx',
     'WorkflowStudioViewModel.ts',
     'WorkflowCommandCenter.tsx',
+    'WorkflowHomeView.tsx',
     'WorkflowRunConsole.tsx',
     'WorkflowArtifactGallery.tsx',
     'WorkflowPermissionPanels.tsx',
@@ -572,6 +573,21 @@ describe('WorkflowStudio source contract', () => {
     expect(commandCenterSource).toContain('data-testid="workflow-command-center"');
     expect(commandCenterSource).toContain('data-testid="workflow-run-setup-drawer"');
     expect(commandCenterSource).toContain('data-testid="workflow-view-tabs"');
+  });
+
+  it('keeps the Workflow home overview in a dedicated view component', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const homeViewSource = readFileSync(resolve(currentDir, 'WorkflowHomeView.tsx'), 'utf8');
+
+    expect(studioSource).toContain("import { WorkflowHomeView } from './WorkflowHomeView'");
+    expect(studioSource).toContain('<WorkflowHomeView');
+    expect(studioSource).not.toContain('data-testid="workflow-home-overview"');
+    expect(studioSource).not.toContain('data-testid="workflow-empty-state-guide"');
+    expect(studioSource).not.toContain('data-testid="workflow-first-run-wizard"');
+
+    expect(homeViewSource).toContain('data-testid="workflow-home-overview"');
+    expect(homeViewSource).toContain('data-testid="workflow-empty-state-guide"');
+    expect(homeViewSource).toContain('data-testid="workflow-first-run-wizard"');
   });
 
   it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {
