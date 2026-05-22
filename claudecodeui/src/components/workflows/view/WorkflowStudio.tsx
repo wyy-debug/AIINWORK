@@ -63,6 +63,13 @@ import {
 import { buildWorkflowMigrationDoctorReport } from '../model/workflowMigrationDoctor';
 import { buildFlowGramRuntimeVisualState } from './flowgram/FlowGramRuntimeVisualBridge';
 import type { WorkflowFlowGramEditorHandle } from './WorkflowFlowGramEditor';
+import {
+  buildWorkflowHumanNextAction,
+  buildWorkflowPreviewConsistency,
+  buildWorkflowReadinessSummaries,
+  buildWorkflowRunStory,
+} from './WorkflowStudioViewModel';
+import type { WorkflowHumanHint } from './WorkflowStudioViewModel';
 
 const WorkflowFlowGramEditor = lazy(() => import('./WorkflowFlowGramEditor'));
 
@@ -78,11 +85,6 @@ type WorkflowLayoutMode = 'left-to-right' | 'top-down' | 'compact';
 type WorkflowEdgeRouteStyle = NonNullable<WorkflowEdge['routeStyle']>;
 type WorkflowMinimapFilter = 'all' | 'status' | 'type' | 'risk';
 type WorkflowUiMode = 'simple' | 'advanced';
-type WorkflowHumanHint = {
-  title: string;
-  body: string;
-  actionLabel: string;
-};
 
 type WorkflowPythonNodeManifest = {
   id?: string;
@@ -779,100 +781,18 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const visibleRuns = useMemo(() => [...runs]
     .filter((run) => !archivedRunIds.includes(run.id))
     .sort((a, b) => Number(pinnedRunIds.includes(b.id)) - Number(pinnedRunIds.includes(a.id))), [archivedRunIds, pinnedRunIds, runs]);
-  const humanNextAction = useMemo<WorkflowHumanHint>(() => {
-    if (draft.nodes.length === 0) {
-      return {
-        title: 'Start with one step',
-        body: 'Add an Agent or Subagent step, then connect approval or artifact only when you need it.',
-        actionLabel: 'Add step',
-      };
-    }
-    if (!selectedNode) {
-      return {
-        title: 'Choose a step to configure',
-        body: 'Select a node on the canvas, or run this workflow if the path already looks right.',
-        actionLabel: 'Select node',
-      };
-    }
-    if (selectedNode.type === 'shell' || selectedNode.type === 'mcp' || selectedNode.type === 'tool') {
-      return {
-        title: 'Check risk before running',
-        body: 'This step may need permission approval. Run a dry check before starting the workflow.',
-        actionLabel: 'Dry check',
-      };
-    }
-    if (selectedNode.type === 'approval') {
-      return {
-        title: 'Approval step is ready',
-        body: 'Use this step to pause risky work and keep a human in control.',
-        actionLabel: 'Review approvals',
-      };
-    }
-    return {
-      title: `Configure ${selectedNode.title || selectedNode.type}`,
-      body: 'Set the minimum fields, then run the workflow or add the next step.',
-      actionLabel: 'Configure',
-    };
-  }, [draft.nodes.length, selectedNode]);
-  const runStory = useMemo<WorkflowHumanHint>(() => {
-    if (!selectedRun) {
-      return {
-        title: 'No run yet',
-        body: 'Start a run from the current workflow to see live progress, approvals, and outputs here.',
-        actionLabel: 'Start run',
-      };
-    }
-    const waitingNode = Object.values(selectedRun.nodeRuns || {}).find((nodeRun) => nodeRun.status === 'waiting_approval');
-    const failedNode = Object.values(selectedRun.nodeRuns || {}).find((nodeRun) => nodeRun.status === 'failed');
-    if (waitingNode) {
-      return {
-        title: `Waiting for approval: ${waitingNode.title}`,
-        body: waitingNode.waitingReason || 'Review the context and continue or reject this node.',
-        actionLabel: 'Continue or reject',
-      };
-    }
-    if (failedNode) {
-      return {
-        title: `Stopped at ${failedNode.title}`,
-        body: failedNode.error || 'Inspect the failed node, then retry this node or retry from here.',
-        actionLabel: 'Diagnose failure',
-      };
-    }
-    if (selectedRun.status === 'completed') {
-      return {
-        title: 'Run completed',
-        body: `${selectedRun.workflowName} finished. Review artifacts and evidence before closing work.`,
-        actionLabel: 'Review outputs',
-      };
-    }
-    return {
-      title: `Run is ${selectedRun.status}`,
-      body: `${Object.keys(selectedRun.nodeRuns || {}).length} nodes are tracked in this run story.`,
-      actionLabel: 'Watch progress',
-    };
-  }, [selectedRun]);
-  const previewConsistency = useMemo<WorkflowHumanHint>(() => {
-    if (!selectedRun) {
-      return {
-        title: 'Preview not checked',
-        body: 'Start a run after dry check to compare the reviewed preview with execution inputs.',
-        actionLabel: 'No run',
-      };
-    }
-    if (selectedRun.previewChanged || selectedRun.previewDiff?.changed) {
-      const reasons = selectedRun.previewDiff?.reasons?.join(', ') || 'execution inputs changed after preview';
-      return {
-        title: 'Preview changed before execution',
-        body: reasons,
-        actionLabel: 'Review diff',
-      };
-    }
-    return {
-      title: 'Preview matched execution',
-      body: 'The reviewed dry-run snapshot matches the inputs used to create this run.',
-      actionLabel: 'Matched',
-    };
-  }, [selectedRun]);
+  const humanNextAction = useMemo<WorkflowHumanHint>(
+    () => buildWorkflowHumanNextAction({ nodes: draft.nodes }, selectedNode),
+    [draft.nodes, selectedNode],
+  );
+  const runStory = useMemo<WorkflowHumanHint>(
+    () => buildWorkflowRunStory(selectedRun),
+    [selectedRun],
+  );
+  const previewConsistency = useMemo<WorkflowHumanHint>(
+    () => buildWorkflowPreviewConsistency(selectedRun),
+    [selectedRun],
+  );
   const previewChangedNodes = useMemo(() => (
     selectedRun?.previewDiff?.changedNodes || []
   ), [selectedRun]);
@@ -1164,9 +1084,6 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
   const benchmarkTrend = observabilityState?.trend?.results?.length
     ? `${observabilityState.trend.results.length} benchmark trend point(s), latest ${observabilityState.trend.results.at(-1)?.status || 'unknown'}.`
     : 'Benchmark trend tracks latest result, duration, and failure reason per smoke workflow.';
-  const releaseReadinessDetail = useMemo(() => observabilityState?.evidenceBundle?.releaseReadiness
-    ? stringifyValue(observabilityState.evidenceBundle.releaseReadiness).slice(0, 120)
-    : releaseReadiness ? stringifyValue(releaseReadiness).slice(0, 120) : 'Readiness detail is waiting for the next gate run.', [observabilityState, releaseReadiness]);
   const testCoverageMap = observabilityState?.coverageMap?.coverage?.length
     ? observabilityState.coverageMap.coverage.map((item: any) => item.file).join(', ')
     : 'Maps workflow features to unit, source contract, e2e, and screenshot gates.';
@@ -1221,39 +1138,27 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
     const report = governanceState?.policy?.workflows?.[0];
     return report ? `${report.status}; ${report.riskyNodes?.length || 0} risky node(s); MCP allowlist ${(report.mcpAllowlist || []).length}; approvals ${report.approvalCount || 0}` : 'Policy report summarizes security labels, dependencies, approvals, and MCP allowlist.';
   }, [governanceState]);
-  const largeGraphPerformance = useMemo(() => readinessState?.performance
-    ? `${readinessState.performance.nodeCount}/100 nodes, ${readinessState.performance.edgeCount} edges, ${readinessState.performance.status}`
-    : `${draft.nodes.length}/100 nodes visible; FlowGram keeps canvas interaction stable.`, [draft.nodes.length, readinessState]);
-  const virtualizedRunLogs = useMemo(() => readinessState?.virtualizedLogs
-    ? `${readinessState.virtualizedLogs.rows?.length || 0}/${readinessState.virtualizedLogs.total || 0} virtualized log rows loaded`
-    : `${streamingLogRows.length} log rows ready for virtualized rendering.`, [readinessState, streamingLogRows.length]);
-  const offlineReadMode = readinessState?.offline
-    ? `${readinessState.offline.mode}: ${readinessState.offline.workflows?.length || 0} workflows, ${readinessState.offline.runs?.length || 0} runs`
-    : 'Cached workflow and run summaries remain readable when backend is unavailable.';
-  const importValidationSandbox = templateProductState?.exportPreview?.sizeGuard
-    ? `Import/export sandbox ready; package ${templateProductState.exportPreview.sizeGuard.status}, ${templateProductState.exportPreview.sizeGuard.estimatedBytes} bytes`
-    : 'Package imports validate in an isolated preview before writing project data.';
-  const storageBackupRestore = readinessState?.production
-    ? `Backup includes ${readinessState.production.performance?.length || 0} workflow performance records plus definitions, runs, packages.`
-    : 'Backup covers definitions, templates, node packages, run summaries.';
-  const dataRetentionPolicy = readinessState?.retention
-    ? `Retention: ${readinessState.retention.maxRuns} runs, ${readinessState.retention.maxLogEntriesPerNode} logs/node, ${readinessState.retention.artifactRetentionDays} artifact days`
-    : 'Retention controls run logs, artifacts, checkpoints, and evidence expiry.';
-  const packageSizeGuard = readinessState?.sizeGuard
-    ? `${readinessState.sizeGuard.status}: ${readinessState.sizeGuard.estimatedBytes}/${readinessState.sizeGuard.maxRecommendedBytes} bytes`
-    : 'Export/import warns on oversized screenshots, logs, and artifacts.';
-  const releaseSmokeMatrix = readinessState?.smokeMatrix
-    ? `${readinessState.smokeMatrix.passed}/${readinessState.smokeMatrix.total} release smoke gates passed`
-    : 'Release matrix covers dry-run, Python node, approval, artifact, retry, MCP, and Agent/Subagent evidence.';
-  const releaseQualityGate = readinessState?.production?.releaseSmokeMatrix
-    ? `${readinessState.production.status}: ${readinessState.production.releaseSmokeMatrix.passed}/${readinessState.production.releaseSmokeMatrix.total} gates; evidence manifest produced by npm run workflow:quality-gate`
-    : 'Run npm run workflow:quality-gate before release packaging to produce the evidence manifest.';
-  const migrationDoctor = readinessState?.migrationDoctor
-    ? `${readinessState.migrationDoctor.status}: ${readinessState.migrationDoctor.findings?.length || 0} finding(s)`
-    : 'Upgrade doctor checks workflow schema, node packages, templates, and compatibility.';
-  const productionReadinessDashboard = readinessState?.production
-    ? `${readinessState.production.status}: ${readinessState.production.recentFailures?.length || 0} recent failure(s), ${readinessState.production.security?.length || 0} security report(s)`
-    : 'Production readiness combines performance, quality, dependencies, security, template smoke, recent failures.';
+  const {
+    releaseReadinessDetail,
+    largeGraphPerformance,
+    virtualizedRunLogs,
+    offlineReadMode,
+    importValidationSandbox,
+    storageBackupRestore,
+    dataRetentionPolicy,
+    packageSizeGuard,
+    releaseSmokeMatrix,
+    releaseQualityGate,
+    migrationDoctor,
+    productionReadinessDashboard,
+  } = useMemo(() => buildWorkflowReadinessSummaries({
+    readinessState,
+    observabilityState,
+    releaseReadiness,
+    templateProductState,
+    draftNodeCount: draft.nodes.length,
+    streamingLogRowCount: streamingLogRows.length,
+  }), [draft.nodes.length, observabilityState, readinessState, releaseReadiness, streamingLogRows.length, templateProductState]);
   const favoriteWorkflows = useMemo(() => favoriteWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow)), [favoriteWorkflowIds, workflows]);
   const recentWorkflows = useMemo(() => {
     const fromStorage = recentWorkflowIds.map((id) => workflows.find((workflow) => workflow.id === id)).filter((workflow): workflow is WorkflowDefinition => Boolean(workflow));
