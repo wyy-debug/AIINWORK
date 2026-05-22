@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Braces,
@@ -69,8 +69,7 @@ import { WorkflowHomeView } from './WorkflowHomeView';
 import { WorkflowLibraryView } from './WorkflowLibraryView';
 import { WorkflowNodePalette } from './WorkflowNodePalette';
 import { WorkflowEditorSetupStrip } from './WorkflowEditorSetupStrip';
-
-const WorkflowFlowGramEditor = lazy(() => import('./WorkflowFlowGramEditor'));
+import { WorkflowEditorCanvasShell } from './WorkflowEditorCanvasShell';
 
 type WorkflowStudioProps = {
   selectedProject: Project;
@@ -2345,104 +2344,48 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         .map((diagnostic) => `${diagnostic.field}: ${diagnostic.variable || diagnostic.code}`)
       : [];
     return (
-      <div className="relative rounded-md border border-border bg-card/60 p-3 shadow-sm">
-        {!isSimpleMode && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2" data-testid="workflow-canvas-controls">
-          <div className="text-xs text-muted-foreground" data-testid="workflow-multi-select">
-            {draft.nodes.length} nodes / {draft.edges.length} edges
-            <span className="ml-2 rounded border border-border bg-background px-2 py-1">{selectedCount} selected</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-1 rounded-md border border-border bg-background p-1" data-testid="workflow-copy-paste">
-              <button type="button" onClick={copySelectedNodes} disabled={selectedCount === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Copy</button>
-              <button type="button" onClick={pasteCopiedNodes} disabled={copiedNodes.length === 0} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Paste</button>
-            </div>
-            <button type="button" data-testid="workflow-duplicate-subgraph" onClick={duplicateSelectedSubgraph} disabled={selectedCount === 0} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-40">
-              <Copy className="h-3.5 w-3.5" />
-              Subgraph
-            </button>
-            <div className="inline-flex items-center gap-1 rounded-md border border-border bg-background p-1" data-testid="workflow-undo-redo">
-              <button type="button" onClick={() => void undoWorkflowEdit()} disabled={!canUndoWorkflow} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Undo</button>
-              <button type="button" onClick={() => void redoWorkflowEdit()} disabled={!canRedoWorkflow} className="h-7 rounded px-2 text-xs hover:bg-muted disabled:opacity-40">Redo</button>
-            </div>
-            <label className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs" data-testid="workflow-layout-mode">
-              Layout
-              <select value={layoutMode} onChange={(event) => setLayoutMode(event.target.value as WorkflowLayoutMode)} className="bg-transparent text-xs outline-none">
-                {layoutModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-              </select>
-            </label>
-            <button type="button" data-testid="workflow-layout-lock" onClick={toggleLayoutLock} disabled={selectedCount === 0} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:opacity-40">
-              {selectedNodeIds.every((id) => lockedNodeIds.includes(id)) && selectedCount > 0 ? 'Unlock layout' : 'Lock layout'}
-            </button>
-            <label className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs" data-testid="workflow-minimap-filters">
-              MiniMap
-              <select value={minimapFilter} onChange={(event) => setMinimapFilter(event.target.value as WorkflowMinimapFilter)} className="bg-transparent text-xs outline-none">
-                {minimapFilters.map((filter) => <option key={filter} value={filter}>{filter}</option>)}
-              </select>
-            </label>
-            <button type="button" onClick={autoLayoutNodes} className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted" title="Auto layout">
-              <GitBranch className="h-3.5 w-3.5" />
-              Apply
-            </button>
-          </div>
-        </div>
-        )}
-        {!isSimpleMode && (
-        <div className="mb-3 grid gap-2 md:grid-cols-4" data-testid="workflow-flowing-lines">
-          {[
-            ['Running', selectedWorkGraphRuntimeState?.summary.running || 0],
-            ['Waiting', selectedWorkGraphRuntimeState?.summary.waiting || 0],
-            ['Failed', selectedWorkGraphRuntimeState?.summary.failed || 0],
-            ['Artifacts', selectedWorkGraphRuntimeState?.summary.artifacts || 0],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-md border border-border bg-background px-3 py-2 text-xs">
-              <span className="block text-muted-foreground">{label}</span>
-              <span className="mt-1 block text-base font-semibold text-foreground">{value}</span>
-            </div>
-          ))}
-        </div>
-        )}
-        {!isSimpleMode && (
-        <div className="mb-3 flex flex-wrap gap-1 text-[10px] text-muted-foreground" data-testid="workflow-graph-validation-badges">
-          {selectedNodeMissingVariableBadges.map((badge) => (
-            <span key={badge} data-testid="workflow-missing-variable-node-badge" className="rounded border border-red-200 bg-red-50 px-2 py-1 text-red-700">{badge}</span>
-          ))}
-          {(selectedNode ? getNodeValidationBadges(draft, selectedNode, lockedNodeIds) : ['FlowGram validation ready']).map((badge) => (
-            <span key={badge} className="rounded border border-border bg-background px-2 py-1">{badge}</span>
-          ))}
-        </div>
-        )}
-        <Suspense fallback={(
-          <div className="flex h-[560px] min-w-0 items-center justify-center rounded-md border border-border bg-background text-sm text-muted-foreground" data-testid="workflow-flowgram-loading">
-            Loading FlowGram editor...
-          </div>
-        )}
-        >
-          <WorkflowFlowGramEditor
-            ref={flowGramEditorRef}
-            workflow={draft}
-            selectedRun={selectedRun}
-            runtimeVisualState={selectedWorkGraphRuntimeState}
-            selectedNodeId={selectedNodeId}
-            selectedEdgeId={selectedEdgeId}
-            onWorkflowChange={(next) => commitDraft(() => next)}
-            onSelectNode={(nodeId) => {
-              setSelectedNodeId(nodeId);
-              setSelectedNodeIds((current) => current.includes(nodeId) && current.length > 1 ? current : [nodeId]);
-              setSelectedEdgeId('');
-            }}
-            onSelectEdge={(edgeId) => {
-              setSelectedEdgeId(edgeId);
-              setSelectedNodeId('');
-            }}
-            onAddNode={addNode}
-            onCopySelection={copySelectedNodes}
-            onDuplicateSelection={duplicateSelectedSubgraph}
-            onDeleteSelection={deleteSelectedGraphItems}
-            showDiagnostics={!isSimpleMode || isDiagnosticsOpen}
-          />
-        </Suspense>
-      </div>
+      <WorkflowEditorCanvasShell
+        editorRef={flowGramEditorRef}
+        workflow={draft}
+        selectedRun={run}
+        runtimeVisualState={selectedWorkGraphRuntimeState}
+        selectedNodeId={selectedNodeId}
+        selectedEdgeId={selectedEdgeId}
+        selectedCount={selectedCount}
+        copiedNodeCount={copiedNodes.length}
+        canUndoWorkflow={canUndoWorkflow}
+        canRedoWorkflow={canRedoWorkflow}
+        isSimpleMode={isSimpleMode}
+        isDiagnosticsOpen={isDiagnosticsOpen}
+        layoutMode={layoutMode}
+        layoutModes={layoutModes}
+        minimapFilter={minimapFilter}
+        minimapFilters={minimapFilters}
+        selectedLayoutLocked={selectedNodeIds.every((id) => lockedNodeIds.includes(id))}
+        selectedNodeValidationBadges={selectedNode ? getNodeValidationBadges(draft, selectedNode, lockedNodeIds) : ['FlowGram validation ready']}
+        selectedNodeMissingVariableBadges={selectedNodeMissingVariableBadges}
+        onWorkflowChange={(next) => commitDraft(() => next)}
+        onSelectNode={(nodeId) => {
+          setSelectedNodeId(nodeId);
+          setSelectedNodeIds((current) => current.includes(nodeId) && current.length > 1 ? current : [nodeId]);
+          setSelectedEdgeId('');
+        }}
+        onSelectEdge={(edgeId) => {
+          setSelectedEdgeId(edgeId);
+          setSelectedNodeId('');
+        }}
+        onAddNode={addNode}
+        onCopySelection={copySelectedNodes}
+        onPasteSelection={pasteCopiedNodes}
+        onDuplicateSelection={duplicateSelectedSubgraph}
+        onDeleteSelection={deleteSelectedGraphItems}
+        onUndo={undoWorkflowEdit}
+        onRedo={redoWorkflowEdit}
+        onLayoutModeChange={(value) => setLayoutMode(value as WorkflowLayoutMode)}
+        onToggleLayoutLock={toggleLayoutLock}
+        onMinimapFilterChange={(value) => setMinimapFilter(value as WorkflowMinimapFilter)}
+        onAutoLayout={autoLayoutNodes}
+      />
     );
   };
 

@@ -34,6 +34,7 @@ function readWorkflowStudioBoundarySource() {
     'WorkflowLibraryView.tsx',
     'WorkflowNodePalette.tsx',
     'WorkflowEditorSetupStrip.tsx',
+    'WorkflowEditorCanvasShell.tsx',
     'WorkflowRunConsole.tsx',
     'WorkflowArtifactGallery.tsx',
     'WorkflowPermissionPanels.tsx',
@@ -121,6 +122,7 @@ describe('WorkflowStudio source contract', () => {
 
   it('keeps the FlowGram migration clean and native-first', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const canvasShellSource = readFileSync(resolve(currentDir, 'WorkflowEditorCanvasShell.tsx'), 'utf8');
     const flowGramSource = readFlowGramNativeSource();
     const packageJson = readFileSync(resolve(currentDir, '../../../../package.json'), 'utf8');
 
@@ -130,7 +132,7 @@ describe('WorkflowStudio source contract', () => {
     expect(studioSource).not.toContain('workflow-react' + '-flow-canvas');
     expect(packageJson).not.toContain('"@xyflow' + '/react"');
 
-    expect(studioSource).toContain("lazy(() => import('./WorkflowFlowGramEditor'))");
+    expect(canvasShellSource).toContain("lazy(() => import('./WorkflowFlowGramEditor'))");
     expect(flowGramSource).toContain('createFreeNodePanelPlugin');
     expect(flowGramSource).toContain('createFreeNodePanelPlugin({');
     expect(flowGramSource).toContain('nodeEngine: {');
@@ -144,6 +146,7 @@ describe('WorkflowStudio source contract', () => {
 
   it('uses FlowGram-native form, variable, line insertion, history, runtime state, and route loading', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const workflowBoundarySource = readWorkflowStudioBoundarySource();
     const flowGramSource = readFlowGramNativeSource();
     const mainContentSource = readFileSync(resolve(currentDir, '../../main-content/view/MainContent.tsx'), 'utf8');
 
@@ -175,8 +178,8 @@ describe('WorkflowStudio source contract', () => {
     expect(studioSource).toContain('flowGramEditorRef');
     expect(studioSource).toContain('flowGramEditorRef.current?.undo');
     expect(studioSource).toContain('flowGramEditorRef.current?.redo');
-    expect(studioSource).toContain('>Undo<');
-    expect(studioSource).toContain('>Redo<');
+    expect(workflowBoundarySource).toContain('>Undo<');
+    expect(workflowBoundarySource).toContain('>Redo<');
     expect(studioSource).not.toContain('Definition undo');
     expect(studioSource).not.toContain('Definition redo');
 
@@ -636,6 +639,21 @@ describe('WorkflowStudio source contract', () => {
     expect(setupStripSource).toContain('data-testid="workflow-editor-setup-strip"');
     expect(setupStripSource).toContain('data-testid="workflow-dry-run-preview"');
     expect(setupStripSource).toContain('data-testid="workflow-missing-variable-diagnostics"');
+  });
+
+  it('keeps the Workflow editor canvas shell in a dedicated view component', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const canvasShellSource = readFileSync(resolve(currentDir, 'WorkflowEditorCanvasShell.tsx'), 'utf8');
+
+    expect(studioSource).toContain("import { WorkflowEditorCanvasShell } from './WorkflowEditorCanvasShell'");
+    expect(studioSource).toContain('<WorkflowEditorCanvasShell');
+    expect(studioSource).not.toContain('data-testid="workflow-canvas-controls"');
+    expect(studioSource).not.toContain('data-testid="workflow-flowgram-loading"');
+    expect(studioSource).not.toContain('data-testid="workflow-flowing-lines"');
+
+    expect(canvasShellSource).toContain('data-testid="workflow-canvas-controls"');
+    expect(canvasShellSource).toContain('data-testid="workflow-flowgram-loading"');
+    expect(canvasShellSource).toContain('data-testid="workflow-flowing-lines"');
   });
 
   it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {
