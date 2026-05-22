@@ -32,6 +32,7 @@ function readWorkflowStudioBoundarySource() {
     'WorkflowCommandCenter.tsx',
     'WorkflowHomeView.tsx',
     'WorkflowLibraryView.tsx',
+    'WorkflowNodePalette.tsx',
     'WorkflowRunConsole.tsx',
     'WorkflowArtifactGallery.tsx',
     'WorkflowPermissionPanels.tsx',
@@ -604,6 +605,21 @@ describe('WorkflowStudio source contract', () => {
     expect(libraryViewSource).toContain('data-testid="workflow-library"');
     expect(libraryViewSource).toContain('data-testid="workflow-library-gallery"');
     expect(libraryViewSource).toContain('data-testid="workflow-template-preview"');
+  });
+
+  it('keeps the Workflow node palette in a dedicated view component', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const nodePaletteSource = readFileSync(resolve(currentDir, 'WorkflowNodePalette.tsx'), 'utf8');
+
+    expect(studioSource).toContain("import { WorkflowNodePalette } from './WorkflowNodePalette'");
+    expect(studioSource).toContain('<WorkflowNodePalette');
+    expect(studioSource).not.toContain('data-testid="workflow-node-search"');
+    expect(studioSource).not.toContain('data-testid="workflow-add-node"');
+    expect(studioSource).not.toContain('<h3 className="text-sm font-semibold text-foreground">Node palette</h3>');
+
+    expect(nodePaletteSource).toContain('data-testid="workflow-node-search"');
+    expect(nodePaletteSource).toContain('data-testid="workflow-add-node"');
+    expect(nodePaletteSource).toContain('permission gate');
   });
 
   it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {

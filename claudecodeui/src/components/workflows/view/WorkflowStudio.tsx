@@ -20,7 +20,6 @@ import {
   Plus,
   RefreshCw,
   Save,
-  Search,
   Square,
   Star,
   Trash2,
@@ -72,6 +71,7 @@ import { WorkflowPermissionPanels } from './WorkflowPermissionPanels';
 import { WorkflowCommandCenter } from './WorkflowCommandCenter';
 import { WorkflowHomeView } from './WorkflowHomeView';
 import { WorkflowLibraryView } from './WorkflowLibraryView';
+import { WorkflowNodePalette } from './WorkflowNodePalette';
 
 const WorkflowFlowGramEditor = lazy(() => import('./WorkflowFlowGramEditor'));
 
@@ -2961,51 +2961,14 @@ export default function WorkflowStudio({ selectedProject, sessionId = null }: Wo
         </div>
         <div className={cn('hidden min-h-0 flex-1 grid-cols-1 overflow-auto md:grid lg:overflow-hidden', isSimpleMode ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : 'lg:grid-cols-[260px_minmax(0,1fr)_300px]')} data-testid="workflow-editor">
           {!isSimpleMode && (
-          <aside className="min-h-0 overflow-auto border-r border-border p-4">
-            <h3 className="text-sm font-semibold text-foreground">Node palette</h3>
-            <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground">
-              <Search className="h-4 w-4" />
-              <input
-                data-testid="workflow-node-search"
-                value={nodeSearch}
-                onChange={(event) => setNodeSearch(event.target.value)}
-                placeholder="Search nodes"
-                className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
-              />
-            </label>
-            <div className="mt-3 space-y-4">
-              {paletteGroups.map((group) => {
-                const items = filteredNodeTypes.filter((item) => group.types.includes(item.type));
-                if (items.length === 0) return null;
-                return (
-                  <section key={group.id}>
-                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</h4>
-                    <div className="grid gap-2">
-                      {items.map((item) => (
-                        <button
-                          key={item.type}
-                          type="button"
-                          data-testid="workflow-add-node"
-                          data-node-type={item.type}
-                          onClick={() => addNode(item.type)}
-                          className="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-2.5 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
-                        >
-                          <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-700">
-                            <item.icon className="h-3.5 w-3.5" />
-                          </span>
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium text-foreground">{item.label}</span>
-                            <span className="block text-xs text-muted-foreground">{item.description}</span>
-                            {riskyNodeTypes.has(item.type) && <span className="mt-2 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">permission gate</span>}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-          </aside>
+          <WorkflowNodePalette
+            nodeSearch={nodeSearch}
+            paletteGroups={paletteGroups}
+            filteredNodeTypes={filteredNodeTypes}
+            riskyNodeTypes={riskyNodeTypes}
+            onNodeSearchChange={setNodeSearch}
+            onAddNode={addNode}
+          />
           )}
 
           <main className="min-h-0 overflow-auto p-3" data-testid="workflow-desktop-focus-layout">
