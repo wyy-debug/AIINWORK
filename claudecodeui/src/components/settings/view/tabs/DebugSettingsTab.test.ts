@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 import { expect, test } from 'vitest';
 
+import {
+  DEFAULT_ARGUS_DEBUG_SETTINGS,
+  normalizeArgusDebugSettings,
+} from '../../../chat/utils/debugSettings';
+
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const settingsRoot = resolve(currentDir, '../..');
 
@@ -38,4 +43,23 @@ test('settings expose a top-level Debug tab for runtime panel visibility', async
   expect(debugSettings).toContain('showArgusBrainDiagnosticsPanel');
   expect(debugSettings).toContain('argus-debug-settings');
   expect(debugSettings).toContain('argusDebugSettingsChanged');
+});
+
+test('debug runtime panels default to hidden until the user enables them', () => {
+  expect(DEFAULT_ARGUS_DEBUG_SETTINGS).toEqual({
+    showPromptInjectionPanel: false,
+    showRuntimeTimelinePanel: false,
+    showCheckpointPanel: false,
+    showArgusBrainDiagnosticsPanel: false,
+  });
+
+  expect(normalizeArgusDebugSettings({})).toEqual(DEFAULT_ARGUS_DEBUG_SETTINGS);
+  expect(normalizeArgusDebugSettings({
+    showRuntimeTimelinePanel: true,
+    showCheckpointPanel: true,
+  })).toEqual({
+    ...DEFAULT_ARGUS_DEBUG_SETTINGS,
+    showRuntimeTimelinePanel: true,
+    showCheckpointPanel: true,
+  });
 });

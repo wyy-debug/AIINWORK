@@ -14,18 +14,18 @@ export type ArgusDebugSettings = {
 
 export const DEFAULT_ARGUS_DEBUG_SETTINGS: ArgusDebugSettings = {
   showPromptInjectionPanel: false,
-  showRuntimeTimelinePanel: true,
-  showCheckpointPanel: true,
-  showArgusBrainDiagnosticsPanel: true,
+  showRuntimeTimelinePanel: false,
+  showCheckpointPanel: false,
+  showArgusBrainDiagnosticsPanel: false,
 };
 
 export function normalizeArgusDebugSettings(value: unknown): ArgusDebugSettings {
   const parsed = value && typeof value === 'object' ? value as Partial<ArgusDebugSettings> : {};
   return {
     showPromptInjectionPanel: parsed.showPromptInjectionPanel === true,
-    showRuntimeTimelinePanel: parsed.showRuntimeTimelinePanel !== false,
-    showCheckpointPanel: parsed.showCheckpointPanel !== false,
-    showArgusBrainDiagnosticsPanel: parsed.showArgusBrainDiagnosticsPanel !== false,
+    showRuntimeTimelinePanel: parsed.showRuntimeTimelinePanel === true,
+    showCheckpointPanel: parsed.showCheckpointPanel === true,
+    showArgusBrainDiagnosticsPanel: parsed.showArgusBrainDiagnosticsPanel === true,
   };
 }
 
