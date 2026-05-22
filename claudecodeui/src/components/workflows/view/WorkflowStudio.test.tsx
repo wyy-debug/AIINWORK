@@ -29,6 +29,7 @@ function readWorkflowStudioBoundarySource() {
   return [
     'WorkflowStudio.tsx',
     'WorkflowStudioViewModel.ts',
+    'WorkflowCommandCenter.tsx',
     'WorkflowRunConsole.tsx',
     'WorkflowArtifactGallery.tsx',
     'WorkflowPermissionPanels.tsx',
@@ -559,6 +560,20 @@ describe('WorkflowStudio source contract', () => {
     expect(flowGramSource).not.toContain('{humanFeedback} 路 {operationFeedback}');
   });
 
+  it('keeps the Workflow command center in a dedicated view component', () => {
+    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const commandCenterSource = readFileSync(resolve(currentDir, 'WorkflowCommandCenter.tsx'), 'utf8');
+
+    expect(studioSource).toContain("import { WorkflowCommandCenter } from './WorkflowCommandCenter'");
+    expect(studioSource).toContain('<WorkflowCommandCenter');
+    expect(studioSource).not.toContain('data-testid="workflow-command-center"');
+    expect(studioSource).not.toContain('data-testid="workflow-run-setup-drawer"');
+
+    expect(commandCenterSource).toContain('data-testid="workflow-command-center"');
+    expect(commandCenterSource).toContain('data-testid="workflow-run-setup-drawer"');
+    expect(commandCenterSource).toContain('data-testid="workflow-view-tabs"');
+  });
+
   it('keeps run console, artifact gallery, and permission panels behind dedicated component boundaries', () => {
     const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
     const runConsoleSource = readFileSync(resolve(currentDir, 'WorkflowRunConsole.tsx'), 'utf8');
@@ -604,7 +619,7 @@ describe('WorkflowStudio source contract', () => {
   });
 
   it('applies a modern desktop product shell without adding mobile gates', () => {
-    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const studioSource = readWorkflowStudioBoundarySource();
     const flowGramSource = readFlowGramNativeSource();
     const nodeRendererSource = readFileSync(resolve(currentDir, 'flowgram/FlowGramWorkflowNodeRenderer.tsx'), 'utf8');
     const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
@@ -628,7 +643,7 @@ describe('WorkflowStudio source contract', () => {
   });
 
   it('keeps the default Workflow Studio view low-noise and canvas first', () => {
-    const studioSource = readFileSync(resolve(currentDir, 'WorkflowStudio.tsx'), 'utf8');
+    const studioSource = readWorkflowStudioBoundarySource();
     const screenshotSpec = readFileSync(resolve(currentDir, '../../../../e2e/workflow-studio.screenshot.spec.ts'), 'utf8');
 
     expect(studioSource).toContain('data-testid="workflow-quiet-default-header"');
